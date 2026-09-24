@@ -53,6 +53,7 @@ pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
 pub mod mirrored_shard_keys;
+pub mod neighbors;
 pub mod nodes;
 pub mod openapi;
 pub mod outbox;

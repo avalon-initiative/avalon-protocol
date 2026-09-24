@@ -103,11 +103,17 @@ pub struct PeerInfo {
 #[derive(Clone, Default)]
 pub struct PeerTable {
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
+    neighbors: crate::neighbors::NeighborTable,
 }
 
 impl PeerTable {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The announce worker's active set and per-neighbor round-trip stats.
+    pub fn neighbors(&self) -> &crate::neighbors::NeighborTable {
+        &self.neighbors
     }
 
     /// Inserts or refreshes `info`, keyed by its own `base_url`.
@@ -683,6 +689,8 @@ pub struct AnnounceConfig {
     pub max_peers: usize,
 }
 
+/// Upper bound on one announce round trip; a slower peer counts as loss.
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
 /// A peer not re-announced within this many multiples of the announce
 /// interval is pruned — generous enough that one or two missed ticks
@@ -988,12 +996,18 @@ pub async fn run_worker(
         );
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(ANNOUNCE_TIMEOUT)
+        .build()
+        .unwrap_or_default();
     let roles = node_roles();
     let network_id = chain.network_id().to_string();
     let mut active_peers: Vec<String> = config.peers.clone();
 
+    let neighbors = peers.neighbors().clone();
+
     loop {
+        neighbors.set_active(&active_peers, &config.peers);
         // Issue #599, Layer 2: before announcing, refresh this node's own
         // authoritative claim (if it has one) so it's part of the
         // snapshot gossiped out this tick. "Authoritative" here means this
@@ -1010,14 +1024,18 @@ pub async fn run_worker(
         if let Some(own_base_url) = &config.own_base_url {
             let targets = active_peers.clone();
             for peer in &targets {
-                match announce_to(
-                    &client,
+                match measured(
+                    &neighbors,
                     peer,
-                    own_base_url,
-                    &roles,
-                    &network_id,
-                    dht_identity.as_ref(),
-                    &shard_registry.snapshot(),
+                    announce_to(
+                        &client,
+                        peer,
+                        own_base_url,
+                        &roles,
+                        &network_id,
+                        dht_identity.as_ref(),
+                        &shard_registry.snapshot(),
+                    ),
                 )
                 .await
                 {
@@ -1069,9 +1087,26 @@ pub async fn run_worker(
         let known_base_urls: HashSet<String> =
             peers.list_all().into_iter().map(|p| p.base_url).collect();
         retain_reachable_active_peers(&mut active_peers, &config.peers, &known_base_urls);
+        neighbors.set_active(&active_peers, &config.peers);
 
         tokio::time::sleep(config.interval).await;
     }
+}
+
+/// Awaits one announce and records its round trip (request to parsed
+/// response) on success or a loss on failure.
+async fn measured<T>(
+    neighbors: &crate::neighbors::NeighborTable,
+    peer: &str,
+    announce: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let started = std::time::Instant::now();
+    let result = announce.await;
+    match &result {
+        Ok(_) => neighbors.record_success(peer, started.elapsed()),
+        Err(_) => neighbors.record_failure(peer),
+    }
+    result
 }
 
 async fn announce_to(
@@ -1124,6 +1159,47 @@ mod tests {
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn announce_records_round_trip_and_loss_separately() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(30))
+                    .set_body_json(serde_json::json!({"peers": [], "known_shards": []})),
+            )
+            .mount(&server)
+            .await;
+        let up = server.uri();
+        let down = "http://127.0.0.1:1".to_string();
+
+        let neighbors = crate::neighbors::NeighborTable::new();
+        neighbors.set_active(&[up.clone(), down.clone()], &[]);
+        let client = reqwest::Client::new();
+        for peer in [&up, &down] {
+            let _ = measured(
+                &neighbors,
+                peer,
+                announce_to(&client, peer, "http://me", &[], "n", None, &[]),
+            )
+            .await;
+        }
+
+        let snap = neighbors.snapshot();
+        let up_stats = snap[0].round_trip.clone().unwrap();
+        assert!(up_stats.last_ms.unwrap() >= 30.0);
+        assert_eq!(up_stats.samples, 1);
+        assert_eq!(up_stats.failed_recent, 0);
+        let down_stats = snap[1].round_trip.clone().unwrap();
+        assert_eq!(down_stats.samples, 0);
+        assert!(down_stats.last_ms.is_none());
+        assert_eq!(down_stats.loss_ratio, 1.0);
     }
 
     #[test]

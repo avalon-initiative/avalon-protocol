@@ -439,6 +439,24 @@ capability-aware routing — every SDK's zero-URL `connect()` (below)
 picks any STH-verified candidate from `docs/trusted-networks.json`, not
 the best one by role/latency/health.
 
+**Per-neighbor round-trip latency is measured, per observer.** Each announce
+`run_worker` sends to a peer in its active set is timed from request to parsed
+response and folded into in-memory rolling stats keyed by `base_url`
+(`crates/server/src/neighbors.rs`): `last_ms`, `ewma_ms` (smoothing factor
+0.2, seeded by the first sample), `min_ms` and `jitter_ms` (mean absolute
+deviation) over the last 20 successful round trips, `samples`, loss as
+failed attempts over the last 20 attempts, and `last_success_at`. The value is
+an application-level round trip: network plus the peer's request handling, not
+ICMP latency. A failed or timed-out attempt (announce requests time out after
+15s) counts toward loss and never toward any latency figure. Entries exist only
+for peers in the active set and are dropped when a peer leaves it, so memory is
+bounded by `AVALON_NODE_MAX_PEERS`; nothing is persisted. The measurement
+describes the observer-to-peer path, so it is never gossiped and is not a field
+of `PeerInfo`; a peer cannot report its own latency. It is observational only
+and never influences admission, pruning, the version floor, or any trust
+decision. The announce worker publishes its active set and these stats through
+the shared `PeerTable` so read models can serve them.
+
 **Realtime relay and DHT bootstrap consume this peer table.** The realtime
 relay (see [`presence.md`](./presence.md)/[`communication.md`](./communication.md))
 reads each peer's `roles` to decide who a live presence/chat event gets
