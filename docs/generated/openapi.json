@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -5250,6 +5250,47 @@
         }
       }
     },
+    "/nodes/trace": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "Trace the overlay route from this node to a target, hop by hop.",
+        "description": "Each node on the path reports itself, so the result is advisory and not a\nverified fact about the path. Requests forwarded between nodes use the same\nroute with `visited` and `budget_ms` set.",
+        "operationId": "trace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target"
+          },
+          "429": {
+            "description": "Rate limit or in-flight cap hit; see Retry-After"
+          },
+          "503": {
+            "description": "This node has no AVALON_NODE_URL"
+          }
+        }
+      }
+    },
     "/people/discover": {
       "get": {
         "tags": [
@@ -9717,6 +9758,16 @@
           }
         }
       },
+      "StopReason": {
+        "type": "string",
+        "enum": [
+          "ttl",
+          "no_route",
+          "loop",
+          "timeout",
+          "target_unreachable"
+        ]
+      },
       "SubmitGrantRequest": {
         "type": "object",
         "required": [
@@ -9751,6 +9802,147 @@
               "null"
             ],
             "description": "Present only on the same-device fast path (`user_code: None`) — the\ncross-device path's session token is picked up via `poll`, same as\n`device_pairing::approve_pairing`, not returned here directly."
+          }
+        }
+      },
+      "TraceHop": {
+        "type": "object",
+        "description": "One node on the path, as that node reports itself.",
+        "required": [
+          "index",
+          "base_url",
+          "roles",
+          "protocol_version",
+          "processing_ms"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "processing_ms": {
+            "type": "number",
+            "format": "double",
+            "description": "Time this node spent before forwarding (or in total, at the last hop),\non its own clock."
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "to_next_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Leg to the next hop: this node's round trip to it minus the time the\nnext hop reports for itself, so it approximates network transit. When\nthe next hop did not answer, the time this node waited. Absent at the\nlast hop."
+          }
+        }
+      },
+      "TraceRequest": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "budget_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set by forwarding nodes: remaining time budget in milliseconds.",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string",
+            "description": "Base URL of the node to trace to."
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "ttl": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Forwards still allowed, 0 to 16 (default 12). Clients use 1 to 16;\na hop that receives 0 does not forward.",
+            "minimum": 0
+          },
+          "visited": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Set by forwarding nodes: base URLs already on the path."
+          }
+        }
+      },
+      "TraceResponse": {
+        "type": "object",
+        "required": [
+          "trace_id",
+          "target",
+          "reached",
+          "total_ms",
+          "hops"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why routing stopped, when `stopped_reason` is `no_route` or\n`target_unreachable`."
+          },
+          "hops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceHop"
+            },
+            "description": "Ordered path, first node to last, all self-reported."
+          },
+          "reached": {
+            "type": "boolean"
+          },
+          "stopped_reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StopReason"
+              }
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "total_ms": {
+            "type": "number",
+            "format": "double",
+            "description": "Time from receipt to response at the node that answered, on its own clock."
+          },
+          "trace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

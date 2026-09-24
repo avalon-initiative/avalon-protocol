@@ -82,6 +82,7 @@ pub mod topology;
 pub mod topology_access;
 pub mod topology_limits;
 pub mod topology_probe;
+pub mod topology_trace;
 pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;

@@ -503,6 +503,7 @@ async fn main() {
         interest,
         dht_commands,
         own_base_url: announce_config.own_base_url.clone(),
+        own_libp2p_peer_id: dht_identity.as_ref().map(|d| d.peer_id.clone()),
         interest_redis_fast_path,
         principal_limiter: avalon_server::principal_limits::PrincipalLimiter::from_env(
             redis_limiter.as_ref(),

@@ -226,6 +226,9 @@ pub struct AppState {
     /// itself anywhere (`AnnounceConfig`'s own degenerate case), so
     /// nothing to filter either.
     pub own_base_url: Option<String>,
+    /// This node's own libp2p peer id when the DHT is enabled, used as its
+    /// key in overlay routing.
+    pub own_libp2p_peer_id: Option<String>,
     /// The optional per-hoster Redis fast-path in front of
     /// interest lookups — `None` unless `AVALON_REDIS_URL` is set (see
     /// `crate::interest::RedisFastPath`'s own module doc comment). Never

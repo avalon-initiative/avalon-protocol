@@ -123,6 +123,7 @@ async fn link_local_metadata_address_is_refused_even_when_private_peers_are_allo
                 "roles": ["combined"],
                 "protocol_version": status["protocol_version"],
                 "network_id": status["network_id"],
+                "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
             }))
             .send()
             .await
@@ -179,6 +180,7 @@ async fn concurrent_probes_beyond_the_cap_get_429_with_retry_after() {
             "roles": ["combined"],
             "protocol_version": status["protocol_version"],
             "network_id": status["network_id"],
+                "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
         }))
         .send()
         .await

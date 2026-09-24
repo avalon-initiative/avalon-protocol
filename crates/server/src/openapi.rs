@@ -3,7 +3,7 @@
 //! social graph, chat, devices/passkeys/recovery, guilds, integrator/
 //! achievements/registry) — deliberately excludes `/ledger/*`, `/mirror/*`,
 //! `/internal/*` and the node-infra `/nodes/*` routes (no SDK wraps these),
-//! except the public topology endpoints a client app calls (`/nodes/probe`).
+//! except the public topology endpoints a client app calls (`/nodes/probe`, `/nodes/trace`).
 //!
 //! Generated from the real handler signatures/types via
 //! `#[utoipa::path]`/`#[derive(ToSchema)]` on each in-scope handler, not
@@ -29,7 +29,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
-        version = "0.4.0"
+        version = "0.5.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -187,10 +187,15 @@ use utoipa::OpenApi;
         crate::rollback::reverse_event,
         crate::registry::get_integrator_registry,
         crate::topology_probe::probe,
+        crate::topology_trace::trace,
     ),
     components(schemas(
         crate::topology_probe::ProbeRequest,
         crate::topology_probe::ProbeResponse,
+        crate::topology_trace::StopReason,
+        crate::topology_trace::TraceHop,
+        crate::topology_trace::TraceRequest,
+        crate::topology_trace::TraceResponse,
         crate::achievements::AchievementDefinitionResponse,
         crate::achievements::AttestationResponse,
         crate::achievements::AttestationSignatureResponse,

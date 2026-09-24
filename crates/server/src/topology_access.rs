@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/nodes/topology", get(crate::topology::topology))
         .route("/nodes/probe", post(crate::topology_probe::probe))
+        .route("/nodes/trace", post(crate::topology_trace::trace))
 }
 
 /// Merges [`router`] into `base` when [`topology_public`] is true.
