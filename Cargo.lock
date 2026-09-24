@@ -388,6 +388,7 @@ dependencies = [
  "futures-util",
  "governor",
  "hex",
+ "ipnet",
  "libp2p",
  "passkey-authenticator",
  "passkey-client",

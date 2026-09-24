@@ -9,6 +9,16 @@
 //! AVALON_RATE_LIMIT_PER_MINUTE=5 make start
 //! AVALON_RATE_LIMIT_PER_MINUTE=5 cargo test -p avalon-server \
 //!     --test rate_limit_layers rotating -- --ignored
+//!
+//! # the test host's own address is the trusted proxy
+//! AVALON_RATE_LIMIT_PER_MINUTE=5 AVALON_TRUSTED_PROXIES=<host ip> make start
+//! AVALON_RATE_LIMIT_PER_MINUTE=5 AVALON_TRUSTED_PROXIES=<host ip> cargo test \
+//!     -p avalon-server --test rate_limit_layers trusted_proxy -- --ignored
+//!
+//! # same ceiling, no trusted proxies configured
+//! AVALON_RATE_LIMIT_PER_MINUTE=5 make start
+//! AVALON_RATE_LIMIT_PER_MINUTE=5 cargo test -p avalon-server \
+//!     --test rate_limit_layers untrusted_peer -- --ignored
 //! ```
 
 use ed25519_dalek::{Signer, SigningKey};
@@ -195,5 +205,88 @@ async fn rotating_integrator_key_id_header_still_hits_the_per_ip_ceiling() {
     assert!(
         saw_429,
         "a fresh header value per request must not yield a fresh bucket"
+    );
+}
+
+fn random_forwarded_address() -> String {
+    let b = Uuid::new_v4().into_bytes();
+    format!("100.64.{}.{}", b[0], b[1])
+}
+
+async fn status_with_forwarded(
+    http: &reqwest::Client,
+    base: &str,
+    forwarded: &str,
+) -> reqwest::StatusCode {
+    http.get(format!("{base}/ledger/sth/latest"))
+        .header("x-forwarded-for", forwarded)
+        .send()
+        .await
+        .expect("request failed — is `make start` running?")
+        .status()
+}
+
+#[tokio::test]
+#[ignore]
+async fn trusted_proxy_forwarded_addresses_get_separate_ip_buckets() {
+    let Some(per_minute) = std::env::var("AVALON_RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|_| std::env::var("AVALON_TRUSTED_PROXIES").is_ok())
+    else {
+        eprintln!("skipping: set AVALON_RATE_LIMIT_PER_MINUTE and AVALON_TRUSTED_PROXIES");
+        return;
+    };
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let client_a = random_forwarded_address();
+    let client_b = random_forwarded_address();
+
+    let mut saw_429 = false;
+    for _ in 0..(per_minute * 2) {
+        if status_with_forwarded(&http, &base, &client_a).await
+            == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            saw_429 = true;
+            break;
+        }
+    }
+    assert!(saw_429, "client A never hit the per-IP ceiling");
+    assert!(
+        status_with_forwarded(&http, &base, &client_b)
+            .await
+            .is_success(),
+        "client B shares the proxy's peer address but must have its own bucket"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn untrusted_peer_cannot_choose_its_bucket_with_forwarded_for() {
+    let Some(per_minute) = std::env::var("AVALON_RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|_| std::env::var("AVALON_TRUSTED_PROXIES").is_err())
+    else {
+        eprintln!(
+            "skipping: set AVALON_RATE_LIMIT_PER_MINUTE and leave AVALON_TRUSTED_PROXIES unset"
+        );
+        return;
+    };
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let mut saw_429 = false;
+    for _ in 0..(per_minute * 2) {
+        if status_with_forwarded(&http, &base, &random_forwarded_address()).await
+            == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            saw_429 = true;
+            break;
+        }
+    }
+    assert!(
+        saw_429,
+        "a spoofed X-Forwarded-For must not yield a fresh bucket"
     );
 }

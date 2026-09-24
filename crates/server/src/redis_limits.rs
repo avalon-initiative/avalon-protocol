@@ -79,6 +79,7 @@ pub struct RedisLimiterState {
     rate_limit_per_minute: u64,
     principal_rate_limit_per_minute: u64,
     max_concurrent_requests: usize,
+    trusted_proxies: std::sync::Arc<crate::trusted_proxies::TrustedProxies>,
 }
 
 impl RedisLimiterState {
@@ -104,6 +105,7 @@ impl RedisLimiterState {
             principal_rate_limit_per_minute:
                 crate::principal_limits::principal_rate_limit_per_minute_from_env(),
             max_concurrent_requests: crate::max_concurrent_requests_from_env(),
+            trusted_proxies: std::sync::Arc::new(crate::trusted_proxies::TrustedProxies::from_env()),
         })
     }
 
@@ -127,12 +129,12 @@ impl RedisLimiterState {
     }
 }
 
-/// Peer-address key, identical in shape to the in-process per-IP ceiling;
-/// no request header ever contributes.
-fn rate_limit_key(req: &Request) -> String {
+/// Client-address key derived exactly as the in-process per-IP ceiling
+/// derives it; a forwarded header contributes only via a trusted proxy.
+fn rate_limit_key(req: &Request, proxies: &crate::trusted_proxies::TrustedProxies) -> String {
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(addr)| format!("ip:{}", addr.ip()))
+        .map(|ConnectInfo(addr)| format!("ip:{}", proxies.client_ip(addr.ip(), req.headers())))
         .unwrap_or_else(|| "ip:unknown".to_string())
 }
 
@@ -158,7 +160,10 @@ pub async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    let key = format!("avalon:ratelimit:{}", rate_limit_key(&req));
+    let key = format!(
+        "avalon:ratelimit:{}",
+        rate_limit_key(&req, &limiter.trusted_proxies)
+    );
     let current: u64 = match RATE_LIMIT_SCRIPT
         .key(&key)
         .arg(60_000i64)
@@ -296,7 +301,7 @@ mod tests {
             .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))))
             .body(Body::empty())
             .unwrap();
-        assert_eq!(rate_limit_key(&req), "ip:127.0.0.1");
+        assert_eq!(rate_limit_key(&req, &Default::default()), "ip:127.0.0.1");
     }
 
     #[test]
@@ -305,6 +310,26 @@ mod tests {
             .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))))
             .body(Body::empty())
             .unwrap();
-        assert_eq!(rate_limit_key(&req), "ip:127.0.0.1");
+        assert_eq!(rate_limit_key(&req, &Default::default()), "ip:127.0.0.1");
+    }
+
+    #[test]
+    fn rate_limit_key_honors_forwarded_address_only_from_trusted_proxy() {
+        let proxies = crate::trusted_proxies::TrustedProxies::parse("127.0.0.1").unwrap();
+        let from = |peer: [u8; 4]| {
+            HttpRequest::builder()
+                .header("x-forwarded-for", "198.51.100.7")
+                .extension(ConnectInfo(SocketAddr::from((peer, 1234))))
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            rate_limit_key(&from([127, 0, 0, 1]), &proxies),
+            "ip:198.51.100.7"
+        );
+        assert_eq!(
+            rate_limit_key(&from([203, 0, 113, 9]), &proxies),
+            "ip:203.0.113.9"
+        );
     }
 }
