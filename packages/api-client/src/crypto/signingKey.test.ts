@@ -15,9 +15,9 @@ import {
   signWithKey,
   storeSigningKey,
 } from './signingKey'
-import { ed25519 } from '@noble/curves/ed25519'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { generateMnemonic } from '@scure/bip39'
-import { wordlist } from '@scure/bip39/wordlists/english'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
 
 describe('identityCreatedSigningBytes', () => {
   it('matches the exact byte format crates/server/src/handlers.rs verifies against', () => {
@@ -102,6 +102,29 @@ describe('mnemonic derivation and recovery', () => {
 })
 
 // #135
+describe('pinned derivation vectors', () => {
+  // Fixed outputs for the standard all-"abandon" test mnemonic. Any change to
+  // the BIP39/SHA-256/Ed25519 libraries must reproduce these exactly, or every
+  // existing identity's recovery phrase would derive a different key.
+  const MNEMONIC =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+  const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+
+  it('derives the same secret and public key as before', () => {
+    const { secretKey, publicKey } = deriveSigningKeyFromMnemonic(MNEMONIC)
+    expect(hex(secretKey)).toBe('8bbf5b6f60fba8d0956394af68a4e8178e5f198d184bd65c9d97e8ff42ac0440')
+    expect(hex(publicKey)).toBe('150e939484a6474f22cbb9acd65ff4419154549407cc39d2ec4554439a9467eb')
+  })
+
+  it('produces the same Ed25519 signature as before', () => {
+    const { secretKey } = deriveSigningKeyFromMnemonic(MNEMONIC)
+    const signature = signWithKey(secretKey, new TextEncoder().encode('avalon golden message'))
+    expect(hex(signature)).toBe(
+      '68784db1911918422627dbb672662351ab70c29141cf49c86c89e69d8562e4f42206984a23fd74c274bf5bf727f5c748ebf3f8da7691927d55e46b905599560a',
+    )
+  })
+})
+
 describe('device grant helpers', () => {
   it('generateGrantRequestKeyPair produces a valid, usable Ed25519 keypair', () => {
     const { publicKey, secretKey } = generateGrantRequestKeyPair()
