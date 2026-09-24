@@ -2,8 +2,8 @@
 
 Shared, canonical test vectors for cross-SDK conformance — client-side
 "smart" behavior that generic wire-shape codegen does not exercise. One
-JSON file per behavior. Consumed by a thin test-runner in each of the Rust
-SDK, `bindings/csharp`, and `bindings/ts`.
+JSON file per behavior. Consumed by a thin test-runner in each SDK in the
+`avalon-sdks` repository (`languages/rust`, `languages/csharp`, `languages/typescript`).
 
 Each file has this shape:
 
@@ -20,7 +20,7 @@ Each file has this shape:
 }
 ```
 
-- `supportedIn` lists which SDKs actually implement this behavior today.
+- `supportedIn` lists which SDKs' conformance tests exercise this vector today. A language missing from it either lacks the behavior or lacks the test; `notSupported` says which.
   A runner only asserts full pass/fail for its own language when it's
   listed here. When a language is *not* listed, its runner must not
   fabricate a passing implementation — it records the vector as an
@@ -41,25 +41,27 @@ Each file has this shape:
   login path. Supported in all three SDKs.
 - `session-continuation.json` — `ContinuationToken` minting, the
   primitive behind the Hub's automatic reconnect-on-401. TypeScript only
-  today (`bindings/ts/src/crypto/continuation.ts`); Rust and C# have no
+  today (`languages/typescript/src/crypto/continuation.ts`); Rust and C# have no
   client-side implementation despite `crates/protocol` defining the same
   signing-bytes contract server-side.
 - `websocket-interest-claim.json` — `InterestClaim` minting, the
   signed payload an `AccountSession`-level websocket subscribe sends once
   it receives the server's `node_info` hello. TypeScript only
-  today (`bindings/ts/src/accountSession/realtime.ts` +
+  today (`languages/typescript/src/accountSession/realtime.ts` +
   `crypto/interestClaim.ts`).
 - `bip39-mnemonic.json` — BIP39 recovery-phrase-derived signing keys.
-  TypeScript only today (`bindings/ts/src/crypto/mnemonic.ts`).
+  TypeScript only today (`languages/typescript/src/crypto/mnemonic.ts`).
 - `attestation-signing.json` — attestation issuance, bulk issuance, and
   revocation signing bytes. Supported in all three SDKs, each with its own
   hand-written construction. This file is load-bearing: the Rust SDK no
   longer calls the server's own signing-byte functions directly, so
   nothing but these vectors keeps client and server producing the same
   bytes.
-- `signed-tree-head.json` — the Signed Tree Head signing message. Rust
-  only today — the C# SDK has no trust-anchor verification path, and the
-  TypeScript side lives in `apps/hub`, not in `bindings/ts`.
+- `signed-tree-head.json` — the Signed Tree Head signing message. Only
+  the Rust conformance test exercises it today. The C# SDK (`Network.cs`) and the
+  TypeScript SDK (`src/network/`) both verify network identity against pinned trust
+  anchors, but neither conformance test consumes this vector yet: a coverage gap,
+  not a missing feature.
 
 ## Both sides of the wire
 

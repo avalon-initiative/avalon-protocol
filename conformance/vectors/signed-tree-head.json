@@ -5,8 +5,8 @@
     "rust"
   ],
   "notSupported": {
-    "csharp": "bindings/csharp has no Signed Tree Head signing or trust-anchor verification path — network-identity verification is Rust/Hub only today.",
-    "typescript": "bindings/ts verifies STH signatures only through apps/hub's own network/verifyNetwork.ts, not through the SDK itself; the SDK exposes no signing-message construction to test."
+    "csharp": "languages/csharp/AvalonSdk/Network.cs verifies Signed Tree Heads against pinned trust anchors (VerifyNetworkAsync), but its conformance test does not consume this vector yet, so the signing-message bytes are not pinned against it in C#. A coverage gap, not a missing feature.",
+    "typescript": "languages/typescript/src/network/sthMessage.ts builds the signing message (signingMessage) and verifyNetwork.ts verifies against pinned trust anchors, but its conformance test does not consume this vector yet, so the signing-message bytes are not pinned against it in TypeScript. A coverage gap, not a missing feature."
   },
   "signingKeySeedHex": "00112233445566778899aabbccddeeff102030405060708090a0b0c0d0e0f000",
   "signingPublicKeyHex": "832e1d37997758d3222d937e2fa3b9be7812a6cbf755252c7e237b3dae768769",

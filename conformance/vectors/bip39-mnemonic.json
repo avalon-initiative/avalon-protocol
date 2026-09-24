@@ -3,8 +3,8 @@
   "description": "BIP39 recovery-phrase-derived signing keys. A 12-word BIP39 mnemonic must deterministically derive the same Ed25519 event-signing keypair every time: SHA-256(bip39_seed(mnemonic) || 'avalon:signing-key-seed:v1') is used directly as the 32-byte Ed25519 secret key seed. Byte-for-byte identical across every SDK is required, or a phrase recovered through one SDK derives a different key than the one issued by another.",
   "supportedIn": ["typescript"],
   "notSupported": {
-    "rust": "crates/sdk has no BIP39/mnemonic dependency or derivation code anywhere (`grep -ri bip39/mnemonic crates/sdk` finds nothing) — AccountSession registration (AvalonClient::register) generates a genuinely random signing key with no recovery phrase at all. Real gap, not just untested.",
-    "csharp": "bindings/csharp/AvalonSdk has no BIP39/mnemonic dependency or derivation code anywhere, and its BouncyCastle-only crypto stack (see AvalonSdk.csproj's own comment on avoiding native deps) currently pulls in no BIP39 wordlist/entropy library at all. Real gap, not just untested."
+    "rust": "the Rust SDK (languages/rust) has no BIP39/mnemonic dependency or derivation code anywhere (`grep -ri bip39/mnemonic languages/rust/src` finds nothing) — AccountSession registration (AvalonClient::register) generates a genuinely random signing key with no recovery phrase at all. Real gap, not just untested.",
+    "csharp": "languages/csharp/AvalonSdk has no BIP39/mnemonic dependency or derivation code anywhere, and its BouncyCastle-only crypto stack (see AvalonSdk.csproj's own comment on avoiding native deps) currently pulls in no BIP39 wordlist/entropy library at all. Real gap, not just untested."
   },
   "derivationLabelUtf8": "avalon:signing-key-seed:v1",
   "vectors": [
