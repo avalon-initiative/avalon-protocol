@@ -1,6 +1,8 @@
 .card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   gap: var(--av-space-2);
   padding: var(--av-space-4);
   border-radius: var(--av-radius-lg);
