@@ -212,6 +212,16 @@ via `flex-wrap`, `min-width: 0` on flex children, `text-overflow: ellipsis`
 on names/labels, `flex-shrink: 0` on icons, and relative sizing throughout,
 rather than a breakpoint or compact-viewport variant per component.
 
+Three pitfalls have produced real phone-width bugs, so check for them when
+adding a row or column layout: a wrapping flex row whose text column is
+`flex: 1` (zero basis) never wraps its siblings onto a new line and instead
+shrinks the text to an ellipsis, so give it a minimum basis
+(`flex: 1 1 8rem`); a column layout with `align-items: flex-start` sizes each
+child to its longest unbreakable word, so use `stretch`; and chat/message
+bodies need `overflow-wrap: anywhere`, since `break-word` does not reduce
+min-content width. Tab bars that cannot fit scroll horizontally on one row
+rather than wrapping.
+
 ### What the Hub calls
 
 The Hub's full request surface spans identity/session endpoints (WebAuthn
