@@ -14,7 +14,7 @@ defineEmits<{ accept: []; remove: [] }>()
 
 <template>
   <div :class="styles.row">
-    <span :class="styles.name">{{ identityId }}</span>
+    <span :class="styles.name">{{ displayName ?? identityId }}</span>
     <span :class="styles.direction">{{ direction === 'incoming' ? 'wants to be friends' : 'pending' }}</span>
     <div :class="styles.actions">
       <button v-if="direction === 'incoming'" :class="styles.accept" type="button" @click="$emit('accept')">

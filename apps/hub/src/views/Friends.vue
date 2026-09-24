@@ -280,6 +280,7 @@ async function onMessageFriend(identityId: string) {
             v-for="request in incomingRequests"
             :key="request.id"
             :identity-id="request.otherIdentityId"
+            :display-name="request.displayName"
             direction="incoming"
             @accept="onAcceptRequest(request.id)"
             @remove="onRemoveRequest(request.id)"
@@ -288,6 +289,7 @@ async function onMessageFriend(identityId: string) {
             v-for="request in outgoingRequests"
             :key="request.id"
             :identity-id="request.otherIdentityId"
+            :display-name="request.displayName"
             direction="outgoing"
             @remove="onRemoveRequest(request.id)"
           />

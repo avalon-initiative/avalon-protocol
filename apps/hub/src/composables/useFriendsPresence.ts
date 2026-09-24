@@ -5,7 +5,7 @@
 // so only one presence socket is ever open.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { PresenceSubscription, PresenceUpdate } from '@avalon-initiative/protocol-sdk'
-import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
+import { listFriendRequestsWithNames, listFriendsWithPresence } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
 import { useSessionStore } from '../api/session'
 
@@ -42,9 +42,12 @@ export function useFriendsPresence() {
     const s = session.session
     if (!s) return
     try {
-      const [friendList, requestList] = await Promise.all([listFriendsWithPresence(s), s.friendRequests()])
+      const [friendList, requestList] = await Promise.all([
+        listFriendsWithPresence(s),
+        listFriendRequestsWithNames(s, selfId.value),
+      ])
       friends.value = friendList
-      requests.value = splitFriendRequests(requestList, selfId.value)
+      requests.value = requestList
       presenceSubscription?.subscribe(friendList.map((f) => f.identityId))
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'

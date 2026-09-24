@@ -5,7 +5,8 @@
   display: flex;
   gap: var(--av-space-2);
   border-bottom: 1px solid var(--av-color-border);
-  flex-wrap: wrap;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .tab {
@@ -17,6 +18,8 @@
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tabActive {
@@ -46,6 +49,7 @@
 @media (max-width: 720px) {
   .channelsLayout {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .channelSidebar {
