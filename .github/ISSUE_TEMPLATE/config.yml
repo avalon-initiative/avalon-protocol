@@ -1,2 +1,8 @@
 blank_issues_enabled: true
-contact_links: []
+contact_links:
+  - name: Question or idea
+    url: https://github.com/orgs/avalon-initiative/discussions
+    about: Open-ended questions, design sanity checks, and early ideas belong in Discussions, not Issues.
+  - name: Avalon Discord
+    url: https://discord.gg/FFDsFw9F4g
+    about: Drop-in chat and quick questions. Not a durable record; move anything worth keeping into an issue or Discussion.
