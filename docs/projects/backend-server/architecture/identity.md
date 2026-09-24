@@ -288,7 +288,7 @@ construction, not by omission.
 
 The Hub derives the identity's Ed25519 signing keypair client-side during
 registration from a freshly generated BIP39 mnemonic phrase
-(`apps/hub/src/crypto/signingKey.ts::deriveSigningKeyFromMnemonic` —
+(`avalon-hub/apps/hub/src/crypto/signingKey.ts::deriveSigningKeyFromMnemonic` —
 `sha256(BIP39 seed ‖ a versioned domain-separation label)`, not a BIP32 HD
 derivation, since there's exactly one signing key per identity, not a
 hierarchy) and stores the resulting secret key in plain `localStorage`,
@@ -559,10 +559,10 @@ step.
   fuller self-description field set for exactly one identity per request, so the batch
   endpoint's exposure stays narrow. It omits `discoverable` — that's the *viewed*
   identity's own search-visibility setting, not something the viewer needs.
-- `apps/hub/src/views/Profile.vue` — surfaces and edits `bio`/`favorite_genres`/
+- `avalon-hub/apps/hub/src/views/Profile.vue` — surfaces and edits `bio`/`favorite_genres`/
   `pronouns` on the user's own profile; editable there only, readable on another
   identity's profile card via `get_identity_profile`, never editable there.
-- `apps/hub/src/views/UserProfile.vue` — a read-only profile card for another
+- `avalon-hub/apps/hub/src/views/UserProfile.vue` — a read-only profile card for another
   identity, reachable by clicking a friend row or a guild member row, rendering the
   full self-description fields plus live presence. No shared-guilds list yet — no
   endpoint exposes another identity's guild memberships to a viewer.
@@ -614,15 +614,15 @@ step.
   it also persists that virtual passkey locally so `avalon login <identity_id>` can
   reload it and drive a real login ceremony later, printing a session token — a
   dev/test convenience, not a pattern for real deployment. `avalon outbox-status`.
-- `apps/hub/src/crypto/webauthn.ts` — the real browser WebAuthn ceremonies via
+- `avalon-hub/apps/hub/src/crypto/webauthn.ts` — the real browser WebAuthn ceremonies via
   `@simplewebauthn/browser`, verified field-for-field against the server's
-  request/response shapes. `apps/hub/src/crypto/signingKey.ts` — Ed25519 signing via
+  request/response shapes. `avalon-hub/apps/hub/src/crypto/signingKey.ts` — Ed25519 signing via
   `@noble/curves`, keys derived from a BIP39 mnemonic (`@scure/bip39`) per the section
-  above. `apps/hub/src/api/identity.ts` ties it together with the
+  above. `avalon-hub/apps/hub/src/api/identity.ts` ties it together with the
   `/identities/register/*` and `/sessions/*` API calls into
   `createIdentity()`/`login()`/`recoverSigningKey()`. `CreateIdentity.vue` shows the
   mnemonic once, right after the identity id, and asks for an optional device label
-  passed through to `register_finish`. `apps/hub/src/api/passkeys.ts` orchestrates the
+  passed through to `register_finish`. `avalon-hub/apps/hub/src/api/passkeys.ts` orchestrates the
   authenticated add-a-passkey ceremony. `Profile.vue` has the recovery form and the
   grant-request form, shown only when the current device has no signing key stored for
   the logged-in identity; once it does, "Your devices" lists every registered device
@@ -636,7 +636,7 @@ step.
   identity and everything durable it carries. The same warning resurfaces on the
   Passkeys card for as long as exactly one passkey is registered, not a one-time
   dismiss — it disappears the moment a second passkey is registered.
-- `apps/hub/src/api/recovery.ts` orchestrates guardian configuration and the
+- `avalon-hub/apps/hub/src/api/recovery.ts` orchestrates guardian configuration and the
   recovery-initiation ceremony — `startRecovery()` is the one function in the Hub's
   API layer that deliberately never sends a bearer token. `Profile.vue` has a
   "Recovery guardians" card (a friend checklist plus an M-of-N threshold stepper), an
@@ -663,7 +663,7 @@ step.
   limiting.
 - `crates/cli/src/dev_tools.rs` — `avalon pair-device` drives the `start`/`poll` side
   of the flow as a stand-in incapable client.
-- `apps/hub/src/views/PairDevice.vue`, routed at `/pair` (matching
+- `avalon-hub/apps/hub/src/views/PairDevice.vue`, routed at `/pair` (matching
   `verification_uri`'s `?user_code=` shape) — a `user_code` field plus approve/deny
   buttons, using the user's existing authenticated Hub session.
 

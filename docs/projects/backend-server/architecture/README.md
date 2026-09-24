@@ -52,7 +52,7 @@ instead, since each is a separate deployable: the SDKs
 ([`../../sdks/architecture/sdk.md`](../../sdks/architecture/sdk.md) —
 language-agnostic; exposes protocol capabilities, not infrastructure
 topology) and the Hub
-([`../../hub/architecture/hub.md`](../../hub/architecture/hub.md) — a client
+([`../../hub/architecture/hub.md`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/architecture/hub.md) — a client
 of the network, not the network).
 
 ## Invariants

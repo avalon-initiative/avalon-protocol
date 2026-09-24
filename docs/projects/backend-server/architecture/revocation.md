@@ -31,7 +31,7 @@ User X — Dragon Slayer (Ashen Realms)
 ```
 
 The original issuance remains observable. The Hub shows both, not an empty
-slot ([`./hub.md`](../../hub/architecture/hub.md)).
+slot ([`./hub.md`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/architecture/hub.md)).
 
 ## Reason code vocabulary and visibility
 

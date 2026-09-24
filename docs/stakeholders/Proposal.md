@@ -151,7 +151,7 @@ history.
 
 ## Hub & Clients
 
-The Hub (`apps/hub`) is a player's front door into Avalon with no
+The Hub (`avalon-hub/apps/hub`) is a player's front door into Avalon with no
 integrator open: identity setup, friends, guilds, achievements, and
 connected-integrator management. It is a client of the network like any
 other — it talks to `avalon-server` through the same API, authentication,
@@ -159,7 +159,7 @@ and capability model as any integrator or third-party client, has no
 backend of its own, and holds no privilege another authorized client
 couldn't have.
 
-A companion app (`apps/hub-app`, a desktop/mobile shell around the
+A companion app (`avalon-hub/apps/hub-app`, a desktop/mobile shell around the
 same UI) is a second proof that other clients are possible by
 construction: web, mobile, desktop, a Discord integration, or an
 integrator's own native UI could all be built the same way. A player who

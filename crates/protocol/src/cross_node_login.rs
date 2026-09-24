@@ -11,7 +11,7 @@
 //! Same idea as [`crate::continuation::ContinuationToken`] and
 //! [`crate::interest_claim::InterestClaim`]: a short assertion self-signed
 //! with the identity's own Ed25519 event-signing key
-//! (`apps/hub/src/crypto/signingKey.ts`), verifiable by *any* node against
+//! (`avalon-hub/apps/hub/src/crypto/signingKey.ts`), verifiable by *any* node against
 //! `avalon_indexer::projections::identity_signing_keys` — no new key
 //! material, no new custody model.
 //!

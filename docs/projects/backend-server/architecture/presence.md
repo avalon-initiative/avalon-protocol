@@ -143,7 +143,7 @@ scaling history or queries ([scalability](./scalability.md)).
   `Presence`; a background task forwards every pushed update onto it, and
   dropping the receiver ends that task on its next send attempt (no separate
   unsubscribe call).
-- `apps/hub/src/api/client.ts::openPresenceSocket` — the Hub's client for the
+- `avalon-hub/apps/hub/src/api/client.ts::openPresenceSocket` — the Hub's client for the
   same endpoint (a plain browser `WebSocket`, not the Rust SDK, which the Hub
   doesn't consume directly). `Friends.vue` uses it to keep each friend's
   presence live; the friend-*list* poll (membership changes — a request

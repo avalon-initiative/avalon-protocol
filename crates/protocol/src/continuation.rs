@@ -3,7 +3,7 @@
 //! An existing session should survive its original node going offline: the
 //! client mints a short-lived, self-signed assertion with the identity's
 //! own Ed25519 event-signing key (the same key it already holds for
-//! authoring events, `apps/hub/src/crypto/signingKey.ts`), and *any* node —
+//! authoring events, `avalon-hub/apps/hub/src/crypto/signingKey.ts`), and *any* node —
 //! including one the client never registered/logged into — can verify it
 //! against that key's public half, read from `avalon_indexer::projections::identity_signing_keys`
 //! (populated locally on an authoring node, reconstructed from replayed

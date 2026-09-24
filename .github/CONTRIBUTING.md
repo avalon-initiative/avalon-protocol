@@ -233,9 +233,7 @@ catalogue row, in the same PR that adds its emitter.
 
 ## Development Interface
 
-The Rust workspace (`crates/`), the JS/TS workspace (`apps/hub`,
-`apps/hub-app`), and the C# SDK (`bindings/csharp`) all run
-through the root `Makefile` — run `make help` for the full list. The common
+The Rust workspace (`crates/`) runs through the root `Makefile` — run `make help` for the full list. The common
 ones:
 
 ```bash
@@ -247,8 +245,6 @@ make fmt             # cargo fmt --all
 make check           # fmt-check + lint + test — what CI runs
 make migrate         # apply pending db/migrations/ (up)
 make db-reset        # wipe db and reapply all migrations
-make web-install      # npm install at the workspace root (apps/hub, apps/hub-app)
-make check-all       # check (Rust) + web-lint + web-test + csharp-build + csharp-test
 ```
 
 Needs a `.env` at the repo root with `DATABASE_URL` and `AVALON_SERVER_ADDR`

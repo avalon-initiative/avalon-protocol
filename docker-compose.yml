@@ -1,7 +1,7 @@
 # Two ways to use this file:
 #
-# 1. Postgres only, for the native cargo/npm dev flow (the JS/TS workspace
-#    and avalon-server itself run on the host, not in a container) — the
+# 1. Postgres only, for the native cargo dev flow (avalon-server itself runs
+#    on the host, not in a container) — the
 #    original, still-supported use of this file. Defaults here match
 #    `.env.compose.example`'s DATABASE_URL. Bring it up with
 #    `docker compose up -d postgres`, then follow

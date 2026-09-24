@@ -2,18 +2,6 @@
 /target/
 crates/*/target/
 
-# Node / npm workspaces (apps/hub, apps/hub-app)
-node_modules/
-dist/
-apps/*/dist/
-apps/*/node_modules/
-storybook-static/
-*.tsbuildinfo
-
-# Tauri
-apps/hub-app/src-tauri/target/
-apps/hub-app/src-tauri/gen/
-
 # -----------------------------------------------------------------------------
 # Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries
 # (target/, node_modules/, __pycache__/, etc.) go above this block, added

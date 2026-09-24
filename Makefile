@@ -12,7 +12,6 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	openapi openapi-check openapi-version-check check-trust-anchors \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
-	web-install hub-dev app-dev web-build web-lint web-test \
 	inspect-ledger inspect-ledger-full create-identity login outbox-status \
 	register-integrator issue-achievement \
 	check-all clean-all
@@ -48,14 +47,6 @@ help:
 	@echo "  make check         fmt-check + lint + test — what CI runs"
 	@echo "  make clean         remove Rust build artifacts and PID/log files"
 	@echo ""
-	@echo "JS/TS workspace (apps/hub, apps/hub-app)"
-	@echo "  make web-install   npm install at the workspace root"
-	@echo "  make hub-dev       vite dev server for apps/hub (web Hub client)"
-	@echo "  make app-dev       tauri dev for apps/hub-app (desktop/mobile companion app)"
-	@echo "  make web-build     build hub and hub-app across the JS workspace"
-	@echo "  make web-lint      eslint across the JS workspace"
-	@echo "  make web-test      vitest across the JS workspace"
-	@echo ""
 	@echo "  (C# and TypeScript SDKs live in the avalon-sdks repo now: dotnet/npm build+test run there)"
 	@echo ""
 	@echo "  make inspect-ledger        pretty-print the hash-chained ledger (avalon-cli)"
@@ -66,7 +57,7 @@ help:
 	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
 	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
-	@echo "  make check-all     check (Rust) + web-lint + web-test"
+	@echo "  make check-all     check (Rust)"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
 
 # --- Rust workspace ----------------------------------------------------------
@@ -265,32 +256,6 @@ stack-down:
 stack-logs:
 	docker compose $(STACK_COMPOSE_FILES) --profile stack logs -f avalon-server
 
-# --- JS/TS workspace (apps/hub, apps/hub-app) ---
-# npm workspaces, declared in the repo-root package.json. Nothing here has
-# been `npm install`ed yet in a verified environment — versions are pinned
-# but unconfirmed against a real install.
-
-web-install:
-	npm install
-
-hub-dev:
-	npm run dev -w apps/hub
-
-app-dev:
-	npm run tauri dev -w apps/hub-app
-
-web-build:
-	npm run build -w apps/hub
-	npm run build -w apps/hub-app
-
-web-lint:
-	npm run lint -w apps/hub
-	npm run lint -w apps/hub-app 2>/dev/null || true
-
-web-test:
-	npm run test -w apps/hub
-	npm run test -w apps/hub-app
-
 # --- Ledger inspection -------------------------------------------------------
 
 inspect-ledger:
@@ -316,8 +281,6 @@ issue-achievement:
 
 # --- Everything -------------------------------------------------------------
 
-check-all: check web-lint web-test
+check-all: check
 
 clean-all: clean
-	rm -rf node_modules apps/*/node_modules apps/*/dist
-	rm -rf apps/hub-app/src-tauri/target

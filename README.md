@@ -109,11 +109,10 @@ crates/
   server/     the network-facing API/auth service every client talks to
   cli/        local dev/ops tooling (`avalon` binary)
   devenv/     loads the workspace root's .env from a fixed path
-
-apps/
-  hub/          web client — Vue3, the first doorway into Avalon
-  hub-app/   Tauri companion app (desktop/mobile), same UI as hub
 ```
+
+The Hub client applications (web app and the Tauri desktop/mobile app) live in
+[`avalon-hub`](https://github.com/avalon-initiative/avalon-hub).
 
 Every official SDK (Rust, C#, TypeScript) lives in a separate `avalon-sdks`
 repository rather than in this workspace; see the
@@ -159,7 +158,7 @@ for what each tier's `environment` value means.
 Avalon Hub bundles this same list at build time and always shows which
 pinned network the current session is connected to, flagging a mismatch or
 an unpinned network rather than trusting it silently — see
-`apps/hub/src/network/`.
+`avalon-hub/apps/hub/src/network/`.
 
 ## Learn more
 

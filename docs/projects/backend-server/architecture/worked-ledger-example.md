@@ -145,7 +145,7 @@ or a basis for authenticity ([`./achievements-and-attestations.md`](./achievemen
 (`game:<slug>:achievement:<key>`), not a bare name — this is exactly the
 string Nova's `GET /me/achievements` response carries, resolved to a
 display name client-side by a separate lookup
-(`apps/hub/src/api/achievements.ts`), never embedded here.
+(`avalon-hub/apps/hub/src/api/achievements.ts`), never embedded here.
 
 ### 5. Nova founds a guild and adds a member
 

@@ -91,7 +91,6 @@ Quick reference once you've read that page:
 ```bash
 docker compose up -d && cp .env.compose.example .env   # Postgres + env
 make migrate && make start                              # db + server
-make web-install                                        # JS workspace, once
 ```
 
 Run `make help` for the full command list, including the C# SDK
