@@ -63,15 +63,39 @@ export async function listFriendsWithPresence(session: AccountSession): Promise<
 export interface FriendRequestView {
   id: string
   otherIdentityId: string
+  // Undefined when the batch profile lookup has no entry; the UI falls back to the id.
+  displayName?: string
   direction: 'incoming' | 'outgoing'
   requestedAt: string
 }
 
-export function splitFriendRequests(requests: FriendRequest[], selfId: string): FriendRequestView[] {
-  return requests.map((r) => ({
-    id: r.id,
-    direction: r.from === selfId ? 'outgoing' : 'incoming',
-    otherIdentityId: r.from === selfId ? r.to : r.from,
-    requestedAt: r.requestedAt,
-  }))
+export function splitFriendRequests(
+  requests: FriendRequest[],
+  selfId: string,
+  displayNameById: Map<string, string> = new Map(),
+): FriendRequestView[] {
+  return requests.map((r) => {
+    const otherIdentityId = r.from === selfId ? r.to : r.from
+    return {
+      id: r.id,
+      direction: r.from === selfId ? 'outgoing' : 'incoming',
+      otherIdentityId,
+      displayName: displayNameById.get(otherIdentityId),
+      requestedAt: r.requestedAt,
+    }
+  })
+}
+
+export async function listFriendRequestsWithNames(
+  session: AccountSession,
+  selfId: string,
+): Promise<FriendRequestView[]> {
+  const requests = await session.friendRequests()
+  if (!Array.isArray(requests) || requests.length === 0) return []
+  const otherIds = requests.map((r) => (r.from === selfId ? r.to : r.from))
+  const profiles = await session.profiles(otherIds)
+  const displayNameById = new Map<string, string>(
+    (Array.isArray(profiles) ? profiles : []).map((p) => [p.identityId, p.displayName]),
+  )
+  return splitFriendRequests(requests, selfId, displayNameById)
 }

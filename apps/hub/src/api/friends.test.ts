@@ -53,4 +53,15 @@ describe('splitFriendRequests', () => {
     expect(view.direction).toBe('incoming')
     expect(view.otherIdentityId).toBe(OTHER)
   })
+
+  it('attaches the resolved display name for the other party', () => {
+    const requests: FriendRequest[] = [{ id: 'r1', from: OTHER, to: SELF, requestedAt: 't' }]
+    const [view] = splitFriendRequests(requests, SELF, new Map([[OTHER, 'Bea']]))
+    expect(view.displayName).toBe('Bea')
+  })
+
+  it('leaves displayName undefined when no profile was resolved', () => {
+    const requests: FriendRequest[] = [{ id: 'r1', from: SELF, to: OTHER, requestedAt: 't' }]
+    expect(splitFriendRequests(requests, SELF)[0].displayName).toBeUndefined()
+  })
 })

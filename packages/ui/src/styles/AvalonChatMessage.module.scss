@@ -91,7 +91,7 @@
   font-size: var(--av-text-base);
   color: var(--av-color-text);
   white-space: pre-wrap;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .deleteButton {
