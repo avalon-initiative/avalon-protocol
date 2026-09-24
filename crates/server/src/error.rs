@@ -328,6 +328,8 @@ pub enum AppError {
     RecoveryAlreadyInProgress,
     #[error("too many recovery attempts against this identity recently, try again later")]
     RecoveryRateLimited,
+    #[error("rate limit exceeded for this account, try again later")]
+    PrincipalRateLimited { retry_after_secs: u64 },
     #[error("this recovery request is not yet past its mandatory time-delay")]
     RecoveryNotReadyToFinalize,
     #[error("this recovery request has already been completed or cancelled")]
@@ -609,6 +611,7 @@ impl AppError {
             AppError::RecoveryRequestNotFound => "RECOVERY_REQUEST_NOT_FOUND",
             AppError::RecoveryAlreadyInProgress => "RECOVERY_ALREADY_IN_PROGRESS",
             AppError::RecoveryRateLimited => "RECOVERY_RATE_LIMITED",
+            AppError::PrincipalRateLimited { .. } => "RATE_LIMITED",
             AppError::RecoveryNotReadyToFinalize => "RECOVERY_NOT_READY_TO_FINALIZE",
             AppError::RecoveryAlreadyResolved => "RECOVERY_ALREADY_RESOLVED",
             AppError::NotAGuardian => "NOT_A_GUARDIAN",
@@ -834,7 +837,9 @@ impl IntoResponse for AppError {
             AppError::RecoveryNotAvailable => StatusCode::NOT_FOUND,
             AppError::RecoveryRequestNotFound => StatusCode::NOT_FOUND,
             AppError::RecoveryAlreadyInProgress => StatusCode::CONFLICT,
-            AppError::RecoveryRateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::RecoveryRateLimited | AppError::PrincipalRateLimited { .. } => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
             AppError::RecoveryNotReadyToFinalize => StatusCode::CONFLICT,
             AppError::RecoveryAlreadyResolved => StatusCode::CONFLICT,
             AppError::NotAGuardian => StatusCode::FORBIDDEN,
@@ -951,7 +956,13 @@ impl IntoResponse for AppError {
             body["is_mirror"] = json!(true);
             body["mirror_peers"] = json!(peers);
         }
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let AppError::PrincipalRateLimited { retry_after_secs } = &self {
+            if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response.headers_mut().insert("retry-after", value);
+            }
+        }
+        response
     }
 }
 

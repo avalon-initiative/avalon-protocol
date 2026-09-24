@@ -799,6 +799,13 @@ async fn authenticate_integrator_key(
         return Err(AppError::InvalidIntegratorSignature);
     }
 
+    state
+        .principal_limiter
+        .check(crate::principal_limits::Principal::Integrator(
+            integrator_id,
+        ))
+        .await?;
+
     Ok((integrator_id, issuer_key))
 }
 

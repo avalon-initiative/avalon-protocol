@@ -232,6 +232,9 @@ pub struct AppState {
     /// required for correctness; the DHT lookup this sits in front of
     /// stays authoritative either way.
     pub interest_redis_fast_path: Option<crate::interest::RedisFastPath>,
+    /// Per-verified-principal rate limit, applied once a credential has
+    /// been checked. See `crate::principal_limits`.
+    pub principal_limiter: crate::principal_limits::PrincipalLimiter,
     /// Shared with `mirror_watcher::run_worker` (when spawned)
     /// so `POST /mirror/notify`'s handler (`crate::mirror_push::notify`)
     /// can wake its poll loop early instead of waiting out the rest of

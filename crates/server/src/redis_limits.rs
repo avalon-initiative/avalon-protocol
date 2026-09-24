@@ -77,6 +77,7 @@ const CONCURRENCY_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 pub struct RedisLimiterState {
     conn: ConnectionManager,
     rate_limit_per_minute: u64,
+    principal_rate_limit_per_minute: u64,
     max_concurrent_requests: usize,
 }
 
@@ -100,24 +101,35 @@ impl RedisLimiterState {
         Some(Self {
             conn,
             rate_limit_per_minute: crate::rate_limit_per_minute_from_env(),
+            principal_rate_limit_per_minute:
+                crate::principal_limits::principal_rate_limit_per_minute_from_env(),
             max_concurrent_requests: crate::max_concurrent_requests_from_env(),
         })
     }
+
+    /// Counts one request against a verified principal's window; true when
+    /// admitted. Fails open if Redis is unreachable, like the per-IP layer.
+    pub(crate) async fn check_principal(&self, principal_key: &str) -> bool {
+        let key = format!("avalon:principal-ratelimit:{principal_key}");
+        let mut conn = self.conn.clone();
+        match RATE_LIMIT_SCRIPT
+            .key(&key)
+            .arg(60_000i64)
+            .invoke_async::<u64>(&mut conn)
+            .await
+        {
+            Ok(current) => current <= self.principal_rate_limit_per_minute,
+            Err(err) => {
+                tracing::warn!(error = %err, "redis principal rate limit: Redis unreachable, failing open");
+                true
+            }
+        }
+    }
 }
 
-/// Same key shape `IntegratorOrIpKeyExtractor` (`crate::lib`) uses for the
-/// in-process limiter — kept independently here rather than shared, since
-/// that extractor is tied to `tower_governor`'s `KeyExtractor` trait and
-/// this middleware isn't a `tower_governor` layer at all.
+/// Peer-address key, identical in shape to the in-process per-IP ceiling;
+/// no request header ever contributes.
 fn rate_limit_key(req: &Request) -> String {
-    if let Some(key_id) = req
-        .headers()
-        .get("x-avalon-integrator-key-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-    {
-        return format!("integrator:{key_id}");
-    }
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| format!("ip:{}", addr.ip()))
@@ -278,13 +290,13 @@ mod tests {
     use axum::http::Request as HttpRequest;
 
     #[test]
-    fn rate_limit_key_prefers_integrator_header_over_ip() {
+    fn rate_limit_key_ignores_integrator_header() {
         let req = HttpRequest::builder()
             .header("x-avalon-integrator-key-id", "abc123")
             .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))))
             .body(Body::empty())
             .unwrap();
-        assert_eq!(rate_limit_key(&req), "integrator:abc123");
+        assert_eq!(rate_limit_key(&req), "ip:127.0.0.1");
     }
 
     #[test]
