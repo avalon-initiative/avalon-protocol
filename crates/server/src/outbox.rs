@@ -837,13 +837,19 @@ mod tests {
         );
     }
 
+    /// Serializes tests that mutate process-global environment variables.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn outbox_poll_interval_env_var_overrides_default() {
-        // SAFETY-of-intent note: `std::env::set_var` is process-global;
-        // this test does not run concurrently with anything else reading
-        // this exact var (no other test in this crate touches
-        // `AVALON_OUTBOX_POLL_INTERVAL_SECS`), so it's safe here despite
-        // being `unsafe` in edition-2024 terms.
+        let _env = env_guard();
+        // Env vars are process-global; `env_guard` serializes every test that mutates them.
         unsafe {
             std::env::set_var("AVALON_OUTBOX_POLL_INTERVAL_SECS", "7");
         }
@@ -859,6 +865,7 @@ mod tests {
 
     #[test]
     fn a_non_positive_outbox_poll_interval_env_var_falls_back_to_default() {
+        let _env = env_guard();
         unsafe {
             std::env::set_var("AVALON_OUTBOX_POLL_INTERVAL_SECS", "0");
         }
@@ -871,13 +878,7 @@ mod tests {
         }
     }
 
-    /// SAFETY-of-intent note, same as the poll-interval tests above: these
-    /// three env vars (`AVALON_SETTLEMENT_REMOTE_URL(S)`,
-    /// `AVALON_SETTLEMENT_SUBMIT_KEY`) aren't touched by any other test in
-    /// this crate's binary, so mutating them process-globally here is
-    /// safe despite being `unsafe` in edition-2024 terms. Each test clears
-    /// all three afterward regardless of which it set, so they can't leak
-    /// into whichever test runs next.
+    /// Clears every remote-submit env var; call with `env_guard` held.
     fn clear_remote_submit_env_vars() {
         unsafe {
             std::env::remove_var("AVALON_SETTLEMENT_REMOTE_URL");
@@ -888,12 +889,14 @@ mod tests {
 
     #[test]
     fn no_remote_env_vars_set_returns_none() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         assert!(RemoteSubmitConfig::from_env().is_none());
     }
 
     #[test]
     fn singular_remote_url_becomes_the_implicit_core_entry() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         unsafe {
             std::env::set_var("AVALON_SETTLEMENT_REMOTE_URL", "https://authority.example/");
@@ -909,6 +912,7 @@ mod tests {
 
     #[test]
     fn plural_remote_urls_parses_a_per_shard_map() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         unsafe {
             std::env::set_var(
@@ -931,6 +935,7 @@ mod tests {
 
     #[test]
     fn plural_remote_urls_naming_core_wins_over_the_singular_fallback() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         unsafe {
             std::env::set_var(
@@ -957,6 +962,7 @@ mod tests {
     /// Realtime — see `crate::backing_services`'s own doc comment).
     #[test]
     fn a_malformed_entry_in_the_plural_var_is_skipped_not_accepted() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         unsafe {
             std::env::set_var(
@@ -978,6 +984,7 @@ mod tests {
     /// a silently-broken one.
     #[test]
     fn a_malformed_singular_url_with_nothing_else_configured_returns_none() {
+        let _env = env_guard();
         clear_remote_submit_env_vars();
         unsafe {
             std::env::set_var("AVALON_SETTLEMENT_REMOTE_URL", "not a url");
