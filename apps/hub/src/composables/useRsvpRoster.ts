@@ -11,7 +11,7 @@
 // listMembersWithPresence already use.
 import { ref, type Ref } from 'vue'
 import { groupRsvpRoster } from '../api/guildEvents'
-import type { AvalonRsvpRosterGroup } from '@avalon/ui'
+import type { AvalonRsvpRosterGroup } from '@avalon-initiative/common-ui'
 import { useSessionStore } from '../api/session'
 
 export function useRsvpRoster(guildId: Ref<string>) {

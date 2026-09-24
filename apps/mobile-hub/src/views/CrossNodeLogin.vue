@@ -17,7 +17,7 @@
 // was reached by typing a code or by a deep link/QR scan prefilling it.
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon-initiative/common-ui'
 import * as api from '@avalon/api-client'
 import { useSessionStore } from '@avalon/api-client'
 import { loadSigningKey, mintCrossNodeLoginGrant } from '@avalon/api-client'

@@ -39,7 +39,7 @@ notifications) rather than duplicating Hub content that's identical here.
 - [`../hub/`](../hub/README.md) — the web client this wraps; same UI
   patterns, same backend calls, different shell, currently well ahead of
   this project in feature coverage.
-- [`../ui/`](../ui/README.md) — the shared component library both Hub apps
+- [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) — the shared component library both Hub apps
   are built from.
 - [`../backend-server/`](../backend-server/README.md) — what this talks to,
   same as the Hub, with no backend of its own.

@@ -4,7 +4,7 @@
 // later work, not part of wiring the API itself.
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAvatar, AvalonButton, AvalonCard } from '@avalon/ui'
+import { AvalonAvatar, AvalonButton, AvalonCard } from '@avalon-initiative/common-ui'
 import { getMe, useSessionStore } from '@avalon/api-client'
 import type { ProfileResponse } from '@avalon/api-client'
 import styles from '../styles/Home.module.scss'

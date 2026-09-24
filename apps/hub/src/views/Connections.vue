@@ -4,7 +4,7 @@
 // button. GET /me/connections is the source of truth — no client-side
 // merging needed, unlike the guild roster's presence merge.
 import { ref } from 'vue'
-import { AvalonCard, AvalonConnectionCard } from '@avalon/ui'
+import { AvalonCard, AvalonConnectionCard } from '@avalon-initiative/common-ui'
 import { capabilityDescription } from '../api/connections'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../api/session'

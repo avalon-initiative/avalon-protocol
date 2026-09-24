@@ -6,7 +6,7 @@
 // endpoints added here.
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAvatar, AvalonButton, AvalonCard, AvalonIcon, AvalonPresenceBadge } from '@avalon/ui'
+import { AvalonAvatar, AvalonButton, AvalonCard, AvalonIcon, AvalonPresenceBadge } from '@avalon-initiative/common-ui'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
 import type { HistoryEntry } from '@avalon-initiative/protocol-sdk'
 import { useFriendsPresence } from '../composables/useFriendsPresence'

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Same identity-creation ceremony as apps/hub's CreateIdentity.vue,
-// composed from the same @avalon/ui components and the shared
+// composed from the same @avalon-initiative/common-ui components and the shared
 // @avalon/api-client module.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
+import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon-initiative/common-ui'
 import { createIdentity, login, useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'

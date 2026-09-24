@@ -8,7 +8,7 @@
 // api/recovery.ts::startRecovery / crates/server/src/recovery.rs).
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
+import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon-initiative/common-ui'
 import type { RecoveryRequest } from '@avalon-initiative/protocol-sdk'
 import { avalonClient, useSessionStore } from '../api/session'
 import { loadSigningKeySeed } from '../api/signingKeyStorage'

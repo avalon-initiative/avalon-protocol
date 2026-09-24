@@ -133,7 +133,7 @@ it — without deleting it or touching any attestation already issued.
 
 A definition gets a visual identity without every integrator needing to host
 anything: `icon` is a key into a small, fixed built-in icon set shipped with
-`packages/ui` (`trophy`/`star`/`shield`/`sword` — generic enough to cover
+the UI library (`trophy`/`star`/`shield`/`sword` — generic enough to cover
 games/apps/services alike), and `icon_url` is an integrator-hosted image that
 takes precedence over `icon` when present. Both are optional; a definition
 with neither set still renders the hardcoded default (`trophy`) rather than a
@@ -298,7 +298,7 @@ the other.
   validate `icon` against the fixed built-in set and `icon_url` against an
   `http`/`https` scheme; `AchievementDefinitionResponse.icon` always comes back
   populated (falls back to the hardcoded default, `trophy`, when the row has neither
-  field set) while `icon_url` stays `Option`. `packages/ui`'s
+  field set) while `icon_url` stays `Option`. the UI library's
   `AvalonAchievementCard` renders the built-in icon or an `<img>` for `icon_url` when
   present. Verified live, including the default-fallback and rejected-input paths
   (`crates/server/tests/achievements.rs`).

@@ -7,7 +7,7 @@
 // different server.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon-initiative/common-ui'
 import { getServerUrl, setServerUrl } from '@avalon/api-client'
 import styles from '../styles/Settings.module.scss'
 

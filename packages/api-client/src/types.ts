@@ -978,7 +978,7 @@ export interface ListIntegratorsParams {
 // One registry metric, matching
 // crates/server/src/registry.rs::MetricResponse field-for-field — never
 // rendered as a bare `value` anywhere in the Hub; see AvalonMetricTile
-// in @avalon/ui.
+// in the UI library.
 export interface MetricResponse {
   value: number
   definition: string

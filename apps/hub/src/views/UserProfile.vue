@@ -14,7 +14,7 @@
 // pre-filtered to visible fields, but nothing in the Hub read it.
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AvalonAvatar, AvalonButton, AvalonCard, AvalonPresenceBadge } from '@avalon/ui'
+import { AvalonAvatar, AvalonButton, AvalonCard, AvalonPresenceBadge } from '@avalon-initiative/common-ui'
 import { NotFoundError } from '@avalon-initiative/protocol-sdk'
 import { listPublishedIntegratorData, type PublishedIntegratorData } from '../api/integratorData'
 import type { FriendRequest, PresenceStatus, PublicIdentityProfile } from '@avalon-initiative/protocol-sdk'

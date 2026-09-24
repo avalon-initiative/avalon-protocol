@@ -15,7 +15,7 @@
 // single-tap default.
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon-initiative/common-ui'
 import { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 import { loadSigningKeySeed } from '../api/signingKeyStorage'

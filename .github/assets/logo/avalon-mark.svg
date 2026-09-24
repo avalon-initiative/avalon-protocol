@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1024" height="1024">
   <!-- Avalon primary mark (.vscode/mocks/IconMock.png's "Mark (Standalone)"):
        a faceted gem/diamond built from six triangles using the brand
-       palette in packages/ui/src/styles/tokens.css (#310/#311) - replaces
+       palette in the UI library's tokens.css (#310/#311) - replaces
        the solid-color placeholder `tauri icon` generated before any real
        branding existed (see the mobile-hub Tauri build-fix commit this
        replaces). `tauri icon apps/mobile-hub/src-tauri/app-icon.svg` is

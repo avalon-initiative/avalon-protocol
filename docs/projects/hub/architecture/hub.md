@@ -41,7 +41,7 @@ Rules that keep this true:
 - no Hub-only endpoints, read paths, or credentials
 - anything the Hub needs that the server lacks is a server ticket first
 - no server-side rendering that reaches into Postgres; no Hub-scoped tables
-- `packages/ui` is a component library for clients and knows nothing about
+- the UI library (`@avalon-initiative/common-ui`) is a component library for clients and knows nothing about
   storage or settlement
 
 ## Hub and achievements
@@ -199,7 +199,7 @@ user lands on to authorize an integrator.
 
 ### Shared component library
 
-`packages/ui` (`@avalon/ui`) holds every shared component — buttons, form
+`@avalon-initiative/common-ui` (repository [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui), installed from GitHub Packages) holds every shared component — buttons, form
 fields, cards, nav, identity/social rows, guild/event/achievement
 components — all presentational (props in, events out), split into
 `components/`/`styles/`/`stories/`/`types/`/`state/`. No `<style>` blocks

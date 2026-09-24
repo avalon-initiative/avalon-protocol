@@ -32,7 +32,7 @@ list (`Home`, `Friends`, `Guild(s)`, `Achievements`, `Messages`, `Profile`,
 | A user of a game/app/service that integrates Avalon, wanting to understand the Hub | [`for-users.md`](for-users.md) |
 | Contributing code to the Hub itself | [`architecture/hub.md`](architecture/hub.md) |
 | Building the desktop/mobile companion instead | [`../mobile-hub/README.md`](../mobile-hub/README.md) |
-| Looking for the shared component library the Hub is built from | [`../ui/README.md`](../ui/README.md) |
+| Looking for the shared component library the Hub is built from | [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) |
 
 ## In this folder
 
@@ -46,5 +46,5 @@ list (`Home`, `Friends`, `Guild(s)`, `Achievements`, `Messages`, `Profile`,
 
 - [`../backend-server/`](../backend-server/README.md) — everything the Hub
   reads and writes goes through this; the Hub has no backend of its own.
-- [`../ui/`](../ui/README.md) — the shared Vue3 component library the Hub is
+- [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) — the shared Vue3 component library the Hub is
   built from, alongside [`../mobile-hub/`](../mobile-hub/README.md).

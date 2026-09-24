@@ -213,7 +213,7 @@ into a Hub-only or integrator-only corner.
   next to the active thread, the same "swap selection in place, no remount"
   shape the guild page's Channels tab uses. Reuses `AvalonChatMessage`/
   `AvalonChatComposer` unmodified (both already wire-shape-agnostic —
-  neither carries a guild/channel field) — no separate `packages/ui`
+  neither carries a guild/channel field) — no separate the UI library
   component. `useConversations`/`useConversationThread`/`useGuildChat`
   (`apps/hub/src/composables/`) subscribe to `GET /ws/messages` for new
   messages; `apps/hub/src/api/client.ts`'s
