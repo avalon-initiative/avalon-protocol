@@ -11,11 +11,10 @@ a session token proves, what a capability grant is, what an attestation's
 
 ```toml
 [dependencies]
-avalon-sdk = { git = "https://github.com/LunarVagabond/avalon-protocol" }
+avalon-sdk = { git = "https://github.com/avalon-initiative/avalon-sdks" }
 ```
 
-(Not yet published to crates.io — a git dependency, or a path dependency if
-you're working inside this workspace, until it is.)
+(Not yet published to crates.io — a git dependency until it is.)
 
 ## 2. You need a server to talk to
 
