@@ -1042,7 +1042,7 @@ export type MyConnectionsResponse = IntegratorBindingResponse[]
 
 // Settlement / transparency-log reads, matching
 // `crates/server/src/settlement.rs::SignedTreeHeadResponse` field-for-field.
-// export interface SignedTreeHeadResponse {
+export interface SignedTreeHeadResponse {
   tree_size: number
   // Lowercase hex-encoded RFC 6962 Merkle Tree Hash.
   root_hash: string
