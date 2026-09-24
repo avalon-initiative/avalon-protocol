@@ -381,6 +381,14 @@ feature.
   `finalize_is_idempotent_on_a_replayed_batch_id`
   (`crates/chain/tests/managed_hosting.rs`, `--ignored`).
 
+### Hiding topology data
+
+The topology, probe and trace routes (`/nodes/topology`, `/nodes/probe`,
+`/nodes/trace`) are public and readable from any origin by default. A hoster
+who prefers not to publish their neighbor list sets
+`AVALON_TOPOLOGY_PUBLIC=false`; those routes then return 404.
+`/nodes/peers` and `/nodes/discover` stay available either way.
+
 ## Open questions
 
 Whether/how a private instance's history could ever be selectively
