@@ -165,6 +165,20 @@ see `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`.
 
 [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md)
 
+## Community
+
+Where to talk about Avalon depends on whether the conversation should last:
+
+- **[GitHub Discussions](https://github.com/orgs/avalon-initiative/discussions)
+  and [Issues](https://github.com/avalon-initiative/avalon-protocol/issues)**
+  are the durable record. Design questions, proposals, decisions, bug
+  reports, and anything you'd want to find again in a year belong here.
+- **[Discord](https://discord.gg/FFDsFw9F4g)** is for drop-in chat: hanging
+  out, quick "where did this come from?" questions, and rapid-fire
+  back-and-forth. It is not a durable record and nothing there is treated as
+  a decision. When a conversation there produces an idea worth keeping, it
+  gets moved into a Discussion or an Issue.
+
 ## Contributing
 
 Opening a PR here makes you part of the Avalon Initiative, not an outside
