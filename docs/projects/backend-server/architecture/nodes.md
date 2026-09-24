@@ -457,6 +457,28 @@ and never influences admission, pruning, the version floor, or any trust
 decision. The announce worker publishes its active set and these stats through
 the shared `PeerTable` so read models can serve them.
 
+**`GET /nodes/topology` is this node's own view of the network.** Public,
+read-only, `Cache-Control: public, max-age=5`, served while
+`AVALON_TOPOLOGY_PUBLIC` is true (the default). It returns `self` (base URL,
+libp2p peer id, protocol version, network id, roles, stale flag, resource
+metrics, and the latest tree size and STH time of each shard this node
+authors), `neighbors` (the active announce/exchange set: roles, protocol
+version, peer id, last announced, whether it is a bootstrap peer, and the
+measured round-trip stats above under `latency`, labeled with this node as
+`observed_by`), `known` (peer table entries that are not active neighbors,
+newest first, bounded by `limit`, default 100, at most 500, with `known_total`
+reporting the size before the limit), `mirrors` and `generated_at`. Each
+`mirrors` entry is one configured `AVALON_MIRROR_PEERS` source: the tree size
+of the latest signed tree head observed from it, the entries mirrored for that
+shard, `last_mirrored_at`, `lag_entries` (observed tree size minus mirrored
+entries, never negative, absent until a tree head has been observed), and any
+unresolved equivocation findings for the shard. Shards this node auto-mirrors
+from gossip rather than from configuration are not listed. No aggregator
+exists: each node reports only what it sees, and clients assemble the graph by
+walking from node to node. The response is assembled from local state only and
+carries nothing that is not already public elsewhere, except the observer's own
+measurements.
+
 **Realtime relay and DHT bootstrap consume this peer table.** The realtime
 relay (see [`presence.md`](./presence.md)/[`communication.md`](./communication.md))
 reads each peer's `roles` to decide who a live presence/chat event gets
