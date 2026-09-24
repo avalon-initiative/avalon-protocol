@@ -396,6 +396,7 @@ mod live_tests {
             interest: crate::interest::InterestRegistry::new().0,
             dht_commands: None,
             own_base_url: None,
+            own_libp2p_peer_id: None,
             interest_redis_fast_path: None,
             principal_limiter: crate::principal_limits::PrincipalLimiter::from_env(None),
             mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
