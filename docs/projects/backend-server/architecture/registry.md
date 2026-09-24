@@ -209,7 +209,7 @@ today's stability promise until they exist.
 
 The Rust SDK's `AvalonClient::registry(slug)` is the thin typed client for
 this — no `Session`/`authenticate()` needed, since the route itself is
-public and unauthenticated. `bindings/csharp` does not mirror this yet.
+public and unauthenticated. The C# SDK does not mirror this yet.
 
 ## Current implementation
 

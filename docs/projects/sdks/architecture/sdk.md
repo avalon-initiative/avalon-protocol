@@ -162,8 +162,7 @@ Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
 `avalon-chain` or `avalon-server`.
 
-The Rust SDK physically lives in the `avalon-sdks` repo (`languages/rust/`) rather
-than `crates/sdk` in this repo; `crates/cli` reaches it via a real git
+The Rust SDK lives in the `avalon-sdks` repo (`languages/rust/`); `crates/cli` reaches it via a real git
 dependency, not a workspace path. It has **no dependency on any other
 crate in this workspace** — not `avalon-protocol`, not `avalon-chain`, not
 `avalon-server` — so it is structurally the same kind of thing the C# and
@@ -318,8 +317,7 @@ constant instead of a literal string at every call site.
 
 ### C# SDK surface
 
-`avalon-sdks`' `languages/csharp/AvalonSdk` (moved from this repo's `bindings/csharp`
-by #775) is a real, building C# port of the same surface: auth/session,
+`avalon-sdks`' `languages/csharp/AvalonSdk` is a real, building C# port of the same surface: auth/session,
 friends/presence, guilds, conversations,
 sync-journal, achievements (including definition CRUD and bulk issuance),
 integrator-space schema/mapping/instance-data, integrator registration and
@@ -357,7 +355,7 @@ plus opt-in live tests against a real server and Postgres.
 
 ### TypeScript SDK surface
 
-`avalon-sdks`' `languages/typescript/` (moved from this repo's `bindings/ts`) is a
+`avalon-sdks`' `languages/typescript/` is a
 self-contained TypeScript SDK implementing both `AccountSession` and
 `IntegratorSession` from scratch, ES modules, `vitest` for tests.
 Published to GitHub Packages as `@avalon-initiative/protocol-sdk`;

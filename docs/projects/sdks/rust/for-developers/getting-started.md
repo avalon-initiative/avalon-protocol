@@ -74,7 +74,7 @@ session.
 
 ## C# / Unity equivalent
 
-`bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works unmodified
+`avalon-sdks`' `languages/csharp/AvalonSdk` (targets netstandard2.1, so it works unmodified
 in Unity/IL2CPP) mirrors the same four steps — same method names translated
 to C# idiom, same two-call `authenticate` (`GET /me` + `GET /me/grants`),
 same typed exceptions in place of `SdkError`:

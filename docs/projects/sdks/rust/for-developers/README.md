@@ -1,13 +1,13 @@
 # For Developers
 
 Documentation for developers integrating Avalon into their own game, app, or
-service — the audience the SDKs (the Rust SDK, `bindings/csharp`) exist for.
+service — the audience the SDKs (the Rust SDK, the C# SDK) exist for.
 
 Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
 integrating your game, app, or service with Avalon at all — a vision
 document, not an integration guide. The pages below are the integration
 guide, for the Rust SDK, the reference implementation.
-`bindings/csharp/AvalonSdk` mirrors most of that surface but doesn't have
+The C# SDK (`avalon-sdks`' `languages/csharp/AvalonSdk`) mirrors most of that surface but doesn't have
 its own parallel guide yet.
 
 ## Guides
