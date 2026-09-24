@@ -162,6 +162,26 @@ async fn finalize_with_an_invalid_signature_is_rejected_and_inserts_nothing() {
         row.is_none(),
         "a rejected finalize must roll back — the entry must never land"
     );
+
+    // The rejected entry must not linger in the provider's cached leaves: a
+    // later commit has to line up with the table row for row.
+    let next = sample_batch("test.managed_hosting_after_rejection");
+    chain.commit(&next).await.expect("commit failed");
+    let stored: Vec<String> = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC")
+        .fetch_all(&pool)
+        .await
+        .expect("query failed")
+        .into_iter()
+        .map(|r| r.try_get("entry_hash").expect("entry_hash column"))
+        .collect();
+    let cached = chain
+        .entry_hashes_up_to(stored.len() as i64)
+        .await
+        .expect("entry_hashes_up_to failed");
+    assert_eq!(
+        cached, stored,
+        "leaf cache diverged from ledger_entries after a rejected finalize"
+    );
 }
 
 /// The whole point of "finalize recomputes fresh rather than trusting
