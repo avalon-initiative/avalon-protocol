@@ -39,7 +39,7 @@ themselves.
 | [`projects/sdks/`](projects/sdks/README.md) | Every official SDK (Rust, C#, TypeScript), one per language, one language-agnostic design reference. |
 | [`projects/cli/`](projects/cli/README.md) | `avalon`, the local dev/ops CLI. |
 | [`projects/hub/`](projects/hub/README.md) | The web client — a user's first doorway into Avalon. |
-| [`projects/mobile-hub/`](projects/mobile-hub/README.md) | The Tauri desktop/mobile shell around the Hub UI. |
+| [`projects/hub-app/`](projects/hub-app/README.md) | The Tauri desktop/mobile shell around the Hub UI. |
 | [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) | The shared Vue3 component library both Hub apps use. |
 
 See [`projects/README.md`](projects/README.md) for why the split is drawn

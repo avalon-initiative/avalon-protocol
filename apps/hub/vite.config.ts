@@ -8,7 +8,7 @@ import vue from '@vitejs/plugin-vue'
 // to; there is no bundled backend here.
 
 // Footer build info: the exact git tag when built from a release, otherwise
-// the short commit hash for dev/CI builds — mirrors mobile-hub's Tauri
+// the short commit hash for dev/CI builds — mirrors hub-app's Tauri
 // `get_app_info` split between `releaseVersion` and `buildRevision`.
 function getBuildRevision(): { revision: string; isRelease: boolean } {
   try {

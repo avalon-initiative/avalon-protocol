@@ -3,8 +3,8 @@
        a faceted gem/diamond built from six triangles using the brand
        palette in the UI library's tokens.css (#310/#311) - replaces
        the solid-color placeholder `tauri icon` generated before any real
-       branding existed (see the mobile-hub Tauri build-fix commit this
-       replaces). `tauri icon apps/mobile-hub/src-tauri/app-icon.svg` is
+       branding existed (see the hub-app Tauri build-fix commit this
+       replaces). `tauri icon apps/hub-app/src-tauri/app-icon.svg` is
        the source of truth for every generated size in ./icons/. -->
   <polygon points="50,8 12,38 50,50" fill="#22D3EE" />
   <polygon points="50,8 50,50 88,38" fill="#E8F0FF" />

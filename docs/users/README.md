@@ -12,5 +12,5 @@ managing which games/apps/services can see what.
 
 See [`../WhyAvalon.md`](../WhyAvalon.md) for the plain-language case for why
 this exists at all. As more user-facing surfaces appear outside the Hub
-(e.g. anything `mobile-hub`-specific), their docs will live with that
+(e.g. anything `hub-app`-specific), their docs will live with that
 project the same way.

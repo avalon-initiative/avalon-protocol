@@ -638,8 +638,8 @@ to a genuinely different node rather than a genuinely different device.
   genuine cross-shard display-name collision, since this node's own
   uniqueness index can't be enforced globally.
 - **Approval screens are real in both first-party clients**: the Hub's
-  `apps/hub/src/views/CrossNodeLogin.vue` and mobile-hub's
-  `apps/mobile-hub/src/views/CrossNodeLogin.vue` (with a real `avalon://`
+  `apps/hub/src/views/CrossNodeLogin.vue` and hub-app's
+  `apps/hub-app/src/views/CrossNodeLogin.vue` (with a real `avalon://`
   deep-link entry point on desktop; iOS/Android Universal Links are not yet
   set up). Both call `GET /auth/cross-node/lookup?user_code=...`
   (unauthenticated, returns status/requesting-context/expiry, never the

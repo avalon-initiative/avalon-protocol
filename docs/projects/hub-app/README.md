@@ -1,4 +1,4 @@
-# mobile-hub
+# hub-app
 
 ## What this is, in plain language
 
@@ -8,7 +8,7 @@ your guild or see if a friend is online without having a game open at all.
 
 ## What this is, technically (the meta)
 
-`apps/mobile-hub` — a [Tauri](https://tauri.app/) shell (desktop + mobile)
+`apps/hub-app` — a [Tauri](https://tauri.app/) shell (desktop + mobile)
 around the same UI as [`../hub/`](../hub/README.md), for guild/friend
 presence without a game client open. Its `src-tauri/` is intentionally its
 own standalone Cargo package, **not** a member of the root Rust workspace —

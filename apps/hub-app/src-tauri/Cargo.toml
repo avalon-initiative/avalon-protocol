@@ -1,14 +1,14 @@
 [workspace]
 
 [package]
-name = "avalon-mobile-hub"
+name = "avalon-hub-app"
 version = "0.1.0"
 edition = "2021"
 description = "Tauri shell for Avalon's companion app (desktop + mobile). Deliberately NOT a member of the root Cargo workspace: this is app packaging, not protocol implementation, and Tauri's own dependency set/build tooling shouldn't leak into crates/."
 publish = false
 
 [lib]
-name = "avalon_mobile_hub_lib"
+name = "avalon_hub_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

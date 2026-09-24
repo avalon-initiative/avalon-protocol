@@ -1,5 +1,5 @@
 {
-  "name": "@avalon/mobile-hub",
+  "name": "@avalon/hub-app",
   "private": true,
   "version": "0.1.0",
   "description": "Avalon Hub as a Tauri shell (desktop + mobile) around the same Vue3 UI used by the web hub, so guild chat/presence/friends stay reachable without a game client open. See Proposal.md \u00a722.",

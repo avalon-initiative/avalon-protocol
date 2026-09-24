@@ -280,7 +280,7 @@ fn is_verified_seed_node(
 }
 
 /// `GET /auth/cross-node/lookup?user_code=...` — unauthenticated: the
-/// Hub/mobile-hub approval screen has to
+/// Hub/hub-app approval screen has to
 /// show real context before a human decides whether to approve, but `submit`/`deny` only
 /// ever take a `user_code` with no read path to go with it. Deliberately
 /// returns nothing beyond what's needed to render the prompt — never

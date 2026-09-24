@@ -106,7 +106,7 @@ guild-integrator connection.
 
 ## Guild chat is a network primitive
 
-A channel belongs to the guild. It is visible through the Hub, the mobile-hub
+A channel belongs to the guild. It is visible through the Hub, the hub-app
 companion app, an integrator that chooses to render it, a web client, and later a
 Discord bridge or other authorized client. User A in Integrator A and User B in
 Integrator B talk in the same channel. See
@@ -353,7 +353,7 @@ Every management action (rename/describe, define roles, invite, kick, change rol
 transfer ownership, create/archive channels, associate an integrator) is gated
 client-side on the caller's own resolved permission list, but the server is the real
 authority — a hidden-but-still-reachable action shows a plain error on a 403 rather
-than crashing. `apps/mobile-hub` is not yet wired to guilds.
+than crashing. `apps/hub-app` is not yet wired to guilds.
 
 Roster, channel, and message reads all require current guild membership
 (session-authenticated, checked against `guild_members`); a non-member's request is

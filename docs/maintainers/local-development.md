@@ -12,7 +12,7 @@ repeated here).
   version, workspace edition is 2021) — `cargo`, `rustc`.
 - **Docker** with the `docker compose` CLI plugin — used only to run
   Postgres locally; the app itself runs natively via `make start`.
-- **Node.js and npm** for `apps/hub`, `apps/mobile-hub` (npm
+- **Node.js and npm** for `apps/hub`, `apps/hub-app` (npm
   workspaces from the repo root). No version is pinned in `package.json`;
   a current LTS Node works.
 - **.NET SDK** for `bindings/csharp` (targets `netstandard2.1` for Unity
@@ -105,7 +105,7 @@ To log back in with an identity `create-identity` already saved locally:
 make login IDENTITY_ID=<uuid>
 ```
 
-## 6. Web workspace (Hub, mobile-hub)
+## 6. Web workspace (Hub, hub-app)
 
 ```bash
 make web-install    # npm install at the workspace root, once
@@ -119,7 +119,7 @@ through it. The shared component library lives in
 [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) and is installed as
 `@avalon-initiative/common-ui`; run its Storybook from that repository.
 
-`make mobile-dev` (Tauri dev build of `apps/mobile-hub`) needs Tauri's own
+`make app-dev` (Tauri dev build of `apps/hub-app`) needs Tauri's own
 native prerequisites beyond Node — see
 [Tauri's prerequisites guide](https://tauri.app/start/prerequisites/) if you
 need that app specifically; it's not required for the Hub web client.

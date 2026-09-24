@@ -31,7 +31,7 @@ to avoid (see [Proposal: Current Limitations & Non-Goals](../../../stakeholders/
 
 Because the Hub uses only the public API, other clients are possible by
 construction: web, mobile, desktop, a Discord integration, an integrator's native UI, a
-third-party application. `apps/mobile-hub` is the first proof — the same UI in a
+third-party application. `apps/hub-app` is the first proof — the same UI in a
 Tauri shell for desktop and mobile, for guild chat and presence without an integrator
 running (see [Proposal: Hub & Clients](../../../stakeholders/Proposal.md#hub--clients)).
 A user who never installs any Hub loses nothing at the protocol level.
@@ -98,7 +98,7 @@ placeholder screen.
 server client is `@avalon-initiative/protocol-sdk`: nothing in the app calls
 `fetch` directly. `apps/hub/src/api/` holds the session store (an SDK
 `AccountSession`) and thin domain modules (`guilds.ts`, `friends.ts`, ...)
-built on it; `apps/mobile-hub` uses the same SDK with its own session store.
+built on it; `apps/hub-app` uses the same SDK with its own session store.
 
 The logged-in Hub is a persistent shell, not separate pages: `HubShell.vue`
 renders a fixed left sidebar on desktop (wordmark, nav, the caller's own

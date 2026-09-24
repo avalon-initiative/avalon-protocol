@@ -19,7 +19,7 @@ use keyring::Entry;
 
 // Matches tauri.conf.json's `identifier` — the keychain "service" every
 // entry this app stores is filed under.
-const SERVICE: &str = "protocol.avalon.mobilehub";
+const SERVICE: &str = "protocol.avalon.hubapp";
 
 /// Abstracts the keychain lookup so the command handlers below are testable
 /// without a real OS keychain (headless CI, this sandbox) or a running
@@ -127,7 +127,7 @@ pub fn run() {
             secure_storage_delete
         ])
         .run(tauri::generate_context!())
-        .expect("error while running avalon mobile-hub");
+        .expect("error while running avalon hub-app");
 }
 
 #[cfg(test)]
