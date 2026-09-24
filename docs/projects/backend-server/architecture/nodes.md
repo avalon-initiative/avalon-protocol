@@ -1018,6 +1018,74 @@ Served only while `AVALON_TOPOLOGY_PUBLIC` is true. Live coverage:
 constrained with bootstrap peers and `AVALON_NODE_MAX_PEERS`, and compares
 each trace with a simulation of the routing rule.
 
+### Operation tracing: `X-Avalon-Trace`
+
+`POST /nodes/trace` follows the overlay route. Operation tracing follows a real
+forwarded request. A request carrying `X-Avalon-Trace: <uuid>` asks the nodes
+that handle or forward it to report a hop; nothing else about the request
+changes.
+
+Real forwarded operations covered, and the exact requests involved:
+
+- **Realtime relay.** A client `PUT /me/presence`, `PUT` of integrator
+  presence, guild channel message send or delete, or conversation message send
+  makes the receiving node relay the event with `POST /nodes/relay` to every
+  eligible peer (one per target, in parallel). `POST /nodes/relay` is the
+  receiving end and never forwards.
+- **Remote settlement submit.** A write on a node configured with
+  `AVALON_SETTLEMENT_REMOTE_URL(S)` is committed by the outbox worker with
+  `POST /ledger/submit` on the settlement authority. The worker runs detached
+  from the client request, so its path cannot ride the write's own response.
+
+Wire format:
+
+- Request header `X-Avalon-Trace`: a UUID. A missing or malformed value means
+  no tracing.
+- Response header `X-Avalon-Trace-Hops`: unpadded URL-safe base64 of
+  `{ trace_id, branches: [ { target, outcome: "ok"|"timeout"|"unreachable",
+  hops: [ { index, base_url, roles, protocol_version, processing_ms,
+  to_next_ms? } ] } ], truncated }`. Hop entries are the same public fields as
+  the trace endpoint. A branch is one path from the originating node; hops are
+  in the order traveled and `index` counts from the originating node.
+- A node that handles a traced request reports one branch with one hop. A
+  forwarding node prepends its own hop to every path the downstream node
+  returned. `to_next_ms` is this node's round trip minus the downstream hop's
+  `processing_ms`. A target that timed out or was unreachable yields a branch
+  with only the forwarding hop and the matching `outcome`.
+- Relay fan-out reports one branch per target. A traced request that would
+  normally detach its relay waits for the fan-out (bounded at 5 s per target)
+  so the response can carry the branches; no extra requests are made.
+- Remote submit: a write made with the header registers its trace id against
+  its outbox row in process memory. When the worker submits the batch it sends
+  the same header on the `POST /ledger/submit` it already makes and keeps the
+  resulting path (gateway hop, then authority hop) in a bounded in-memory store
+  for 10 minutes. The path is read back with
+  `GET /ledger/remote-submit-status` carrying the same `X-Avalon-Trace` id: the
+  response then carries `X-Avalon-Trace-Hops` and its body is unchanged. The
+  gateway hop's `processing_ms` is the time the write waited in the outbox
+  before being sent. A failed submit is recorded with outcome `unreachable` or
+  `timeout` and replaced by the retry.
+- Caps: 8 branches, 8 hops per branch and 8 KiB for the encoded header.
+  Anything beyond is dropped and `truncated` is set; it is never an error.
+
+Invariants:
+
+- Requests without the header, and every request when
+  `AVALON_TOPOLOGY_PUBLIC` is false (the layer is not mounted), behave exactly
+  as before, including response headers. A node without `AVALON_NODE_URL`
+  ignores the header.
+- Tracing adds no outbound calls; the header rides calls already made. The one
+  behavior difference on a traced request is that the relay fan-out is awaited.
+- Hop data from downstream nodes is untrusted: shape is validated, strings are
+  clipped, durations must be finite and non-negative, and a mismatched trace id
+  or malformed header is ignored. Trace data never fails the operation.
+- The data is self-reported and advisory, like the trace endpoint's. The
+  header is meant for non-browser clients; responses do not expose it through
+  CORS.
+
+Code: `crates/server/src/op_trace.rs`. Live coverage: the `relay` and
+`remote-settlement` groups of `scripts/live-tests.sh` (`op_trace` tests).
+
 ### Outbound address policy
 
 `crates/server/src/outbound_policy.rs` decides which peer-supplied URLs this

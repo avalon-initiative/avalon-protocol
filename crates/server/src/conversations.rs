@@ -466,10 +466,11 @@ pub async fn send_message(
     // already published once, on the original send.
     state.chat.publish_conversation_message(response.clone());
     // Issue #539: reach subscribers connected to a different node.
-    tokio::spawn(crate::realtime_relay::relay_to_peers(
+    crate::realtime_relay::relay_from_handler(
         state.clone(),
         crate::realtime_relay::RelayEvent::ConversationMessage(response.clone()),
-    ));
+    )
+    .await;
     // Issue #540: at-rest durability on at least one additional node.
     tokio::spawn(crate::chat_replication::replicate_to_peers(
         state.clone(),
