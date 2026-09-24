@@ -861,4 +861,132 @@ mod tests {
         assert_eq!(s.hops[0].processing_ms, 0.0);
         assert_eq!(s.hops[0].to_next_ms, Some(0.0));
     }
+
+    mod http {
+        use super::*;
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn fwd(allow_private: bool) -> HttpForwarder {
+            HttpForwarder {
+                policy: OutboundPolicy::new(allow_private),
+            }
+        }
+
+        fn request() -> TraceRequest {
+            TraceRequest {
+                target: "http://z".into(),
+                ttl: Some(3),
+                trace_id: Some(Uuid::nil()),
+                visited: Some(vec!["http://a".into()]),
+                budget_ms: Some(1000),
+            }
+        }
+
+        async fn outcome(server: &MockServer, allow_private: bool) -> ForwardOutcome {
+            fwd(allow_private)
+                .forward(&node(&server.uri()), &request(), Duration::from_millis(500))
+                .await
+        }
+
+        fn good_body() -> serde_json::Value {
+            serde_json::to_value(TraceResponse {
+                trace_id: Uuid::nil(),
+                target: "http://z".into(),
+                reached: true,
+                stopped_reason: None,
+                detail: None,
+                total_ms: 1.0,
+                hops: vec![hop_of("http://n", None)],
+            })
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn posts_the_internal_fields_and_parses_the_response() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/nodes/trace"))
+                .and(body_partial_json(serde_json::json!({
+                    "ttl": 3, "visited": ["http://a"], "budget_ms": 1000
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(good_body()))
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Response(r) if r.reached && r.hops.len() == 1
+            ));
+        }
+
+        #[tokio::test]
+        async fn refuses_private_neighbors_without_the_flag() {
+            let server = MockServer::start().await;
+            assert!(matches!(
+                outcome(&server, false).await,
+                ForwardOutcome::Unreachable("outbound_policy")
+            ));
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn maps_failures_to_outcomes() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(429))
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Unreachable("rate_limited")
+            ));
+
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Unreachable("bad_response")
+            ));
+
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Timeout
+            ));
+
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1:1/"),
+                )
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Unreachable("bad_status")
+            ));
+        }
+
+        #[tokio::test]
+        async fn a_response_for_another_trace_is_rejected() {
+            let server = MockServer::start().await;
+            let mut body = good_body();
+            body["trace_id"] = serde_json::json!(Uuid::new_v4());
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                outcome(&server, true).await,
+                ForwardOutcome::Unreachable("bad_response")
+            ));
+        }
+    }
 }

@@ -902,6 +902,71 @@ and returns `{ target, ok, samples_ms, min_ms, median_ms, error? }`.
 
 Served only while `AVALON_TOPOLOGY_PUBLIC` is true.
 
+### Trace: `POST /nodes/trace`
+
+A traceroute across the overlay: which nodes carry a request toward a target,
+and how long each leg takes. Body: `{ "target": "<base_url>", "ttl": 1..16,
+"trace_id"?: uuid }` (default ttl 12). The receiving node applies
+`overlay_routing::next_hop` toward the target and, unless it is the target,
+forwards the same request to the chosen active neighbor and waits. Each node
+prepends its own hop entry to the path that comes back, so the first node
+returns the whole path:
+
+```
+{ trace_id, target, reached, stopped_reason?, detail?, total_ms,
+  hops: [ { index, base_url, roles, protocol_version, processing_ms, to_next_ms? } ] }
+```
+
+- This traces the overlay route (the path gossip and key-space lookups take),
+  not every request type: most node-to-node calls are direct.
+- Every forwarding decision is `next_hop`'s; the trace goes only to the
+  neighbor it chose, so cost is one forward per hop with no fan-out. The
+  target is never contacted unless it is itself an active neighbor.
+- `stopped_reason` when `reached` is false: `ttl` (a node received 0 forwards
+  remaining), `no_route` (`detail` names why: `no_neighbors`, `no_progress`,
+  `all_visited`, `foreign_network`), `loop` (a node found itself in the
+  visited list), `timeout` (the time budget ran out; the path ends at the
+  node that was waiting), `target_unreachable` (the chosen neighbor refused
+  the connection, answered with an error or unusable body, or was refused by
+  the outbound policy; `detail` is `connect`, `bad_status`, `rate_limited`,
+  `bad_response`, `response_too_large` or `outbound_policy`).
+- Forwarded requests are the same route with two extra fields: `visited`
+  (canonical base URLs already on the path) and `budget_ms` (remaining time
+  budget). The default budget is 10 s, clamped to 15 s. Each hop hands
+  downstream its remaining budget minus 100 ms and waits at most its own
+  remaining budget, so a downstream timeout is reported by the node that saw
+  it. A node with under 50 ms of forward budget left stops with `timeout`.
+- Every request field is untrusted and clamped: `ttl` to 16, `visited` to 32
+  entries, `budget_ms` to the maximum, target to an http(s) base URL of at
+  most 2048 characters. A downstream response is checked before use (same
+  trace id, at most `ttl + 1` hops, clipped strings, finite non-negative
+  numbers, at most 256 KiB).
+- Durations are relative, each measured on the reporting node's own clock; no
+  timestamp crosses nodes. `processing_ms` is the time the node spent before
+  forwarding (in total at the last hop). `to_next_ms` is that node's round
+  trip to the next hop minus the time the next hop reports for itself, so it
+  approximates network transit; when the next hop never answered it is the
+  time waited. `total_ms` is receipt to response at the answering node.
+- **The data is self-reported.** Each hop describes itself (`base_url`,
+  `roles`, `protocol_version`, its own timings), and the node that assembles
+  the path cannot verify what a downstream node says. Treat it as advisory,
+  never as a verified fact about the path. Hop entries carry only what
+  `/nodes/status` and the announce already make public.
+- Limits: per-IP `AVALON_TRACE_RATE_LIMIT_PER_MINUTE` (default 60) and
+  `AVALON_TRACE_MAX_CONCURRENT` (default 16) in-flight traces per node. Each
+  hop of a trace is a request on the next node, and a forward arrives from the
+  forwarding node's address, so all traces through one node share that
+  node's bucket at its neighbor; raise the limit on nodes that carry many
+  traces. `429` with `Retry-After` on either limit. A node without
+  `AVALON_NODE_URL` cannot identify itself and answers `503`
+  `node_url_not_configured`.
+- Errors: `invalid_target` (400), `rate_limited` / `too_many_in_flight` (429).
+
+Served only while `AVALON_TOPOLOGY_PUBLIC` is true. Live coverage:
+`scripts/live-tests.sh topology-trace` starts nodes in a line and a ring,
+constrained with bootstrap peers and `AVALON_NODE_MAX_PEERS`, and compares
+each trace with a simulation of the routing rule.
+
 ### Outbound address policy
 
 `crates/server/src/outbound_policy.rs` decides which peer-supplied URLs this
