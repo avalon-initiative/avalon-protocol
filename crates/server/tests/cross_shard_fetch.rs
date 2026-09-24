@@ -150,6 +150,8 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
     // fetches doesn't exist yet the instant register/finish returns, only
     // the (separately, directly-written) `identity_signing_keys`
     // projection does. Real wait for a real async commit, not a race.
+    // A fresh ledger has no tree head until its first batch closes, so an
+    // early fetch error is retried rather than treated as a failure.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let entries;
     loop {
@@ -161,13 +163,21 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
             &subject,
             &core_verify_keys(),
         )
-        .await
-        .expect("a freshly registered identity's signing_key_added entry should verify");
-        if !attempt.is_empty() || std::time::Instant::now() >= deadline {
-            entries = attempt;
-            break;
+        .await;
+        match attempt {
+            Ok(found) if !found.is_empty() => {
+                entries = found;
+                break;
+            }
+            Err(err) if std::time::Instant::now() >= deadline => {
+                panic!("a freshly registered identity's signing_key_added entry should verify: {err:?}")
+            }
+            Ok(_) if std::time::Instant::now() >= deadline => {
+                entries = Vec::new();
+                break;
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     assert_eq!(
