@@ -47,7 +47,7 @@ help:
 	@echo "  make check         fmt-check + lint + test — what CI runs"
 	@echo "  make clean         remove Rust build artifacts and PID/log files"
 	@echo ""
-	@echo "JS/TS workspace (apps/hub, apps/mobile-hub, packages/api-client)"
+	@echo "JS/TS workspace (apps/hub, apps/mobile-hub)"
 	@echo "  make web-install   npm install at the workspace root"
 	@echo "  make hub-dev       vite dev server for apps/hub (web Hub client)"
 	@echo "  make mobile-dev    tauri dev for apps/mobile-hub (desktop/mobile companion app)"
@@ -261,7 +261,7 @@ stack-down:
 stack-logs:
 	docker compose $(STACK_COMPOSE_FILES) --profile stack logs -f avalon-server
 
-# --- JS/TS workspace (apps/hub, apps/mobile-hub, packages/api-client) ---
+# --- JS/TS workspace (apps/hub, apps/mobile-hub) ---
 # npm workspaces, declared in the repo-root package.json. Nothing here has
 # been `npm install`ed yet in a verified environment — versions are pinned
 # but unconfirmed against a real install.
@@ -284,7 +284,6 @@ web-lint:
 	npm run lint -w apps/mobile-hub 2>/dev/null || true
 
 web-test:
-	npm run test -w packages/api-client
 	npm run test -w apps/hub
 	npm run test -w apps/mobile-hub
 
@@ -316,5 +315,5 @@ issue-achievement:
 check-all: check web-lint web-test
 
 clean-all: clean
-	rm -rf node_modules apps/*/node_modules apps/*/dist packages/*/node_modules
+	rm -rf node_modules apps/*/node_modules apps/*/dist
 	rm -rf apps/mobile-hub/src-tauri/target

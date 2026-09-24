@@ -12,7 +12,7 @@ repeated here).
   version, workspace edition is 2021) — `cargo`, `rustc`.
 - **Docker** with the `docker compose` CLI plugin — used only to run
   Postgres locally; the app itself runs natively via `make start`.
-- **Node.js and npm** for `apps/hub`, `apps/mobile-hub`, `packages/api-client` (npm
+- **Node.js and npm** for `apps/hub`, `apps/mobile-hub` (npm
   workspaces from the repo root). No version is pinned in `package.json`;
   a current LTS Node works.
 - **.NET SDK** for `bindings/csharp` (targets `netstandard2.1` for Unity

@@ -1,7 +1,6 @@
 # Keeps the build context small for the Rust-only Dockerfile (issue #289) —
 # none of this is needed to build avalon-server/migrate.
 apps/
-packages/
 bindings/
 node_modules/
 .git/

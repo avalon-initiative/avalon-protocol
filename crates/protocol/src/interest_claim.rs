@@ -7,8 +7,8 @@
 //!
 //! An [`InterestClaim`] is the same idea as [`crate::continuation::ContinuationToken`]
 //! applied to a different problem: a short assertion self-signed with the
-//! identity's own Ed25519 event-signing key (`apps/hub`'s
-//! `packages/api-client/src/crypto/signingKey.ts`), verifiable by *any* node
+//! identity's own Ed25519 event-signing key (the TypeScript SDK's
+//! signing-key module), verifiable by *any* node
 //! against `avalon_indexer::projections::identity_signing_keys` — no new key
 //! material, no new custody model, reusing exactly what #525 already
 //! established for session continuation.
