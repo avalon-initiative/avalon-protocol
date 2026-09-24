@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 // Small, standalone router — mirrors apps/hub's shape for the auth screens
 // but doesn't carry the rest of hub's route tree; guild/friends/

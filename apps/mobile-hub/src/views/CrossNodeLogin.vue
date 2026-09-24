@@ -1,26 +1,20 @@
 <script setup lang="ts">
-// Cross-node login approval — mobile-hub's own
-// entry point into the same approval logic
-// `apps/hub/src/views/CrossNodeLogin.vue` already established:
-// `lookupCrossNodeLogin` before rendering anything approvable (the
-// decided phishing-context requirement), then a locally signed grant
-// submitted directly to the *requesting* node — never a bearer token sent
-// anywhere, never this app's own configured server unless that happens to
-// be the requesting node too. Neither app imports the other's `.vue` file
-// (they're separate Tauri/Vite apps); the actual shared logic lives in
-// `@avalon/api-client`, imported identically by both.
+// Cross-node login approval: `lookupCrossNodeLogin` before rendering anything
+// approvable (the phishing-context requirement), then a locally signed grant
+// submitted directly to the *requesting* node. Never a bearer token sent
+// anywhere, and never this app's own configured server unless that happens to
+// be the requesting node too.
 //
-// #642's own no-auto-approve requirement, specifically owned by this
-// screen: a deep link never resolves straight to an approved session on
-// its own — landing here always requires an explicit tap on "Approve"
-// after the request's real context has been shown, whether this screen
-// was reached by typing a code or by a deep link/QR scan prefilling it.
+// A deep link never resolves straight to an approved session on its own:
+// landing here always requires an explicit tap on "Approve" after the
+// request's real context has been shown, whether the screen was reached by
+// typing a code or by a deep link/QR scan prefilling it.
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon-initiative/common-ui'
-import * as api from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
-import { loadSigningKey, mintCrossNodeLoginGrant } from '@avalon/api-client'
+import { denyCrossNodeLogin, lookupCrossNodeLogin, submitCrossNodeLoginGrant } from '@avalon-initiative/protocol-sdk'
+import { useSessionStore } from '../api/session'
+import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import styles from '../styles/CrossNodeLogin.module.scss'
 
 const route = useRoute()
@@ -48,11 +42,11 @@ async function onLookUp() {
   looking.value = true
   lookupStatus.value = null
   try {
-    const result = await api.lookupCrossNodeLogin(node, code)
+    const result = await lookupCrossNodeLogin(node, code)
     lookupStatus.value = result.status
-    requestingContext.value = result.requesting_context
-    integratorVerified.value = result.integrator_verified
-    displayName.value = result.display_name ?? ''
+    requestingContext.value = result.requestingContext
+    integratorVerified.value = result.integratorVerified
+    displayName.value = result.displayName ?? ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -63,9 +57,11 @@ async function onLookUp() {
 async function onApprove() {
   const node = nodeBaseUrl.value.trim().replace(/\/$/, '')
   const code = userCode.value.trim()
-  if (!node || !code || !session.identityId || !session.signingKeyId) return
+  if (!node || !code || !session.identityId() || !session.signingKeyId()) return
 
-  const secretKey = loadSigningKey(session.identityId)
+  const identityId = session.identityId()!
+  const signingKeyId = session.signingKeyId()!
+  const secretKey = loadSigningKeySeed(identityId)
   if (!secretKey) {
     error.value =
       "This device doesn't have your signing key — recover it from your recovery phrase first, then try again."
@@ -75,14 +71,7 @@ async function onApprove() {
   error.value = ''
   submitting.value = true
   try {
-    const grant = mintCrossNodeLoginGrant(
-      session.identityId,
-      session.signingKeyId,
-      secretKey,
-      node,
-      requestingContext.value,
-    )
-    await api.submitCrossNodeLoginGrant(node, { user_code: code, grant })
+    await submitCrossNodeLoginGrant(node, identityId, signingKeyId, secretKey, node, requestingContext.value, code)
     resolvedStatus.value = 'approved'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -98,7 +87,7 @@ async function onDeny() {
   error.value = ''
   submitting.value = true
   try {
-    await api.denyCrossNodeLogin(node, { user_code: code })
+    await denyCrossNodeLogin(node, code)
     resolvedStatus.value = 'denied'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

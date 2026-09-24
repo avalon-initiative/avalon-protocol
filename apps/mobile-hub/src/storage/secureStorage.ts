@@ -1,10 +1,8 @@
-// The mobile-hub side of issue #60's platform secure-storage requirement:
-// a `KeyValueStore` (see @avalon/api-client's own module) backed by the
-// single native command src-tauri/src/lib.rs exposes, rather than
-// `localStorage` — the session token this stores never touches the
-// webview's own storage on this platform.
+// A `KeyValueStore` (see ../api/sessionStorage) backed by the native commands
+// src-tauri/src/lib.rs exposes, rather than `localStorage`: the session token
+// this stores never touches the webview's own storage.
 import { invoke } from '@tauri-apps/api/core'
-import type { KeyValueStore } from '@avalon/api-client'
+import type { KeyValueStore } from '../api/sessionStorage'
 
 export function createSecureSessionStorage(): KeyValueStore {
   return {

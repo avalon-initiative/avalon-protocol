@@ -1,14 +1,11 @@
 <script setup lang="ts">
-// Issue #60: the server URL is configurable at runtime rather than only at
-// build time, same storage/behavior as apps/hub's network selector — see
-// @avalon/api-client's client.ts (getServerUrl/setServerUrl). Changing it
-// takes effect on next load, same as apps/hub's own reload-based
-// convention, since an in-flight session's token has no meaning against a
-// different server.
+// The server URL is configurable at runtime rather than only at build time;
+// see ../api/serverUrl. Changing it takes effect on next load, since an
+// in-flight session's token has no meaning against a different server.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon-initiative/common-ui'
-import { getServerUrl, setServerUrl } from '@avalon/api-client'
+import { getServerUrl, setServerUrl } from '../api/serverUrl'
 import styles from '../styles/Settings.module.scss'
 
 const router = useRouter()

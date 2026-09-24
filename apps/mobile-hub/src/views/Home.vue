@@ -5,23 +5,24 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard } from '@avalon-initiative/common-ui'
-import { getMe, useSessionStore } from '@avalon/api-client'
-import type { ProfileResponse } from '@avalon/api-client'
+import type { Profile } from '@avalon-initiative/protocol-sdk'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/Home.module.scss'
 
 const router = useRouter()
 const session = useSessionStore()
 
-const profile = ref<ProfileResponse | null>(null)
+const profile = ref<Profile | null>(null)
 const error = ref('')
 
 onMounted(async () => {
-  if (!session.token) return
+  const active = session.session
+  if (!active) return
   try {
-    // Profile data is always re-read from GET /me, never cached locally
-    // (#55's invariant) — the only thing this device persists is the
-    // session token itself.
-    profile.value = await getMe(session.token)
+    // Profile data is always re-read from GET /me, never cached locally; the
+    // only things this device persists are the session credentials.
+    await active.refreshProfile()
+    profile.value = active.profile()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Could not load your profile.'
   }
@@ -37,9 +38,9 @@ async function onLogout() {
   <main :class="styles.main">
     <AvalonCard title="Avalon">
       <div v-if="profile" :class="styles.profile">
-        <AvalonAvatar :name="profile.display_name" :src="profile.avatar_url" size="lg" />
-        <p :class="styles.name">{{ profile.display_name }}</p>
-        <p :class="styles.id">{{ profile.identity_id }}</p>
+        <AvalonAvatar :name="profile.displayName" :src="profile.avatarUrl" size="lg" />
+        <p :class="styles.name">{{ profile.displayName }}</p>
+        <p :class="styles.id">{{ profile.identityId }}</p>
       </div>
       <p v-else-if="error" :class="styles.error">{{ error }}</p>
       <p v-else :class="styles.loading">Loading…</p>
