@@ -57,11 +57,9 @@ Each file has this shape:
   longer calls the server's own signing-byte functions directly, so
   nothing but these vectors keeps client and server producing the same
   bytes.
-- `signed-tree-head.json` — the Signed Tree Head signing message. Only
-  the Rust conformance test exercises it today. The C# SDK (`Network.cs`) and the
-  TypeScript SDK (`src/network/`) both verify network identity against pinned trust
-  anchors, but neither conformance test consumes this vector yet: a coverage gap,
-  not a missing feature.
+- `signed-tree-head.json` — the Signed Tree Head signing message and
+  signature. Supported in all three SDKs, each with its own hand-written
+  construction, verified against pinned trust anchors.
 
 ## Both sides of the wire
 
