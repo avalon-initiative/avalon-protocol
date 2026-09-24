@@ -686,6 +686,7 @@ mod tests {
 
     #[test]
     fn dht_config_from_env_is_some_when_unset() {
+        let _env = crate::test_env::guard();
         // Unset defaults to enabled, not disabled.
         // SAFETY-of-intent note: process-global env var, same posture
         // `crate::nodes`'s own `node_roles_defaults_to_combined_when_unset`
@@ -698,6 +699,7 @@ mod tests {
 
     #[test]
     fn dht_config_from_env_is_none_when_explicitly_disabled() {
+        let _env = crate::test_env::guard();
         unsafe {
             std::env::set_var("AVALON_DHT_ENABLED", "false");
         }
