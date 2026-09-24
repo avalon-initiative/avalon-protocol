@@ -3,7 +3,7 @@
 // in front of Login/CreateIdentity for a visitor who isn't authenticated
 // yet — router/index.ts sends unauthenticated `/` here instead of
 // redirecting straight into the create-identity flow.
-import { AvalonButton, AvalonCard, AvalonIcon } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonIcon } from '@avalon-initiative/common-ui'
 import styles from '../styles/Landing.module.scss'
 
 const audiences = [

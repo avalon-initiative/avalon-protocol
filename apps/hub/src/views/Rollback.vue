@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Lists what this identity did inside a compromise window and lets the owner
 // undo each reversible action. Logic lives in useRollback.
-import { AvalonButton, AvalonCard, AvalonDateTimeField } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonDateTimeField } from '@avalon-initiative/common-ui'
 import { useRollback } from '../composables/useRollback'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Rollback.module.scss'

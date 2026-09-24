@@ -2,7 +2,7 @@
 // The pre-authentication page frame — same shape as apps/hub's own
 // AuthLayout.vue, sized for the narrower Tauri window instead of a wide
 // desktop viewport.
-import { AvalonIcon } from '@avalon/ui'
+import { AvalonIcon } from '@avalon-initiative/common-ui'
 import styles from '../styles/AuthLayout.module.scss'
 </script>
 

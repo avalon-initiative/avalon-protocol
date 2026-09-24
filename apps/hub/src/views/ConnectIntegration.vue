@@ -6,7 +6,7 @@
 // which is also where the IntegratorBinding gets established.
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from '@avalon/ui'
+import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from '@avalon-initiative/common-ui'
 import { capabilityDescription } from '../api/connections'
 import { useIntegrationConsent } from '../composables/useIntegrationConsent'
 import { useSessionStore } from '../api/session'

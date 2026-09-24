@@ -8,8 +8,8 @@
 // and Integrators are no longer among them.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
-import type { AvalonNavItem, PresenceStatus } from '@avalon/ui'
+import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon-initiative/common-ui'
+import type { AvalonNavItem, PresenceStatus } from '@avalon-initiative/common-ui'
 import {
   countUnread,
   isUnread,

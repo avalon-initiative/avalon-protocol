@@ -12,7 +12,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	openapi openapi-check openapi-version-check \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
-	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
+	web-install hub-dev mobile-dev web-build web-lint web-test \
 	inspect-ledger inspect-ledger-full create-identity login outbox-status \
 	register-integrator issue-achievement \
 	check-all clean-all
@@ -47,12 +47,11 @@ help:
 	@echo "  make check         fmt-check + lint + test — what CI runs"
 	@echo "  make clean         remove Rust build artifacts and PID/log files"
 	@echo ""
-	@echo "JS/TS workspace (apps/hub, apps/mobile-hub, packages/ui, packages/api-client)"
+	@echo "JS/TS workspace (apps/hub, apps/mobile-hub, packages/api-client)"
 	@echo "  make web-install   npm install at the workspace root"
 	@echo "  make hub-dev       vite dev server for apps/hub (web Hub client)"
 	@echo "  make mobile-dev    tauri dev for apps/mobile-hub (desktop/mobile companion app)"
-	@echo "  make storybook     Storybook for packages/ui (shared component library)"
-	@echo "  make web-build     build hub, mobile-hub, and ui across the JS workspace"
+	@echo "  make web-build     build hub and mobile-hub across the JS workspace"
 	@echo "  make web-lint      eslint across the JS workspace"
 	@echo "  make web-test      vitest across the JS workspace"
 	@echo ""
@@ -262,7 +261,7 @@ stack-down:
 stack-logs:
 	docker compose $(STACK_COMPOSE_FILES) --profile stack logs -f avalon-server
 
-# --- JS/TS workspace (apps/hub, apps/mobile-hub, packages/ui, packages/api-client) ---
+# --- JS/TS workspace (apps/hub, apps/mobile-hub, packages/api-client) ---
 # npm workspaces, declared in the repo-root package.json. Nothing here has
 # been `npm install`ed yet in a verified environment — versions are pinned
 # but unconfirmed against a real install.
@@ -276,18 +275,13 @@ hub-dev:
 mobile-dev:
 	npm run tauri dev -w apps/mobile-hub
 
-storybook:
-	npm run storybook -w packages/ui
-
 web-build:
-	npm run build -w packages/ui
 	npm run build -w apps/hub
 	npm run build -w apps/mobile-hub
 
 web-lint:
 	npm run lint -w apps/hub
 	npm run lint -w apps/mobile-hub 2>/dev/null || true
-	npm run lint -w packages/ui
 
 web-test:
 	npm run test -w packages/api-client

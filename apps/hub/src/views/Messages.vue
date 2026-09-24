@@ -4,11 +4,11 @@
 // place, no remount" shape #241 established for Guild.vue's Channels tab.
 // Reuses the exact same message components guild chat does
 // (AvalonChatMessage/AvalonChatComposer are wire-shape-agnostic — see
-// their own prop types) so this view is glue only: no new packages/ui
+// their own prop types) so this view is glue only: no new UI-library
 // component, per this ticket's invariant.
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AvalonCard, AvalonChatComposer, AvalonChatMessage } from '@avalon/ui'
+import { AvalonCard, AvalonChatComposer, AvalonChatMessage } from '@avalon-initiative/common-ui'
 import { otherParticipants, MESSAGE_BODY_MAX_CHARS } from '../api/conversations'
 import { useConversations } from '../composables/useConversations'
 import { useConversationThread } from '../composables/useConversationThread'

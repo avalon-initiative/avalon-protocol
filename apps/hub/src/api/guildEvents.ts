@@ -2,7 +2,7 @@
 // apps/hub/src/api/guilds.ts and guildChat.ts since it's about calendar
 // sorting/formatting/RSVP-state, not roster/role merging or message
 // composition — following the same split guildChat.ts already documents.
-import type { AvalonRsvpRosterGroup } from '@avalon/ui'
+import type { AvalonRsvpRosterGroup } from '@avalon-initiative/common-ui'
 import type { GuildEvent, RsvpRosterEntry, RsvpStatus } from '@avalon-initiative/protocol-sdk'
 
 // Matches crates/server/src/guild_events.rs::EVENT_TITLE_MAX_CHARS exactly

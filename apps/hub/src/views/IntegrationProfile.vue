@@ -11,7 +11,7 @@
 // public and unauthenticated.
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonConnectionCard, AvalonGuildCard, AvalonMetricTile } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonConnectionCard, AvalonGuildCard, AvalonMetricTile } from '@avalon-initiative/common-ui'
 import { isActiveIntegratorStatus } from '../api/integrations'
 import { capabilityDescription } from '../api/connections'
 import { buildDiscoverQueryString } from '../api/guilds'

@@ -5,7 +5,7 @@
 // digest, so a fresh identity's single `identity.created` entry and a busy
 // identity's full history render the same way, just with more rows.
 import { onMounted, onUnmounted, ref } from 'vue'
-import { AvalonCard, AvalonIcon } from '@avalon/ui'
+import { AvalonCard, AvalonIcon } from '@avalon-initiative/common-ui'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
 import type { HistoryEntry } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'

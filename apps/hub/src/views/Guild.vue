@@ -27,8 +27,8 @@ import {
   AvalonRsvpControl,
   AvalonRsvpRosterPanel,
   AvalonTextField,
-} from '@avalon/ui'
-import type { AvalonIconName } from '@avalon/ui'
+} from '@avalon-initiative/common-ui'
+import type { AvalonIconName } from '@avalon-initiative/common-ui'
 import type { Role, GuildEvent } from '@avalon-initiative/protocol-sdk'
 import ResourcePermissionOverrides from '../components/ResourcePermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
@@ -1227,7 +1227,7 @@ async function onArchiveChannel(channelId: string) {
 
 const sortedEvents = computed(() => sortByStartsAt(events.value))
 
-// AvalonEventCard's own prop type (packages/ui) still uses the wire's
+// AvalonEventCard's own prop type (UI library) still uses the wire's
 // snake_case not_going — independent of bindings/ts's own RsvpCounts.
 function toRsvpCountsProp(counts: GuildEvent['rsvpCounts']) {
   return { going: counts.going, maybe: counts.maybe, not_going: counts.notGoing }

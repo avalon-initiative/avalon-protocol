@@ -7,7 +7,7 @@
 import { ref } from 'vue'
 import { useNetworkTrust } from '../composables/useNetworkTrust'
 import { getServerUrl, setServerUrl } from '../api/serverUrl'
-import { AvalonModal } from '@avalon/ui'
+import { AvalonModal } from '@avalon-initiative/common-ui'
 import styles from '../styles/NetworkStatus.module.scss'
 
 const { state, knownNetworks, refresh } = useNetworkTrust()

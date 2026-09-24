@@ -40,7 +40,7 @@ themselves.
 | [`projects/cli/`](projects/cli/README.md) | `avalon`, the local dev/ops CLI. |
 | [`projects/hub/`](projects/hub/README.md) | The web client — a user's first doorway into Avalon. |
 | [`projects/mobile-hub/`](projects/mobile-hub/README.md) | The Tauri desktop/mobile shell around the Hub UI. |
-| [`projects/ui/`](projects/ui/README.md) | The shared Vue3 component library both Hub apps use. |
+| [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) | The shared Vue3 component library both Hub apps use. |
 
 See [`projects/README.md`](projects/README.md) for why the split is drawn
 where it is, and what stays cross-cutting instead of moving into one project

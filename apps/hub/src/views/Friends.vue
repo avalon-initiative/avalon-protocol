@@ -13,7 +13,7 @@ import {
   AvalonForm,
   AvalonSuggestionRow,
   AvalonTextField,
-} from '@avalon/ui'
+} from '@avalon-initiative/common-ui'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
 import type { SearchResultIdentity } from '@avalon-initiative/protocol-sdk'

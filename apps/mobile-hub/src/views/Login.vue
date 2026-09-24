@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Same identity-id-first login ceremony as apps/hub's Login.vue,
-// composed from the same @avalon/ui components and the shared
+// composed from the same @avalon-initiative/common-ui components and the shared
 // @avalon/api-client module — no local WebAuthn/session logic here.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
+import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon-initiative/common-ui'
 import { login, useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'

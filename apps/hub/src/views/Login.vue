@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
+import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon-initiative/common-ui'
 import { avalonClient, useSessionStore } from '../api/session'
 import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import AuthLayout from './AuthLayout.vue'

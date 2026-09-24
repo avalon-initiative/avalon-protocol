@@ -3,8 +3,8 @@
 // render empty rather than hidden — no real registrants yet.
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from '@avalon/ui'
-import type { AvalonFilterBarSortOption } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from '@avalon-initiative/common-ui'
+import type { AvalonFilterBarSortOption } from '@avalon-initiative/common-ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../api/session'

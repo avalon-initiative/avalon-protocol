@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@avalon/api-client": "*",
-    "@avalon/ui": "*",
+    "@avalon-initiative/common-ui": "0.0.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-deep-link": "^2.4.10",
     "pinia": "^4.0.3",

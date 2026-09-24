@@ -292,7 +292,7 @@ public and unauthenticated. `bindings/csharp` does not mirror this yet.
   `AvalonMetricTile` — value, definition, and class label together, never a
   bare number. A non-`active` `status` renders as a visibly distinct badge
   rather than reading the same as `active`; no key-history UI is built here
-  yet. `packages/ui`'s `AvalonIntegratorCard` and `AvalonMetricTile` are
+  yet. the UI library's `AvalonIntegratorCard` and `AvalonMetricTile` are
   the reusable components for this, in the existing
   components/styles/stories split.
 - **Recognition relationships**: `crates/server/src/recognitions.rs` —

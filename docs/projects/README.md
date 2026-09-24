@@ -22,7 +22,7 @@ inside a project folder stays valid as-is.
 | [`cli/`](cli/README.md) | `avalon`, the local dev/ops binary (`crates/cli`) — identity creation, login, integrator registration, ledger inspection, outbox status, pruning. | Real, used for day-to-day dev workflows in this repo. |
 | [`hub/`](hub/README.md) | `apps/hub` — the web client (Vue3 + Vite + TS). A user's first doorway into Avalon with no game or app open: identity setup, friends, guilds, achievements, integrator discovery/connections. | Real, a persistent app with nested routed pages, not a stub, built on `@avalon-initiative/protocol-sdk`. |
 | [`mobile-hub/`](mobile-hub/README.md) | `apps/mobile-hub` — a Tauri (desktop + mobile) shell around the same Hub UI, for guild/friend presence without a game client open. | Scaffolding/skeleton, not yet built out. |
-| [`ui/`](ui/README.md) | `packages/ui` (`@avalon/ui`) — the shared Vue3 component library used by both Hub apps, documented in Storybook. | Partial; grows alongside `hub`/`mobile-hub`. |
+| [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) | `@avalon-initiative/common-ui` — the shared Vue3 component library used by both Hub apps, documented in Storybook. Lives in its own repository. | Partial; grows alongside `hub`/`mobile-hub`. |
 
 ## Why these boundaries and not others
 

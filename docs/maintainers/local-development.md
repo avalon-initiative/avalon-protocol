@@ -12,7 +12,7 @@ repeated here).
   version, workspace edition is 2021) — `cargo`, `rustc`.
 - **Docker** with the `docker compose` CLI plugin — used only to run
   Postgres locally; the app itself runs natively via `make start`.
-- **Node.js and npm** for `apps/hub`, `apps/mobile-hub`, `packages/ui` (npm
+- **Node.js and npm** for `apps/hub`, `apps/mobile-hub`, `packages/api-client` (npm
   workspaces from the repo root). No version is pinned in `package.json`;
   a current LTS Node works.
 - **.NET SDK** for `bindings/csharp` (targets `netstandard2.1` for Unity
@@ -105,19 +105,19 @@ To log back in with an identity `create-identity` already saved locally:
 make login IDENTITY_ID=<uuid>
 ```
 
-## 6. Web workspace (Hub, mobile-hub, shared UI)
+## 6. Web workspace (Hub, mobile-hub)
 
 ```bash
 make web-install    # npm install at the workspace root, once
 make hub-dev         # Vite dev server for apps/hub
-make storybook       # Storybook for packages/ui
 ```
 
 **It worked if:** `make hub-dev` prints a local Vite URL (default
 `http://localhost:5173`) that loads the Hub in a browser, and — with the
 server from step 4 running — the identity created in step 5 can log in
-through it. `make storybook` prints a local Storybook URL serving
-`packages/ui`'s component stories.
+through it. The shared component library lives in
+[`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) and is installed as
+`@avalon-initiative/common-ui`; run its Storybook from that repository.
 
 `make mobile-dev` (Tauri dev build of `apps/mobile-hub`) needs Tauri's own
 native prerequisites beyond Node — see

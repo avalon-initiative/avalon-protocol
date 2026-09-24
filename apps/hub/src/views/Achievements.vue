@@ -6,7 +6,7 @@
 // its own credentials, never something the Hub does on a user's behalf.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAchievementCard, AvalonCard, AvalonFilterBar } from '@avalon/ui'
+import { AvalonAchievementCard, AvalonCard, AvalonFilterBar } from '@avalon-initiative/common-ui'
 import { formatActivityTimestamp } from '../api/activityFeed'
 import {
   filterAchievementsByIntegrator,

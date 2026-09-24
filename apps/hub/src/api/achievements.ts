@@ -7,7 +7,7 @@
 // primary response doesn't embed. Sorting/filtering below is entirely
 // client-side presentation, never a protocol event or server computation
 // — the Hub renders verification results, it never computes trust or rank.
-import type { AchievementIconName } from '@avalon/ui'
+import type { AchievementIconName } from '@avalon-initiative/common-ui'
 import { getIntegrator, listAchievementDefinitions, listMilestoneDefinitions } from '@avalon-initiative/protocol-sdk'
 import type { AccountSession, Attestation, AttestationHistoryEntry as AttestationHistoryEntryWire } from '@avalon-initiative/protocol-sdk'
 import { getServerUrl } from './serverUrl'
@@ -43,7 +43,7 @@ function mergeHistoryEntry(entry: AttestationHistoryEntryWire): AchievementHisto
   return { event: entry.event, at: entry.at, reasonCode: entry.reasonCode, reason: entry.reason }
 }
 
-// #332's fixed built-in set — kept in sync with packages/ui's own
+// #332's fixed built-in set — kept in sync with the UI library's own
 // AchievementIconName. A definition's `icon` string is only ever trusted
 // as one of these; anything else (shouldn't happen, since the server
 // validates it, but a stale/foreign client could still send garbage) falls

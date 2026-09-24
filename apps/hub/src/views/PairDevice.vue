@@ -7,7 +7,7 @@
 // also be typed in by hand.
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon-initiative/common-ui'
 import { useSessionStore } from '../api/session'
 import local from '../styles/PairDevice.module.scss'
 import styles from '../styles/page.module.scss'

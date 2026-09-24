@@ -11,7 +11,7 @@ import {
   AvalonGuildCard,
   AvalonModal,
   AvalonTextField,
-} from '@avalon/ui'
+} from '@avalon-initiative/common-ui'
 import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
 import { useMyGuildInvites } from '../composables/useMyGuildInvites'

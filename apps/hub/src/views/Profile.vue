@@ -36,7 +36,7 @@ import {
   AvalonForm,
   AvalonTextField,
   AvalonWarningBanner,
-} from '@avalon/ui'
+} from '@avalon-initiative/common-ui'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Profile.module.scss'
 
