@@ -386,6 +386,7 @@ dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
  "futures-util",
+ "governor",
  "hex",
  "libp2p",
  "passkey-authenticator",

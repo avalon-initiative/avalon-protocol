@@ -43,6 +43,7 @@ pub mod openapi;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
+pub mod principal_limits;
 pub mod proto_schema;
 pub mod realtime_proxy;
 pub mod realtime_relay;
@@ -61,14 +62,14 @@ pub mod state;
 pub mod version;
 pub mod visibility;
 
-use axum::http::{HeaderValue, Method, Request};
+use axum::http::{HeaderValue, Method};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use state::AppState;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_governor::governor::GovernorConfigBuilder;
-use tower_governor::key_extractor::{KeyExtractor, PeerIpKeyExtractor};
-use tower_governor::{GovernorError, GovernorLayer};
+use tower_governor::key_extractor::PeerIpKeyExtractor;
+use tower_governor::GovernorLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -111,7 +112,7 @@ fn cors_layer_from_env() -> CorsLayer {
 /// limits, every one defaulted so an unconfigured node behaves exactly as
 /// it always has — never "unlimited", never "fails to start".
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 256;
-const DEFAULT_RATE_LIMIT_PER_MINUTE: u64 = 600;
+const DEFAULT_RATE_LIMIT_PER_MINUTE: u64 = 3000;
 
 pub(crate) fn max_concurrent_requests_from_env() -> usize {
     std::env::var("AVALON_MAX_CONCURRENT_REQUESTS")
@@ -127,33 +128,6 @@ pub(crate) fn rate_limit_per_minute_from_env() -> u64 {
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE)
-}
-
-/// Keyed by the calling integrator's own key id
-/// (`x-avalon-integrator-key-id`, the same header
-/// [`authz::authenticate_integrator`] reads) when present, so one
-/// integrator's traffic can't starve another's — falls back to peer IP for
-/// pre-auth endpoints (registration, login) that don't carry an integrator
-/// key yet. Requires the server to be served via
-/// `into_make_service_with_connect_info::<SocketAddr>()` (see `main.rs`)
-/// for the IP fallback to resolve to anything but an error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct IntegratorOrIpKeyExtractor;
-
-impl KeyExtractor for IntegratorOrIpKeyExtractor {
-    type Key = String;
-
-    fn extract<T>(&self, req: &Request<T>) -> Result<Self::Key, GovernorError> {
-        if let Some(key_id) = req
-            .headers()
-            .get("x-avalon-integrator-key-id")
-            .and_then(|v| v.to_str().ok())
-            .filter(|v| !v.is_empty())
-        {
-            return Ok(format!("integrator:{key_id}"));
-        }
-        PeerIpKeyExtractor.extract(req).map(|ip| format!("ip:{ip}"))
-    }
 }
 
 /// `redis_limiter` is `Some` only when `AVALON_REDIS_URL` is configured —
@@ -209,7 +183,7 @@ fn apply_common_layers(
             60.0 / rate_limit_per_minute as f64,
         ))
         .burst_size(rate_limit_per_minute as u32)
-        .key_extractor(IntegratorOrIpKeyExtractor)
+        .key_extractor(PeerIpKeyExtractor)
         .finish()
         .expect("per_minute is always > 0, so period/burst_size are always non-zero");
 
@@ -235,7 +209,7 @@ fn apply_common_layers(
             // silently drops a request without a response.
             .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
             // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
-            // the configured ceiling — see `IntegratorOrIpKeyExtractor`.
+            // the configured per-IP ceiling; keyed by peer address only.
             .layer(GovernorLayer::new(governor_config)),
     };
 

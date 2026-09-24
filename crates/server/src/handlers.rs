@@ -78,6 +78,15 @@ pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Resul
 /// gets continuation-token support for free, with no per-route changes,
 /// since both credential kinds resolve to the same `Uuid` return type.
 pub(crate) async fn authenticate_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
+    let identity_id = resolve_token(state, token).await?;
+    state
+        .principal_limiter
+        .check(crate::principal_limits::Principal::Identity(identity_id))
+        .await?;
+    Ok(identity_id)
+}
+
+async fn resolve_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
     if let Some(body) = token.strip_prefix(avalon_protocol::continuation::WIRE_PREFIX) {
         return crate::continuation::verify(state, body).await;
     }

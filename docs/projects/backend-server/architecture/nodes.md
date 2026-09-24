@@ -757,15 +757,24 @@ to what this process always hardcoded:
 - `AVALON_MAX_CONCURRENT_REQUESTS` (default `256`) — a concurrency-limiting
   middleware layer. Backpressures (bounded wait) past the ceiling, never
   drops a request without a response.
-- `AVALON_RATE_LIMIT_PER_MINUTE` (default `600`) — token-bucket rate limiting
-  keyed by the caller's integrator credential when present, falling back to
-  peer IP for pre-auth endpoints. Over-limit responses are always `429` with
-  `Retry-After`. The integrator key id is read from a request header before it
-  is verified, so this key selects a bucket but is not a security boundary;
-  the two-layer replacement (a header-independent per-IP ceiling plus a
-  verified per-principal limit) is decided in #838. The tracing and CORS
-  layers wrap both limiters, so a `429` or `503` from them still carries CORS
-  headers and browsers can read the status.
+- `AVALON_RATE_LIMIT_PER_MINUTE` (default `3000`) — the outer per-IP flood
+  ceiling, applied before authentication. Keyed by the connection's peer
+  address only; no request header ever selects the bucket.
+- `AVALON_PRINCIPAL_RATE_LIMIT_PER_MINUTE` (default `600`) — the inner
+  per-principal limit, applied after a credential is verified. Keyed by the
+  verified identity id (user session or continuation token) or the verified
+  integrator id (integrator challenge-response credential), so users sharing
+  an address each get their own budget and one user cannot consume another's.
+  Requests that fail authentication are counted only by the per-IP ceiling.
+
+  Over-limit responses from either layer are always `429` with `Retry-After`.
+  Both layers exist in the in-process and Redis-backed limiters. The tracing
+  and CORS layers wrap the per-IP limiter, so a `429` or `503` from it still
+  carries CORS headers and browsers can read the status; the per-principal
+  `429` is produced inside a handler and carries them the same way.
+  A node behind a reverse proxy sees the proxy as the peer address, so the
+  per-IP ceiling treats all of its clients as one address unless trusted
+  forwarded-address handling is configured.
 - `AVALON_OUTBOX_POLL_INTERVAL_SECS` (default `3`) — the outbox worker's
   drain cadence.
 

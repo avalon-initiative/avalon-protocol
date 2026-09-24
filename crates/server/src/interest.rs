@@ -1007,6 +1007,7 @@ mod tests {
                 dht_commands: None,
                 own_base_url,
                 interest_redis_fast_path: None,
+                principal_limiter: crate::principal_limits::PrincipalLimiter::from_env(None),
                 mirror_wake: Arc::new(tokio::sync::Notify::new()),
                 host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
                 shard_registry: crate::nodes::ShardRegistry::new(),

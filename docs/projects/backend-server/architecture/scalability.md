@@ -88,9 +88,10 @@ eventually becomes. Four independently-configurable limits are enforced in
 exactly as safe as it always was: `AVALON_MAX_DB_CONNECTIONS` (Postgres pool
 size), `AVALON_MAX_CONCURRENT_REQUESTS` (`tower::limit::ConcurrencyLimitLayer`
 — backpressures, never drops), `AVALON_RATE_LIMIT_PER_MINUTE`
-(`tower_governor`, GCRA, keyed by integrator key id with an IP fallback for
-pre-auth endpoints — always `429` + `Retry-After`, never a silent drop or a
-generic `500`), and `AVALON_OUTBOX_POLL_INTERVAL_SECS` (drain cadence). See
+(`tower_governor`, GCRA, a per-IP ceiling keyed by peer address only) with
+`AVALON_PRINCIPAL_RATE_LIMIT_PER_MINUTE` as the per-verified-principal limit
+underneath it — always `429` + `Retry-After`, never a silent drop or a
+generic `500`, and `AVALON_OUTBOX_POLL_INTERVAL_SECS` (drain cadence). See
 [`./nodes.md`](./nodes.md) for the exact defaults and where each is wired.
 
 ## Current implementation

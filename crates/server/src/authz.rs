@@ -397,6 +397,7 @@ mod live_tests {
             dht_commands: None,
             own_base_url: None,
             interest_redis_fast_path: None,
+            principal_limiter: crate::principal_limits::PrincipalLimiter::from_env(None),
             mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
             shard_registry: crate::nodes::ShardRegistry::new(),

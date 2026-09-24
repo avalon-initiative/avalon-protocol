@@ -462,6 +462,7 @@ async fn main() {
         }
     }
 
+    let redis_limiter = avalon_server::redis_limits::RedisLimiterState::from_env().await;
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -503,6 +504,9 @@ async fn main() {
         dht_commands,
         own_base_url: announce_config.own_base_url.clone(),
         interest_redis_fast_path,
+        principal_limiter: avalon_server::principal_limits::PrincipalLimiter::from_env(
+            redis_limiter.as_ref(),
+        ),
         mirror_wake: mirror_wake.clone(),
         host_metrics: host_metrics_sampler.clone(),
         shard_registry: shard_registry.clone(),
@@ -640,7 +644,6 @@ async fn main() {
     // across this operator's own processes — `None` (the default,
     // AVALON_REDIS_URL unset) keeps `router` on its existing in-process
     // layers. See `avalon_server::redis_limits`'s own module doc comment.
-    let redis_limiter = avalon_server::redis_limits::RedisLimiterState::from_env().await;
     if redis_limiter.is_some() {
         tracing::info!(
             "avalon-server: rate limit / concurrency ceiling backed by Redis (AVALON_REDIS_URL set)"
