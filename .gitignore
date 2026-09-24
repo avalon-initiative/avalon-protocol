@@ -2,7 +2,7 @@
 /target/
 crates/*/target/
 
-# Node / npm workspaces (apps/hub, apps/mobile-hub)
+# Node / npm workspaces (apps/hub, apps/hub-app)
 node_modules/
 dist/
 apps/*/dist/
@@ -11,8 +11,8 @@ storybook-static/
 *.tsbuildinfo
 
 # Tauri
-apps/mobile-hub/src-tauri/target/
-apps/mobile-hub/src-tauri/gen/
+apps/hub-app/src-tauri/target/
+apps/hub-app/src-tauri/gen/
 
 # -----------------------------------------------------------------------------
 # Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries

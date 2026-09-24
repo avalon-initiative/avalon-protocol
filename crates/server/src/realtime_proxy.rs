@@ -57,7 +57,7 @@
 //! then sends a real `Close` frame to the client before returning — a
 //! clean, visible disconnect, never a silent hang. Reconnecting is left to
 //! the client, same as any other WebSocket disconnect; see this issue's
-//! own PR description for the current state of Hub/mobile-hub's
+//! own PR description for the current state of Hub/hub-app's
 //! reconnect behavior against this.
 
 use axum::extract::ws::{CloseFrame, Message as AxumMessage, WebSocket};

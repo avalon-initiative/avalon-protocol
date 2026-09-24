@@ -243,7 +243,7 @@ async fn same_device_submit_returns_a_real_session_directly() {
 
 /// The cross-device path: start on one "client", submit the grant (as if
 /// relayed from wherever the signing key lives), poll to pick up the
-/// resulting session — exactly the flow a mobile-hub QR scan drives.
+/// resulting session — exactly the flow a hub-app QR scan drives.
 #[tokio::test]
 #[ignore]
 async fn cross_device_start_submit_poll_round_trip_delivers_a_session_exactly_once() {

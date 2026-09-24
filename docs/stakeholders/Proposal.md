@@ -55,7 +55,7 @@ The reference implementation is a Rust workspace: a `protocol` crate
 (pure domain types and traits, no I/O), a `chain` crate (the settlement
 ledger), an `indexer` crate (the fast-read query layer, rebuildable from
 ledger history at any time), and a `server` crate (the one network-facing
-API every client — the Hub, mobile-hub, and every integrator — talks to).
+API every client — the Hub, hub-app, and every integrator — talks to).
 SDKs and a local dev/ops CLI build on top of that network; neither is
 part of what the server deploys as.
 
@@ -159,7 +159,7 @@ and capability model as any integrator or third-party client, has no
 backend of its own, and holds no privilege another authorized client
 couldn't have.
 
-A companion app (`apps/mobile-hub`, a desktop/mobile shell around the
+A companion app (`apps/hub-app`, a desktop/mobile shell around the
 same UI) is a second proof that other clients are possible by
 construction: web, mobile, desktop, a Discord integration, or an
 integrator's own native UI could all be built the same way. A player who

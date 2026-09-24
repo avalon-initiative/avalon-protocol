@@ -112,7 +112,7 @@ crates/
 
 apps/
   hub/          web client — Vue3, the first doorway into Avalon
-  mobile-hub/   Tauri companion app (desktop/mobile), same UI as hub
+  hub-app/   Tauri companion app (desktop/mobile), same UI as hub
 ```
 
 Every official SDK (Rust, C#, TypeScript) lives in a separate `avalon-sdks`
@@ -207,7 +207,7 @@ publicly launched yet.
 <!--
 ## Related projects
 
-TODO: once the backend, SDKs, Hub, and mobile-hub split into their own
+TODO: once the backend, SDKs, Hub, and hub-app split into their own
 repositories, list them here.
 -->
 

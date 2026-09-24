@@ -25,7 +25,7 @@ for them to drift independently. It does **not** cover:
 
 - The Rust reference SDK, which lives in the separate `avalon-sdks` repo and
   releases on its own schedule.
-- `bindings/ts` and `bindings/csharp`, and the Hub/mobile-hub apps — each
+- `bindings/ts` and `bindings/csharp`, and the Hub/hub-app apps — each
   currently sits at its own independent `0.1.0` and isn't wired into this
   process. Give each its own release process when it needs one rather than
   forcing them onto the server's version.

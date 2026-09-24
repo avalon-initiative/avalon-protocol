@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Avalon's network-facing API/auth/realtime service. The backend the hub, mobile-hub, and games all talk to — never bundled into a client app's own backend."
+description = "Avalon's network-facing API/auth/realtime service. The backend the hub, hub-app, and games all talk to — never bundled into a client app's own backend."
 default-run = "avalon-server"
 
 [dependencies]

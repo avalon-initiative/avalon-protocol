@@ -1,7 +1,7 @@
 //! Avalon's network-facing service: identity, auth, social, guilds,
 //! achievement verification, integrator registration.
 //!
-//! This is the one thing `hub` and `mobile-hub` are clients of — per the
+//! This is the one thing `hub` and `hub-app` are clients of — per the
 //! decision that Hub is frontend-only and never becomes its own backend.
 //! Integrators integrate against this service through `avalon-sdk`, not directly.
 //!

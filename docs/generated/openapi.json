@@ -120,7 +120,7 @@
         "tags": [
           "identity"
         ],
-        "summary": "`GET /auth/cross-node/lookup?user_code=...` — unauthenticated: the\nHub/mobile-hub approval screen has to\nshow real context before a human decides whether to approve, but `submit`/`deny` only\never take a `user_code` with no read path to go with it. Deliberately\nreturns nothing beyond what's needed to render the prompt — never\n`request_code` (the polling device's own bearer credential, not the\napprover's business).",
+        "summary": "`GET /auth/cross-node/lookup?user_code=...` — unauthenticated: the\nHub/hub-app approval screen has to\nshow real context before a human decides whether to approve, but `submit`/`deny` only\never take a `user_code` with no read path to go with it. Deliberately\nreturns nothing beyond what's needed to render the prompt — never\n`request_code` (the polling device's own bearer credential, not the\napprover's business).",
         "operationId": "lookup",
         "parameters": [
           {

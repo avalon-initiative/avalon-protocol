@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    avalon_mobile_hub_lib::run();
+    avalon_hub_app_lib::run();
 }

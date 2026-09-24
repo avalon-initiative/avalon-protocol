@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from './api/session'
 // Design tokens + base page styles come from the shared component library
-// so every Avalon client (hub, mobile-hub) renders the same theme.
+// so every Avalon client (hub, hub-app) renders the same theme.
 import '@avalon-initiative/common-ui/tokens.css'
 import '@avalon-initiative/common-ui/global.css'
 import '@avalon-initiative/common-ui/style.css'
