@@ -458,7 +458,8 @@ decision. The announce worker publishes its active set and these stats through
 the shared `PeerTable` so read models can serve them.
 
 **`GET /nodes/topology` is this node's own view of the network.** Public,
-read-only, `Cache-Control: public, max-age=5`. It returns `self` (base URL,
+read-only, `Cache-Control: public, max-age=5`, served while
+`AVALON_TOPOLOGY_PUBLIC` is true (the default). It returns `self` (base URL,
 libp2p peer id, protocol version, network id, roles, stale flag, resource
 metrics, and the latest tree size and STH time of each shard this node
 authors), `neighbors` (the active announce/exchange set: roles, protocol
