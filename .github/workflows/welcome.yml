@@ -6,56 +6,9 @@ on:
   pull_request_target:
     types: [opened]
 
-permissions:
-  issues: write
-  pull-requests: write
-
 jobs:
-  welcome-issue:
-    if: github.event_name == 'issues' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/first-interaction@v3
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          issue_message: |
-            Thanks for taking the time to file this — reports like this are what keep Avalon Protocol moving in the right direction. Someone will take a look and follow up here soon. Glad to have you here.
-          pr_message: unused
-
-  welcome-pr:
-    if: github.event_name == 'pull_request_target' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      # actions/first-interaction@v3 determines "first PR" by checking whether
-      # the sender has ever filed an Issue, not whether they have an earlier
-      # PR (its isFirstPullRequest() check never filters by author at all) —
-      # so a returning PR contributor who has just never opened an Issue gets
-      # welcomed as a first-timer on every PR. Do the author-scoped check
-      # ourselves via the search API instead.
-      - name: Welcome first-time PR contributors only
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request;
-
-            const { data } = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${owner}/${repo} type:pr author:${pr.user.login}`,
-              per_page: 100,
-            });
-
-            const hasEarlierPr = data.items.some((item) => item.number < pr.number);
-            if (hasEarlierPr) {
-              return;
-            }
-
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pr.number,
-              body:
-                'This looks like a first PR to Avalon Protocol — welcome, and thanks for putting in the work. ' +
-                "It genuinely means a lot to see the project picked up and built on.\n\n" +
-                "CONTRIBUTING.md covers the branch/commit/PR conventions if anything looks unfamiliar, but don't sweat getting every " +
-                'detail perfect — a maintainer will review and help square it away. Looking forward to seeing this through.',
-            });
+  call:
+    permissions:
+      issues: write
+      pull-requests: write
+    uses: avalon-initiative/.github/.github/workflows/welcome.yml@main

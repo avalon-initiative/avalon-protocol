@@ -52,8 +52,8 @@ Decision / Consequences / Related.
 - **No live database in most sandboxes.** `crates/server` and `crates/chain`
   use runtime-checked `sqlx::query` rather than the compile-time `sqlx::query!`
   macro specifically so `cargo build`/`test`/`clippy` all pass without a
-  reachable Postgres. `make test-live` is the real, `--ignored` test suite
-  that needs `make start` running against an actual dev database — see the
+  reachable Postgres. `make test-live` is the real, `--ignored` test suite;
+  it starts its own isolated servers against an actual dev database — see the
   root `.env.example`.
 - **Merges are squash-only by convention** — the PR title becomes the commit
   message on `main`, so it's the one place the `[#<issue>] - ...` format is

@@ -261,14 +261,16 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
         "the mirror projection must reflect the second passkey too"
     );
 
-    let revoke_status = http
+    let revoke = http
         .post(format!("{base}/me/passkeys/{second_passkey_id}/revoke"))
         .bearer_auth(&token)
+        .json(&serde_json::json!({}))
         .send()
         .await
-        .unwrap()
-        .status();
-    assert!(revoke_status.is_success());
+        .unwrap();
+    let revoke_status = revoke.status();
+    let revoke_body = revoke.text().await.unwrap_or_default();
+    assert!(revoke_status.is_success(), "{revoke_status}: {revoke_body}");
 
     assert_eq!(
         active_mirrored_passkey_count(&pool, identity_id).await,

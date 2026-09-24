@@ -8,11 +8,8 @@ what a hoster does with a release once it exists, see
 
 **This is the designed process, not fully live yet** — `make release` and
 the release CI workflow described below are being built to match this doc
-rather than the other way around. This repo is also private and its GitHub
-Actions workflows stay disabled at the repo-settings level until it goes
-public (see `.claude/CLAUDE.md`'s conventions), so even once the workflow
-file exists, it won't actually fire until that flips. Treat this page as
-the spec both the tooling and this doc's own future edits are held to.
+rather than the other way around. Treat this page as the spec both the
+tooling and this doc's own future edits are held to.
 
 ## Scope
 

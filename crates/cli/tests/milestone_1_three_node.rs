@@ -3,8 +3,8 @@
 //! genuinely separate, independently-deployed nodes rather than one
 //! process. Gated `--ignored` since it needs this sandbox's own live
 //! 3-node topology (this sandbox + `avalon-peer` + `avalon-peer-two`),
-//! not just `make start`. Never runs under
-//! `make test` or `make test-live`.
+//! not just `make start`. Skipped unless `AVALON_FLEET_TEST=1` is set, so
+//! `make test-live` never writes to the fleet.
 //!
 //! `crates/cli/tests/milestone_1_walkthrough.rs` already proves the
 //! full vertical slice against one node — this test doesn't repeat that
@@ -794,6 +794,13 @@ fn node3_url() -> String {
 #[tokio::test]
 #[ignore]
 async fn identity_has_no_operational_home_node_across_real_separate_infrastructure() {
+    if std::env::var("AVALON_FLEET_TEST").as_deref() != Ok("1") {
+        eprintln!(
+            "skipping: writes to the real dev fleet (AVALON_NODE1_URL/NODE2_URL/NODE3_URL); \
+             set AVALON_FLEET_TEST=1 to run it"
+        );
+        return;
+    }
     let node1 = node1_url();
     let node2 = node2_url();
     let node3 = node3_url();

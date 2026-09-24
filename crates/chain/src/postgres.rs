@@ -678,6 +678,13 @@ impl PostgresSettlementProvider {
         Ok(cached.leaves[..tree_size as usize].to_vec())
     }
 
+    /// Drops the cached leaves and tree; the next read rebuilds them from
+    /// `ledger_entries`. Called when a transaction that had already extended
+    /// the cache does not commit.
+    async fn reset_leaf_cache(&self) {
+        *self.leaf_cache.write().await = LedgerCache::default();
+    }
+
     /// Grows `leaf_cache` (leaves + tree together) to cover `tree_size` if
     /// it doesn't already — the fast/slow path every cache-backed read
     /// below shares. No-op if the cache already covers `tree_size`.
@@ -1338,40 +1345,49 @@ impl PostgresSettlementProvider {
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-        let (tree_size, batch_root, _real_committed_at) =
-            self.insert_batch_and_compute_root(&mut tx, batch).await?;
+        // Everything past this point can fail after the shared leaf cache was
+        // already extended, so any error drops the cache.
+        let outcome = async {
+            let (tree_size, batch_root, _real_committed_at) =
+                self.insert_batch_and_compute_root(&mut tx, batch).await?;
 
-        let candidate = SignedTreeHead {
-            tree_size,
-            root_hash: batch_root.clone(),
-            network_id: self.network_id.clone(),
-            signing_key_id: signing_key_id.to_string(),
-            signature: signature_hex.to_string(),
-            created_at,
-        };
-        if !sth::verify_tree_head(verify_key, &candidate) {
-            // Transaction is dropped without `commit()`, rolling back
-            // everything `insert_batch_and_compute_root` just did — a
-            // rejected finalize (stale tip, or a genuinely invalid
-            // signature) never leaves partial state or burns `seq`.
-            return Err(SettlementError::Storage(
-                "finalize: signature does not verify against the freshly-computed tree head \
-                 (stale prepare, or an invalid signature) — re-prepare and re-sign"
-                    .to_string(),
-            ));
+            let candidate = SignedTreeHead {
+                tree_size,
+                root_hash: batch_root.clone(),
+                network_id: self.network_id.clone(),
+                signing_key_id: signing_key_id.to_string(),
+                signature: signature_hex.to_string(),
+                created_at,
+            };
+            if !sth::verify_tree_head(verify_key, &candidate) {
+                // Transaction is dropped without `commit()`, rolling back
+                // everything `insert_batch_and_compute_root` just did — a
+                // rejected finalize (stale tip, or a genuinely invalid
+                // signature) never leaves partial state or burns `seq`.
+                return Err(SettlementError::Storage(
+                    "finalize: signature does not verify against the freshly-computed tree head \
+                     (stale prepare, or an invalid signature) — re-prepare and re-sign"
+                        .to_string(),
+                ));
+            }
+
+            self.insert_signed_tree_head(&mut tx, &candidate).await?;
+
+            tx.commit()
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+            Ok(Commitment {
+                batch_id: batch.id,
+                proof: batch_root.into_bytes(),
+                committed_at: candidate.created_at,
+            })
         }
-
-        self.insert_signed_tree_head(&mut tx, &candidate).await?;
-
-        tx.commit()
-            .await
-            .map_err(|e| SettlementError::Storage(e.to_string()))?;
-
-        Ok(Commitment {
-            batch_id: batch.id,
-            proof: batch_root.into_bytes(),
-            committed_at: candidate.created_at,
-        })
+        .await;
+        if outcome.is_err() {
+            self.reset_leaf_cache().await;
+        }
+        outcome
     }
 }
 
@@ -1390,34 +1406,42 @@ impl SettlementProvider for PostgresSettlementProvider {
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-        let (tree_size, batch_root, committed_at) =
-            self.insert_batch_and_compute_root(&mut tx, batch).await?;
+        // A failure after the shared leaf cache was extended drops the cache.
+        let outcome = async {
+            let (tree_size, batch_root, committed_at) =
+                self.insert_batch_and_compute_root(&mut tx, batch).await?;
 
-        // Signed Tree Head: one per batch commit, in this
-        // same transaction, STH-only signing — no per-entry signature is
-        // ever produced. The private key is loaded from the environment
-        // fresh here (never persisted) — see `crate::sth`'s doc comment.
-        let (signing_key, signing_key_id) = sth::load_signing_key_from_env()
-            .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        let tree_head = sth::sign_tree_head(
-            &signing_key,
-            &signing_key_id,
-            tree_size,
-            &batch_root,
-            &self.network_id,
-            committed_at,
-        );
-        self.insert_signed_tree_head(&mut tx, &tree_head).await?;
+            // Signed Tree Head: one per batch commit, in this
+            // same transaction, STH-only signing — no per-entry signature is
+            // ever produced. The private key is loaded from the environment
+            // fresh here (never persisted) — see `crate::sth`'s doc comment.
+            let (signing_key, signing_key_id) = sth::load_signing_key_from_env()
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+            let tree_head = sth::sign_tree_head(
+                &signing_key,
+                &signing_key_id,
+                tree_size,
+                &batch_root,
+                &self.network_id,
+                committed_at,
+            );
+            self.insert_signed_tree_head(&mut tx, &tree_head).await?;
 
-        tx.commit()
-            .await
-            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-        Ok(Commitment {
-            batch_id: batch.id,
-            proof: batch_root.into_bytes(),
-            committed_at,
-        })
+            Ok(Commitment {
+                batch_id: batch.id,
+                proof: batch_root.into_bytes(),
+                committed_at,
+            })
+        }
+        .await;
+        if outcome.is_err() {
+            self.reset_leaf_cache().await;
+        }
+        outcome
     }
 
     /// Two independent checks, both must pass: a per-entry hash-chain

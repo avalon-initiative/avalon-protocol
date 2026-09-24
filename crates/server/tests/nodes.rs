@@ -13,6 +13,11 @@
 //! `AVALON_SECOND_NODE_SERVER_URL` to run it; it's skipped (not failed)
 //! when unset, same pattern `tests/remote_settlement.rs` already
 //! uses for its own second-node scenario.
+//!
+//! These tests announce made-up peers, which the target gossips onward to
+//! every node it knows; they refuse any target that is not on loopback
+//! (`scripts/live-tests.sh` starts an isolated one) unless
+//! `AVALON_TEST_ALLOW_SHARED_PEER_TABLE=1` is set.
 
 use uuid::Uuid;
 
@@ -26,6 +31,27 @@ fn network_id() -> String {
 
 fn second_node_url() -> Option<String> {
     std::env::var("AVALON_SECOND_NODE_SERVER_URL").ok()
+}
+
+/// Panics unless `target_base` is a loopback address, so fabricated peers
+/// never reach a node that gossips with a real network.
+fn require_isolated_target(target_base: &str) {
+    if std::env::var("AVALON_TEST_ALLOW_SHARED_PEER_TABLE").as_deref() == Ok("1") {
+        return;
+    }
+    let host = target_base
+        .split("://")
+        .nth(1)
+        .unwrap_or(target_base)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("");
+    assert!(
+        host == "localhost" || host.starts_with("127."),
+        "refusing to announce fabricated peers to {target_base}: the peer table gossips to \
+         other nodes; point AVALON_SERVER_URL at an isolated loopback server \
+         (scripts/live-tests.sh) or set AVALON_TEST_ALLOW_SHARED_PEER_TABLE=1"
+    );
 }
 
 /// `protocol_version` defaults to the running crate's own version (real
@@ -55,6 +81,7 @@ async fn announce_with_version(
     network_id: &str,
     protocol_version: &str,
 ) -> reqwest::Response {
+    require_isolated_target(target_base);
     http.post(format!("{target_base}/nodes/announce"))
         .json(&serde_json::json!({
             "base_url": caller_base_url,

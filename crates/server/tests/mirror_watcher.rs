@@ -355,6 +355,12 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     let http = reqwest::Client::new();
     let pool = test_pool().await;
 
+    // A fresh ledger has no tree head until something has been committed.
+    let issuer = register_throwaway_integrator(&http, &base).await;
+    let seq = wait_for_committed_seq(&pool, &issuer).await;
+    let rank = entry_rank(&pool, seq).await;
+    wait_for_covering_sth(&pool, rank).await;
+
     let sth_json: serde_json::Value = http
         .get(format!("{base}/ledger/sth/latest"))
         .send()
