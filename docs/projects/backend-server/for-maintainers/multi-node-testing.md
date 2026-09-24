@@ -22,7 +22,7 @@ several Docker containers.
 ## Why environment variables, not several `.env` files
 
 `crates/devenv` loads the workspace root's single `.env` from a fixed path
-([issue #671](https://github.com/LunarVagabond/avalon-protocol/issues/671))
+([issue #671](https://github.com/avalon-initiative/avalon-protocol/issues/671))
 via `dotenvy::from_path(...).ok()`, which — like `dotenvy` generally — never
 overrides a variable **already set in the process's real environment**. That
 means the reliable way to run several differently-configured nodes against

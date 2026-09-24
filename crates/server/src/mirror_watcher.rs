@@ -1387,6 +1387,7 @@ mod tests {
     // flaky.
     #[test]
     fn from_env_reads_peers_and_poll_interval() {
+        let _env = crate::test_env::guard();
         // SAFETY: test-only env mutation of vars no other test in this
         // binary touches.
         unsafe {

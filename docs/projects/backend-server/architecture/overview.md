@@ -231,9 +231,8 @@ settles are correct.
 - `crates/cli/` — `avalon create-identity`, `login`, `register-integrator`,
   `inspect-ledger`/`inspect-ledger-full`, `outbox-status`, `prune-ledger`.
 - `avalon-hub/apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,
-  integrator discovery), not just scaffolding. `avalon-hub/apps/hub-app`, the UI library (`avalon-common-ui`),
-  `bindings/csharp` are more actively developed than plain scaffolding but
-  earlier-stage than the Hub — see each project's own architecture docs for
+  integrator discovery), not just scaffolding. `avalon-hub/apps/hub-app` and the UI library (`avalon-common-ui`) are
+  developed in their own repositories — see each project's own docs for
   current status.
 </content>
 </invoke>

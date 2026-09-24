@@ -11,11 +11,10 @@ a session token proves, what a capability grant is, what an attestation's
 
 ```toml
 [dependencies]
-avalon-sdk = { git = "https://github.com/LunarVagabond/avalon-protocol" }
+avalon-sdk = { git = "https://github.com/avalon-initiative/avalon-sdks" }
 ```
 
-(Not yet published to crates.io — a git dependency, or a path dependency if
-you're working inside this workspace, until it is.)
+(Not yet published to crates.io — a git dependency until it is.)
 
 ## 2. You need a server to talk to
 
@@ -74,7 +73,7 @@ session.
 
 ## C# / Unity equivalent
 
-`bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works unmodified
+`avalon-sdks`' `languages/csharp/AvalonSdk` (targets netstandard2.1, so it works unmodified
 in Unity/IL2CPP) mirrors the same four steps — same method names translated
 to C# idiom, same two-call `authenticate` (`GET /me` + `GET /me/grants`),
 same typed exceptions in place of `SdkError`:

@@ -30,10 +30,15 @@ change here, not a quiet edit behind an API nobody watches. There is
 deliberately no runtime "publish a new trust anchor" endpoint.
 
 The [README](../../../../README.md#trusted-networks) renders the same file as a
-table, not a second hand-maintained copy — every official SDK bundles the same
-file (the TypeScript SDK, which `avalon-hub/apps/hub` consumes, mirrors it via its own
-generate step), and a test (`avalon-hub/apps/hub/src/network/trustAnchors.readme.test.ts`)
-fails if the README table drifts from the JSON.
+table, not a second hand-maintained copy — `scripts/check-trust-anchors.mjs`
+(run by `make check`) fails if the README table drifts from the JSON.
+
+Clients do not bundle the list. Every official SDK fetches it at runtime from
+`TRUST_ANCHORS_URL`
+(`https://raw.githubusercontent.com/avalon-initiative/avalon-protocol/main/docs/trusted-networks.json`),
+so a client always sees the current published file. When the list cannot be
+fetched, the SDKs report the network as unreachable rather than falling back
+to a stale copy.
 
 ## What this repo actually has today
 
@@ -69,13 +74,13 @@ client shows it as an unknown/unverified network, not mainnet.
 `avalon-hub/apps/hub` does not implement any of the verification itself — it only
 talks to the protocol layer through `@avalon-initiative/protocol-sdk`, whose
 `AvalonClient.verifyNetwork()` fetches `GET /ledger/sth/latest`, matches the
-STH's `network_id` against the SDK's bundled trust-anchor list, and
+STH's `network_id` against the trust-anchor list the SDK fetches at runtime, and
 independently re-verifies the STH's Ed25519 signature against that entry's
 `verify_key` (the same `(tree_size, root_hash, network_id, timestamp)` message
 `crates/protocol/src/sth.rs::signing_message` defines).
 
 - `src/composables/useNetworkTrust.ts` + `src/components/NetworkStatus.vue` —
-  surfaced in the Hub shell sidebar (`HubShell.vue`), always visible, never
+  surfaced in the Hub shell sidebar (`src/views/HubShell.vue`), always visible, never
   buried in settings: which network the session is connected to, and one of
   four states —
   - **Verified** — `network_id` is pinned and the STH signature checks out.
@@ -85,16 +90,15 @@ independently re-verifies the STH's Ed25519 signature against that entry's
   - **Unknown network** — the server's claimed `network_id` isn't in the
     pinned list at all. Labeled as unverified/custom, never treated as
     trusted by default.
-  - **Unreachable** — the STH request itself failed.
+  - **Unreachable** — the STH request itself failed, or the trust-anchor list could not be fetched.
 
-  The same component lists every network the Hub build knows about (the
-  bundled list), so which pinned entry the active connection corresponds to
+  The same component lists every network in the fetched trust-anchor list, so which pinned entry the active connection corresponds to
   is explicit — not just a URL nobody can cross-check.
-- **Switching is explicit, never silent.** `src/api/client.ts`'s
+- **Switching is explicit, never silent.** `src/api/serverUrl.ts`'s
   `getServerUrl()`/`setServerUrl()` are the only reader/writer of which
   server the Hub talks to at runtime (persisted in `localStorage`, falling
   back to the build-time `VITE_AVALON_SERVER_URL` default). `NetworkStatus.vue`
-  lists every bundled trust-anchor entry with a `server_url` and a visible
+  lists every trust-anchor entry with a `server_url` and a visible
   "Switch" action, plus an explicitly-labeled "custom network" option for a
   URL outside the pinned list — picking either persists the choice and
   reloads (an existing session's bearer token has no meaning against a
@@ -118,10 +122,8 @@ the scrutiny that claim deserves.
 
 This is also covered by the Rust SDK: `AvalonClient::verify_network` fetches
 `GET /ledger/sth/latest` and verifies it against the same
-`docs/trusted-networks.json` list, embedded directly into the crate rather
-than mirrored into a generated file the way `avalon-hub/apps/hub` needs to. The Rust SDK
-now lives in the separate `avalon-sdks` repository rather than this
-workspace's own `crates/` — see
+`docs/trusted-networks.json` list, fetched at runtime from `TRUST_ANCHORS_URL`.
+The Rust SDK lives in the separate `avalon-sdks` repository — see
 [`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md). Node
 discovery (*finding* a node in the first place) is a separate, still-open
 concern from trust anchors (*trusting* one once found).
@@ -283,30 +285,28 @@ and re-run without any risk to the network being migrated from.
 
 - `docs/trusted-networks.json` — the canonical list (one `local-dev`
   `avalon-dev-local` entry, see above).
-- The TypeScript SDK's `network/` module (`avalon-sdks` repository) — trust-anchor
-  loading, STH message reconstruction, verification, and zero-URL discovery,
+- The TypeScript SDK's `network/` module (`avalon-sdks` repository) — runtime
+  trust-anchor fetching, STH message reconstruction, verification, and zero-URL discovery,
   unit-tested against real generated Ed25519 keypairs: a valid STH signature
   passes, a forged one or one signed by a different key is flagged, not
   silently accepted. The C# and Rust SDKs carry the same surface.
 - `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`,
   `avalon-hub/apps/hub/src/components/NetworkStatus.vue` — the always-visible Hub-side
-  UI, wired into `HubShell.vue`'s sidebar.
+  UI, wired into `src/views/HubShell.vue`'s sidebar.
 - README's ["Trusted networks"](../../../../README.md#trusted-networks) section.
 - The Rust SDK's network module (`avalon-sdks` repository) — the SDK-side
-  equivalent: `TrustAnchorEntry`/`bundled_trust_anchors()` (embedded from
-  `docs/trusted-networks.json` via `include_str!`, no generated mirror
-  needed), `NetworkTrustStatus`'s four states, and
+  equivalent: `TrustAnchorEntry`, `fetch_trust_anchors()` (runtime fetch from
+  `TRUST_ANCHORS_URL`, nothing bundled), `NetworkTrustStatus`'s four states, and
   `AvalonClient::verify_network`, unit-tested against a real generated
   Ed25519 keypair (valid, forged/wrong-key, and unpinned cases) plus a
   `wiremock`-backed end-to-end fetch test.
-- `crates/protocol/src/network_trust.rs` — a second, independent copy of just
-  the parsing (`TrustAnchorEntry`/`NetworkEnvironment`/`bundled_trust_anchors()`,
-  no verification logic), so `crates/server`'s own bootstrap-peer/anchor-node
-  checks (`nodes.rs`, `cross_node_login.rs`, `mirror_watcher.rs`) don't need a
-  dependency on the client SDK now that the SDK lives in a separate
-  repository. Both copies parse the same `docs/trusted-networks.json`; kept
-  as two hand-synced copies rather than shared code on purpose, matching the
-  decision to make the Rust SDK depend on nothing else in this workspace.
+- `crates/protocol/src/network_trust.rs` — the server-side parsing
+  (`TrustAnchorEntry`/`NetworkEnvironment`/`bundled_trust_anchors()`, no
+  verification logic). Unlike the SDKs, the server compiles
+  `docs/trusted-networks.json` in via `include_str!` for its own
+  bootstrap-peer/anchor-node checks (`nodes.rs`, `cross_node_login.rs`,
+  `mirror_watcher.rs`); the Rust SDK depends on nothing in this workspace and
+  has its own fetching implementation.
 - Not built: a "manually add a custom trust anchor" UI in the Hub (the Hub's
   own invariant is satisfied by clearly flagging an unpinned network as
   unverified rather than requiring a manual-add flow — see Invariants below).

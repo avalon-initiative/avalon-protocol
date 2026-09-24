@@ -1,6 +1,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/rust-workspace-orange.svg" alt="Rust workspace">
+  <a href="https://discord.gg/FFDsFw9F4g"><img src="https://img.shields.io/badge/discord-join%20the%20chat-5865F2.svg?logo=discord&logoColor=white" alt="Join the Avalon Discord"></a>
 </p>
 
 # Avalon Protocol
@@ -131,8 +132,8 @@ pins each known network's `network_id` to the settlement operator's real
 Ed25519 public key, so a client can verify a server's Signed Tree Heads
 (`GET /ledger/sth/latest`) instead of trusting the name alone. This table is
 rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
-single canonical copy — not a hand-maintained duplicate, and a Hub test fails
-if the two ever drift. See
+single canonical copy — not a hand-maintained duplicate, and `make check`
+fails if the two ever drift. See
 [Network trust anchors](docs/projects/backend-server/architecture/network-trust-anchors.md)
 for the full model, how the Hub enforces it, and what this deliberately does
 not solve (a compromised maintainer publishing a bad key here is a
@@ -155,14 +156,29 @@ validator set) — see the
 [trust anchor list](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
-Avalon Hub bundles this same list at build time and always shows which
-pinned network the current session is connected to, flagging a mismatch or
-an unpinned network rather than trusting it silently — see
-`avalon-hub/apps/hub/src/network/`.
+The SDKs fetch this same file at runtime from its raw GitHub URL and report
+the network as unreachable if it cannot be fetched. Avalon Hub uses that to
+always show which pinned network the current session is connected to,
+flagging a mismatch or an unpinned network rather than trusting it silently —
+see `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`.
 
 ## Learn more
 
 [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md)
+
+## Community
+
+Where to talk about Avalon depends on whether the conversation should last:
+
+- **[GitHub Discussions](https://github.com/orgs/avalon-initiative/discussions)
+  and [Issues](https://github.com/avalon-initiative/avalon-protocol/issues)**
+  are the durable record. Design questions, proposals, decisions, bug
+  reports, and anything you'd want to find again in a year belong here.
+- **[Discord](https://discord.gg/FFDsFw9F4g)** is for drop-in chat: hanging
+  out, quick "where did this come from?" questions, and rapid-fire
+  back-and-forth. It is not a durable record and nothing there is treated as
+  a decision. When a conversation there produces an idea worth keeping, it
+  gets moved into a Discussion or an Issue.
 
 ## Contributing
 
