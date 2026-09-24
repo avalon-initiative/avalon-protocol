@@ -361,7 +361,7 @@ plus opt-in live tests against a real server and Postgres.
 self-contained TypeScript SDK implementing both `AccountSession` and
 `IntegratorSession` from scratch, ES modules, `vitest` for tests.
 Published to GitHub Packages as `@avalon-initiative/protocol-sdk`;
-`apps/hub`'s entire data-fetching surface runs on the published package
+`avalon-hub/apps/hub`'s entire data-fetching surface runs on the published package
 in production, not a local path.
 
 Unlike the C# port (which scopes WebAuthn ceremony-driving out entirely)

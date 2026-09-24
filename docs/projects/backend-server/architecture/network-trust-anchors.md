@@ -31,8 +31,8 @@ deliberately no runtime "publish a new trust anchor" endpoint.
 
 The [README](../../../../README.md#trusted-networks) renders the same file as a
 table, not a second hand-maintained copy — every official SDK bundles the same
-file (the TypeScript SDK, which `apps/hub` consumes, mirrors it via its own
-generate step), and a test (`apps/hub/src/network/trustAnchors.readme.test.ts`)
+file (the TypeScript SDK, which `avalon-hub/apps/hub` consumes, mirrors it via its own
+generate step), and a test (`avalon-hub/apps/hub/src/network/trustAnchors.readme.test.ts`)
 fails if the README table drifts from the JSON.
 
 ## What this repo actually has today
@@ -66,7 +66,7 @@ client shows it as an unknown/unverified network, not mainnet.
 
 ## Hub enforcement
 
-`apps/hub` does not implement any of the verification itself — it only
+`avalon-hub/apps/hub` does not implement any of the verification itself — it only
 talks to the protocol layer through `@avalon-initiative/protocol-sdk`, whose
 `AvalonClient.verifyNetwork()` fetches `GET /ledger/sth/latest`, matches the
 STH's `network_id` against the SDK's bundled trust-anchor list, and
@@ -119,7 +119,7 @@ the scrutiny that claim deserves.
 This is also covered by the Rust SDK: `AvalonClient::verify_network` fetches
 `GET /ledger/sth/latest` and verifies it against the same
 `docs/trusted-networks.json` list, embedded directly into the crate rather
-than mirrored into a generated file the way `apps/hub` needs to. The Rust SDK
+than mirrored into a generated file the way `avalon-hub/apps/hub` needs to. The Rust SDK
 now lives in the separate `avalon-sdks` repository rather than this
 workspace's own `crates/` — see
 [`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md). Node
@@ -288,8 +288,8 @@ and re-run without any risk to the network being migrated from.
   unit-tested against real generated Ed25519 keypairs: a valid STH signature
   passes, a forged one or one signed by a different key is flagged, not
   silently accepted. The C# and Rust SDKs carry the same surface.
-- `apps/hub/src/composables/useNetworkTrust.ts`,
-  `apps/hub/src/components/NetworkStatus.vue` — the always-visible Hub-side
+- `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`,
+  `avalon-hub/apps/hub/src/components/NetworkStatus.vue` — the always-visible Hub-side
   UI, wired into `HubShell.vue`'s sidebar.
 - README's ["Trusted networks"](../../../../README.md#trusted-networks) section.
 - The Rust SDK's network module (`avalon-sdks` repository) — the SDK-side

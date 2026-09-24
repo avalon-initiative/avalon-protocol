@@ -268,7 +268,7 @@ public and unauthenticated. `bindings/csharp` does not mirror this yet.
   not yet a real indexer read model, the same pragmatic call
   `discover_guilds` already made for guilds.
 - **Hub directory: "Connected Apps"**: the Hub nav entry and route are
-  `/integrations` (`apps/hub/src/router/index.ts`); `/games` and
+  `/integrations` (`avalon-hub/apps/hub/src/router/index.ts`); `/games` and
   `/games/:slug` still resolve, as redirects, so existing deep links don't
   404. `IntegrationDirectory.vue` has category tabs (Games / Apps /
   Services) filtering the fetched list client-side by `category`; only
@@ -281,10 +281,10 @@ public and unauthenticated. `bindings/csharp` does not mirror this yet.
   the new paths (preserving the query string). `/integrations` is the only
   path for writes and the `x-avalon-integrator-*` header spelling is the
   only one accepted. The Hub's API client
-  (`apps/hub/src/api/client.ts`) calls `/integrations`/`/integrations/{slug}`
+  (`avalon-hub/apps/hub/src/api/client.ts`) calls `/integrations`/`/integrations/{slug}`
   directly.
 - **Hub integrator directory + per-integrator profile page**:
-  `apps/hub/src/views/IntegrationDirectory.vue` lists `GET /integrations`
+  `avalon-hub/apps/hub/src/views/IntegrationDirectory.vue` lists `GET /integrations`
   results with a search box and name/newest sort toggle — no "recommended"
   ordering. `IntegrationProfile.vue` (`/integrations/:slug`, with
   `/games/:slug` redirecting) renders `GET /integrations/{slug}`'s public

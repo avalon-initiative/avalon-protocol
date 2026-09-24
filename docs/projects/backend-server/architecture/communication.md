@@ -107,7 +107,7 @@ currently belongs to, scoped to current membership by construction (a
 explicitly torn down when someone leaves). The Hub polls it on the same
 cadence it uses elsewhere, no WebSocket needed for this volume. Read/unread
 state is **entirely client-local** — a per-channel "last seen" timestamp kept
-in the Hub's own `localStorage` (`apps/hub/src/api/guildAnnouncements.ts`),
+in the Hub's own `localStorage` (`avalon-hub/apps/hub/src/api/guildAnnouncements.ts`),
 never server state: there is nothing here durable enough to be worth tracking
 server-side, and guild chat itself is operational-tier, not protocol history. A
 channel is marked seen when a member actually opens it from the alert (not
@@ -123,14 +123,14 @@ ahead of demand" posture the rest of this document takes for notifications
 generally.
 
 A second slice landed on top of this: `useNotificationSummary`
-(`apps/hub/src/composables/`) aggregates seven pending-action sources into one
+(`avalon-hub/apps/hub/src/composables/`) aggregates seven pending-action sources into one
 badge in `HubShell.vue` — incoming friend requests, guild join requests
 awaiting a manager's review, guild invites received, device-grant approval
 requests, recovery requests a guardian can approve, new guardian designations,
 and unread direct messages. It's a read-only aggregator over each source's own
 existing endpoint, not a new server-side notification store. Direct messages
 get the identical client-local "last seen" treatment guild announcements
-already established (`apps/hub/src/api/notifications.ts`'s
+already established (`avalon-hub/apps/hub/src/api/notifications.ts`'s
 `markConversationSeen`/`isConversationUnread`), marked seen the moment a
 thread is actually opened, not by the aggregate panel merely being open. Being
 named a recovery guardian gets the same "have I seen this" local tracking,
@@ -209,14 +209,14 @@ into a Hub-only or integrator-only corner.
   same tradeoff `presence.md` documents for its own push). SDK:
   `GuildHandle::channel(id).subscribe_messages()` and
   `ConversationHandle::subscribe_messages()`, mirroring `Session::subscribe_presence`.
-- **Hub UI**: `apps/hub/src/views/Messages.vue` — a conversation-list sidebar
+- **Hub UI**: `avalon-hub/apps/hub/src/views/Messages.vue` — a conversation-list sidebar
   next to the active thread, the same "swap selection in place, no remount"
   shape the guild page's Channels tab uses. Reuses `AvalonChatMessage`/
   `AvalonChatComposer` unmodified (both already wire-shape-agnostic —
   neither carries a guild/channel field) — no separate the UI library
   component. `useConversations`/`useConversationThread`/`useGuildChat`
-  (`apps/hub/src/composables/`) subscribe to `GET /ws/messages` for new
-  messages; `apps/hub/src/api/client.ts`'s
+  (`avalon-hub/apps/hub/src/composables/`) subscribe to `GET /ws/messages` for new
+  messages; `avalon-hub/apps/hub/src/api/client.ts`'s
   `openChannelMessageSocket`/`openConversationMessageSocket` are the Hub's
   own plain-`WebSocket` clients for it, the same "Hub doesn't consume the
   Rust SDK directly" posture `openPresenceSocket` already established.

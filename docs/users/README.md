@@ -6,7 +6,7 @@ it.
 
 The Hub is the one user-facing product that exists today, so this audience's
 docs currently live with it rather than here:
-[`../projects/hub/for-users.md`](../projects/hub/for-users.md) — logging in
+[`../projects/hub/for-users.md`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/for-users.md) — logging in
 with a passkey, guardian recovery, friends, guilds, achievements, and
 managing which games/apps/services can see what.
 

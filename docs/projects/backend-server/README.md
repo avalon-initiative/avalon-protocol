@@ -89,7 +89,7 @@ own "Current implementation" section for the full, current detail.
   `avalon-server` itself.
 - [`../cli/`](../cli/README.md) (`avalon`) is a standalone dev/ops tool that
   talks to this backend over the same API surface a client would.
-- [`../hub/`](../hub/README.md) is a *client* of this backend, same as any
+- [`../hub/`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/README.md) is a *client* of this backend, same as any
   integrator — it has no backend of its own.
 </content>
 </invoke>

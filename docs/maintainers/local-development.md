@@ -12,9 +12,8 @@ repeated here).
   version, workspace edition is 2021) — `cargo`, `rustc`.
 - **Docker** with the `docker compose` CLI plugin — used only to run
   Postgres locally; the app itself runs natively via `make start`.
-- **Node.js and npm** for `apps/hub`, `apps/hub-app` (npm
-  workspaces from the repo root). No version is pinned in `package.json`;
-  a current LTS Node works.
+- **Node.js and npm** only if you also work on the Hub applications, which live in
+  [`avalon-hub`](https://github.com/avalon-initiative/avalon-hub) and have their own setup there.
 - **.NET SDK** for `bindings/csharp` (targets `netstandard2.1` for Unity
   compatibility — any modern .NET SDK that can build a netstandard2.1
   library works).
@@ -105,24 +104,18 @@ To log back in with an identity `create-identity` already saved locally:
 make login IDENTITY_ID=<uuid>
 ```
 
-## 6. Web workspace (Hub, hub-app)
+## 6. Hub applications
 
-```bash
-make web-install    # npm install at the workspace root, once
-make hub-dev         # Vite dev server for apps/hub
-```
+The Hub web app and the desktop/mobile app are in
+[`avalon-hub`](https://github.com/avalon-initiative/avalon-hub); its README covers installing, running against this
+server, and releasing. To point a Hub at the server you started in step 4, set
+`VITE_AVALON_SERVER_URL` to the address `AVALON_SERVER_ADDR` binds, and make sure
+`AVALON_WEBAUTHN_ORIGIN` and `AVALON_HUB_ORIGIN` in this repo's `.env` match the origin the
+Hub is served from (`http://localhost:5173` by default).
 
-**It worked if:** `make hub-dev` prints a local Vite URL (default
-`http://localhost:5173`) that loads the Hub in a browser, and — with the
-server from step 4 running — the identity created in step 5 can log in
-through it. The shared component library lives in
-[`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) and is installed as
-`@avalon-initiative/common-ui`; run its Storybook from that repository.
-
-`make app-dev` (Tauri dev build of `apps/hub-app`) needs Tauri's own
-native prerequisites beyond Node — see
-[Tauri's prerequisites guide](https://tauri.app/start/prerequisites/) if you
-need that app specifically; it's not required for the Hub web client.
+The shared component library is in
+[`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) and is
+installed as `@avalon-initiative/common-ui`; run its Storybook from that repository.
 
 ## 7. C# SDK
 
@@ -142,9 +135,8 @@ its `AvalonSdk.Tests` project) via `dotnet build`/`dotnet test`.
 make check-all
 ```
 
-Runs the Rust `check` target (fmt-check + lint + test), `web-lint`,
-`web-test`, `csharp-build`, and `csharp-test` — the closest single local
-approximation of what CI runs (`make check` alone is just the Rust part).
+Runs the Rust `check` target (fmt-check + lint + test + OpenAPI freshness + the
+trust-anchors README check), the closest single local approximation of what CI runs.
 
 ## Resetting and live tests
 

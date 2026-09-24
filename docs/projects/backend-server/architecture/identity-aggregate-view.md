@@ -304,7 +304,7 @@ and stays that way.
 
 ## Where the Hub fits
 
-The Hub (`apps/hub`) is a first-party **client**, not (yet) a registered
+The Hub (`avalon-hub/apps/hub`) is a first-party **client**, not (yet) a registered
 integrator. It reads and writes layer 1 the same way any authenticated
 user session does — it has no issuer key of its own, and nothing in this
 document's `integrations` array represents Hub data, because the Hub has not

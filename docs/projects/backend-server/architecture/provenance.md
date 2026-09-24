@@ -63,7 +63,7 @@ integrator-side character state — see the survival table in
 `Dragon Slayer` from three different integrators is three different claims. Only the
 namespaced id plus the issuer record distinguish them. Any UI that shows an
 achievement without its issuer is misrepresenting provenance; the Hub always
-shows the issuer next to the title ([`./hub.md`](../../hub/architecture/hub.md)).
+shows the issuer next to the title ([`./hub.md`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/architecture/hub.md)).
 
 ## Provenance and the registry
 

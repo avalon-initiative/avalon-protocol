@@ -230,8 +230,8 @@ settles are correct.
   are implemented, as is signed achievement issuance.
 - `crates/cli/` — `avalon create-identity`, `login`, `register-integrator`,
   `inspect-ledger`/`inspect-ledger-full`, `outbox-status`, `prune-ledger`.
-- `apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,
-  integrator discovery), not just scaffolding. `apps/hub-app`, the UI library (`avalon-common-ui`),
+- `avalon-hub/apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,
+  integrator discovery), not just scaffolding. `avalon-hub/apps/hub-app`, the UI library (`avalon-common-ui`),
   `bindings/csharp` are more actively developed than plain scaffolding but
   earlier-stage than the Hub — see each project's own architecture docs for
   current status.
