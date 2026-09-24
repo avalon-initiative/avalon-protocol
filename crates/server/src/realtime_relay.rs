@@ -204,6 +204,53 @@ pub async fn relay_to_peers(state: AppState, event: RelayEvent) {
     }
 }
 
+/// Relays from a request handler: detached as always, unless the request
+/// carries a trace header, in which case the fan-out is awaited so the
+/// response can report one path per target.
+pub async fn relay_from_handler(state: AppState, event: RelayEvent) {
+    match crate::op_trace::current() {
+        None => {
+            tokio::spawn(relay_to_peers(state, event));
+        }
+        Some(scope) => relay_traced(&state, &event, &scope).await,
+    }
+}
+
+async fn relay_traced(state: &AppState, event: &RelayEvent, scope: &crate::op_trace::TraceScope) {
+    use crate::op_trace::{branches_for_forward, from_response, Downstream, MAX_BRANCHES};
+    let mut targets = relay_targets(state, event).await;
+    let mut truncated = false;
+    if targets.len() > MAX_BRANCHES {
+        targets.truncate(MAX_BRANCHES);
+        truncated = true;
+    }
+    let processing = scope.started.elapsed();
+    let client = relay_client();
+    let sends = targets.into_iter().map(|base_url| async move {
+        let sent = std::time::Instant::now();
+        let result = client
+            .post(format!("{base_url}/nodes/relay"))
+            .header(crate::op_trace::TRACE_HEADER, scope.id.to_string())
+            .timeout(crate::op_trace::TRACED_FORWARD_TIMEOUT)
+            .json(event)
+            .send()
+            .await;
+        let down = match result {
+            Ok(r) => Downstream::Answered(from_response(r.headers(), scope.id)),
+            Err(e) if e.is_timeout() => Downstream::Timeout,
+            Err(_) => Downstream::Unreachable,
+        };
+        (base_url, sent.elapsed(), down)
+    });
+    let mut branches = Vec::new();
+    for (base_url, waited, down) in futures_util::future::join_all(sends).await {
+        let (b, t) = branches_for_forward(&scope.identity, processing, waited, &base_url, down);
+        branches.extend(b);
+        truncated |= t;
+    }
+    scope.add_branches(branches, truncated);
+}
+
 /// `POST /nodes/relay` — issue #539's receiving end. Applies `event` to
 /// this node's own local store/broadcast only; never relays it onward
 /// (see module doc comment for why that alone is sufficient to guarantee
@@ -216,6 +263,7 @@ pub async fn relay_handler(
     State(state): State<AppState>,
     Json(event): Json<RelayEvent>,
 ) -> StatusCode {
+    crate::op_trace::participate();
     match event {
         RelayEvent::Presence(presence) => {
             state.presence.apply_relayed(

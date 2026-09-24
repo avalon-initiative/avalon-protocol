@@ -346,10 +346,11 @@ pub async fn update_my_presence(
     // Issue #539: reach subscribers connected to a different node, not
     // just this one — spawned, never awaited inline, so an unreachable
     // peer never delays this response.
-    tokio::spawn(crate::realtime_relay::relay_to_peers(
+    crate::realtime_relay::relay_from_handler(
         state.clone(),
         crate::realtime_relay::RelayEvent::Presence(response.clone()),
-    ));
+    )
+    .await;
     Ok(Json(response))
 }
 
@@ -429,10 +430,11 @@ pub async fn update_integrator_presence(
         active_in: body.active_in,
         updated_at,
     };
-    tokio::spawn(crate::realtime_relay::relay_to_peers(
+    crate::realtime_relay::relay_from_handler(
         state.clone(),
         crate::realtime_relay::RelayEvent::Presence(response.clone()),
-    ));
+    )
+    .await;
     Ok(Json(response))
 }
 

@@ -56,6 +56,7 @@ pub mod mirrored_shard_keys;
 pub mod neighbors;
 pub mod network_coordinates;
 pub mod nodes;
+pub mod op_trace;
 pub mod openapi;
 pub mod outbound_policy;
 pub mod outbox;
@@ -170,7 +171,10 @@ pub(crate) fn rate_limit_per_minute_from_env() -> u64 {
 /// change. See [`router_settlement_only`] for the reduced surface a
 /// Settlement-only process serves instead.
 pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterState>) -> Router {
-    apply_common_layers(full_routes(state), redis_limiter)
+    apply_common_layers(
+        op_trace::mount(full_routes(state.clone()), state),
+        redis_limiter,
+    )
 }
 
 /// The route table a genuinely standalone Settlement node
@@ -188,7 +192,10 @@ pub fn router_settlement_only(
     state: AppState,
     redis_limiter: Option<redis_limits::RedisLimiterState>,
 ) -> Router {
-    apply_common_layers(settlement_only_routes(state), redis_limiter)
+    apply_common_layers(
+        op_trace::mount(settlement_only_routes(state.clone()), state),
+        redis_limiter,
+    )
 }
 
 /// The tail every router variant shares: tracing, CORS, and the
