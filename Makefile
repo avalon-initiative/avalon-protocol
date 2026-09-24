@@ -9,7 +9,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint check clean \
-	openapi openapi-check openapi-version-check \
+	openapi openapi-check openapi-version-check check-trust-anchors \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
 	web-install hub-dev app-dev web-build web-lint web-test \
@@ -35,6 +35,7 @@ help:
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  make openapi       regenerate docs/generated/openapi.json from server's annotated routes"
 	@echo "  make openapi-check fail if docs/generated/openapi.json is stale relative to the real routes"
+	@echo "  make check-trust-anchors  fail if the README trusted-networks table drifts from docs/trusted-networks.json"
 	@echo "  make openapi-version-check fail if the schema's shape changed vs. main without a version bump"
 	@echo "  (TS/C# SDK type regeneration lives in avalon-sdks with the SDKs themselves)"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
@@ -166,7 +167,10 @@ openapi-version-check:
 # ts-sdk-types/ts-sdk-types-check and csharp-sdk-types/csharp-sdk-types-check)
 # live in the avalon-sdks repo now — run them from there directly.
 
-check: fmt-check lint test openapi-check openapi-version-check
+check: fmt-check lint test openapi-check openapi-version-check check-trust-anchors
+
+check-trust-anchors:
+	node scripts/check-trust-anchors.mjs
 
 clean:
 	cargo clean
