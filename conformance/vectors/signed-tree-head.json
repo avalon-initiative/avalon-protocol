@@ -1,13 +1,7 @@
 {
   "$schema": "./SCHEMA.md#signed-tree-head",
   "description": "Signed Tree Head signing message (#39/#210/#531, decoupled per #774). A node signs (tree_size, root_hash, network_id, created_at) under a fixed domain tag with fixed-width big-endian integers and an explicit length prefix on root_hash. A client verifies a network's claimed identity by checking this signature against a pinned trust anchor, and a managed-hosting integrator signs a prepared tree head locally with a key the host never holds — both of which mean a client-side reimplementation that must match the node's byte for byte.",
-  "supportedIn": [
-    "rust"
-  ],
-  "notSupported": {
-    "csharp": "languages/csharp/AvalonSdk/Network.cs verifies Signed Tree Heads against pinned trust anchors (VerifyNetworkAsync), but its conformance test does not consume this vector yet, so the signing-message bytes are not pinned against it in C#. A coverage gap, not a missing feature.",
-    "typescript": "languages/typescript/src/network/sthMessage.ts builds the signing message (signingMessage) and verifyNetwork.ts verifies against pinned trust anchors, but its conformance test does not consume this vector yet, so the signing-message bytes are not pinned against it in TypeScript. A coverage gap, not a missing feature."
-  },
+  "supportedIn": ["rust", "csharp", "typescript"],
   "signingKeySeedHex": "00112233445566778899aabbccddeeff102030405060708090a0b0c0d0e0f000",
   "signingPublicKeyHex": "832e1d37997758d3222d937e2fa3b9be7812a6cbf755252c7e237b3dae768769",
   "vectors": [
