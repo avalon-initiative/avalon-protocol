@@ -65,6 +65,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::error::AppError;
+use crate::network_coordinates::Coordinate;
 use crate::state::AppState;
 
 /// One entry of this node's local peer table. `Deserialize` too: also the
@@ -421,6 +422,8 @@ pub struct AnnounceRequest {
     /// merge.
     #[serde(default)]
     pub known_shards: Vec<ShardAnnouncement>,
+    /// The sender's own network coordinate.
+    pub coordinate: Coordinate,
 }
 
 /// `Deserialize` too: this is also the shape `run_worker` parses back out
@@ -432,6 +435,8 @@ pub struct AnnounceResponse {
     /// doc comment; this is the same exchange in the other direction.
     #[serde(default)]
     pub known_shards: Vec<ShardAnnouncement>,
+    /// The responder's own network coordinate.
+    pub coordinate: Coordinate,
 }
 
 /// `POST /nodes/announce`. Rejects an announcement naming a different
@@ -484,6 +489,7 @@ pub async fn announce(
     Ok(Json(AnnounceResponse {
         peers: state.peers.list_excluding(&caller_base_url),
         known_shards: state.shard_registry.snapshot(),
+        coordinate: state.peers.neighbors().own_coordinate(),
     }))
 }
 
@@ -1031,16 +1037,20 @@ pub async fn run_worker(
                     announce_to(
                         &client,
                         peer,
-                        own_base_url,
-                        &roles,
-                        &network_id,
-                        dht_identity.as_ref(),
-                        &shard_registry.snapshot(),
+                        &announce_request(
+                            own_base_url,
+                            &roles,
+                            &network_id,
+                            dht_identity.as_ref(),
+                            &shard_registry.snapshot(),
+                            neighbors.own_coordinate(),
+                        ),
                     ),
                 )
                 .await
                 {
-                    Ok(discovered) => {
+                    Ok((discovered, rtt)) => {
+                        neighbors.observe_coordinate(peer, &discovered.coordinate, rtt);
                         let mut admitted = Vec::new();
                         for info in discovered.peers {
                             if info.network_id == network_id
@@ -1095,43 +1105,57 @@ pub async fn run_worker(
 }
 
 /// Awaits one announce and records its round trip (request to parsed
-/// response) on success or a loss on failure.
+/// response) on success or a loss on failure; returns the round trip with the value.
 async fn measured<T>(
     neighbors: &crate::neighbors::NeighborTable,
     peer: &str,
     announce: impl std::future::Future<Output = Result<T, String>>,
-) -> Result<T, String> {
+) -> Result<(T, Duration), String> {
     let started = std::time::Instant::now();
     let result = announce.await;
-    match &result {
-        Ok(_) => neighbors.record_success(peer, started.elapsed()),
-        Err(_) => neighbors.record_failure(peer),
+    let rtt = started.elapsed();
+    match result {
+        Ok(value) => {
+            neighbors.record_success(peer, rtt);
+            Ok((value, rtt))
+        }
+        Err(err) => {
+            neighbors.record_failure(peer);
+            Err(err)
+        }
     }
-    result
 }
 
-async fn announce_to(
-    client: &reqwest::Client,
-    peer_base_url: &str,
+fn announce_request(
     own_base_url: &str,
     roles: &[String],
     network_id: &str,
     dht_identity: Option<&DhtIdentity>,
     known_shards: &[ShardAnnouncement],
+    coordinate: Coordinate,
+) -> AnnounceRequest {
+    AnnounceRequest {
+        base_url: own_base_url.to_string(),
+        roles: roles.to_vec(),
+        protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+        network_id: network_id.to_string(),
+        libp2p_peer_id: dht_identity.map(|d| d.peer_id.clone()),
+        libp2p_listen_addrs: dht_identity
+            .map(|d| d.listen_addrs.clone())
+            .unwrap_or_default(),
+        known_shards: known_shards.to_vec(),
+        coordinate,
+    }
+}
+
+async fn announce_to(
+    client: &reqwest::Client,
+    peer_base_url: &str,
+    request: &AnnounceRequest,
 ) -> Result<AnnounceResponse, String> {
     let response = client
         .post(format!("{peer_base_url}/nodes/announce"))
-        .json(&AnnounceRequest {
-            base_url: own_base_url.to_string(),
-            roles: roles.to_vec(),
-            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
-            network_id: network_id.to_string(),
-            libp2p_peer_id: dht_identity.map(|d| d.peer_id.clone()),
-            libp2p_listen_addrs: dht_identity
-                .map(|d| d.listen_addrs.clone())
-                .unwrap_or_default(),
-            known_shards: known_shards.to_vec(),
-        })
+        .json(request)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -1173,7 +1197,9 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_delay(Duration::from_millis(30))
-                    .set_body_json(serde_json::json!({"peers": [], "known_shards": []})),
+                    .set_body_json(
+                        serde_json::json!({"peers": [], "known_shards": [], "coordinate": Coordinate::default()}),
+                    ),
             )
             .mount(&server)
             .await;
@@ -1187,7 +1213,11 @@ mod tests {
             let _ = measured(
                 &neighbors,
                 peer,
-                announce_to(&client, peer, "http://me", &[], "n", None, &[]),
+                announce_to(
+                    &client,
+                    peer,
+                    &announce_request("http://me", &[], "n", None, &[], Coordinate::default()),
+                ),
             )
             .await;
         }
@@ -1201,6 +1231,67 @@ mod tests {
         assert_eq!(down_stats.samples, 0);
         assert!(down_stats.last_ms.is_none());
         assert_eq!(down_stats.loss_ratio, 1.0);
+    }
+
+    #[tokio::test]
+    async fn announce_exchanges_coordinates_and_moves_the_local_one() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let remote = Coordinate {
+            vector: [10.0, 0.0, 0.0],
+            height: 1.0,
+            error: 0.5,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"peers": [], "known_shards": [], "coordinate": remote}),
+            ))
+            .mount(&server)
+            .await;
+        let peer = server.uri();
+        let neighbors = crate::neighbors::NeighborTable::new();
+        neighbors.set_active(std::slice::from_ref(&peer), &[]);
+        let client = reqwest::Client::new();
+        let start = neighbors.own_coordinate();
+
+        for _ in 0..2 {
+            let (response, rtt) = measured(
+                &neighbors,
+                &peer,
+                announce_to(
+                    &client,
+                    &peer,
+                    &announce_request("http://me", &[], "n", None, &[], neighbors.own_coordinate()),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.coordinate, remote);
+            neighbors.observe_coordinate(&peer, &response.coordinate, rtt);
+        }
+
+        assert_ne!(neighbors.own_coordinate(), start);
+        assert_eq!(neighbors.snapshot()[0].coordinate, Some(remote));
+        let sent: Vec<AnnounceRequest> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        assert_eq!(sent[0].coordinate, start);
+        assert_ne!(sent[1].coordinate, start);
+    }
+
+    #[test]
+    fn announce_bodies_without_a_coordinate_do_not_decode() {
+        let req =
+            r#"{"base_url":"http://a","roles":[],"protocol_version":"0.1.0","network_id":"n"}"#;
+        assert!(serde_json::from_str::<AnnounceRequest>(req).is_err());
+        assert!(serde_json::from_str::<AnnounceResponse>(r#"{"peers":[]}"#).is_err());
     }
 
     #[test]
@@ -1553,7 +1644,8 @@ mod tests {
             "base_url": "http://old-peer",
             "roles": ["combined"],
             "protocol_version": "0.1.0",
-            "network_id": "avalon-dev-local"
+            "network_id": "avalon-dev-local",
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0}
         }"#;
         let req: AnnounceRequest =
             serde_json::from_str(json).expect("should deserialize without the new fields");

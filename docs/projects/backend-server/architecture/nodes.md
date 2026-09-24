@@ -457,15 +457,44 @@ and never influences admission, pruning, the version floor, or any trust
 decision. The announce worker publishes its active set and these stats through
 the shared `PeerTable` so read models can serve them.
 
+**Network coordinates are advisory position estimates.** Each node holds one
+Vivaldi coordinate with a height term (`crates/server/src/network_coordinates.rs`):
+a 3-dimensional vector in milliseconds, a `height` in milliseconds (access-link
+latency) and an `error` estimate. `estimate_rtt_ms(a, b)` is the Euclidean distance
+between the vectors plus both heights, so any two nodes can be compared without
+measuring the pair. Every announce request and response carries the sender's own
+coordinate as `coordinate: {vector, height, error}`; an announce without one is
+rejected with a 4xx error. A node publishes only its own coordinate: an observer
+updates its own position from its measured round trip to a neighbor and that
+neighbor's self-reported coordinate, and never gossips the measurement or a
+coordinate for anyone else. Updates use only successful announce round trips.
+
+Constants: `cc` = 0.25 and `ce` = 0.25 (the published Vivaldi step and error
+weights), initial error 1.0 (minimum 0.05, maximum 1.5), round trips floored at 0.1 ms
+and capped at 10 s, height at least 0.01 ms, and each update moves the position by at most
+50 ms. A received coordinate with a non-finite value, a vector component or
+height beyond 10 000 ms, or an error outside (0, 1.5] is ignored for the
+update and counted; it is not fatal to the announce. When two positions coincide the push
+direction is derived from a hash of the peer's base URL, so runs are reproducible.
+State is one coordinate for this node plus the last coordinate each active
+neighbor reported, dropped when the neighbor leaves the active set; nothing is
+persisted. `GET /nodes/topology` shows `self.coordinate` and each neighbor's
+`coordinate` (null until the first exchange).
+
+Coordinates never feed admission, pruning, trust or the version floor, and they are
+an estimate, not a measurement: per-observer measured round trips remain the ground
+truth. Loopback deployments have round trips near 1 ms, so their coordinates carry
+no geographic meaning.
+
 **`GET /nodes/topology` is this node's own view of the network.** Public,
 read-only, `Cache-Control: public, max-age=5`, served while
 `AVALON_TOPOLOGY_PUBLIC` is true (the default). It returns `self` (base URL,
 libp2p peer id, protocol version, network id, roles, stale flag, resource
-metrics, and the latest tree size and STH time of each shard this node
+metrics, this node's `coordinate`, and the latest tree size and STH time of each shard this node
 authors), `neighbors` (the active announce/exchange set: roles, protocol
 version, peer id, last announced, whether it is a bootstrap peer, and the
 measured round-trip stats above under `latency`, labeled with this node as
-`observed_by`), `known` (peer table entries that are not active neighbors,
+`observed_by`, plus the neighbor's own `coordinate`), `known` (peer table entries that are not active neighbors,
 newest first, bounded by `limit`, default 100, at most 500, with `known_total`
 reporting the size before the limit), `mirrors` and `generated_at`. Each
 `mirrors` entry is one configured `AVALON_MIRROR_PEERS` source: the tree size
