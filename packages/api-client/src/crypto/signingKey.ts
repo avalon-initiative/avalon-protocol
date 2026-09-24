@@ -16,11 +16,11 @@
 // offline, with no server round-trip: the server only ever sees the
 // resulting *public* key (identical to before this change), never the
 // phrase or the private key.
-import { ed25519 } from '@noble/curves/ed25519'
-import { sha256 } from '@noble/hashes/sha256'
-import { concatBytes } from '@noble/hashes/utils'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { concatBytes } from '@noble/hashes/utils.js'
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
-import { wordlist } from '@scure/bip39/wordlists/english'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
 
 const STORAGE_PREFIX = 'avalon:signingKey:'
 
