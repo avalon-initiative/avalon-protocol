@@ -77,10 +77,10 @@ a reference while you read the architecture docs.
 | **`server` crate** | The one network-facing API/auth/realtime service every client (Hub, hub-app, integrators) talks to. | [overview.md](projects/backend-server/architecture/overview.md) |
 | **`sdk` crate** | The Rust reference SDK. | [sdk.md](projects/sdks/architecture/sdk.md) |
 | **`cli` crate** | Local dev/ops tooling — the `avalon` binary (`create-identity`, `inspect-ledger`, ...). | root `README.md` |
-| **Hub** (`avalon-hub/apps/hub`) | The Vue3 web client — a user's first doorway into Avalon with no integrator open. A client of the network like any other, not the network itself, and has no backend of its own. | [hub.md](projects/hub/architecture/hub.md) |
+| **Hub** (`avalon-hub/apps/hub`) | The Vue3 web client — a user's first doorway into Avalon with no integrator open. A client of the network like any other, not the network itself, and has no backend of its own. | [hub.md](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/architecture/hub.md) |
 | **`avalon-hub/apps/hub-app`** | A Tauri desktop/mobile shell around the same Hub UI, for guild/friend presence without a game client open. | root `README.md` |
 | **`avalon-common-ui`** | The shared Vue3 component library (`@avalon-initiative/common-ui`) used by both Hub apps; its own repository. | root `README.md` |
-| **`bindings/csharp`** | The flagship external SDK for game developers, Unity-targeted (netstandard2.1). Rust SDK is the reference implementation; C# is the priority developer-facing surface. | root `README.md` |
+| **C# SDK** (`avalon-sdks/languages/csharp`) | The flagship external SDK for game developers, Unity-targeted (netstandard2.1). Rust SDK is the reference implementation; C# is the priority developer-facing surface. | [csharp/README.md](projects/sdks/csharp/README.md) |
 
 ## Where a term came from
 

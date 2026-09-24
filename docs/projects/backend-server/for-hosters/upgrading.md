@@ -32,7 +32,7 @@ meaning before upgrading, not after:
 `release-process.md` exist** — as of this writing that pipeline is designed
 but not yet built (`make release` and the release CI workflow are still
 being wired up). Every step below is written in terms of a tagged release
-on the [Releases page](https://github.com/LunarVagabond/avalon-protocol/releases)
+on the [Releases page](https://github.com/avalon-initiative/avalon-protocol/releases)
 **deliberately, not a commit hash** — developers, nodes, and hosters are
 all expected to reason about "which release" the same way, off the same
 tag. Until a first tagged release actually exists, there is no supported
@@ -74,7 +74,7 @@ a "small" patch can still ship a bad migration.
 ## Routine upgrade
 
 1. **Pick the release and check it out.** Check the
-   [Releases page](https://github.com/LunarVagabond/avalon-protocol/releases)
+   [Releases page](https://github.com/avalon-initiative/avalon-protocol/releases)
    for the latest tag and its notes — confirm the `X.Y.Z` bump matches what
    you're prepared for (see the semver callout above), then:
 

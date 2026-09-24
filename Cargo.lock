@@ -335,7 +335,7 @@ dependencies = [
 [[package]]
 name = "avalon-schema-derive"
 version = "0.1.0"
-source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=main#7923a2383eaf33f2fc525f8efa8f171aa395ef29"
+source = "git+https://github.com/avalon-initiative/avalon-sdks?branch=main#081709d97e8f1236b0d69046e2516a9d5098928b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -345,7 +345,7 @@ dependencies = [
 [[package]]
 name = "avalon-sdk"
 version = "0.1.0"
-source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=main#7923a2383eaf33f2fc525f8efa8f171aa395ef29"
+source = "git+https://github.com/avalon-initiative/avalon-sdks?branch=main#081709d97e8f1236b0d69046e2516a9d5098928b"
 dependencies = [
  "async-trait",
  "avalon-schema-derive",

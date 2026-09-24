@@ -93,9 +93,8 @@ docker compose up -d && cp .env.compose.example .env   # Postgres + env
 make migrate && make start                              # db + server
 ```
 
-Run `make help` for the full command list, including the C# SDK
-(`bindings/csharp`) build/test targets and the `avalon-cli` dev/ops commands
-(`create-identity`, `inspect-ledger`, `outbox-status`, ...).
+Run `make help` for the full command list, including the `avalon-cli` dev/ops
+commands (`create-identity`, `inspect-ledger`, `outbox-status`, ...).
 
 ## Milestone 1 — the end-to-end vertical slice
 

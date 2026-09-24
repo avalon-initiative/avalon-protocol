@@ -209,16 +209,15 @@ isn't where this defaults.
   future SDK polish.
 - Sync status is Rust-only so far — `SyncJournal::status`/`status_of` and
   `SubmissionEngine::subscribe` exist in the Rust SDK; the C# mirror is
-  deferred, same "settle the Rust surface first" posture `bindings/csharp`
+  deferred, same "settle the Rust surface first" posture the C# SDK
   has taken for other additions.
 
 ## Current implementation
 
 The Rust reference SDK now lives in a separate repository
-(`avalon-sdks`, `rust/` — see
-[`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md)) rather than
-this workspace's own `crates/`, so the SDK-side pieces below are described by
-module path within that repository, not `crates/sdk`.
+(`avalon-sdks`, `languages/rust/` — see
+[`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md)), so the
+SDK-side pieces below are described by module path within that repository.
 
 - The local durable journal — `SyncJournal` trait and `FileJournal`
   reference implementation in the Rust SDK's `src/sync_journal.rs` —

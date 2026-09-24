@@ -1271,6 +1271,7 @@ mod tests {
 
     #[test]
     fn node_roles_defaults_to_combined_when_unset() {
+        let _env = crate::test_env::guard();
         // SAFETY-of-intent note: `std::env::remove_var`/`set_var` are
         // process-global; no other test in this crate touches
         // `AVALON_NODE_ROLES`, matching the posture
@@ -1337,6 +1338,7 @@ mod tests {
     /// test function avoids a parallel-test race on the same var.
     #[test]
     fn realtime_mode_from_env_covers_the_remote_and_error_cases() {
+        let _env = crate::test_env::guard();
         unsafe {
             std::env::remove_var("AVALON_REALTIME_URL");
         }

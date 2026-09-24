@@ -14,9 +14,6 @@ repeated here).
   Postgres locally; the app itself runs natively via `make start`.
 - **Node.js and npm** only if you also work on the Hub applications, which live in
   [`avalon-hub`](https://github.com/avalon-initiative/avalon-hub) and have their own setup there.
-- **.NET SDK** for `bindings/csharp` (targets `netstandard2.1` for Unity
-  compatibility — any modern .NET SDK that can build a netstandard2.1
-  library works).
 
 None of these are enforced by a version-lock file in the repo today; if you
 hit a version-specific build failure, it's worth ticketing so a pin can be
@@ -117,17 +114,11 @@ The shared component library is in
 [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) and is
 installed as `@avalon-initiative/common-ui`; run its Storybook from that repository.
 
-## 7. C# SDK
+## 7. SDKs
 
-```bash
-make csharp-build
-make csharp-test
-```
-
-Builds/tests `bindings/csharp/AvalonSdk.sln` (the `AvalonSdk` library plus
-its `AvalonSdk.Tests` project) via `dotnet build`/`dotnet test`.
-
-**It worked if:** both commands exit 0.
+The Rust, C# and TypeScript SDKs live in
+[`avalon-sdks`](https://github.com/avalon-initiative/avalon-sdks) and are built and
+tested from that repository; its README covers the toolchains.
 
 ## Everything at once
 
