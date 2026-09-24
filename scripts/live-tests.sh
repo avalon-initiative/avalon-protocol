@@ -8,7 +8,7 @@
 # usage: scripts/live-tests.sh [group ...]     (default: all groups)
 #   groups: core ledger-writers relay own-shard cross-shard-login aggregator internal-role
 #           gateway-only realtime-proxy remote-settlement remote-submit
-#           settlement-only topology topology-probe peer-table-bounds
+#           settlement-only topology topology-probe topology-trace peer-table-bounds
 #
 # env: AVALON_ENV_FILE  .env to read DATABASE_URL and keys from
 #                       (default: <repo>/.env, else the primary checkout's)
@@ -142,7 +142,7 @@ run_test() {
 MULTI_PROCESS="chat_replication cross_node_login_cross_shard cross_node_login_verification \
 cross_shard gateway_only_deployment identity_locator internal_role_protocol mirror_push realtime_proxy \
 realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only topology \
-topology_probe peer_table_bounds"
+topology_probe topology_trace peer_table_bounds"
 
 # Test files that write or rewrite ledger/projection tables directly. Run
 # beside other tests they desync the server's in-memory Merkle leaf cache and
@@ -501,6 +501,63 @@ group_topology_probe() {
   merge_subshell
 }
 
+# Prints the given ports ordered by decreasing overlay distance to the first
+# one, so a line wired in that order routes toward the first port at every hop.
+line_order() {
+  python3 - "$@" <<'PY'
+import hashlib, sys
+ports = sys.argv[1:]
+key = lambda p: int(hashlib.sha256(f"http://127.0.0.1:{p}".encode()).hexdigest(), 16)
+t = key(ports[0])
+rest = sorted(ports[1:], key=lambda p: key(p) ^ t, reverse=True)
+print(" ".join(rest + [ports[0]]))
+PY
+}
+
+group_topology_trace() {
+  new_schema live_topology_trace || return
+  local u="http://127.0.0.1" b=$((BASE_PORT + 110))
+  local -a line ring
+  read -r -a line <<<"$(line_order $((b + 3)) $((b + 1)) $((b + 2)) "$b")"
+  ring=("$((b + 4))" "$((b + 5))" "$((b + 6))" "$((b + 7))")
+  local edge=$((b + 8)) hole=$((b + 9)) closed=$((b + 10)) strict=$((b + 11)) cap=$((b + 12)) limited=$((b + 13))
+  local common=(AVALON_ANNOUNCE_INTERVAL_SECS=2 AVALON_ALLOW_PRIVATE_PEERS=true
+    AVALON_TRACE_RATE_LIMIT_PER_MINUTE=100000)
+  local i n left right peers
+  for i in 0 1 2 3; do
+    peers=""
+    [ "$i" -gt 0 ] && peers="$u:${line[$((i - 1))]}"
+    [ "$i" -lt 3 ] && peers="${peers:+$peers,}$u:${line[$((i + 1))]}"
+    n=2; [ "$i" -eq 0 ] || [ "$i" -eq 3 ] && n=1
+    start_node "trace-line-$i" live_topology_trace "${line[$i]}" "${common[@]}" \
+      AVALON_BOOTSTRAP_PEERS="$peers" AVALON_NODE_MAX_PEERS=$n || return
+  done
+  for i in 0 1 2 3; do
+    left="${ring[$(((i + 3) % 4))]}"; right="${ring[$(((i + 1) % 4))]}"
+    start_node "trace-ring-$i" live_topology_trace "${ring[$i]}" "${common[@]}" \
+      AVALON_BOOTSTRAP_PEERS="$u:$left,$u:$right" AVALON_NODE_MAX_PEERS=2 || return
+  done
+  start_blackhole "$hole"
+  start_node trace-edge live_topology_trace "$edge" "${common[@]}" \
+    AVALON_BOOTSTRAP_PEERS="$u:$hole,$u:$closed" AVALON_NODE_MAX_PEERS=2 || return
+  start_node trace-strict live_topology_trace "$strict" AVALON_ANNOUNCE_INTERVAL_SECS=2 \
+    AVALON_ALLOW_PRIVATE_PEERS=false AVALON_BOOTSTRAP_PEERS="$u:${line[0]}" \
+    AVALON_NODE_MAX_PEERS=1 || return
+  start_node trace-cap live_topology_trace "$cap" "${common[@]}" \
+    AVALON_BOOTSTRAP_PEERS="$u:$hole" AVALON_NODE_MAX_PEERS=1 AVALON_TRACE_MAX_CONCURRENT=1 || return
+  start_node trace-limited live_topology_trace "$limited" AVALON_ALLOW_PRIVATE_PEERS=true \
+    AVALON_TRACE_RATE_LIMIT_PER_MINUTE=3 || return
+  (
+    export TRACE_LINE="$(IFS=,; echo "${line[*]}")" TRACE_RING="$(IFS=,; echo "${ring[*]}")"
+    export TRACE_EDGE="$edge" TRACE_HOLE="$hole" TRACE_CLOSED="$closed" TRACE_STRICT="$strict" \
+      TRACE_CAP="$cap" TRACE_LIMITED="$limited"
+    run_test topology-trace/topology_trace avalon-server topology_trace
+    printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
+    echo "$FAILED" >"$LOG_DIR/subshell-failed"
+  )
+  merge_subshell
+}
+
 group_peer_table_bounds() {
   new_schema live_ptb || return
   new_schema live_ptb_other || return
@@ -527,7 +584,7 @@ group_peer_table_bounds() {
   merge_subshell
 }
 
-GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-probe peer-table-bounds)
+GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-probe topology-trace peer-table-bounds)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${GROUPS_ALL[@]}")
 
@@ -551,6 +608,7 @@ for g in "${SELECTED[@]}"; do
     settlement-only) group_settlement_only ;;
     topology) group_topology ;;
     topology-probe) group_topology_probe ;;
+    topology-trace) group_topology_trace ;;
     peer-table-bounds) group_peer_table_bounds ;;
     *) echo "unknown group: $g" >&2; FAILED=1 ;;
   esac

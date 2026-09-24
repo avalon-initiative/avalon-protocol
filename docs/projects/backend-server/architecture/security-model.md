@@ -156,16 +156,20 @@ in front of it — a deployment requirement, not an optional hardening step.
   M-of-N recovery was configured in advance — see [identity.md](./identity.md)
   for the current mechanics.
 - **Topology endpoints are unauthenticated outbound-request triggers.**
-  `POST /nodes/probe` makes this node send requests to a URL that came from
-  gossip. Mitigations: the target must already be in the peer table; every
+  `POST /nodes/probe` and `POST /nodes/trace` make this node send requests to
+  URLs that came from gossip. Mitigations: the target must already be in the peer table; every
   resolved address must pass the outbound address policy (link-local, cloud
   metadata, unspecified, multicast always refused; loopback and private ranges
   refused unless `AVALON_ALLOW_PRIVATE_PEERS`); the connection is pinned to
   the checked address; no redirects; at most 3 sequential requests per call;
   a per-request timeout; a dedicated per-IP rate limit and a cap on
   concurrent probes; timings only in the response. A hoster can turn the
-  whole group off with `AVALON_TOPOLOGY_PUBLIC=false`. The measurements are
-  the probing node's own claims, not verified facts. See
+  whole group off with `AVALON_TOPOLOGY_PUBLIC=false`. A trace forwards only
+  to the active neighbor the routing rule chose, one forward per hop, with a
+  hop cap of 16, a visited-list loop check, a carried time budget, clamped
+  request fields, a size- and shape-checked downstream response, and its own
+  per-IP limit and in-flight cap. The measurements and hop entries are
+  self-reported by the nodes involved, not verified facts. See
   [`./nodes.md`](./nodes.md).
 - **The peer table is fed by unauthenticated announces and gossip.** Without
   bounds, fabricated addresses could grow it without limit, spread through
