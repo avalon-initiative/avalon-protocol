@@ -155,6 +155,18 @@ in front of it — a deployment requirement, not an optional hardening step.
   registered is total, permanent loss of the identity unless guardian-based
   M-of-N recovery was configured in advance — see [identity.md](./identity.md)
   for the current mechanics.
+- **Topology endpoints are unauthenticated outbound-request triggers.**
+  `POST /nodes/probe` makes this node send requests to a URL that came from
+  gossip. Mitigations: the target must already be in the peer table; every
+  resolved address must pass the outbound address policy (link-local, cloud
+  metadata, unspecified, multicast always refused; loopback and private ranges
+  refused unless `AVALON_ALLOW_PRIVATE_PEERS`); the connection is pinned to
+  the checked address; no redirects; at most 3 sequential requests per call;
+  a per-request timeout; a dedicated per-IP rate limit and a cap on
+  concurrent probes; timings only in the response. A hoster can turn the
+  whole group off with `AVALON_TOPOLOGY_PUBLIC=false`. The measurements are
+  the probing node's own claims, not verified facts. See
+  [`./nodes.md`](./nodes.md).
 
 ## Current implementation
 

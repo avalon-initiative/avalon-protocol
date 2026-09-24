@@ -8,7 +8,7 @@
 # usage: scripts/live-tests.sh [group ...]     (default: all groups)
 #   groups: core ledger-writers relay own-shard cross-shard-login aggregator internal-role
 #           gateway-only realtime-proxy remote-settlement remote-submit
-#           settlement-only
+#           settlement-only topology
 #
 # env: AVALON_ENV_FILE  .env to read DATABASE_URL and keys from
 #                       (default: <repo>/.env, else the primary checkout's)
@@ -123,7 +123,8 @@ run_test() {
 # the rest against one plain server.
 MULTI_PROCESS="chat_replication cross_node_login_cross_shard cross_node_login_verification \
 cross_shard gateway_only_deployment identity_locator internal_role_protocol mirror_push realtime_proxy \
-realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only"
+realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only \
+topology_probe"
 
 # Test files that write or rewrite ledger/projection tables directly. Run
 # beside other tests they desync the server's in-memory Merkle leaf cache and
@@ -431,7 +432,28 @@ group_settlement_only() {
   merge_subshell
 }
 
-GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only)
+group_topology() {
+  new_schema live_topology || return
+  local a=$((BASE_PORT + 100)) b=$((BASE_PORT + 101)) s=$((BASE_PORT + 102)) l=$((BASE_PORT + 103))
+  local u="http://127.0.0.1"
+  start_node topo-a live_topology "$a" AVALON_ANNOUNCE_INTERVAL_SECS=1 AVALON_ALLOW_PRIVATE_PEERS=true \
+    AVALON_BOOTSTRAP_PEERS="$u:$b,$u:$s" || return
+  start_node topo-b live_topology "$b" AVALON_ANNOUNCE_INTERVAL_SECS=1 AVALON_ALLOW_PRIVATE_PEERS=true \
+    AVALON_BOOTSTRAP_PEERS="$u:$a" || return
+  start_node topo-strict live_topology "$s" AVALON_ANNOUNCE_INTERVAL_SECS=1 AVALON_ALLOW_PRIVATE_PEERS=false \
+    AVALON_BOOTSTRAP_PEERS="$u:$a" || return
+  start_node topo-limited live_topology "$l" AVALON_PROBE_RATE_LIMIT_PER_MINUTE=3 || return
+  (
+    export TOPOLOGY_A_URL="$u:$a" TOPOLOGY_B_URL="$u:$b" TOPOLOGY_STRICT_URL="$u:$s" \
+      TOPOLOGY_LIMITED_URL="$u:$l"
+    run_test topology/topology_probe avalon-server topology_probe
+    printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
+    echo "$FAILED" >"$LOG_DIR/subshell-failed"
+  )
+  merge_subshell
+}
+
+GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${GROUPS_ALL[@]}")
 
@@ -453,6 +475,7 @@ for g in "${SELECTED[@]}"; do
     remote-settlement) group_remote_settlement ;;
     remote-submit) group_remote_submit ;;
     settlement-only) group_settlement_only ;;
+    topology) group_topology ;;
     *) echo "unknown group: $g" >&2; FAILED=1 ;;
   esac
   stop_all
