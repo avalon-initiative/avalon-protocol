@@ -3,7 +3,9 @@
 //!
 //! Env: `TOPOLOGY_A_URL` (allows private peers, knows B and STRICT),
 //! `TOPOLOGY_B_URL`, `TOPOLOGY_STRICT_URL` (does not allow private peers,
-//! knows A), `TOPOLOGY_LIMITED_URL` (probe limit of 3 per minute).
+//! knows A), `TOPOLOGY_LIMITED_URL` (probe limit of 3 per minute),
+//! `TOPOLOGY_CAP_URL` (one probe in flight at a time) and
+//! `TOPOLOGY_BLACKHOLE_URL` (accepts connections, never answers).
 
 use serde_json::{json, Value};
 
@@ -155,4 +157,48 @@ async fn over_limit_gets_429_with_retry_after() {
         .unwrap();
     assert!((1..=60).contains(&retry));
     assert_eq!(r.json::<Value>().await.unwrap()["code"], "rate_limited");
+}
+
+#[tokio::test]
+#[ignore]
+async fn concurrent_probes_beyond_the_cap_get_429_with_retry_after() {
+    let (cap, hole) = (var("TOPOLOGY_CAP_URL"), var("TOPOLOGY_BLACKHOLE_URL"));
+    let http = reqwest::Client::new();
+    let status: Value = http
+        .get(format!("{cap}/nodes/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let announce = http
+        .post(format!("{cap}/nodes/announce"))
+        .json(&json!({
+            "base_url": hole,
+            "roles": ["combined"],
+            "protocol_version": status["protocol_version"],
+            "network_id": status["network_id"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(announce.status().is_success());
+
+    let slow = tokio::spawn({
+        let (cap, hole) = (cap.clone(), hole.clone());
+        async move { probe(&cap, json!({ "target": hole })).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let r = probe(&cap, json!({ "target": hole })).await;
+    assert_eq!(r.status(), 429);
+    assert!(r.headers().get("retry-after").is_some());
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["code"],
+        "too_many_in_flight"
+    );
+
+    let first: Value = slow.await.unwrap().json().await.unwrap();
+    assert_eq!(first["ok"], false);
+    assert_eq!(first["error"], "timeout");
 }

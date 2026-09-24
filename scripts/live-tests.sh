@@ -92,6 +92,22 @@ start_node() {
   return 1
 }
 
+# start_blackhole <port>: accepts TCP connections on 127.0.0.1 and never answers.
+start_blackhole() {
+  python3 -c '
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(64)
+held = []
+while True:
+    held.append(s.accept()[0])
+' "$1" >/dev/null 2>&1 &
+  PIDS+=("$!")
+  sleep 0.5
+}
+
 stop_all() {
   local p
   for p in "${PIDS[@]:-}"; do
@@ -443,9 +459,13 @@ group_topology() {
   start_node topo-strict live_topology "$s" AVALON_ANNOUNCE_INTERVAL_SECS=1 AVALON_ALLOW_PRIVATE_PEERS=false \
     AVALON_BOOTSTRAP_PEERS="$u:$a" || return
   start_node topo-limited live_topology "$l" AVALON_PROBE_RATE_LIMIT_PER_MINUTE=3 || return
+  local cap=$((BASE_PORT + 104)) hole=$((BASE_PORT + 105))
+  start_blackhole "$hole"
+  start_node topo-cap live_topology "$cap" AVALON_ALLOW_PRIVATE_PEERS=true \
+    AVALON_PROBE_MAX_CONCURRENT=1 || return
   (
     export TOPOLOGY_A_URL="$u:$a" TOPOLOGY_B_URL="$u:$b" TOPOLOGY_STRICT_URL="$u:$s" \
-      TOPOLOGY_LIMITED_URL="$u:$l"
+      TOPOLOGY_LIMITED_URL="$u:$l" TOPOLOGY_CAP_URL="$u:$cap" TOPOLOGY_BLACKHOLE_URL="$u:$hole"
     run_test topology/topology_probe avalon-server topology_probe
     printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
     echo "$FAILED" >"$LOG_DIR/subshell-failed"
