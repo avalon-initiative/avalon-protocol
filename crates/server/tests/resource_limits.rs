@@ -28,6 +28,13 @@ fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
+fn hub_origin() -> String {
+    std::env::var("AVALON_HUB_ORIGIN")
+        .ok()
+        .and_then(|o| o.split(',').next().map(|s| s.trim().to_string()))
+        .unwrap_or_else(|| "http://localhost:5173".to_string())
+}
+
 #[tokio::test]
 #[ignore]
 async fn requests_past_the_rate_limit_get_429_with_retry_after() {
@@ -55,6 +62,7 @@ async fn requests_past_the_rate_limit_get_429_with_retry_after() {
     for i in 0..(per_minute * 2) {
         let response = http
             .get(format!("{base}/ledger/sth/latest"))
+            .header(reqwest::header::ORIGIN, hub_origin())
             .send()
             .await
             .expect("request failed — is `make start` running?");
@@ -65,6 +73,12 @@ async fn requests_past_the_rate_limit_get_429_with_retry_after() {
                     .headers()
                     .contains_key(reqwest::header::RETRY_AFTER),
                 "a 429 must always carry Retry-After (request {i})"
+            );
+            assert!(
+                response
+                    .headers()
+                    .contains_key(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+                "a 429 must carry CORS headers or browsers hide it as a network error (request {i})"
             );
             saw_429 = true;
             break;

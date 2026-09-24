@@ -213,21 +213,12 @@ fn apply_common_layers(
         .finish()
         .expect("per_minute is always > 0, so period/burst_size are always non-zero");
 
-    let router = router
-        // Issue #265: every HTTP request gets a tracing span
-        // (method/path/status/latency), and any `tracing::info!`/`error!`
-        // call made while handling it is automatically correlated to that
-        // span — this is what makes request-scoped log correlation work
-        // without hand-threading a request id through every handler.
-        .layer(TraceLayer::new_for_http())
-        .layer(cors_layer_from_env());
-
     // Issue #545: `AVALON_REDIS_URL` swaps both resource-limit layers for
     // their Redis-backed equivalents (`crate::redis_limits`) — per-hoster
     // shared state across that operator's own processes, never network-
     // wide. Unset (the default), the in-process layers below are
     // unchanged from #363.
-    match redis_limiter {
+    let limited = match redis_limiter {
         Some(limiter) => router
             // Concurrency first, same relative order the in-process
             // layers already use below.
@@ -246,7 +237,14 @@ fn apply_common_layers(
             // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
             // the configured ceiling — see `IntegratorOrIpKeyExtractor`.
             .layer(GovernorLayer::new(governor_config)),
-    }
+    };
+
+    // Tracing and CORS wrap the limiters so a 429/503 they produce still
+    // carries CORS headers — otherwise the browser reports a limited
+    // request as an opaque network failure instead of a readable status.
+    limited
+        .layer(TraceLayer::new_for_http())
+        .layer(cors_layer_from_env())
 }
 
 /// Issue #664: the reduced route table for a genuinely standalone
