@@ -588,6 +588,27 @@ trust hop with no accountability story yet. A hard-fork escape hatch (a new
 `network_id`, old network keeps running unchanged) is reserved, undesigned,
 for a genuinely-incompatible-crypto-change case none of the above can cover.
 
+## Overlay next-hop selection
+
+Given a target node, `overlay_routing::next_hop(self, target, active_neighbors, visited)`
+(a pure function in `crates/server/src/overlay_routing.rs`) picks where a node forwards:
+
+1. If the target is an active neighbor, the next hop is the target itself.
+2. Otherwise the unvisited active neighbor with the smallest XOR distance to the target,
+   and only if it is strictly closer than the node itself, so every hop makes progress.
+3. Otherwise `NoRoute`, with a reason (`TargetIsSelf`, `ForeignNetwork`, `NoNeighbors`,
+   `AllVisited`, `NoProgress`).
+
+Only nodes on the caller's own `network_id` are considered. The result is deterministic for
+a given neighbor set, and the visited set plus strict progress rule rule out cycles.
+
+Key derivation: when the node, the target and every candidate neighbor announce a libp2p
+peer id, a node's key is `SHA-256(PeerId::to_bytes())`, the same key libp2p Kademlia uses
+for its XOR metric, so overlay routing and DHT lookups agree on distance. If any of them
+lacks a peer id, all nodes in that decision use `SHA-256` of the canonical `base_url`
+(trimmed, trailing slashes removed, ASCII-lowercased) instead, so distances always come
+from one key space.
+
 ## Current implementation
 
 ### Cross-node login

@@ -56,6 +56,7 @@ pub mod mirrored_shard_keys;
 pub mod nodes;
 pub mod openapi;
 pub mod outbox;
+pub mod overlay_routing;
 pub mod passkeys;
 pub mod presence;
 pub mod principal_limits;
