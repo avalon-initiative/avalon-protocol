@@ -59,6 +59,7 @@ pub mod rollback;
 pub mod settlement;
 pub mod signature_gate;
 pub mod state;
+pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
 
@@ -68,7 +69,6 @@ use axum::Router;
 use state::AppState;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_governor::governor::GovernorConfigBuilder;
-use tower_governor::key_extractor::PeerIpKeyExtractor;
 use tower_governor::GovernorLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -183,7 +183,9 @@ fn apply_common_layers(
             60.0 / rate_limit_per_minute as f64,
         ))
         .burst_size(rate_limit_per_minute as u32)
-        .key_extractor(PeerIpKeyExtractor)
+        .key_extractor(trusted_proxies::ClientIpKeyExtractor {
+            proxies: std::sync::Arc::new(trusted_proxies::TrustedProxies::from_env()),
+        })
         .finish()
         .expect("per_minute is always > 0, so period/burst_size are always non-zero");
 
@@ -209,7 +211,7 @@ fn apply_common_layers(
             // silently drops a request without a response.
             .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
             // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
-            // the configured per-IP ceiling; keyed by peer address only.
+            // the configured per-IP ceiling, keyed by the derived client address.
             .layer(GovernorLayer::new(governor_config)),
     };
 

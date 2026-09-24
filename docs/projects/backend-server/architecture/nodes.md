@@ -772,9 +772,29 @@ to what this process always hardcoded:
   and CORS layers wrap the per-IP limiter, so a `429` or `503` from it still
   carries CORS headers and browsers can read the status; the per-principal
   `429` is produced inside a handler and carries them the same way.
-  A node behind a reverse proxy sees the proxy as the peer address, so the
-  per-IP ceiling treats all of its clients as one address unless trusted
-  forwarded-address handling is configured.
+- `AVALON_TRUSTED_PROXIES` (default unset) — comma-separated IPs or CIDR
+  ranges of the reverse proxies the node sits behind. Unset trusts no proxy
+  and the per-IP key is the peer address. When the direct peer is in the list,
+  the per-IP key becomes the right-most `X-Forwarded-For` entry that is not
+  itself a trusted proxy, so an address a client prepends is never used. A
+  missing or malformed header falls back to the peer address, and a peer not in
+  the list has the header ignored entirely. Keys are canonicalized, so an
+  IPv4-mapped IPv6 address and its IPv4 form share one bucket; both limiters
+  derive the key identically. An unparseable value aborts startup.
+
+  The proxy must overwrite or append `X-Forwarded-For`, never pass a
+  client-supplied value through unchanged. For nginx:
+
+  ```nginx
+  location / {
+      proxy_pass http://127.0.0.1:8080;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  ```
+
+  with `AVALON_TRUSTED_PROXIES=127.0.0.1` on the node. Without this setting a
+  node behind a proxy sees the proxy as the peer address, so the per-IP ceiling
+  treats all of its clients as one address.
 - `AVALON_OUTBOX_POLL_INTERVAL_SECS` (default `3`) — the outbox worker's
   drain cadence.
 
