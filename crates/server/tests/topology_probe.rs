@@ -1,9 +1,9 @@
 //! `POST /nodes/probe` against real, running `avalon-server` processes. Gated
 //! `--ignored`; `scripts/live-tests.sh topology` starts the nodes.
 //!
-//! Env: `TOPOLOGY_A_URL` (allows private peers, knows B and STRICT),
+//! Env: `TOPOLOGY_A_URL` (allows private peers, knows B),
 //! `TOPOLOGY_B_URL`, `TOPOLOGY_STRICT_URL` (does not allow private peers,
-//! knows A), `TOPOLOGY_LIMITED_URL` (probe limit of 3 per minute),
+//! refuses A), `TOPOLOGY_LIMITED_URL` (probe limit of 3 per minute),
 //! `TOPOLOGY_CAP_URL` (one probe in flight at a time) and
 //! `TOPOLOGY_BLACKHOLE_URL` (accepts connections, never answers).
 
@@ -91,20 +91,24 @@ async fn unknown_target_is_rejected_distinctly() {
 
 #[tokio::test]
 #[ignore]
-async fn private_target_is_refused_without_the_allow_flag() {
+async fn a_node_without_the_allow_flag_never_holds_private_peers() {
     let (strict, a) = (var("TOPOLOGY_STRICT_URL"), var("TOPOLOGY_A_URL"));
-    wait_for_peer(&strict, &a).await;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let peers: Vec<Value> = reqwest::get(format!("{strict}/nodes/peers"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!peers.iter().any(|p| p["base_url"] == a));
     let r = probe(&strict, json!({ "target": a })).await;
-    assert_eq!(r.status(), 403);
-    assert_eq!(
-        r.json::<Value>().await.unwrap()["code"],
-        "target_not_allowed"
-    );
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.json::<Value>().await.unwrap()["code"], "unknown_target");
 }
 
 #[tokio::test]
 #[ignore]
-async fn link_local_metadata_address_is_refused_even_when_private_peers_are_allowed() {
+async fn link_local_metadata_address_is_refused_at_announce_even_when_private_peers_are_allowed() {
     let a = var("TOPOLOGY_A_URL");
     let http = reqwest::Client::new();
     let status: Value = http
@@ -128,13 +132,13 @@ async fn link_local_metadata_address_is_refused_even_when_private_peers_are_allo
             .send()
             .await
             .unwrap();
-        assert!(announce.status().is_success());
-        let r = probe(&a, json!({ "target": target })).await;
-        assert_eq!(r.status(), 403, "{target}");
+        assert_eq!(announce.status(), 403, "{target}");
         assert_eq!(
-            r.json::<Value>().await.unwrap()["code"],
-            "target_not_allowed"
+            announce.json::<Value>().await.unwrap()["code"],
+            "base_url_not_allowed"
         );
+        let r = probe(&a, json!({ "target": target })).await;
+        assert_eq!(r.status(), 404, "{target}");
     }
 }
 
@@ -180,7 +184,7 @@ async fn concurrent_probes_beyond_the_cap_get_429_with_retry_after() {
             "roles": ["combined"],
             "protocol_version": status["protocol_version"],
             "network_id": status["network_id"],
-                "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
         }))
         .send()
         .await

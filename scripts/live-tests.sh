@@ -8,7 +8,7 @@
 # usage: scripts/live-tests.sh [group ...]     (default: all groups)
 #   groups: core ledger-writers relay own-shard cross-shard-login aggregator internal-role
 #           gateway-only realtime-proxy remote-settlement remote-submit
-#           settlement-only topology topology-probe topology-trace
+#           settlement-only topology topology-probe topology-trace peer-table-bounds
 #
 # env: AVALON_ENV_FILE  .env to read DATABASE_URL and keys from
 #                       (default: <repo>/.env, else the primary checkout's)
@@ -76,6 +76,8 @@ start_node() {
     AVALON_REDIS_URL= AVALON_DHT_ENABLED=false \
     AVALON_LIBP2P_LISTEN_ADDR=/ip4/127.0.0.1/tcp/0 AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS=2 \
     AVALON_RATE_LIMIT_PER_MINUTE=1000000 \
+    AVALON_ALLOW_PRIVATE_PEERS=true AVALON_ANNOUNCE_VERIFY_REACHABILITY=false \
+    AVALON_ANNOUNCE_NEW_PEERS_PER_SOURCE_PER_MINUTE=1000 \
     "$@" "$SERVER_BIN" >"$LOG_DIR/$name.log" 2>&1 &
   LAST_PID=$!
   PIDS+=("$LAST_PID")
@@ -140,7 +142,7 @@ run_test() {
 MULTI_PROCESS="chat_replication cross_node_login_cross_shard cross_node_login_verification \
 cross_shard gateway_only_deployment identity_locator internal_role_protocol mirror_push realtime_proxy \
 realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only topology \
-topology_probe topology_trace op_trace"
+topology_probe topology_trace op_trace peer_table_bounds"
 
 # Test files that write or rewrite ledger/projection tables directly. Run
 # beside other tests they desync the server's in-memory Merkle leaf cache and
@@ -558,7 +560,33 @@ group_topology_trace() {
   merge_subshell
 }
 
-GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-probe topology-trace)
+group_peer_table_bounds() {
+  new_schema live_ptb || return
+  new_schema live_ptb_other || return
+  local cap=$((BASE_PORT + 110)) real=$((BASE_PORT + 111)) strict=$((BASE_PORT + 112)) \
+    limited=$((BASE_PORT + 113)) reach=$((BASE_PORT + 114)) other=$((BASE_PORT + 115))
+  local u="http://127.0.0.1"
+  start_node ptb-cap live_ptb "$cap" AVALON_NODE_MAX_KNOWN_PEERS=5 AVALON_ANNOUNCE_INTERVAL_SECS=1 \
+    AVALON_BOOTSTRAP_PEERS="$u:$real" || return
+  start_node ptb-real live_ptb "$real" AVALON_ANNOUNCE_INTERVAL_SECS=1 \
+    AVALON_BOOTSTRAP_PEERS="$u:$cap" || return
+  start_node ptb-strict live_ptb "$strict" AVALON_ALLOW_PRIVATE_PEERS=false \
+    AVALON_ANNOUNCE_VERIFY_REACHABILITY=true || return
+  start_node ptb-limited live_ptb "$limited" \
+    AVALON_ANNOUNCE_NEW_PEERS_PER_SOURCE_PER_MINUTE=3 || return
+  start_node ptb-reach live_ptb "$reach" AVALON_ANNOUNCE_VERIFY_REACHABILITY=true || return
+  start_node ptb-other live_ptb_other "$other" AVALON_NETWORK_ID=avalon-test-882 || return
+  (
+    export PTB_CAP_URL="$u:$cap" PTB_REAL_URL="$u:$real" PTB_STRICT_URL="$u:$strict" \
+      PTB_LIMITED_URL="$u:$limited" PTB_REACH_URL="$u:$reach" PTB_OTHER_NET_URL="$u:$other"
+    run_test peer-table-bounds/peer_table_bounds avalon-server peer_table_bounds
+    printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
+    echo "$FAILED" >"$LOG_DIR/subshell-failed"
+  )
+  merge_subshell
+}
+
+GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-probe topology-trace peer-table-bounds)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${GROUPS_ALL[@]}")
 
@@ -583,6 +611,7 @@ for g in "${SELECTED[@]}"; do
     topology) group_topology ;;
     topology-probe) group_topology_probe ;;
     topology-trace) group_topology_trace ;;
+    peer-table-bounds) group_peer_table_bounds ;;
     *) echo "unknown group: $g" >&2; FAILED=1 ;;
   esac
   stop_all

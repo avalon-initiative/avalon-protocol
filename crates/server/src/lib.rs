@@ -62,6 +62,7 @@ pub mod outbound_policy;
 pub mod outbox;
 pub mod overlay_routing;
 pub mod passkeys;
+pub mod peer_admission;
 pub mod presence;
 pub mod principal_limits;
 pub mod proto_schema;

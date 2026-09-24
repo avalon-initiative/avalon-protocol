@@ -29,6 +29,15 @@ fn network_id() -> String {
     std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
 }
 
+/// A well-formed loopback URL nothing listens on; the harness nodes allow
+/// private peers and skip the reachability contact.
+fn fabricated_url() -> String {
+    format!(
+        "http://127.0.0.1:{}",
+        20000 + Uuid::new_v4().as_u128() % 40000
+    )
+}
+
 fn second_node_url() -> Option<String> {
     std::env::var("AVALON_SECOND_NODE_SERVER_URL").ok()
 }
@@ -111,7 +120,7 @@ async fn announcing_without_a_coordinate_is_rejected_and_the_caller_not_admitted
     let http = reqwest::Client::new();
     let base = server_url();
     require_isolated_target(&base);
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     let response = http
         .post(format!("{base}/nodes/announce"))
@@ -137,7 +146,7 @@ async fn announcing_without_a_coordinate_is_rejected_and_the_caller_not_admitted
 async fn announcing_upserts_the_caller_and_the_response_excludes_it() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     let response = announce(&http, &base, &caller_base_url, &network_id()).await;
     assert!(response.status().is_success(), "{:?}", response.status());
@@ -162,7 +171,7 @@ async fn announcing_upserts_the_caller_and_the_response_excludes_it() {
 async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     announce(&http, &base, &caller_base_url, &network_id()).await;
     announce(&http, &base, &caller_base_url, &network_id()).await;
@@ -180,7 +189,7 @@ async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {
 async fn an_announcement_naming_a_different_network_id_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     let response = announce(
         &http,
@@ -208,7 +217,7 @@ async fn an_announcement_below_the_version_floor_is_excluded_but_not_rejected() 
     let http = reqwest::Client::new();
     let base = server_url();
     let net = network_id();
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     let response = announce_with_version(&http, &base, &caller_base_url, &net, "0.0.1").await;
     assert!(
@@ -324,7 +333,7 @@ async fn node_status_reports_own_roles() {
 async fn discover_matches_separate_status_and_peers_calls() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+    let caller_base_url = fabricated_url();
 
     // Make sure there's at least one peer on record so the comparison below
     // is meaningful, not just two empty lists agreeing.

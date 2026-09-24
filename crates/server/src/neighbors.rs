@@ -158,6 +158,17 @@ impl NeighborTable {
         inner.bootstrap = bootstrap.to_vec();
     }
 
+    /// Base URLs in the active set or the bootstrap list; the peer table never evicts these.
+    pub fn protected_urls(&self) -> std::collections::HashSet<String> {
+        let inner = self.inner.read().expect("neighbor table lock poisoned");
+        inner
+            .active
+            .iter()
+            .chain(inner.bootstrap.iter())
+            .cloned()
+            .collect()
+    }
+
     /// Records a successful round trip; ignored for peers outside the active set.
     pub fn record_success(&self, peer: &str, rtt: std::time::Duration) {
         let mut inner = self.inner.write().expect("neighbor table lock poisoned");
