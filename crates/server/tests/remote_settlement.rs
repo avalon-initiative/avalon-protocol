@@ -29,7 +29,8 @@
 //! calls out as needing a real second `avalon-server` deployment to
 //! exercise end-to-end.
 
-use avalon_protocol::events::EventBatch;
+use avalon_protocol::events::{EventBatch, ProtocolEvent};
+use avalon_protocol::ids::GlobalId;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -62,30 +63,28 @@ async fn remote_settlement_pool() -> Option<PgPool> {
     )
 }
 
-async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
-    let suffix = Uuid::new_v4().simple().to_string();
-    let slug = format!("test-remote-settlement-{}", &suffix[..8]);
-    let body = serde_json::json!({
-        "slug": slug,
-        "name": "Remote Settlement Test Integrator",
-        "owner_name": "Test Studio",
-        "requested_capabilities": [],
-        "initial_key": {
-            "algorithm": "ed25519",
-            "public_key": base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                [0u8; 32],
-            ),
-        },
-    });
-    let response = http
-        .post(format!("{base}/integrations"))
-        .json(&body)
-        .send()
+/// Enqueues one identity-namespaced event into the remote-settlement node's
+/// own outbox. Only core-shard events forward through the single
+/// `AVALON_SETTLEMENT_REMOTE_URL`; a `game:`/`app:` issuer would route to a
+/// named shard with no configured authority and commit locally instead.
+async fn enqueue_core_event(pool: &PgPool) -> String {
+    let actor = Uuid::new_v4();
+    let issuer = GlobalId::new("identity", &actor.to_string(), "self", "test_event");
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "test.remote_settlement".to_string(),
+        issuer: issuer.clone(),
+        subject: issuer.clone(),
+        payload: serde_json::json!({ "note": "remote-settlement test" }),
+        timestamp: time::OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    let mut tx = pool.begin().await.expect("begin failed");
+    avalon_server::outbox::enqueue(&mut tx, &event)
         .await
-        .expect("POST /integrations failed — is the remote-settlement node running?");
-    assert!(response.status().is_success(), "{:?}", response.status());
-    format!("game:{slug}:self:registered")
+        .expect("enqueue failed");
+    tx.commit().await.expect("commit failed");
+    issuer.as_str().to_string()
 }
 
 async fn wait_for_row<T, F>(mut fetch: F, description: &str) -> T
@@ -148,7 +147,7 @@ async fn ledger_submit_rejects_requests_with_no_or_wrong_bearer_key() {
 #[tokio::test]
 #[ignore]
 async fn a_write_on_the_remote_settlement_node_lands_on_the_authority_and_is_backfilled_back() {
-    let Some(remote_base) = remote_settlement_url() else {
+    let Some(_remote_base) = remote_settlement_url() else {
         panic!(
             "AVALON_REMOTE_SETTLEMENT_SERVER_URL not set — this test needs a second \
              avalon-server process configured with AVALON_SETTLEMENT_REMOTE_URL pointed at \
@@ -167,8 +166,7 @@ async fn a_write_on_the_remote_settlement_node_lands_on_the_authority_and_is_bac
         .await
         .expect("failed to connect to the authority's Postgres");
 
-    let http = reqwest::Client::new();
-    let issuer = register_throwaway_integrator(&http, &remote_base).await;
+    let issuer = enqueue_core_event(&remote_pool).await;
 
     // Committed on the real authority — not the remote-settlement node's
     // own database, which never runs `chain.commit` locally while

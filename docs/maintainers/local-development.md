@@ -142,12 +142,47 @@ trust-anchors README check), the closest single local approximation of what CI r
 
 ```bash
 make db-reset     # drop + recreate the public schema, reapply all migrations
-make test-live    # cargo test --workspace -- --ignored, needs `make start` running
+make test-live    # the --ignored suite against private, isolated servers
 ```
 
 `make test-live` runs the tests that are `#[ignore]`d by default because
 they need a real server and database — a real WebAuthn ceremony over HTTP,
-not a mock. Run `make start` first.
+not a mock. It runs `scripts/live-tests.sh`, which reads `DATABASE_URL` and
+the signing keys from `.env` (or `AVALON_ENV_FILE`), builds `avalon-server`,
+then for each group starts its own `avalon-server` processes on
+`127.0.0.1` (ports from `LIVE_PORT_BASE`, default 18000). Every process uses
+its own throwaway Postgres schema, dropped afterwards, and has no bootstrap
+or mirror peers beyond the ones a group wires between its own processes. It
+does not need `make start`, and it never announces anything to a running node.
+
+Groups: `core` (every test file that needs only one plain server),
+`relay` (two DHT-enabled nodes plus one poll-only mirror: realtime relay and
+reconnect, chat replication, mirror push, identity locator, node discovery),
+`own-shard`, `cross-shard-login`, `aggregator`, `internal-role`,
+`gateway-only`, `realtime-proxy`, `remote-settlement`, `remote-submit` and
+`settlement-only`. Run a subset with `make test-live GROUPS="relay core"`,
+narrow `core` with `LIVE_ONLY="mirror_watcher"`, pass a test-name filter with
+`LIVE_TEST_ARGS=...`, and keep the schemas for inspection with
+`LIVE_KEEP_SCHEMAS=1`. Server logs and per-test output are kept under
+`$TMPDIR/avalon-live-tests-<pid>/`.
+
+`make test-live-raw` is the bare `cargo test --workspace -- --ignored`
+against whatever `AVALON_SERVER_URL` points at. The multi-process tests
+(`realtime_*`, `mirror_push`, `chat_replication`, `remote_*`,
+`settlement_only`, `gateway_only_deployment`, `internal_role_protocol`,
+`cross_shard*`, `cross_node_login_*`, `identity_locator`) fail there unless
+their extra processes and environment variables are set up by hand as each
+test file's module comment describes. `nodes.rs` refuses a non-loopback
+target because it announces made-up peers that the target would gossip on.
+`milestone_1_three_node` targets the real dev fleet and is skipped unless
+`AVALON_FLEET_TEST=1`.
+
+The multi-process test files that create their own schema
+(`internal_role_protocol`, `gateway_only_deployment`, `realtime_proxy`) apply
+migrations to it with the current checksums; a schema left over from before a
+migration file was edited reports "migration N was previously applied but has
+been modified". Drop the schema (the script does this itself) rather than
+editing the migration.
 
 ### `.env` loading in tests and live-verification code
 

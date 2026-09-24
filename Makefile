@@ -8,7 +8,7 @@ PID_FILE := $(PID_DIR)/avalon-server.pid
 LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
-	build run start stop restart status test test-live fmt fmt-check lint check clean \
+	build run start stop restart status test test-live test-live-raw fmt fmt-check lint check clean \
 	openapi openapi-check openapi-version-check check-trust-anchors \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
@@ -28,7 +28,8 @@ help:
 	@echo "  make restart       stop, then start"
 	@echo "  make status        report whether the background process is running"
 	@echo "  make test          cargo test --workspace"
-	@echo "  make test-live     cargo test --workspace -- --ignored"
+	@echo "  make test-live     scripts/live-tests.sh: --ignored suite against private, isolated servers (GROUPS=... to pick)"
+	@echo "  make test-live-raw cargo test --workspace -- --ignored (needs a matching server already running)"
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
@@ -103,10 +104,15 @@ status:
 test:
 	cargo test --workspace
 
-# Delete this target (and its help line above) if this project ends up with no
-# tests gated on real infra (a database, an external service) that are skipped
-# by default in `test`.
+# The `--ignored` suite, run against servers this script starts itself on
+# 127.0.0.1 with throwaway schemas (see scripts/live-tests.sh). Never touches a
+# running node.
 test-live:
+	scripts/live-tests.sh $(GROUPS)
+
+# Plain `--ignored` run against whatever server AVALON_SERVER_URL points at;
+# the multi-process tests fail without their extra processes and env vars.
+test-live-raw:
 	cargo test --workspace -- --ignored
 
 fmt:
