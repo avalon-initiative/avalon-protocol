@@ -6,4 +6,3 @@ node_modules/
 .git/
 target/
 _running/
-.claude/

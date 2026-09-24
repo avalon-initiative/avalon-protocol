@@ -177,7 +177,7 @@ it). If an assistant materially helped with a commit, tag it with a trailer
 so it's easy to trace later, without cluttering the subject line:
 
 ```
-git commit -m "[#154] - Add guild discovery query to indexer" --trailer "Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "[#154] - Add guild discovery query to indexer" --trailer "Co-Authored-By: <Tool> <noreply@example.com>"
 ```
 
 This is optional and about being open, not a requirement — reviewers still
