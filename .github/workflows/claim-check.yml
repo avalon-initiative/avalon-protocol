@@ -4,88 +4,9 @@ on:
   pull_request:
     types: [opened, reopened, edited, synchronize, labeled, unlabeled]
 
-permissions:
-  issues: read
-  pull-requests: read
-
 jobs:
-  claim:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verify referenced issue is claimed by the PR author
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const title = context.payload.pull_request.title || '';
-            const body = context.payload.pull_request.body || '';
-            const author = context.payload.pull_request.user.login;
-
-            // Dependabot PRs aren't tied to a claimed issue and never will be —
-            // it's not a collaborator, so the write-access check below doesn't
-            // apply to it either.
-            if (author === 'dependabot[bot]') {
-              console.log('Exempt: automated dependency update PR.');
-              return;
-            }
-
-            // Matches CONTRIBUTING.md's maintainer-only tag convention.
-            if (/^(\[noissue\]|\[hotfix\]|\[security\]) - .+/.test(title)) {
-              const { owner, repo } = context.repo;
-              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner,
-                repo,
-                username: author,
-              });
-              if (perm.permission === 'admin' || perm.permission === 'write') {
-                console.log(`Exempt: @${author} has ${perm.permission} access.`);
-                return;
-              }
-              core.setFailed(
-                `[noissue]/[hotfix] titles are restricted to the maintainer and named core devs (see CONTRIBUTING.md). ` +
-                `@${author} does not have write access to this repo, so this title isn't allowed — open an issue and use "[#<issue>] - ..." instead.`
-              );
-              return;
-            }
-
-            // GitHub's own closing-keyword set: close(s/d), fix(es/ed), resolve(s/d).
-            const keywordPattern = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)/gi;
-            const issueNumbers = new Set();
-            let match;
-            while ((match = keywordPattern.exec(body)) !== null) {
-              issueNumbers.add(parseInt(match[2], 10));
-            }
-
-            if (issueNumbers.size === 0) {
-              core.setFailed(
-                'No claimed issue is referenced. Reference the issue you claimed with a closing keyword ' +
-                '(e.g. "Closes #123") in the PR body — see CONTRIBUTING.md -> Claiming An Issue.'
-              );
-              return;
-            }
-
-            const { owner, repo } = context.repo;
-            const problems = [];
-            for (const issue_number of issueNumbers) {
-              let issue;
-              try {
-                ({ data: issue } = await github.rest.issues.get({ owner, repo, issue_number }));
-              } catch (error) {
-                problems.push(`#${issue_number} could not be looked up (${error.message})`);
-                continue;
-              }
-              const assignees = issue.assignees.map((assignee) => assignee.login);
-              if (!assignees.includes(author)) {
-                const assigneeList = assignees.length
-                  ? assignees.map((login) => `@${login}`).join(', ')
-                  : 'nobody';
-                problems.push(`#${issue_number} is assigned to ${assigneeList}, not @${author}`);
-              }
-            }
-
-            if (problems.length > 0) {
-              core.setFailed(
-                'This PR references an issue you have not claimed:\n' +
-                problems.map((problem) => `- ${problem}`).join('\n') +
-                '\n\nComment `/claim` on the issue before opening a PR against it — see CONTRIBUTING.md -> Claiming An Issue.'
-              );
-            }
+  call:
+    permissions:
+      issues: read
+      pull-requests: read
+    uses: avalon-initiative/.github/.github/workflows/claim-check.yml@main
