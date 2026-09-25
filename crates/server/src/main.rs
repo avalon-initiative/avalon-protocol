@@ -331,8 +331,10 @@ async fn main() {
     if let Err(e) = avalon_protocol::shard::parse_shard_id(&own_shard_id) {
         tracing::error!(
             "refusing to start: AVALON_OWN_SHARD_ID={own_shard_id:?} is invalid: {e}. Use `core` \
-             (only for the network's pinned core authority) or a registered shard id of the form \
-             `game|app|service:<integrator-slug>[/<instance>]`"
+             (only for the network's pinned core authority), a registered shard id of the form \
+             `game|app|service:<integrator-slug>[/<instance>]`, or a self-certifying \
+             `node:<key-hash>` id derived from this node's own key \
+             (avalon_protocol::shard_identity::derive_self_certifying_id)"
         );
         std::process::exit(1);
     }

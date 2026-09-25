@@ -13,6 +13,7 @@ the startup guard checks, and how one operator runs a shard with redundancy.
 | Running a lone throwaway `local-dev` node (a fresh `make stack-up`) | `core` (the default) | The generated key; the server warns that it is not pinned |
 | Running anything else on a real network: a game, app or service, or a community node | `game:<slug>`, `app:<slug>` or `service:<slug>` | A `shard_settlement` key registered for the integrator `<slug>` |
 | Running a second or third node for the same integrator | `game:<slug>/<instance>` | Any unrevoked `shard_settlement` key registered for `<slug>` |
+| Joining with no integrator registration at all | `node:<key-hash>`, derived from the node's own key | The node's own freshly generated key — nothing to register |
 
 `core` is the reserved label of the network's pinned core authority. A node that
 holds some other key and leaves the default in place becomes a second author of
@@ -22,6 +23,24 @@ same as an impostor's. The startup guard below exists to stop that.
 `instance` is 1-64 characters of `[a-z0-9-]`, starting with `[a-z0-9]`. The owner
 part (`<slug>`) alone decides which keys are accepted, so `game:wow/1` and
 `game:wow/2` are both verified against the keys registered for `wow`.
+
+## Authoring with no registration: self-certifying shard ids
+
+`AVALON_OWN_SHARD_ID` can also be `node:<key-hash>`, where `<key-hash>` is the
+lowercase hex SHA-256 digest of the node's own settlement verify key
+(`avalon_protocol::shard_identity::derive_self_certifying_id`). This id needs no
+integrator, no root key, no `avalon add-shard-key` call, and no core authority
+online — the id already names the exact key a verifier must check its tree
+heads against, so there is nothing left for a registry to resolve. A node
+picks a settlement key, derives its id, sets `AVALON_OWN_SHARD_ID` to it, and
+starts.
+
+A human-readable name for a self-certifying shard comes later, from a
+name-binding claim (`avalon_protocol::shard_identity::NameBindingClaim`) signed
+by the same key — the naming/resolution layer this claim feeds is separate,
+not-yet-built work. A self-certifying shard with no name at all authors and
+verifies exactly the same as one with a claimed name; a name is never required
+to join or to be verified.
 
 ## Getting a registered shard key
 
@@ -74,7 +93,14 @@ the server compares that key's public half with the `verify_key` pinned for
 | Keys differ, anchor `environment` is `dev`, `int` or `prod` | Refuses to start. |
 | Keys differ, anchor is `local-dev`, `AVALON_BOOTSTRAP_PEERS` or `AVALON_MIRROR_PEERS` is set | Refuses to start. |
 | Keys differ, anchor is `local-dev`, no peers configured | Starts with a warning. `core_author_pinned: false`. |
-| The network has no anchor, or the shard is not `core` | No check. `core_author_pinned` is absent. |
+| The network has no anchor, or the shard is not `core` (including a named shard or a `node:<key-hash>` self-certifying shard) | No check. `core_author_pinned` is absent. |
+
+A self-certifying id needs no entry in this table at all, and not because it
+was carved out as an exception: `core` is the one shard id with a key pinned
+*outside* the id itself, so it is the one case that can ever mismatch. A
+self-certifying id's own bytes are a function of its key — there is no wrong
+key to pin it against, so nothing here applies to it, the same way nothing
+here applies to a named shard.
 
 The refusal reads:
 
@@ -94,7 +120,7 @@ Fixes:
 An invalid `AVALON_OWN_SHARD_ID` also refuses to start:
 
 ```
-refusing to start: AVALON_OWN_SHARD_ID="<value>" is invalid: <reason>. Use `core` (only for the network's pinned core authority) or a registered shard id of the form `game|app|service:<integrator-slug>[/<instance>]`
+refusing to start: AVALON_OWN_SHARD_ID="<value>" is invalid: <reason>. Use `core` (only for the network's pinned core authority), a registered shard id of the form `game|app|service:<integrator-slug>[/<instance>]`, or a self-certifying `node:<key-hash>` id derived from this node's own key (avalon_protocol::shard_identity::derive_self_certifying_id)
 ```
 
 The guard checks the key, not registration. A node with a named shard whose key
