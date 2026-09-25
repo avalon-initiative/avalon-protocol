@@ -176,6 +176,38 @@ migration file was edited reports "migration N was previously applied but has
 been modified". Drop the schema (the script does this itself) rather than
 editing the migration.
 
+### Load tests
+
+```bash
+make load-test                                   # smoke scale, every scenario, seconds
+LOAD_SCALE=full LOAD_REPEAT=3 make load-test     # a real run, several minutes per pass
+make load-test SCENARIOS="flood-public sustained"
+```
+
+`scripts/load-tests.sh` starts its own `avalon-server` processes the same way
+`scripts/live-tests.sh` does (shared helpers in `scripts/lib/harness.sh`:
+`127.0.0.1`, one throwaway schema per scenario dropped afterwards, no
+bootstrap peers unless the scenario builds its own mesh) and drives them with
+`crates/loadtest`, a small Rust load generator. The generator refuses any
+target that is not a loopback address (`LOADTEST_ALLOW_NON_LOOPBACK=1`
+overrides that check), so it cannot be pointed at a running node or a peer.
+Each scenario prints `METRIC` lines, `CHECK PASS/FAIL` lines and a `RESULT`
+json line; the script exits non-zero if any check failed.
+
+Environment: `LOAD_SCALE` (`smoke` default, or `full`), `LOAD_REPEAT` (repeat
+the selected scenarios, for ranges on a noisy machine), `LOAD_PORT_BASE`
+(default 19900; give parallel runs different bases), `LOAD_JSON` (append the
+`RESULT` lines to a file), `LOAD_KEEP_SCHEMAS=1`, `LOAD_PROFILE=release`
+(uses `target/release` binaries, build them first with
+`cargo build --release -p avalon-server -p avalon-loadtest`) and
+`AVALON_ENV_FILE`. Scenarios: `flood-public`, `flood-auth-principal`,
+`flood-auth-ip`, `many-identities`, `announce-source`, `announce-cap`,
+`announce-strict`, `mesh`, `concurrency`, `db-pool`, `db-pool-reads`,
+`db-pool-writes`, `db-pool-large`, `slow-conn`, `oversized`, `sustained`. The
+measured results and their interpretation are in
+`docs/projects/backend-server/architecture/scalability.md`. CI runs the smoke
+scale in a separate `load-smoke` job with a Postgres service container.
+
 ### `.env` loading in tests and live-verification code
 
 Every `--ignored` live test, plus `crates/server/src/outbox.rs` and

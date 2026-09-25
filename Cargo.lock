@@ -317,6 +317,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "avalon-loadtest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde_json",
+ "sqlx",
+ "time",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "avalon-protocol"
 version = "0.1.0"
 dependencies = [
