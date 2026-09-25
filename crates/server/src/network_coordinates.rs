@@ -40,8 +40,9 @@ pub const MAX_STEP_MS: f64 = 50.0;
 
 /// A node's own network coordinate, as published in announce exchanges and
 /// the topology read model.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Coordinate {
+    #[schema(value_type = Vec<f64>, min_items = 3, max_items = 3)]
     pub vector: [f64; DIMENSIONS],
     pub height: f64,
     pub error: f64,

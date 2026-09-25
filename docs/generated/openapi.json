@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -5250,6 +5250,45 @@
         }
       }
     },
+    "/nodes/topology": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "`GET /nodes/topology`: this node's own view of its neighbors, known\npeers, and mirror sources. Public and read-only.",
+        "operationId": "topology",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of `known` entries returned (default 100, capped at 500).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This node's topology view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopologyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Topology is disabled on this node (AVALON_TOPOLOGY_PUBLIC=false)"
+          },
+          "429": {
+            "description": "Rate limit hit; see Retry-After"
+          }
+        }
+      }
+    },
     "/nodes/trace": {
       "post": {
         "tags": [
@@ -6442,6 +6481,74 @@
           }
         }
       },
+      "Coordinate": {
+        "type": "object",
+        "description": "A node's own network coordinate, as published in announce exchanges and\nthe topology read model.",
+        "required": [
+          "vector",
+          "height",
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "number",
+            "format": "double"
+          },
+          "height": {
+            "type": "number",
+            "format": "double"
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 3,
+            "minItems": 3
+          }
+        }
+      },
+      "CpuMetrics": {
+        "type": "object",
+        "properties": {
+          "core_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "load_average_15m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "load_average_1m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "load_average_5m": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "usage_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
       "CreateAchievementDefinitionRequest": {
         "type": "object",
         "required": [
@@ -6745,6 +6852,27 @@
           }
         }
       },
+      "DbPoolMetrics": {
+        "type": "object",
+        "properties": {
+          "in_use": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "DeleteInstanceRequest": {
         "type": "object",
         "properties": {
@@ -6976,6 +7104,40 @@
           "identity_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "DiskMetrics": {
+        "type": "object",
+        "description": "One configured path's disk usage — `label` says which config value it\ncame from (`\"node_storage\"` / `\"postgres_data\"`), since a node may\nreport more than one and a dashboard client needs to tell them apart.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "mount_point": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -8056,6 +8218,39 @@
           }
         }
       },
+      "KnownPeer": {
+        "type": "object",
+        "required": [
+          "base_url",
+          "roles",
+          "protocol_version",
+          "last_announced_at"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "last_announced_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "libp2p_peer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ListIntegratorsResponse": {
         "type": "object",
         "required": [
@@ -8147,6 +8342,43 @@
           }
         }
       },
+      "MemoryMetrics": {
+        "type": "object",
+        "properties": {
+          "swap_total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "swap_used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "MessageResponse": {
         "type": "object",
         "required": [
@@ -8200,6 +8432,65 @@
           "value": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "MirrorSource": {
+        "type": "object",
+        "required": [
+          "shard_id",
+          "source_url",
+          "last_observed_at",
+          "mirrored_entries",
+          "last_mirrored_at",
+          "open_equivocations"
+        ],
+        "properties": {
+          "lag_entries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Observed tree size minus mirrored entries, never negative; `None`\nuntil a tree head has been observed from the source."
+          },
+          "last_mirrored_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "mirrored_entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "observed_tree_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Tree size of the latest signed tree head observed from the source."
+          },
+          "open_equivocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenFinding"
+            }
+          },
+          "shard_id": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
           }
         }
       },
@@ -8272,6 +8563,153 @@
           "role_index": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "Neighbor": {
+        "type": "object",
+        "required": [
+          "base_url",
+          "bootstrap",
+          "roles",
+          "last_announced_at"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "bootstrap": {
+            "type": "boolean"
+          },
+          "coordinate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Coordinate",
+                "description": "The neighbor's own coordinate as it last reported it; advisory."
+              }
+            ]
+          },
+          "last_announced_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "latency": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservedLatency",
+                "description": "`None` until an announce to this peer has been attempted."
+              }
+            ]
+          },
+          "libp2p_peer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty and `None` below when the peer has not yet appeared in the peer table."
+          }
+        }
+      },
+      "NodeResourceMetrics": {
+        "type": "object",
+        "description": "The `resources` block itself — every field individually optional per\n#517's acceptance criteria, so a client can render whatever a given\nnode/platform actually managed to report.",
+        "required": [
+          "cpu",
+          "memory",
+          "disks",
+          "db_pool"
+        ],
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CpuMetrics"
+          },
+          "db_pool": {
+            "$ref": "#/components/schemas/DbPoolMetrics"
+          },
+          "disks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiskMetrics"
+            }
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryMetrics"
+          },
+          "open_file_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "This process's open file descriptor count — the cheapest\ncross-platform proxy `sysinfo` exposes for \"how many\nconnections/handles is this node currently holding open,\" since\n`sysinfo` has no direct portable socket-count API.",
+            "minimum": 0
+          },
+          "process_uptime_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ObservedLatency": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RoundTripStats"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "observed_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A round-trip measurement together with the node that took it."
+      },
+      "OpenFinding": {
+        "type": "object",
+        "required": [
+          "tree_size",
+          "source_a",
+          "source_b"
+        ],
+        "properties": {
+          "source_a": {
+            "type": "string"
+          },
+          "source_b": {
+            "type": "string"
+          },
+          "tree_size": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -9420,6 +9858,86 @@
           }
         }
       },
+      "RoundTripStats": {
+        "type": "object",
+        "description": "Rolling round-trip statistics for one neighbor, as observed by this node.",
+        "required": [
+          "measurement",
+          "samples",
+          "failed_recent",
+          "attempts_recent",
+          "loss_ratio",
+          "last_success_at"
+        ],
+        "properties": {
+          "attempts_recent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts in the last window (at most the window size).",
+            "minimum": 0
+          },
+          "ewma_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Exponentially weighted moving average of successful round trips."
+          },
+          "failed_recent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Failed attempts in the last window of attempts.",
+            "minimum": 0
+          },
+          "jitter_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Mean absolute deviation over the last successful round trips."
+          },
+          "last_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Round trip of the most recent successful announce, in milliseconds."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "loss_ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "Fraction of recent attempts that failed, 0.0 when none were made."
+          },
+          "measurement": {
+            "type": "string",
+            "description": "Always `\"application_round_trip\"`: announce request to parsed response."
+          },
+          "min_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Minimum over the last successful round trips."
+          },
+          "samples": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Successful round trips recorded since the peer became active.",
+            "minimum": 0
+          }
+        }
+      },
       "RsvpCounts": {
         "type": "object",
         "required": [
@@ -9533,6 +10051,61 @@
           "identity_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "SelfView": {
+        "type": "object",
+        "required": [
+          "protocol_version",
+          "network_id",
+          "roles",
+          "stale",
+          "resources",
+          "shards",
+          "coordinate"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coordinate": {
+            "$ref": "#/components/schemas/Coordinate",
+            "description": "This node's advisory network coordinate; see `network_coordinates`."
+          },
+          "libp2p_peer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network_id": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/NodeResourceMetrics"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardHead"
+            },
+            "description": "Shards this node authors, with their latest signed tree head."
+          },
+          "stale": {
+            "type": "boolean"
           }
         }
       },
@@ -9700,6 +10273,27 @@
           }
         }
       },
+      "ShardHead": {
+        "type": "object",
+        "required": [
+          "shard_id",
+          "tree_size",
+          "sth_created_at"
+        ],
+        "properties": {
+          "shard_id": {
+            "type": "string"
+          },
+          "sth_created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tree_size": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "StartCrossNodeLoginResponse": {
         "type": "object",
         "required": [
@@ -9802,6 +10396,49 @@
               "null"
             ],
             "description": "Present only on the same-device fast path (`user_code: None`) — the\ncross-device path's session token is picked up via `poll`, same as\n`device_pairing::approve_pairing`, not returned here directly."
+          }
+        }
+      },
+      "TopologyResponse": {
+        "type": "object",
+        "required": [
+          "self",
+          "neighbors",
+          "known",
+          "known_total",
+          "mirrors",
+          "generated_at"
+        ],
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "known": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnownPeer"
+            }
+          },
+          "known_total": {
+            "type": "integer",
+            "description": "Peer table entries that are not active neighbors, before `limit`.",
+            "minimum": 0
+          },
+          "mirrors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MirrorSource"
+            }
+          },
+          "neighbors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Neighbor"
+            }
+          },
+          "self": {
+            "$ref": "#/components/schemas/SelfView"
           }
         }
       },
