@@ -13,7 +13,9 @@
 //! are refused unless `AVALON_ALLOW_PRIVATE_PEERS` is true. IPv4-mapped IPv6
 //! addresses are judged as the IPv4 address they carry.
 //!
-//! Redirects are never followed by clients built here.
+//! NAT64-embedded addresses (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4
+//! addresses (`2002::/16`) are unwrapped to their embedded IPv4 address the
+//! same way. Redirects are never followed by clients built here.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
@@ -75,9 +77,32 @@ impl CheckedTarget {
     }
 }
 
+/// Unwraps IPv4-mapped, NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4
+/// (`2002::/16`) addresses to the IPv4 address they embed.
+fn canonicalize(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => unwrap_embedded_v4(v6),
+        v4 => v4,
+    }
+}
+
+fn unwrap_embedded_v4(v6: Ipv6Addr) -> IpAddr {
+    let o = v6.octets();
+    if o[0..12] == [0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0] {
+        return IpAddr::V4(Ipv4Addr::new(o[12], o[13], o[14], o[15]));
+    }
+    if o[0..6] == [0, 0x64, 0xff, 0x9b, 0, 1] {
+        return IpAddr::V4(Ipv4Addr::new(o[6], o[7], o[9], o[10]));
+    }
+    if o[0] == 0x20 && o[1] == 0x02 {
+        return IpAddr::V4(Ipv4Addr::new(o[2], o[3], o[4], o[5]));
+    }
+    IpAddr::V6(v6)
+}
+
 /// Addresses refused regardless of configuration.
 pub fn always_forbidden(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
+    match canonicalize(ip) {
         IpAddr::V4(v4) => {
             v4.is_unspecified()
                 || v4.is_multicast()
@@ -94,7 +119,7 @@ pub fn always_forbidden(ip: IpAddr) -> bool {
 
 /// Loopback and private-range addresses, refused unless private peers are allowed.
 pub fn is_private(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
+    match canonicalize(ip) {
         IpAddr::V4(v4) => is_private_v4(v4),
         IpAddr::V6(v6) => is_private_v6(v6),
     }
@@ -278,6 +303,54 @@ mod tests {
         assert!(OutboundPolicy::new(false)
             .check_ip(ip("::ffff:8.8.8.8"))
             .is_ok());
+    }
+
+    #[test]
+    fn nat64_embedded_ipv4_is_judged_as_the_embedded_address() {
+        let strict = OutboundPolicy::new(false);
+        let lax = OutboundPolicy::new(true);
+        // 64:ff9b::/96 (well-known), embedding 169.254.169.254, 127.0.0.1, 10.0.0.1, 8.8.8.8.
+        assert!(strict.check_ip(ip("64:ff9b::a9fe:a9fe")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b::a9fe:a9fe")).is_err());
+        assert!(strict.check_ip(ip("64:ff9b::7f00:1")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b::7f00:1")).is_ok());
+        assert!(strict.check_ip(ip("64:ff9b::a00:1")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b::a00:1")).is_ok());
+        assert!(strict.check_ip(ip("64:ff9b::808:808")).is_ok());
+
+        // 64:ff9b:1::/48 (local-use), same embedded addresses (RFC 6052 skips
+        // the reserved `u` octet at bits 64-71 for this prefix length).
+        assert!(strict.check_ip(ip("64:ff9b:1:a9fe:a9:fe00::")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b:1:a9fe:a9:fe00::")).is_err());
+        assert!(strict.check_ip(ip("64:ff9b:1:7f00:0:100::")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b:1:7f00:0:100::")).is_ok());
+        assert!(strict.check_ip(ip("64:ff9b:1:a00:0:100::")).is_err());
+        assert!(lax.check_ip(ip("64:ff9b:1:a00:0:100::")).is_ok());
+        assert!(strict.check_ip(ip("64:ff9b:1:808:8:800::")).is_ok());
+    }
+
+    #[test]
+    fn six_to_four_embedded_ipv4_is_judged_as_the_embedded_address() {
+        let strict = OutboundPolicy::new(false);
+        let lax = OutboundPolicy::new(true);
+        // 2002::/16 embeds the IPv4 address in the next 32 bits.
+        assert!(strict.check_ip(ip("2002:a9fe:a9fe::")).is_err());
+        assert!(lax.check_ip(ip("2002:a9fe:a9fe::")).is_err());
+        assert!(strict.check_ip(ip("2002:7f00:1::")).is_err());
+        assert!(lax.check_ip(ip("2002:7f00:1::")).is_ok());
+        assert!(strict.check_ip(ip("2002:808:808::")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_hostname_resolving_to_a_nat64_address_is_refused() {
+        // check_base_url exercises literal IPv6 hosts through the same path.
+        let strict = OutboundPolicy::new(false);
+        assert!(matches!(
+            strict
+                .check_base_url("http://[64:ff9b::a9fe:a9fe]:9000")
+                .await,
+            Err(PolicyError::Forbidden(_))
+        ));
     }
 
     #[test]
