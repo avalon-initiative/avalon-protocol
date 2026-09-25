@@ -599,6 +599,10 @@ scenario_cosigned() {
     head_cosigned_only_by "$pm" "$size" "$k1" "$k2" "$k3"
   check "a witness-aware client accepts the mirror's head by a majority of the three witness keys" \
     witness_client_accepts "$pm" "$k1" "$k2" "$k3"
+  local wp
+  for wp in "$p1" "$p2" "$p3"; do
+    wait_until "witness on port $wp serves the new head" 60 head_at_least "$wp" "$size"
+  done
   check "the same client accepts it when it collects the head from the witnesses instead" \
     witness_client_accepts "$p1,$p2,$p3" "$k1" "$k2" "$k3"
 
