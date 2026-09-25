@@ -1152,6 +1152,9 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
   `base_url` on announce, on gossip merge and on an announce response; an
   invalid or stale one is dropped without refusing the peer. A relayed entry
   without an advert never erases a proven one.
+  Only an advert from the peer's own announce response is stored as direct
+  and eligible as a witness candidate; each worker tick contacts up to 5
+  peers holding only non-direct adverts to obtain it, outside the active set.
 - **Announce rejections are explicit.** `{ "error", "code" }` bodies:
   `invalid_base_url` and `base_url_too_long` (400), `base_url_not_allowed`
   (403), `base_url_unresolvable` and `peer_unreachable` and

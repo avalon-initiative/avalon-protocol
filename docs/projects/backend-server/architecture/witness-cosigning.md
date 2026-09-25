@@ -333,6 +333,13 @@ verified from the announce response received from that exact `base_url`
 (the URL's own endpoint vouches for the key). Adverts from inbound announces,
 gossip and the unverified pool are `direct = false`, are never candidates,
 never displace a direct advert, and a keyless entry never erases one.
+A node obtains a direct advert by announcing to the peer: every tick the
+announce worker also contacts up to 5 table peers that hold only a non-direct
+advert (round-robin by base URL, skipping active peers, which are contacted
+anyway), so a node with no outbound bootstrap peers, such as a seed that only
+receives announces, still vouches its inbound-only peers. These contacts
+pass the outbound address policy, use the announce timeout, take only the
+advert from the response, and never touch the active set or neighbors table.
 
 The scenario suite that exercises growth, loss of the original node, witness loss, eclipse and fork attempts against real processes, plus the live-fleet drill procedure, is in [`../for-maintainers/witness-drill.md`](../for-maintainers/witness-drill.md) (`scripts/witness-drill.sh`).
 

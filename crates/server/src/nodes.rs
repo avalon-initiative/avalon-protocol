@@ -1847,6 +1847,7 @@ pub async fn run_worker(
     let neighbors = peers.neighbors().clone();
     neighbors.set_own_libp2p_peer_id(dht_identity.as_ref().map(|d| d.peer_id.clone()));
 
+    let mut vouch_cursor = 0usize;
     loop {
         neighbors.set_active(&active_peers, &config.peers);
         // Issue #599, Layer 2: before announcing, refresh this node's own
@@ -2013,6 +2014,29 @@ pub async fn run_worker(
             }
         }
 
+        if let Some(own_base_url) = &config.own_base_url {
+            let targets =
+                pick_vouch_targets(&peers, &active_peers, vouch_cursor, VOUCH_CONTACTS_PER_TICK);
+            vouch_cursor = vouch_cursor.wrapping_add(VOUCH_CONTACTS_PER_TICK);
+            if !targets.is_empty() {
+                let request = announce_request(
+                    own_base_url,
+                    &roles,
+                    &network_id,
+                    dht_identity.as_ref(),
+                    &shard_registry.snapshot(),
+                    &head_gossip.snapshot(),
+                    witness_signer
+                        .as_ref()
+                        .map(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
+                    neighbors.own_coordinate(),
+                );
+                for peer in &targets {
+                    vouch_contact(&client, &peers, admission(), peer, &request).await;
+                }
+            }
+        }
+
         let cutoff = OffsetDateTime::now_utc() - config.interval * PRUNE_INTERVAL_MULTIPLE;
         peers.prune_older_than(cutoff);
         peers.prune_unverified_older_than(cutoff);
@@ -2031,6 +2055,66 @@ pub async fn run_worker(
         neighbors.set_active(&active_peers, &config.peers);
 
         tokio::time::sleep(config.interval).await;
+    }
+}
+
+/// Peers with only a non-direct witness advert contacted per worker tick.
+const VOUCH_CONTACTS_PER_TICK: usize = 5;
+
+/// Up to `limit` peers holding a non-direct advert and no direct one, not in
+/// `skip`, taken in base-URL order starting at `cursor` (wrapping) so every
+/// such peer gets a turn.
+fn pick_vouch_targets(
+    peers: &PeerTable,
+    skip: &[String],
+    cursor: usize,
+    limit: usize,
+) -> Vec<String> {
+    let mut urls: Vec<String> = peers
+        .list_all()
+        .into_iter()
+        .filter(|p| p.witness.as_ref().is_some_and(|w| !w.direct) && !skip.contains(&p.base_url))
+        .map(|p| p.base_url)
+        .collect();
+    urls.sort();
+    if urls.is_empty() {
+        return urls;
+    }
+    let shift = cursor % urls.len();
+    urls.rotate_left(shift);
+    urls.truncate(limit);
+    urls
+}
+
+/// Announces to `peer` only to obtain its own witness advert from the
+/// response; the peer is not added to the active set or the neighbors table
+/// and nothing else in the response is merged. Only the URL's own response
+/// can create a direct advert.
+async fn vouch_contact(
+    client: &reqwest::Client,
+    peers: &PeerTable,
+    adm: &PeerAdmission,
+    peer: &str,
+    request: &AnnounceRequest,
+) {
+    if adm.check_address(peer).await.is_err() {
+        return;
+    }
+    let Ok(response) = announce_to(client, peer, request).await else {
+        return;
+    };
+    if let Some(advert) = verified_advert(
+        &normalized_base_url(peer),
+        response.witness,
+        OffsetDateTime::now_utc(),
+    ) {
+        peers.attach_witness(
+            &normalized_base_url(peer),
+            WitnessAdvert {
+                direct: true,
+                ..advert
+            },
+        );
     }
 }
 
@@ -3116,6 +3200,78 @@ mod tests {
         let newer = mk(true, now);
         table.attach_witness(url, newer.clone());
         assert_eq!(table.list_all()[0].witness, Some(newer));
+    }
+
+    #[tokio::test]
+    async fn an_inbound_only_peer_gets_a_direct_advert_only_from_its_own_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let now = OffsetDateTime::now_utc();
+        let server = MockServer::start().await;
+        let url = server.uri();
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let signer = WitnessSigner::new(key, id).unwrap();
+        let body = serde_json::json!({
+            "peers": [],
+            "witness": signer.advert(&url, now),
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+        });
+        Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let table = PeerTable::new();
+        let silent = "http://127.0.0.1:9";
+        for u in [url.as_str(), silent] {
+            let mut p = supported(u, now);
+            p.witness = Some(signer.advert(u, now));
+            table.upsert(p);
+        }
+        let targets = pick_vouch_targets(&table, &[], 0, VOUCH_CONTACTS_PER_TICK);
+        assert_eq!(targets.len(), 2);
+
+        let adm = admission_for_tests(true, |_| {});
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let request = announce_request(
+            "http://me",
+            &[],
+            "avalon-dev-local",
+            None,
+            &[],
+            &[],
+            None,
+            Coordinate::default(),
+        );
+        for t in &targets {
+            vouch_contact(&client, &table, &adm, t, &request).await;
+        }
+        let direct = |u: &str| {
+            table
+                .list_all()
+                .into_iter()
+                .find(|p| p.base_url == u)
+                .and_then(|p| p.witness)
+                .map(|w| w.direct)
+        };
+        assert_eq!(direct(&url), Some(true));
+        assert_eq!(direct(silent), Some(false));
+        assert!(table.neighbors().protected_urls().is_empty());
+        // Once direct, a peer is no longer a vouch target.
+        assert_eq!(
+            pick_vouch_targets(&table, &[], 0, 5),
+            vec![silent.to_string()]
+        );
+
+        let policy = crate::outbound_policy::OutboundPolicy::new(true);
+        let candidates =
+            crate::known_list::build_candidates(&policy, &table, "avalon-dev-local", now).await;
+        assert_eq!(candidates.len(), 1);
     }
 
     #[test]
