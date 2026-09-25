@@ -397,10 +397,11 @@ for the matching network entry — no separate discovery registry yet, since
 that file is already exactly "a published node list" (one of three
 plausible discovery sources, alongside a well-known endpoint or DNS). Each candidate is verified the same way an already-known
 URL is (`GET /ledger/sth/latest` against the entry's pinned `verify_key`);
-the first that verifies wins. Selection is "first that verifies," not yet
-ranked by latency, geographic proximity, health, or operator preference —
-those remain future refinements once there's more than one anchor node per
-network to choose between. Self-hosting stays possible without any central
+the SDK then picks the verified candidate with the lowest measured
+`GET /nodes/status` round trip (verification always comes first; latency only
+orders candidates that already passed it). Geographic proximity, health, and
+operator preference are not ranking inputs yet — future refinements once
+there's more than one anchor node per network to choose between. Self-hosting stays possible without any central
 registry — `AvalonConfig { server_url }` remains for local development and
 private deployments, entirely unaffected by `connect()`'s existence. A node
 mirroring the public network and a private, disconnected instance both
