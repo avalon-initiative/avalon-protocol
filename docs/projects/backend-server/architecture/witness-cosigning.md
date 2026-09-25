@@ -68,10 +68,10 @@ done it, same as any other signed statement in this protocol.
 
 | Parameter | Default | |
 |---|---|---|
-| Known-list size (Y) | 10, hard cap | Bounded verification cost per node/client regardless of network size; large enough for real diversity, small enough to gossip and check cheaply. |
-| Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 6 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=10 cap, X=6. |
-| Freshness window | 10 minutes, configurable | Slot-health/refill trigger only (see below) — never head validity. |
-| Anchor slots | 2 of the 10 | Reserved for bundled anchors (see below); never filled by ordinary refill. |
+| Known-list size (Y) | 5, hard cap (`AVALON_KNOWN_LIST_CAPACITY`) | Bounded verification cost per node/client regardless of network size; small enough to gossip and check cheaply. At Y=5 the required count is 3 and the list tolerates 2 failures. The capacity is configurable; the required count is always a strict majority of the actual list size and is not separately configurable. |
+| Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 3 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=5 cap, X=3 (tolerance 2). |
+| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.2, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger only (see below) — never head validity. |
+| Anchor slots | 2 of the 5 (clamped to the capacity when it is set lower) | Reserved for bundled anchors (see below); never filled by ordinary refill. |
 | Diversity cap | 2 slots per prefix | Applies to every slot, anchors included. |
 | Head-gossip cap | ≤5 head summaries per exchange | Matches the existing per-exchange gossip discipline (#882/#948) — small, bounded payload, not full cosignature bytes on every exchange. |
 
@@ -149,7 +149,20 @@ else's).
 
 ## Freshness window
 
-10 minutes by default. A witness whose most recent `observed_at` for a
+10 minutes by default, scaled for confirmed slots by how many failures the
+list can still absorb. With n confirmed slots, `tolerance(n) = n -
+majority_threshold(n)` and the effective window is `freshness_window *
+max(floor, tolerance(n) / tolerance(capacity))`, floor defaulting to 0.2
+(`AVALON_KNOWN_LIST_FRESHNESS_FLOOR`, in (0, 1], invalid values fall back to
+the default). At capacity 5 that is the full 10 minutes with 5 confirmed, 5
+minutes with 3 or 4, and 2 minutes with 2. With zero or one confirmed slot the
+window is unchanged. Probationary slots always use the base window. The
+window is computed once per prune pass from the pre-eviction confirmed count,
+so a pass never tightens as it evicts. The tradeoff: a small list drops a
+silent member sooner, and a fast drop can leave it at one confirmed witness,
+the plain author-signature case, until a probationary slot clears probation.
+A witness whose most recent `observed_at` for a
+ whose most recent `observed_at` for a
 network's current head is older than the window is a **stale slot** — eligible
 for replacement by ordinary refill — not a signal that anything it signed in
 the past becomes invalid. Old cosigned heads remain valid forever (consistency
@@ -182,7 +195,7 @@ There is exactly one rule — `X = majority_threshold(current known-list size)`
 — and it is evaluated identically regardless of how many nodes exist. At
 Y_actual=1 a node is its own sole witness (X=1, self-attestation, matching
 today's behavior exactly). As peers are discovered the list grows toward the
-Y=10 cap and X is recomputed each time membership changes. Nothing in this
+Y=5 cap and X is recomputed each time membership changes. Nothing in this
 design distinguishes "the original node" from any other — the original
 node's departure just looks like any other witness leaving a list, handled by
 ordinary refill.

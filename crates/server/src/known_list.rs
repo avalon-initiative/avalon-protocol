@@ -9,7 +9,7 @@
 //! node's general, unbounded "who do I gossip/announce with" address book
 //! and is deliberately never persisted (`crate::nodes`'s own module doc
 //! comment — a node just re-announces after a restart). The known list is a
-//! much smaller (10-slot), purpose-specific structure — which witnesses
+//! much smaller (5-slot by default), purpose-specific structure — which witnesses
 //! this node currently trusts for cosigning-majority computation — and
 //! *must* survive a restart, or a well-timed restart hands an attacker a
 //! fresh eclipse attempt every time. This module never writes into
@@ -41,11 +41,14 @@ use crate::nodes::PeerTable;
 use crate::outbound_policy::OutboundPolicy;
 
 /// Default known-list capacity (`Y` in the design doc).
-const DEFAULT_CAPACITY: usize = 10;
+const DEFAULT_CAPACITY: usize = 5;
 /// Default reserved anchor slots (2 of `Y`).
 const DEFAULT_ANCHOR_CAPACITY: usize = 2;
 /// Default per-prefix diversity cap, applied to anchors too.
 const DEFAULT_MAX_PER_PREFIX: usize = 2;
+/// Default lower bound on the freshness scale factor, see
+/// [`KnownListInner::effective_freshness_window`].
+const DEFAULT_FRESHNESS_FLOOR: f64 = 0.2;
 /// Default freshness window: a slot unobserved this long is stale and
 /// eligible for replacement — same 10-minute default the design doc gives.
 const DEFAULT_FRESHNESS_SECS: u64 = 10 * 60;
@@ -60,7 +63,7 @@ const DEFAULT_FRESHNESS_SECS: u64 = 10 * 60;
 const DEFAULT_PROBATION_SECS: u64 = 30 * 60;
 /// Default interval between refill ticks — independent of, and slower
 /// than, the announce worker's own cadence: this is membership maintenance
-/// for a 10-slot list, not peer discovery itself.
+/// for a small list, not peer discovery itself.
 const DEFAULT_REFILL_INTERVAL_SECS: u64 = 120;
 
 /// Whether a slot's occupant already counts toward this list's majority
@@ -115,6 +118,9 @@ pub struct KnownListConfig {
     pub max_per_prefix: usize,
     pub freshness_window: Duration,
     pub probation_window: Duration,
+    /// Smallest fraction of `freshness_window` a slot may be held to when the
+    /// list's failure tolerance is low; in `(0, 1]`.
+    pub freshness_floor: f64,
 }
 
 impl Default for KnownListConfig {
@@ -125,6 +131,7 @@ impl Default for KnownListConfig {
             max_per_prefix: DEFAULT_MAX_PER_PREFIX,
             freshness_window: Duration::from_secs(DEFAULT_FRESHNESS_SECS),
             probation_window: Duration::from_secs(DEFAULT_PROBATION_SECS),
+            freshness_floor: DEFAULT_FRESHNESS_FLOOR,
         }
     }
 }
@@ -147,19 +154,34 @@ fn env_secs(var: &str, default: u64) -> Duration {
     )
 }
 
+fn env_fraction(var: &str, default: f64) -> f64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|f| *f > 0.0 && *f <= 1.0)
+        .unwrap_or(default)
+}
+
 impl KnownListConfig {
     /// `AVALON_KNOWN_LIST_CAPACITY` / `_ANCHOR_CAPACITY` / `_MAX_PER_PREFIX`
-    /// / `_FRESHNESS_SECS` / `_PROBATION_SECS`, each defaulting as above.
+    /// / `_FRESHNESS_SECS` / `_PROBATION_SECS` / `_FRESHNESS_FLOOR`, each
+    /// defaulting as above. The anchor count is clamped to the capacity.
     pub fn from_env() -> Self {
+        let capacity = env_usize("AVALON_KNOWN_LIST_CAPACITY", DEFAULT_CAPACITY);
         Self {
-            capacity: env_usize("AVALON_KNOWN_LIST_CAPACITY", DEFAULT_CAPACITY),
+            capacity,
             anchor_capacity: env_usize(
                 "AVALON_KNOWN_LIST_ANCHOR_CAPACITY",
                 DEFAULT_ANCHOR_CAPACITY,
-            ),
+            )
+            .min(capacity),
             max_per_prefix: env_usize("AVALON_KNOWN_LIST_MAX_PER_PREFIX", DEFAULT_MAX_PER_PREFIX),
             freshness_window: env_secs("AVALON_KNOWN_LIST_FRESHNESS_SECS", DEFAULT_FRESHNESS_SECS),
             probation_window: env_secs("AVALON_KNOWN_LIST_PROBATION_SECS", DEFAULT_PROBATION_SECS),
+            freshness_floor: env_fraction(
+                "AVALON_KNOWN_LIST_FRESHNESS_FLOOR",
+                DEFAULT_FRESHNESS_FLOOR,
+            ),
         }
     }
 }
@@ -237,6 +259,7 @@ pub struct KnownListInner {
     max_per_prefix: usize,
     freshness_window: Duration,
     probation_window: Duration,
+    freshness_floor: f64,
     slots: Vec<KnownSlot>,
     /// First-observed time per not-yet-admitted candidate — the tenure
     /// signal [`Self::refill`] ranks candidates by. Deliberately owned
@@ -250,16 +273,17 @@ pub struct KnownListInner {
 
 impl KnownListInner {
     pub fn new(cfg: KnownListConfig) -> Self {
-        assert!(
-            cfg.anchor_capacity <= cfg.capacity,
-            "anchor_capacity must fit within capacity"
-        );
         Self {
             capacity: cfg.capacity,
-            anchor_capacity: cfg.anchor_capacity,
+            anchor_capacity: cfg.anchor_capacity.min(cfg.capacity),
             max_per_prefix: cfg.max_per_prefix,
             freshness_window: cfg.freshness_window,
             probation_window: cfg.probation_window,
+            freshness_floor: if cfg.freshness_floor > 0.0 && cfg.freshness_floor <= 1.0 {
+                cfg.freshness_floor
+            } else {
+                DEFAULT_FRESHNESS_FLOOR
+            },
             slots: Vec::new(),
             candidate_first_seen: HashMap::new(),
         }
@@ -372,15 +396,47 @@ impl KnownListInner {
         promoted
     }
 
-    /// Removes every slot (anchor or not) not observed within the
-    /// freshness window — automatic detection of an unresponsive occupant,
-    /// scoped to connectivity only (see this module's own doc comment on
-    /// "misbehaving"). Returns the removed slots.
+    /// Failures a list of `n` confirmed witnesses tolerates while a strict
+    /// majority of `n` can still be reached.
+    fn tolerance(n: usize) -> usize {
+        n.saturating_sub(avalon_protocol::witness::majority_threshold(n))
+    }
+
+    /// The freshness window applied to confirmed slots: the base window scaled
+    /// by `max(floor, tolerance(n) / tolerance(capacity))`. Lists with zero or
+    /// one confirmed witness keep the full window.
+    pub fn effective_freshness_window(&self, confirmed: usize) -> Duration {
+        let max_tolerance = Self::tolerance(self.capacity);
+        if confirmed <= 1 || max_tolerance == 0 {
+            return self.freshness_window;
+        }
+        let ratio = Self::tolerance(confirmed) as f64 / max_tolerance as f64;
+        self.freshness_window
+            .mul_f64(ratio.clamp(self.freshness_floor, 1.0))
+    }
+
+    /// Removes every slot (anchor or not) not observed within the freshness
+    /// window (scaled for confirmed slots, see
+    /// [`Self::effective_freshness_window`]); probationary slots use the base
+    /// window. The window is computed once from the confirmed count before
+    /// any removal, so one pass never tightens as it evicts. Returns the
+    /// removed slots.
     pub fn prune_stale(&mut self, now: OffsetDateTime) -> Vec<KnownSlot> {
-        let freshness_window = self.freshness_window;
+        let confirmed = self
+            .slots
+            .iter()
+            .filter(|s| s.status == SlotStatus::Confirmed)
+            .count();
+        let confirmed_window = self.effective_freshness_window(confirmed);
+        let base_window = self.freshness_window;
         let mut removed = Vec::new();
         self.slots.retain(|s| {
-            let stale = now - s.last_observed_at > freshness_window;
+            let window = if s.status == SlotStatus::Confirmed {
+                confirmed_window
+            } else {
+                base_window
+            };
+            let stale = now - s.last_observed_at > window;
             if stale {
                 removed.push(s.clone());
             }
@@ -818,6 +874,7 @@ mod tests {
             max_per_prefix: 2,
             freshness_window: Duration::from_secs(600),
             probation_window: Duration::from_secs(1800),
+            freshness_floor: 0.2,
         }
     }
 
@@ -1092,5 +1149,135 @@ mod tests {
         let c: IpAddr = "2001:db8:abcd:2::1".parse().unwrap();
         assert_eq!(diversity_prefix(a), diversity_prefix(b));
         assert_ne!(diversity_prefix(a), diversity_prefix(c));
+    }
+
+    fn list_with_capacity(capacity: usize) -> KnownListInner {
+        let mut c = cfg();
+        c.capacity = capacity;
+        KnownListInner::new(c)
+    }
+
+    fn secs(list: &KnownListInner, n: usize) -> u64 {
+        list.effective_freshness_window(n).as_secs()
+    }
+
+    #[test]
+    fn defaults_are_capacity_five() {
+        let d = KnownListConfig::default();
+        assert_eq!(d.capacity, 5);
+        assert!(d.anchor_capacity <= d.capacity);
+        assert_eq!(d.freshness_floor, 0.2);
+    }
+
+    #[test]
+    fn an_oversized_anchor_capacity_is_clamped_not_fatal() {
+        let mut c = cfg();
+        c.capacity = 1;
+        c.anchor_capacity = 2;
+        let mut list = KnownListInner::new(c);
+        let now = OffsetDateTime::now_utc();
+        assert!(list.try_admit("a1".into(), "n1".into(), true, now));
+        assert!(!list.try_admit("a2".into(), "n2".into(), true, now));
+    }
+
+    #[test]
+    fn effective_window_at_capacity_five() {
+        let list = list_with_capacity(5);
+        // tolerance: n=2 -> 0, 3 -> 1, 4 -> 1, 5 -> 2; max tolerance 2.
+        assert_eq!(secs(&list, 0), 600);
+        assert_eq!(secs(&list, 1), 600);
+        assert_eq!(secs(&list, 2), 120);
+        assert_eq!(secs(&list, 3), 300);
+        assert_eq!(secs(&list, 4), 300);
+        assert_eq!(secs(&list, 5), 600);
+    }
+
+    #[test]
+    fn effective_window_at_capacity_ten() {
+        let list = list_with_capacity(10);
+        // max tolerance 4 (10 - 6).
+        assert_eq!(secs(&list, 1), 600);
+        assert_eq!(secs(&list, 2), 120);
+        assert_eq!(secs(&list, 3), 150);
+        assert_eq!(secs(&list, 4), 150);
+        assert_eq!(secs(&list, 5), 300);
+        assert_eq!(secs(&list, 10), 600);
+    }
+
+    #[test]
+    fn the_floor_bounds_the_scale_factor() {
+        let mut c = cfg();
+        c.capacity = 5;
+        c.freshness_floor = 0.7;
+        let list = KnownListInner::new(c);
+        assert_eq!(secs(&list, 2), 420);
+        assert_eq!(secs(&list, 3), 420);
+        assert_eq!(secs(&list, 5), 600);
+        c.freshness_floor = 1.0;
+        assert_eq!(secs(&KnownListInner::new(c), 3), 600);
+    }
+
+    fn confirmed_list(ids: &[&str], t0: OffsetDateTime) -> KnownListInner {
+        let mut list = list_with_capacity(5);
+        for (i, id) in ids.iter().enumerate() {
+            assert!(list.try_admit((*id).into(), format!("net-{i}"), false, t0));
+        }
+        for slot in list.slots.iter_mut() {
+            slot.status = SlotStatus::Confirmed;
+        }
+        list
+    }
+
+    #[test]
+    fn a_two_slot_list_evicts_a_silent_slot_after_the_scaled_window_only() {
+        let t0 = OffsetDateTime::now_utc();
+        let mut list = confirmed_list(&["a", "b"], t0);
+        list.observe("a", t0 + Duration::from_secs(200));
+        // Scaled window is 120s: b (silent 110s) stays, then goes at 121s.
+        assert!(list.prune_stale(t0 + Duration::from_secs(110)).is_empty());
+        let removed = list.prune_stale(t0 + Duration::from_secs(121));
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].witness_key_id, "b");
+    }
+
+    #[test]
+    fn a_full_list_keeps_the_full_window() {
+        let t0 = OffsetDateTime::now_utc();
+        let mut list = confirmed_list(&["a", "b", "c", "d", "e"], t0);
+        assert!(list.prune_stale(t0 + Duration::from_secs(599)).is_empty());
+        assert_eq!(list.prune_stale(t0 + Duration::from_secs(601)).len(), 5);
+    }
+
+    #[test]
+    fn one_pass_does_not_cascade_with_a_tightening_window() {
+        let t0 = OffsetDateTime::now_utc();
+        let mut list = confirmed_list(&["a", "b", "c", "d", "e"], t0);
+        // Four slots idle 400s, one fresh. Window from n=5 is 600s: nobody is
+        // evicted, even though the shrinking list would allow 120s.
+        list.observe("e", t0 + Duration::from_secs(400));
+        assert!(list.prune_stale(t0 + Duration::from_secs(400)).is_empty());
+        assert_eq!(list.len(), 5);
+        // Next pass, still 5 confirmed: at 601s four go together; the fifth
+        // survives the same pass and is judged on its own age afterwards.
+        let removed = list.prune_stale(t0 + Duration::from_secs(601));
+        assert_eq!(removed.len(), 4);
+        assert!(list.contains("e"));
+    }
+
+    #[test]
+    fn probationary_slots_keep_the_base_window() {
+        let t0 = OffsetDateTime::now_utc();
+        let mut list = list_with_capacity(5);
+        assert!(list.try_admit("a1".into(), "n1".into(), true, t0));
+        assert!(list.try_admit("a2".into(), "n2".into(), true, t0));
+        assert!(list.try_admit("p".into(), "n3".into(), false, t0));
+        list.observe("a1", t0 + Duration::from_secs(500));
+        list.observe("a2", t0 + Duration::from_secs(500));
+        // Two confirmed -> scaled 120s applies to them, not to the probationary slot.
+        assert!(list.prune_stale(t0 + Duration::from_secs(500)).is_empty());
+        assert!(list.contains("p"));
+        let removed = list.prune_stale(t0 + Duration::from_secs(601));
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].witness_key_id, "p");
     }
 }

@@ -38,11 +38,14 @@ next_port() { PORT_OFFSET=$((PORT_OFFSET + 1)); NEXT_PORT=$((BASE_PORT + PORT_OF
 # Fast-forwarded known-list tuning: real defaults (10 min freshness, 30 min
 # probation, 2 min refill) would make every scenario here take the better
 # part of an hour. These env values only change *how fast* the same
-# admission/refill/probation rules run, never the rules themselves.
+# admission/refill/probation rules run, never the rules themselves. The
+# freshness floor is raised so a small confirmed list's scaled window
+# (floor * 6s) stays above the 2s refill interval that refreshes live slots.
 FAST_KNOWN_LIST=(
   AVALON_KNOWN_LIST_REFILL_INTERVAL_SECS=2
   AVALON_KNOWN_LIST_FRESHNESS_SECS=6
   AVALON_KNOWN_LIST_PROBATION_SECS=3
+  AVALON_KNOWN_LIST_FRESHNESS_FLOOR=0.7
   AVALON_ANNOUNCE_INTERVAL_SECS=2
   AVALON_MIRROR_POLL_INTERVAL_SECS=3
 )

@@ -28,7 +28,7 @@ touches a running node or the default schema. The script reuses
 `load-tests.sh` use. Known-list state is observed through each node's
 persisted `known_list.json`, and admission, pruning and refill are sped up
 with the existing `AVALON_KNOWN_LIST_*` and `AVALON_ANNOUNCE_INTERVAL_SECS`
-settings; only the timings change, never the rules.
+settings (including a raised `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`, so a small list's scaled window stays above the 2 s refill interval); only the timings change, never the rules.
 
 | Scenario | What it does | In CI |
 |---|---|---|

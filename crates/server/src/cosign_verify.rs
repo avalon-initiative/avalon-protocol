@@ -130,6 +130,7 @@ mod tests {
             max_per_prefix: 10,
             freshness_window: Duration::from_secs(3600),
             probation_window: Duration::from_secs(0),
+            freshness_floor: 1.0,
         }
     }
 
