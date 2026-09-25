@@ -1,0 +1,214 @@
+{
+  "$schema": "./SCHEMA.md#witness-cosigned-tree-head",
+  "description": "Witness-cosigned tree head acceptance (#932, wiring the #934 design-spike primitives — avalon_protocol::witness::WitnessCosignature/witness_signing_message and avalon_protocol::cosigned_sth::verify_cosigned_tree_head). A cosigned head is accepted only when the author's own SignedTreeHead verifies AND at least witness::majority_threshold(knownList.length) of its cosignatures are individually signature-valid against a key in the verifier's own known list and fresh (observedAt within [freshnessCutoff, now]). Each vector's sth/cosignatures carry precomputed signatures (same fixed seeds throughout the file) so a reimplementation is checked against real signature bytes, not just its own round trip.",
+  "supportedIn": [
+    "rust"
+  ],
+  "notSupported": {
+    "csharp": "no client-side witness-cosigning verification yet — only the Rust protocol crate implements verify_cosigned_tree_head so far (#932); production known-list management and gossip are #946/#947, still open.",
+    "typescript": "no client-side witness-cosigning verification yet — same gap as csharp."
+  },
+  "authorSigningKeySeedHex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "authorVerifyingKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+  "witnessSigningKeySeedsHex": {
+    "witness-1": "2222222222222222222222222222222222222222222222222222222222222222",
+    "witness-2": "3333333333333333333333333333333333333333333333333333333333333333",
+    "witness-3": "4444444444444444444444444444444444444444444444444444444444444444",
+    "witness-stranger": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "witnessVerifyingKeysHex": {
+    "witness-1": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "witness-2": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+    "witness-3": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+    "witness-stranger": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242"
+  },
+  "networkId": "avalon-conformance-test",
+  "vectors": [
+    {
+      "name": "accepted: valid fresh majority of a 3-witness known list",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [
+          {
+            "witnessKeyId": "witness-1",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+          },
+          {
+            "witnessKeyId": "witness-2",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "c8793c20653f34320ecdc398d83fb22ab27dc1d3936cfe58ae1d46e77450435767f28cda8ff10e5ddff6a888a9543afb57227c5944c324a933916bd8a207960c"
+          }
+        ],
+        "knownList": [
+          "witness-1",
+          "witness-2",
+          "witness-3"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "below-threshold: only 1 of 3 known witnesses cosigned",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [
+          {
+            "witnessKeyId": "witness-1",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+          }
+        ],
+        "knownList": [
+          "witness-1",
+          "witness-2",
+          "witness-3"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": false
+      }
+    },
+    {
+      "name": "unknown witness: a valid cosignature from a key outside the known list does not count",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [
+          {
+            "witnessKeyId": "witness-1",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+          },
+          {
+            "witnessKeyId": "witness-stranger",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "ea0083afa761c81b87d0a440bafd14b7a558a6a35632e0dd16b36872154713f2aa92659ce8503cc260299c846a0cd79599dcd84544eccbb8e035bf890efbb30a"
+          }
+        ],
+        "knownList": [
+          "witness-1",
+          "witness-2",
+          "witness-3"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": false
+      }
+    },
+    {
+      "name": "stale: a cosignature observed before the freshness cutoff does not count",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [
+          {
+            "witnessKeyId": "witness-1",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+          },
+          {
+            "witnessKeyId": "witness-3",
+            "observedAtUnixSeconds": 1789999999,
+            "signatureHex": "89db2a0656bd3d90c2cbcc94e8ab482824146d27f18f58a54e7d5c89d917f8c9db351a664aaa31f0c60371dbcd06cd06cecfef0c03da8570a02c0315c0993e04"
+          }
+        ],
+        "knownList": [
+          "witness-1",
+          "witness-2",
+          "witness-3"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": false
+      }
+    },
+    {
+      "name": "conflicting heads: two different roots at the same tree_size, each majority-cosigned, share a witness",
+      "input": {
+        "knownList": [
+          "witness-1",
+          "witness-2",
+          "witness-3"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600,
+        "headA": {
+          "sth": {
+            "treeSize": 12,
+            "rootHashHex": "abababababababababababababababababababababababababababababababab",
+            "createdAtUnixSeconds": 1790000000,
+            "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+          },
+          "cosignatures": [
+            {
+              "witnessKeyId": "witness-1",
+              "observedAtUnixSeconds": 1790000600,
+              "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+            },
+            {
+              "witnessKeyId": "witness-2",
+              "observedAtUnixSeconds": 1790000600,
+              "signatureHex": "c8793c20653f34320ecdc398d83fb22ab27dc1d3936cfe58ae1d46e77450435767f28cda8ff10e5ddff6a888a9543afb57227c5944c324a933916bd8a207960c"
+            }
+          ]
+        },
+        "headB": {
+          "sth": {
+            "treeSize": 12,
+            "rootHashHex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "createdAtUnixSeconds": 1790000000,
+            "signatureHex": "8f05a439ed28b07b08685066b071a56fe70d0c26aeb2023e818f62ba09e8eb9ba43f2be027ff815e56f6f67860b953ad2e6113faf1d43862e70cd72f66dc6506"
+          },
+          "cosignatures": [
+            {
+              "witnessKeyId": "witness-2",
+              "observedAtUnixSeconds": 1790000600,
+              "signatureHex": "3a0e2ed94cd6aea74cfc57b0d8d0103fcc9f130530ccb55aa41b2729972256a5712855be12bcacdcf1f7da21ca57b5ba66c0a7f901974025f45e68d5e8b28d09"
+            },
+            {
+              "witnessKeyId": "witness-3",
+              "observedAtUnixSeconds": 1790000600,
+              "signatureHex": "64e7e0ab927bef3e76319985c386f27e2231c3242044be17c4b861a92e0b1f81ba2bf6aed0672e961b35bdaf64cd004d8c5530a0b66c88b24ddb21544ae00f04"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "headAAccepted": true,
+        "headBAccepted": true,
+        "equivocatingWitnesses": [
+          "witness-2"
+        ]
+      }
+    }
+  ]
+}
