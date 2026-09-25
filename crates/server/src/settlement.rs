@@ -314,15 +314,20 @@ pub async fn sth_at_tree_size(
         }
     }
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
-    let sth = mirror_sth_at(
+    let mirrored = mirror_sth_at(
         &state.pool,
         state.chain.network_id(),
         shard_id,
         tree_size,
         source_url,
     )
-    .await?
-    .ok_or_else(|| sth_not_found_error(source_url))?;
+    .await?;
+    let sth = match mirrored {
+        Some(sth) => sth,
+        None => cosigned_observed_sth(&state, shard_id, tree_size, source_url)
+            .await?
+            .ok_or_else(|| sth_not_found_error(source_url))?,
+    };
     let cosigs = state
         .chain
         .list_witness_cosignatures(&sth.network_id, shard_id, tree_size)
@@ -391,6 +396,37 @@ async fn mirror_sth_at(
     )
     .await?;
     Ok(observed.map(SignedTreeHead::from))
+}
+
+/// An observed head this node itself cosigned but has not backfilled up to
+/// yet, so a verifier can collect the cosignature before the head is trusted
+/// anywhere. Only a head matching a stored cosignature's root is served.
+async fn cosigned_observed_sth(
+    state: &AppState,
+    shard_id: &str,
+    tree_size: i64,
+    source_url: Option<&str>,
+) -> Result<Option<SignedTreeHead>, AppError> {
+    let network_id = state.chain.network_id();
+    let cosigs = state
+        .chain
+        .list_witness_cosignatures(network_id, shard_id, tree_size)
+        .await?;
+    for cosig in cosigs {
+        if let Some(observed) = mirror::observed_sth_matching_root(
+            &state.pool,
+            network_id,
+            shard_id,
+            tree_size,
+            &cosig.root_hash,
+            source_url,
+        )
+        .await?
+        {
+            return Ok(Some(SignedTreeHead::from(observed)));
+        }
+    }
+    Ok(None)
 }
 
 #[derive(Deserialize)]

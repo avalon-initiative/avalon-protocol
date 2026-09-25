@@ -66,6 +66,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::cosign_gather;
 use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::known_list::KnownListHandle;
 use crate::nodes::HeadGossipTracker;
@@ -211,7 +212,6 @@ async fn discover_and_verify_shard_peers(
     shard_registry: &crate::nodes::ShardRegistry,
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
-    known_list: &[(String, VerifyingKey)],
 ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
     for shard_id in shard_registry.known_shard_ids() {
@@ -245,7 +245,7 @@ async fn discover_and_verify_shard_peers(
                 match cosign_verify::verify_cosigned_against_any_key(
                     db_keys.iter().copied(),
                     &head,
-                    known_list,
+                    &[],
                     now,
                 ) {
                     Some(matched_key) => {
@@ -319,7 +319,24 @@ pub struct MirrorWatcherHandles {
     /// `None` when this node has opted out of cosigning or has no witness
     /// signing key — see [`WitnessCosignConfig::from_env`].
     pub witness: Option<WitnessCosignConfig>,
+    /// Peer table used to resolve a known-list witness's base URL when
+    /// gathering cosignatures.
+    pub peers: crate::nodes::PeerTable,
+    /// Trust anchors a peer's claimed `network_id` is resolved against.
+    pub trust_anchors: Vec<avalon_protocol::network_trust::TrustAnchorEntry>,
 }
+
+/// What `record_verified_head` needs to decide whether an author-verified
+/// head has reached majority: this tick's known list and how to reach each
+/// of its witnesses.
+struct MajorityContext<'a> {
+    known_list: &'a [(String, VerifyingKey)],
+    sources: &'a [cosign_gather::WitnessSource],
+    policy: crate::outbound_policy::OutboundPolicy,
+}
+
+type HeldHeads = std::collections::HashSet<(String, i64, String)>;
+const MAX_HELD_LOG_ENTRIES: usize = 1024;
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
 /// returns `Some`. Never returns. See module docs for the two-phase
@@ -345,7 +362,11 @@ pub async fn run_worker(
         known_list,
         head_gossip,
         witness,
+        peers,
+        trust_anchors,
     } = handles;
+    let mut held_logged = HeldHeads::new();
+    let policy = crate::outbound_policy::OutboundPolicy::from_env();
     let client = reqwest::Client::new();
 
     if config.peers.is_empty() {
@@ -389,6 +410,12 @@ pub async fn run_worker(
         // at startup — so an admitted or dropped known-list witness is
         // reflected starting this very tick, no restart needed.
         let known_list_pairs = cosign_verify::known_list_verifying_keys(&known_list);
+        let witness_sources = cosign_gather::witness_sources(&known_list_pairs, &peers.list_all());
+        let majority = MajorityContext {
+            known_list: &known_list_pairs,
+            sources: &witness_sources,
+            policy,
+        };
 
         // Phase 1: poll every peer independently for its latest STH,
         // verify + store + equivocation-check each one. Peers that
@@ -400,15 +427,7 @@ pub async fn run_worker(
         let mut verified_by_shard: HashMap<(String, String), Vec<(String, CosignedTreeHead)>> =
             HashMap::new();
         for (shard_id, peer) in &config.peers {
-            match fetch_and_verify_sth(
-                &client,
-                avalon_protocol::network_trust::bundled_trust_anchors(),
-                peer,
-                shard_id,
-                &known_list_pairs,
-            )
-            .await
-            {
+            match fetch_and_verify_sth(&client, &trust_anchors, peer, shard_id).await {
                 Ok((head, author_key)) => {
                     record_verified_head(
                         &pool,
@@ -423,7 +442,8 @@ pub async fn run_worker(
                         peer,
                         head,
                         author_key,
-                        &known_list_pairs,
+                        &majority,
+                        &mut held_logged,
                     )
                     .await;
                 }
@@ -439,7 +459,6 @@ pub async fn run_worker(
                 &shard_registry,
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
-                &known_list_pairs,
             )
             .await;
             for (shard_id, peer, head, author_key) in discovered {
@@ -462,7 +481,8 @@ pub async fn run_worker(
                     &peer,
                     head,
                     author_key,
-                    &known_list_pairs,
+                    &majority,
+                    &mut held_logged,
                 )
                 .await;
             }
@@ -642,14 +662,10 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
     })
 }
 
-/// Fetches `peer`'s latest STH for `shard_id` and verifies it by majority
-/// cosignature against `known_list` — the one step every peer goes through
-/// in phase 1, regardless of what happens next. This replaces the old
-/// plain-author-signature check outright, not alongside it —
-/// `cosigned_sth::verify_cosigned_tree_head`'s own documented `len() <= 1`
-/// degenerate case *is* that check, for a `known_list` of 0 or 1 (today's
-/// and most real deployments'), so nothing here behaves differently for
-/// them. Issue #604: `shard_id` is sent as an explicit `?shard_id=` query
+/// Fetches `peer`'s latest STH for `shard_id` and verifies its author
+/// signature — the one step every peer goes through in phase 1. Majority
+/// cosignature is decided afterwards by `record_verified_head`, so cosigning
+/// never depends on it. Issue #604: `shard_id` is sent as an explicit `?shard_id=` query
 /// param (#573's documented footgun) — a peer serving more than one shard
 /// (mirroring one, authoring another) answers a bare request with whichever
 /// it treats as its own default, not necessarily the one this config entry
@@ -663,7 +679,6 @@ async fn fetch_and_verify_sth(
     anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
     peer: &str,
     shard_id: &str,
-    known_list: &[(String, VerifyingKey)],
 ) -> Result<(CosignedTreeHead, VerifyingKey), MirrorWatcherError> {
     let (dto, peer_protocol_version) = fetch_latest_sth(client, peer, Some(shard_id)).await?;
     check_peer_version(peer, &peer_protocol_version)?;
@@ -681,17 +696,14 @@ async fn fetch_and_verify_sth(
     let head: CosignedTreeHead = dto.into();
     let now = OffsetDateTime::now_utc();
     let Some(matched_key) =
-        cosign_verify::verify_cosigned_against_any_key([verify_key], &head, known_list, now)
+        cosign_verify::verify_cosigned_against_any_key([verify_key], &head, &[], now)
     else {
         tracing::error!(
             event = "sth_verification_failed",
             peer = %peer,
             network_id = %head.sth.network_id,
             tree_size = head.sth.tree_size,
-            known_list_size = known_list.len(),
-            "STH failed verification — either the author signature itself is invalid, or (with \
-             a known list of more than one) the attached cosignatures don't reach majority — not \
-             storing, not trusting",
+            "STH failed verification: the author signature is invalid — not storing, not trusting",
         );
         return Err(MirrorWatcherError::InvalidSignature);
     };
@@ -875,7 +887,8 @@ async fn record_verified_head(
     peer: &str,
     head: CosignedTreeHead,
     author_key: VerifyingKey,
-    known_list: &[(String, VerifyingKey)],
+    majority: &MajorityContext<'_>,
+    held_logged: &mut HeldHeads,
 ) {
     let observed = ObservedSth::from_sth(peer, shard_id, &head.sth, OffsetDateTime::now_utc());
     match mirror::insert_observation(pool, &observed).await {
@@ -891,6 +904,54 @@ async fn record_verified_head(
             return;
         }
     }
+
+    // Cosigning depends only on the author signature (checked by the caller)
+    // plus the consistency and double-cosign guards, never on majority.
+    witness_cosign::decide_and_cosign(
+        chain,
+        pool,
+        client,
+        witness,
+        head_gossip,
+        peer,
+        shard_id,
+        &head,
+    )
+    .await;
+
+    let held_key = (
+        shard_id.to_string(),
+        head.sth.tree_size,
+        head.sth.root_hash.clone(),
+    );
+    let head = match cosign_gather::resolve_majority(
+        majority.policy,
+        &author_key,
+        head,
+        majority.known_list,
+        majority.sources,
+        shard_id,
+    )
+    .await
+    {
+        cosign_gather::HeadVerdict::Trusted(head) => head,
+        cosign_gather::HeadVerdict::Held => {
+            if held_logged.len() >= MAX_HELD_LOG_ENTRIES {
+                held_logged.clear();
+            }
+            if held_logged.insert(held_key.clone()) {
+                tracing::info!(
+                    peer = %peer,
+                    shard_id,
+                    tree_size = held_key.1,
+                    "mirror-watcher: head's author signature is valid but cosignatures do not \
+                     reach majority yet — holding it, retrying next tick",
+                );
+            }
+            return;
+        }
+    };
+    let known_list = majority.known_list;
 
     store_valid_cosignatures(chain, shard_id, &head, known_list).await;
 
@@ -938,21 +999,6 @@ async fn record_verified_head(
             }
         }
     }
-
-    // The head is independently verified at this point (author signature,
-    // majority cosignature of the known list); whether this node also
-    // cosigns it is the separate decision in `witness_cosign`.
-    witness_cosign::decide_and_cosign(
-        chain,
-        pool,
-        client,
-        witness,
-        head_gossip,
-        peer,
-        shard_id,
-        &head,
-    )
-    .await;
 
     if let Some((interest, network_interest)) = interest {
         network_interest

@@ -348,6 +348,32 @@ receives announces, still vouches its inbound-only peers. These contacts
 pass the outbound address policy, use the announce timeout, take only the
 advert from the response, and never touch the active set or neighbors table.
 
+**Cosigning does not wait on majority, and mirrors gather cosignatures (#970).**
+A head reaches `witness_cosign::decide_and_cosign` as soon as its author
+signature verifies, with the consistency and no-double-cosign guards
+unchanged; majority is only what decides whether this node then trusts and
+stores the head. An author node serves no cosignatures of its own, so a
+mirror with a known list of more than one witness gathers them itself
+(`crates/server/src/cosign_gather.rs`): the cosignatures attached to the
+source's response plus, for each confirmed known-list witness, a
+`GET {witness_base_url}/ledger/sth/{tree_size}?shard_id=<shard>&witnesses=1`.
+A witness's base URL is the peer-table entry whose *direct* witness advert
+carries that witness key; witnesses with no such entry are skipped. Fetches
+go through the outbound address policy, time out after 5 seconds, run at
+most 8 at a time and read at most 64 KiB; a response is used only if its
+root, size, network and creation time equal the head's, and each
+cosignature must still verify against the known-list key. If majority is
+reached the head is stored and trusted as before, with the gathered
+cosignatures stored for re-serving; otherwise it is held (logged once at
+info) and retried on the next tick. A known list of 0 or 1 keeps the plain
+author-signature path. The same helper backs `cross_shard::fetch_and_compute`
+and `cross_shard_fetch::fetch_verified_sth`, which verify a remote shard's
+head from its author and had the same dependency. A mirror that has cosigned
+a head but not yet backfilled it serves that observed head with its
+cosignature from `GET /ledger/sth/{tree_size}` (only when the head's root
+matches a stored cosignature), so witnesses can serve each other before any
+of them has backfilled.
+
 ## Not done yet
 
 - **Clients do not verify cosignatures.** The SDKs and the Hub check the author

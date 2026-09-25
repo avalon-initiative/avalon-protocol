@@ -77,7 +77,11 @@ The first is what a pinned client does and must exit 0 before, during and after.
 second lists the cosignatures that node holds. To check a majority the way a
 witness-aware client will, feed the same head as served by each witness to
 `verify_sth cosigned <witness-key-hex>...`; it accepts only if a majority of the given
-keys cosigned, and rejects the same head with one of two. Also confirm:
+keys cosigned, and rejects the same head with one of two. The author serves no
+cosignatures itself; a mirror collects them from each confirmed witness's
+`GET /ledger/sth/{tree_size}?shard_id=<shard>&witnesses=1`, so a mirror that logs
+"holding it" for a head is waiting for a majority of witnesses to answer for that exact
+head, not failing verification. Also confirm:
 
 - `GET /ledger/sth/{tree_size}` on the author returns the same root and signature it did
   before the rollout for a size that existed then (history unchanged);

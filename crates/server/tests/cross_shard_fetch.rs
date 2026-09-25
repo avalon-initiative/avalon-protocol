@@ -164,6 +164,7 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
             &subject,
             &core_verify_keys(),
             &[],
+            &[],
         )
         .await;
         match attempt {
@@ -208,6 +209,7 @@ async fn an_unknown_subject_returns_no_entries() {
         &subject,
         &core_verify_keys(),
         &[],
+        &[],
     )
     .await
     .expect("an unknown subject should succeed with zero entries, not error");
@@ -232,6 +234,7 @@ async fn a_shard_with_no_resolvable_verify_key_fails_closed() {
         &base,
         &subject,
         &HashMap::new(),
+        &[],
         &[],
     )
     .await;
@@ -264,6 +267,7 @@ async fn a_wrong_verify_key_fails_closed() {
         &base,
         &subject,
         &wrong_keys,
+        &[],
         &[],
     )
     .await;
