@@ -32,28 +32,42 @@ settings; only the timings change, never the rules.
 
 | Scenario | What it does | In CI |
 |---|---|---|
-| `lifecycle` | A alone, then A,B,C, then A removed (B,C), then B,C,D,E. Checks admission with no restart of A, that B and C keep answering and re-shape their lists after A is gone, and that D and E are admitted without A. | yes |
+| `lifecycle` | A alone, then A,B,C, then A removed (B,C), then B,C,D,E. Checks admission with no restart of A, that B and C keep answering, that exactly A's witness key (and no other slot) leaves B's list once A is gone, and that D and E are admitted without A. | yes |
 | `eclipse` | A victim is announced to by a flood of nodes that all share one /24 (every loopback node does). Asserts the list fills up to the per-prefix cap and never past it. | yes (4-node flood) |
 | `witness-loss` | A known-list member is frozen (`SIGSTOP`) without leaving anyone's peer list. Asserts it is dropped once past the freshness window and a newly joined node takes the slot. | no |
-| `long-offline` | A mirroring node is stopped, a write lands elsewhere, ten seconds pass (well past the sped-up windows), and it restarts on the same schema. Asserts it rejoins the peer table. | no |
-| `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork. A third node mirrors both. Asserts it logs and records `equivocation_detected`. | no |
+| `long-offline` | A mirroring node is stopped, a write lands elsewhere, ten seconds pass (well past the sped-up windows), and it restarts on the same schema. Asserts it rejoins the peer table and that its mirrored head catches up to the author's current size and root, past the size it held when it left. | no |
+| `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork at one tree size. Each fork has its own cosigning witness and mirrors itself and that witness, so each author serves its own group's cosignatures; one witness key is shared by both authors (honest witnesses refuse to cosign two roots at one size, so a provable equivocation needs a double-signing witness). A mirror of both logs records the source-based `equivocation_detected` and refuses the second cosignature (`witness_double_cosign_refused`). A node that only gossips with both authors sees the conflicting head summaries, fetches both cosigned heads, logs `equivocation_confirmed` and stores `equivocation_evidence` naming the shared witness; the evidence is read back with `crates/server/examples/witness_evidence.rs`. | no |
+| `cosigned` | An author with cosigning off, three cosigning witnesses and a non-cosigning mirror whose known list holds exactly the three witness keys, all confirmed. Asserts the mirror serves a new head only with a majority of those keys' cosignatures, and that a witness-aware client accepts it. One witness is then killed: the head must stay verifiable on the other two, the dead witness's slot leaves the mirror's list, and a newly started witness takes it. See "Known failures" below. | no |
 | `rollout` | A single-key author writes history; two mirrors start with witness keys and cosign it. Asserts history is unchanged, the default head body is the same shape, an old single-key client verifies before, during and after, a witness-aware client accepts the head with both cosignatures and rejects it with one, the log keeps growing, and turning cosigning off on one node changes nothing else. See [`witness-policy-rollout.md`](./witness-policy-rollout.md). | no |
 
 The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
-(`lifecycle` and a 4-node `eclipse`, about half a minute of scenario time).
+(`lifecycle` and a 4-node `eclipse`, about half a minute of scenario time). `fork` and `cosigned` start four to six nodes each and take a minute or more apiece, so they stay local.
+
+## Known failures
+
+`cosigned` exercises a mirror whose known list holds more than one confirmed
+witness. Before the fix for #970, that mirror never accepts a new head:
+witnesses cosign only after the majority check passes, and an author serves no
+cosignatures, so the check can never pass once two slots are confirmed. The
+scenario's checks that the mirror serves a cosigned head (and the client
+checks that depend on it) fail with `sth_verification_failed ...
+known_list_size=3` in the mirror's log until that is fixed. They are left
+strict on purpose.
 
 ## Not yet covered
 
-- `fork` exercises source-based equivocation detection in
-  `mirror_watcher::check_equivocation`, which does not need cosignatures. It
-  does not exercise gossip-driven confirmation
-  (`crate::equivocation::confirm_and_record`) or a cosigned-majority proof
-  across two disjoint witness groups. Cosigning now exists, so extending it is
-  the follow-up tracked in #966.
-- Only `rollout` runs with real cosignatures (two cosigning mirrors of a
-  single-key author). The other scenarios prove admission, loss, refill and
-  diversity, and every drill node advertises its own witness key so the known
-  lists can fill.
+- Two truly disjoint witness groups cannot produce a proof: a proof needs one
+  witness that cosigned both roots, which honest witnesses refuse to do. `fork`
+  therefore shares one witness key across the two authors (the double-signing
+  witness) and gives each fork its own additional witness.
+- Gossip-driven confirmation fetches both heads from the authors that
+  gossiped the conflicting summaries, so the authors must hold the
+  cosignatures. `fork` arranges that by having each author mirror itself and
+  its witness; a plain author that mirrors nothing serves none and the
+  conflict cannot be confirmed.
+- Only `rollout`, `fork` and `cosigned` run with real cosignatures. The other
+  scenarios prove admission, loss, refill and diversity, and every drill node
+  advertises its own witness key so the known lists can fill.
 - The eclipse scenario floods from one prefix. Prefix diversity across many
   real prefixes needs hosts on different subnets, i.e. the fleet.
 
