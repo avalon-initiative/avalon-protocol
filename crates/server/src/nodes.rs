@@ -1079,8 +1079,17 @@ pub async fn announce(
         );
         let chain = state.chain.clone();
         let head_gossip = state.head_gossip.clone();
+        let peers = state.peers.clone();
+        let known_list = state.known_list.clone();
         tokio::spawn(async move {
-            crate::equivocation::confirm_and_record(&chain, &head_gossip, conflict).await;
+            crate::equivocation::confirm_and_record(
+                &chain,
+                &head_gossip,
+                &peers,
+                &known_list,
+                conflict,
+            )
+            .await;
         });
     }
 
@@ -1804,11 +1813,13 @@ fn retain_reachable_active_peers(
 /// shard's existence propagates over strictly more edges, over enough
 /// ticks, than this node's own bounded direct-connection count, which is
 /// the entire point (see this module's own doc comment).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_worker(
     chain: PostgresSettlementProvider,
     peers: PeerTable,
     shard_registry: ShardRegistry,
     head_gossip: HeadGossipTracker,
+    known_list: crate::known_list::KnownListHandle,
     own_shard_id: String,
     config: AnnounceConfig,
     dht_identity: Option<DhtIdentity>,
@@ -1999,10 +2010,14 @@ pub async fn run_worker(
                             );
                             let chain = chain.clone();
                             let head_gossip = head_gossip.clone();
+                            let peers = peers.clone();
+                            let known_list = known_list.clone();
                             tokio::spawn(async move {
                                 crate::equivocation::confirm_and_record(
                                     &chain,
                                     &head_gossip,
+                                    &peers,
+                                    &known_list,
                                     conflict,
                                 )
                                 .await;

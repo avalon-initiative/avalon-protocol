@@ -496,6 +496,34 @@ pub async fn discard_mirrored_entries_from(
     Ok(result.rows_affected())
 }
 
+/// What a stored evidence row proves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EquivocationEvidenceKind {
+    /// The author key signed two roots at one tree size; the witness list may be empty.
+    Author,
+    /// At least one witness cosigned both conflicting roots.
+    Witness,
+}
+
+impl EquivocationEvidenceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Author => "author",
+            Self::Witness => "witness",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, SettlementError> {
+        match value {
+            "author" => Ok(Self::Author),
+            "witness" => Ok(Self::Witness),
+            other => Err(SettlementError::Storage(format!(
+                "unknown equivocation evidence kind: {other}"
+            ))),
+        }
+    }
+}
+
 /// Durable, independently-verifiable proof that two different
 /// witness-majorities each cosigned a different tree head at the same
 /// `network_id`/`shard_id`/`tree_size` — the storage half of
@@ -508,6 +536,7 @@ pub async fn discard_mirrored_entries_from(
 /// either one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WitnessEquivocationEvidence {
+    pub kind: EquivocationEvidenceKind,
     pub network_id: String,
     pub shard_id: String,
     pub tree_size: i64,
@@ -613,8 +642,8 @@ pub async fn record_witness_equivocation_evidence(
             (network_id, shard_id, tree_size,
              root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
              root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
-             equivocating_witness_key_ids)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             equivocating_witness_key_ids, evidence_kind)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (network_id, shard_id, tree_size, root_hash_a, root_hash_b) DO NOTHING
         "#,
     )
@@ -632,6 +661,7 @@ pub async fn record_witness_equivocation_evidence(
     .bind(second.sth.created_at)
     .bind(cosignatures_to_json(&second.cosignatures))
     .bind(&evidence.equivocating_witness_key_ids)
+    .bind(evidence.kind.as_str())
     .execute(pool)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -651,7 +681,7 @@ pub async fn witness_equivocation_evidence_for(
         SELECT network_id, shard_id, tree_size,
                root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
                root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
-               equivocating_witness_key_ids, detected_at
+               equivocating_witness_key_ids, evidence_kind, detected_at
         FROM equivocation_evidence
         WHERE network_id = $1 AND shard_id = $2
         ORDER BY detected_at DESC
@@ -686,6 +716,9 @@ pub async fn witness_equivocation_evidence_for(
 
         let equivocating_witness_key_ids: Vec<String> =
             row.try_get("equivocating_witness_key_ids").map_err(get)?;
+        let kind = EquivocationEvidenceKind::parse(
+            &row.try_get::<String, _>("evidence_kind").map_err(get)?,
+        )?;
         let detected_at: OffsetDateTime = row.try_get("detected_at").map_err(get)?;
 
         let head_a = CosignedTreeHead {
@@ -724,6 +757,7 @@ pub async fn witness_equivocation_evidence_for(
         };
 
         out.push(WitnessEquivocationEvidence {
+            kind,
             network_id,
             shard_id,
             tree_size,

@@ -36,7 +36,7 @@ settings; only the timings change, never the rules.
 | `eclipse` | A victim is announced to by a flood of nodes that all share one /24 (every loopback node does). Asserts the list fills up to the per-prefix cap and never past it. | yes (4-node flood) |
 | `witness-loss` | A known-list member is frozen (`SIGSTOP`) without leaving anyone's peer list. Asserts it is dropped once past the freshness window and a newly joined node takes the slot. | no |
 | `long-offline` | A mirroring node is stopped, a write lands elsewhere, ten seconds pass (well past the sped-up windows), and it restarts on the same schema. Asserts it rejoins the peer table. | no |
-| `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork. A third node mirrors both. Asserts it logs and records `equivocation_detected`. | no |
+| `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork. A third node mirrors both and must log and record `equivocation_detected`. A fourth node mirrors nothing and only hears both heads over announce gossip; both authors are bare (no cosignatures), so it must confirm the fork from the two author signatures and store `author` evidence with no witness named (read back with the `witness_evidence` example). | no |
 | `rollout` | A single-key author writes history; two mirrors start with witness keys and cosign it. Asserts history is unchanged, the default head body is the same shape, an old single-key client verifies before, during and after, a witness-aware client accepts the head with both cosignatures and rejects it with one, the log keeps growing, and turning cosigning off on one node changes nothing else. See [`witness-policy-rollout.md`](./witness-policy-rollout.md). | no |
 
 The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
@@ -44,12 +44,10 @@ The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
 
 ## Not yet covered
 
-- `fork` exercises source-based equivocation detection in
-  `mirror_watcher::check_equivocation`, which does not need cosignatures. It
-  does not exercise gossip-driven confirmation
-  (`crate::equivocation::confirm_and_record`) or a cosigned-majority proof
-  across two disjoint witness groups. Cosigning now exists, so extending it is
-  the follow-up tracked in #966.
+- `fork` covers source-based detection and gossip-driven author-level
+  confirmation. It does not cover a cosigned-majority proof across two
+  disjoint witness groups (witness-level evidence from gossip), which is only
+  unit-tested.
 - Only `rollout` runs with real cosignatures (two cosigning mirrors of a
   single-key author). The other scenarios prove admission, loss, refill and
   diversity, and every drill node advertises its own witness key so the known

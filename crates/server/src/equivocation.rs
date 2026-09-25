@@ -23,7 +23,9 @@
 //! which path (gossip-driven confirmation here, or a mirror poll tick
 //! observing two disagreeing heads directly) caught it first.
 
-use avalon_chain::mirror::{record_witness_equivocation_evidence, WitnessEquivocationEvidence};
+use avalon_chain::mirror::{
+    record_witness_equivocation_evidence, EquivocationEvidenceKind, WitnessEquivocationEvidence,
+};
 use avalon_chain::PostgresSettlementProvider;
 use avalon_protocol::cosigned_sth::{find_equivocating_witnesses, CosignedTreeHead};
 use ed25519_dalek::VerifyingKey;
@@ -31,7 +33,8 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 
 use crate::cross_shard::{pinned_core_verify_key, resolve_shard_verify_keys_from_db};
-use crate::nodes::{HeadConflict, HeadGossipTracker};
+use crate::known_list::KnownListHandle;
+use crate::nodes::{HeadConflict, HeadGossipTracker, PeerTable};
 
 /// Same freshness window the design doc gives as the default
 /// (`docs/projects/backend-server/architecture/witness-cosigning.md`) — how
@@ -150,17 +153,42 @@ fn confirm_equivocation(
     })
 }
 
+/// The first of `candidate_author_keys` that signed both heads, when the
+/// heads are two different roots at the same network and tree size — direct
+/// proof the author signed two roots, independent of any cosignature.
+fn confirm_author_equivocation(
+    candidate_author_keys: &[VerifyingKey],
+    head_a: &CosignedTreeHead,
+    head_b: &CosignedTreeHead,
+) -> Option<VerifyingKey> {
+    if head_a.sth.network_id != head_b.sth.network_id
+        || head_a.sth.tree_size != head_b.sth.tree_size
+        || head_a.sth.root_hash == head_b.sth.root_hash
+    {
+        return None;
+    }
+    candidate_author_keys.iter().copied().find(|key| {
+        avalon_protocol::sth::verify_tree_head(key, &head_a.sth)
+            && avalon_protocol::sth::verify_tree_head(key, &head_b.sth)
+    })
+}
+
 /// Fetches, confirms, and (on success) durably records the equivocation
 /// `conflict` signals — spawned from `crate::nodes::announce` and
 /// `crate::nodes::run_worker` whenever [`crate::nodes::HeadGossipTracker::merge`]
 /// surfaces a new conflict. A no-op if this shard's equivocation is already
 /// on record, if either peer can't be reached, or if no resolvable author
-/// key confirms an actual majority-vs-majority conflict (a false-positive
-/// gossip signal — e.g. a peer that has since moved past the size in
-/// question — is not an error, just nothing to prove).
+/// key signed both heads (a false-positive gossip signal — e.g. a peer that
+/// has since moved past the size in question — is not an error, just
+/// nothing to prove). Cosignatures the two peers do not serve are gathered
+/// from confirmed known-list witnesses; a shared witness yields witness-level
+/// evidence, otherwise two valid author signatures over different roots yield
+/// author-level evidence with no witnesses named.
 pub async fn confirm_and_record(
     chain: &PostgresSettlementProvider,
     head_gossip: &HeadGossipTracker,
+    peers: &PeerTable,
+    known_list: &KnownListHandle,
     conflict: HeadConflict,
 ) {
     if head_gossip.is_equivocating(&conflict.shard_id) {
@@ -206,6 +234,9 @@ pub async fn confirm_and_record(
     }
 
     let network_id = chain.network_id();
+    if head_a.sth.network_id != network_id || head_b.sth.network_id != network_id {
+        return;
+    }
     let candidate_author_keys: Vec<VerifyingKey> =
         pinned_core_verify_key(network_id, &conflict.shard_id)
             .into_iter()
@@ -215,10 +246,36 @@ pub async fn confirm_and_record(
             )
             .collect();
 
+    let sources = crate::cosign_gather::witness_sources(
+        &crate::cosign_verify::known_list_verifying_keys(known_list),
+        &peers.list_all(),
+    );
+    let policy = crate::outbound_policy::OutboundPolicy::from_env();
+    let (extra_a, extra_b) = tokio::join!(
+        crate::cosign_gather::gather_witness_cosignatures(
+            policy,
+            &sources,
+            &head_a,
+            &conflict.shard_id
+        ),
+        crate::cosign_gather::gather_witness_cosignatures(
+            policy,
+            &sources,
+            &head_b,
+            &conflict.shard_id
+        ),
+    );
+    let head_a = crate::cosign_gather::merge_cosignatures(head_a, extra_a);
+    let head_b = crate::cosign_gather::merge_cosignatures(head_b, extra_b);
+
     let now = OffsetDateTime::now_utc();
-    let Some((_author_key, equivocators)) =
+    let (kind, equivocators) = if let Some((_key, equivocators)) =
         confirm_equivocation(&candidate_author_keys, &head_a, &head_b, now)
-    else {
+    {
+        (EquivocationEvidenceKind::Witness, equivocators)
+    } else if confirm_author_equivocation(&candidate_author_keys, &head_a, &head_b).is_some() {
+        (EquivocationEvidenceKind::Author, Vec::new())
+    } else {
         return;
     };
 
@@ -229,14 +286,16 @@ pub async fn confirm_and_record(
         tree_size = conflict.tree_size,
         root_hash_a = %head_a.sth.root_hash,
         root_hash_b = %head_b.sth.root_hash,
+        evidence_kind = ?kind,
         equivocating_witnesses = ?equivocators,
-        "confirmed a witness equivocation: this shard's log showed two different roots at the \
-         same tree_size to different witness groups — no longer trusting either head",
+        "confirmed an equivocation: this shard's log showed two different roots at the same \
+         tree_size — no longer trusting either head",
     );
 
     head_gossip.mark_equivocating(&conflict.shard_id);
 
     let evidence = WitnessEquivocationEvidence {
+        kind,
         network_id: network_id.to_string(),
         shard_id: conflict.shard_id.clone(),
         tree_size: conflict.tree_size,
@@ -402,6 +461,102 @@ mod tests {
         assert!(
             confirm_equivocation(&[author_key.verifying_key()], &head_a, &head_b, now).is_none()
         );
+    }
+
+    #[test]
+    fn author_level_confirmation_needs_no_cosignatures() {
+        let author_key = SigningKey::generate(&mut rand::rng());
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(10_000);
+        let head_a = head(
+            &author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            now,
+            &[],
+        );
+        let head_b = head(
+            &author_key,
+            5,
+            &root_hash_fixture(2),
+            "avalon-test",
+            now,
+            &[],
+        );
+
+        assert_eq!(
+            confirm_author_equivocation(&[author_key.verifying_key()], &head_a, &head_b),
+            Some(author_key.verifying_key())
+        );
+        // No witness-level proof exists for bare heads.
+        assert!(
+            confirm_equivocation(&[author_key.verifying_key()], &head_a, &head_b, now).is_none()
+        );
+    }
+
+    #[test]
+    fn author_level_confirmation_rejects_an_invalid_author_signature() {
+        let author_key = SigningKey::generate(&mut rand::rng());
+        let forger = SigningKey::generate(&mut rand::rng());
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(10_000);
+        let head_a = head(
+            &author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            now,
+            &[],
+        );
+        let forged = head(&forger, 5, &root_hash_fixture(2), "avalon-test", now, &[]);
+        let mut tampered = head(
+            &author_key,
+            5,
+            &root_hash_fixture(3),
+            "avalon-test",
+            now,
+            &[],
+        );
+        tampered.sth.root_hash = root_hash_fixture(4);
+
+        let keys = [author_key.verifying_key()];
+        assert!(confirm_author_equivocation(&keys, &head_a, &forged).is_none());
+        assert!(confirm_author_equivocation(&keys, &head_a, &tampered).is_none());
+    }
+
+    #[test]
+    fn author_level_confirmation_ignores_same_root_size_or_network_mismatch() {
+        let author_key = SigningKey::generate(&mut rand::rng());
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(10_000);
+        let keys = [author_key.verifying_key()];
+        let base = head(
+            &author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            now,
+            &[],
+        );
+        let same_root = head(
+            &author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            now,
+            &[],
+        );
+        let other_size = head(
+            &author_key,
+            6,
+            &root_hash_fixture(2),
+            "avalon-test",
+            now,
+            &[],
+        );
+        let other_net = head(&author_key, 5, &root_hash_fixture(2), "other-net", now, &[]);
+
+        assert!(confirm_author_equivocation(&keys, &base, &same_root).is_none());
+        assert!(confirm_author_equivocation(&keys, &base, &other_size).is_none());
+        assert!(confirm_author_equivocation(&keys, &base, &other_net).is_none());
     }
 
     #[test]

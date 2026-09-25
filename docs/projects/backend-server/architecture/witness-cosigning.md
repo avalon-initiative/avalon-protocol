@@ -98,6 +98,15 @@ shard's own author, which happens whenever the author also announces a witness k
 and holds a slot, could never reach a majority for that shard, since an author never
 cosigns its own log. The rule is part of the cosigned-head conformance vectors.
 
+**This holds for one known list only.** The intersection guarantee is about
+majorities of a single list. Two nodes with different lists (or two heads each
+cosigned by a majority of a different list) can produce two majority-cosigned
+heads with no shared witness, and then the pair proves nothing about any
+witness. What still proves misbehavior is the author's own signature: two
+heads at one `tree_size` with different roots, both signed by the same
+resolvable author key, show the author signed two roots, with no cosignature
+needed. See "Author-level evidence" below.
+
 ## The known list: anchors, diversity, refill
 
 Prototype: `crates/protocol/src/known_list.rs`, `KnownList`. Every node and
@@ -161,8 +170,9 @@ set for a summary it's seen fetches it directly (e.g.
 **Fork detection is a side effect of this gossip, not a separate mechanism.**
 Any node or client that ever observes two different cosigned heads at the
 same `tree_size` for the same network/shard has direct proof of an
-equivocation (by the majority-intersection guarantee above, this can only
-happen if a real witness double-signed). That's treated as a loud,
+equivocation of the author, and of a witness too when the two cosignature sets
+share one (the majority-intersection guarantee, valid within one known list).
+That's treated as a loud,
 logged, "stop and don't trust either head" event — never silently
 auto-resolved.
 
@@ -251,6 +261,28 @@ table and function #938 (landed the same day) uses for equivocations it
 finds directly during mirror sync, reconciled into one write path rather
 than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
+
+**Author-level evidence.** Confirmation does not require cosignatures. When a
+gossiped conflict is confirmed, each side is also topped up with cosignatures
+fetched from the confirmed known-list witnesses
+(`crate::cosign_gather::gather_witness_cosignatures`), so a bare author that serves
+none can still be shown to carry a majority. Then: if the two heads share a
+verifying witness, the row is stored as `witness` evidence naming it; otherwise,
+if both author signatures verify under an author key this node resolves (the
+pinned core key or the shard's registered `shard_settlement` keys) and the
+roots differ at the same network and `tree_size`, the row is stored as
+`author` evidence with an empty witness list. `equivocation_evidence` gained an
+`evidence_kind` column (migration `0079_equivocation_evidence_kind`; existing
+rows read as `witness`; a `witness` row must still name at least one witness).
+Either kind marks the shard equivocating, so `witness_cosign` refuses to cosign
+it. `crates/server/examples/witness_evidence.rs` reads the rows back.
+
+What remains unprovable: two majority-cosigned heads with different lists and no
+shared witness say nothing about any witness (only the author's double-signing
+is proven, and only when this node can resolve the author key); a node that
+cannot resolve the author key records nothing; a fork shown to one observer
+and never gossiped is not detected by anyone else; and evidence proves the
+author signed two roots, not which one is the honest history.
 
 #963 added the cosigning decision itself (`crates/server/src/witness_cosign.rs`),
 called from `mirror_watcher::record_verified_head` right after a head passes
