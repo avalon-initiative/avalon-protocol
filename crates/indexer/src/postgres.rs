@@ -21,12 +21,14 @@ use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::identity_chain_store::{self, Recorded};
 use crate::projections::{
     attestations, friendships, guild_rosters, identity_passkeys, identity_signing_keys,
     integrator_bindings, integrator_data_instances, integrator_recognitions,
     integrator_schema_mappings, integrator_schemas, profiles,
 };
 use crate::{IndexError, Indexer};
+use time::OffsetDateTime;
 
 /// Every table a `PostgresIndexer` owns — closing issue #43: this is the
 /// literal list `rebuild_from_scratch` truncates before replaying, and the
@@ -50,6 +52,8 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_integrator_schemas",
     "indexer_identity_passkeys",
     "indexer_identity_signing_keys",
+    "identity_chain_events",
+    "identity_chain_state",
 ];
 
 #[derive(Clone)]
@@ -148,6 +152,35 @@ impl PostgresIndexer {
 
         if claimed.is_none() {
             return Ok(());
+        }
+
+        // Chained events are recorded and resolved first; only `profile.updated`
+        // is projected through the resolved chain (see `apply_profile_chained`).
+        match identity_chain_store::record(tx, event, OffsetDateTime::now_utc()).await? {
+            Recorded::Unchained => {}
+            Recorded::Rejected(err) => {
+                eprintln!("indexer: dropping chained event {}: {err:?}", event.id);
+                return Ok(());
+            }
+            Recorded::Chained {
+                accepted,
+                displaced,
+                newly_accepted,
+                accepted_events,
+            } => {
+                if event.kind == "profile.updated" {
+                    apply_profile_chained(
+                        tx,
+                        event,
+                        accepted,
+                        &displaced,
+                        !newly_accepted.is_empty(),
+                        &accepted_events,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
         }
 
         match event.kind.as_str() {
@@ -272,6 +305,43 @@ impl PostgresIndexer {
 
         Ok(())
     }
+}
+
+/// Projects a chained `profile.updated`: a rejected or superseded event is
+/// skipped, and any change to which events are accepted (a winner displacing
+/// an applied loser, or an out-of-order gap filling) reverts the displaced
+/// events' fields and replays every accepted profile event in chain order, so
+/// the resulting row is a function of the accepted set alone.
+async fn apply_profile_chained(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    accepted: bool,
+    displaced: &[ProtocolEvent],
+    gap_filled: bool,
+    accepted_events: &[ProtocolEvent],
+) -> Result<(), IndexError> {
+    if displaced.is_empty() && !gap_filled {
+        if accepted {
+            if let Some(write) = profiles::decode(event) {
+                profiles::apply(tx, &write).await?;
+            }
+        }
+        return Ok(());
+    }
+    for old in displaced.iter().filter(|e| e.kind == "profile.updated") {
+        if let Some(write) = profiles::decode(old) {
+            profiles::apply(tx, &profiles::revert_of(&write)).await?;
+        }
+    }
+    for ev in accepted_events
+        .iter()
+        .filter(|e| e.kind == "profile.updated")
+    {
+        if let Some(write) = profiles::decode(ev) {
+            profiles::apply(tx, &write).await?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]

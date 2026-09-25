@@ -34,6 +34,7 @@ pub mod events;
 pub mod guilds;
 pub mod identity;
 pub mod identity_chain;
+pub mod identity_chain_wire;
 pub mod ids;
 pub mod integrator_schema_mappings;
 pub mod integrator_schemas;

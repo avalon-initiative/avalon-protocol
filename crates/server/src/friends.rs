@@ -181,7 +181,7 @@ pub async fn create_friend_request(
     }
     inserted?;
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::FriendRequested
             .as_str()
@@ -198,6 +198,7 @@ pub async fn create_friend_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -277,7 +278,7 @@ pub async fn accept_friend_request(
     let (a, b) = ordered_pair(request.from, request.to);
     let since = OffsetDateTime::now_utc();
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::FriendAccepted
             .as_str()
@@ -294,6 +295,7 @@ pub async fn accept_friend_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     // Issue #506: `friendships` is a projection now — the row is written
     // by the indexer applying `event`, not a bespoke `INSERT` here, same
     // pattern `handlers::register_finish` established for `profiles`.
@@ -366,7 +368,7 @@ pub async fn remove_friend(
 
     let mut tx = state.pool.begin().await?;
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::FriendRemoved.as_str().to_string(),
         issuer: identity_ref(actor, "friend_removed"),
@@ -377,6 +379,7 @@ pub async fn remove_friend(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 

@@ -258,6 +258,7 @@ pub async fn set_guardians(
     }
 
     let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     sqlx::query("DELETE FROM recovery_guardians WHERE identity_id = $1")
         .bind(identity_id)
@@ -287,7 +288,7 @@ pub async fn set_guardians(
     .execute(&mut *tx)
     .await?;
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryConfigured
             .as_str()
@@ -303,6 +304,7 @@ pub async fn set_guardians(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -735,7 +737,7 @@ pub async fn finish_request(
     }
     inserted?;
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryRequested
             .as_str()
@@ -751,6 +753,7 @@ pub async fn finish_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -919,7 +922,7 @@ pub async fn approve_request(
         .await?;
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryApproved
             .as_str()
@@ -938,6 +941,7 @@ pub async fn approve_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -1008,7 +1012,7 @@ pub async fn cancel_request(
         return Err(AppError::RecoveryAlreadyResolved);
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryCancelled
             .as_str()
@@ -1025,6 +1029,7 @@ pub async fn cancel_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -1116,7 +1121,7 @@ pub async fn finalize_request(
     .execute(&mut *tx)
     .await?;
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecovered
             .as_str()
@@ -1132,6 +1137,7 @@ pub async fn finalize_request(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;

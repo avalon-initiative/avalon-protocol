@@ -206,6 +206,27 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
     }
 }
 
+/// A write that clears every optional field `write` sets, leaving
+/// `display_name` alone. Applied for a displaced chain event before the
+/// accepted events are replayed.
+pub fn revert_of(write: &ProfileWrite) -> ProfileWrite {
+    ProfileWrite {
+        identity_id: write.identity_id,
+        display_name: None,
+        avatar_url: write.avatar_url.as_ref().map(|_| None),
+        bio: write.bio.as_ref().map(|_| None),
+        favorite_genres: write.favorite_genres.as_ref().map(|_| Vec::new()),
+        pronouns: write.pronouns.as_ref().map(|_| None),
+        banner_url: write.banner_url.as_ref().map(|_| None),
+        status: write.status.as_ref().map(|_| None),
+        links: write.links.as_ref().map(|_| Vec::new()),
+        timezone: write.timezone.as_ref().map(|_| None),
+        theme_color: write.theme_color.as_ref().map(|_| None),
+        location: write.location.as_ref().map(|_| None),
+        main_guild: write.main_guild.as_ref().map(|_| None),
+    }
+}
+
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &ProfileWrite,
