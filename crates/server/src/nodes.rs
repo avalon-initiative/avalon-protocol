@@ -105,13 +105,25 @@ pub struct PeerInfo {
 #[derive(Debug, PartialEq, Eq)]
 pub struct TableFull;
 
+/// Bound on the unverified pool, independent of `AVALON_NODE_MAX_KNOWN_PEERS`
+/// and not itself hoster-configurable: gossip relay alone must never be able
+/// to grow to main-table scale.
+const MAX_UNVERIFIED_PEERS: usize = 256;
+
 /// `Arc<RwLock<_>>` around a plain map, cheap to clone into [`AppState`] —
 /// same shape `crate::presence::PresenceStore` already establishes for
 /// in-process, non-durable state. Keyed by `base_url`: a peer is uniquely
 /// identified by where it's reachable, not by any self-reported id.
+///
+/// `unverified` holds entries relayed by gossip only — never contacted, never
+/// self-announced. An entry moves into `peers` only via a direct announce
+/// (`admit_new_announcer`) or a successful outbound contact by this node
+/// (`run_worker`'s announce, or `/nodes/probe`); gossip alone never writes
+/// into `peers`. Both maps share the same `last_announced_at` expiry rule.
 #[derive(Clone, Default)]
 pub struct PeerTable {
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
+    unverified: Arc<RwLock<HashMap<String, PeerInfo>>>,
     neighbors: crate::neighbors::NeighborTable,
 }
 
@@ -226,9 +238,72 @@ impl PeerTable {
             .retain(|_, info| info.last_announced_at >= cutoff);
     }
 
+    /// Inserts or refreshes `info` in the unverified pool, keyed by its own
+    /// `base_url`. A new entry into a full pool evicts the entry with the
+    /// oldest `last_announced_at` — unlike [`Self::insert_bounded`], nothing
+    /// here is protected, so this never refuses a newcomer.
+    pub fn insert_unverified(&self, info: PeerInfo) {
+        let mut pool = self
+            .unverified
+            .write()
+            .expect("unverified pool lock poisoned");
+        if !pool.contains_key(&info.base_url) && pool.len() >= MAX_UNVERIFIED_PEERS {
+            if let Some(victim) = pool
+                .values()
+                .min_by(|a, b| {
+                    a.last_announced_at
+                        .cmp(&b.last_announced_at)
+                        .then_with(|| a.base_url.cmp(&b.base_url))
+                })
+                .map(|p| p.base_url.clone())
+            {
+                pool.remove(&victim);
+            }
+        }
+        pool.insert(info.base_url.clone(), info);
+    }
+
+    /// Every entry currently in the unverified pool.
+    pub fn list_unverified(&self) -> Vec<PeerInfo> {
+        self.unverified
+            .read()
+            .expect("unverified pool lock poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Removes `base_url` from the unverified pool and returns it, if
+    /// present — the promotion step: the caller is expected to insert the
+    /// returned entry into the main table right after, having just confirmed
+    /// it via a direct announce or a successful outbound contact.
+    pub fn take_unverified(&self, base_url: &str) -> Option<PeerInfo> {
+        self.unverified
+            .write()
+            .expect("unverified pool lock poisoned")
+            .remove(base_url)
+    }
+
+    /// Same expiry rule as [`Self::prune_older_than`], applied to the
+    /// unverified pool: an entry that never gets promoted ages out.
+    pub fn prune_unverified_older_than(&self, cutoff: OffsetDateTime) {
+        self.unverified
+            .write()
+            .expect("unverified pool lock poisoned")
+            .retain(|_, info| info.last_announced_at >= cutoff);
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.peers.read().expect("peer table lock poisoned").len()
+    }
+
+    #[cfg(test)]
+    fn unverified_len(&self) -> usize {
+        self.unverified
+            .read()
+            .expect("unverified pool lock poisoned")
+            .len()
     }
 }
 
@@ -610,7 +685,7 @@ async fn admit_new_announcer(
             .await?;
     }
     let base_url = info.base_url.clone();
-    match state.peers.insert_bounded(info, adm.cfg.max_known_peers) {
+    match admit_promoted(&state.peers, info, adm.cfg.max_known_peers) {
         Ok(Some(evicted)) => {
             tracing::info!(
                 event = "peer_evicted_for_capacity",
@@ -632,6 +707,58 @@ async fn admit_new_announcer(
     }
 }
 
+/// Inserts `info` into the main table and, on success, clears the same base
+/// URL from the unverified pool — a peer that announces itself directly is
+/// confirmed, whether or not gossip had already relayed it into the pool.
+fn admit_promoted(
+    peers: &PeerTable,
+    info: PeerInfo,
+    max: usize,
+) -> Result<Option<String>, TableFull> {
+    let base_url = info.base_url.clone();
+    let result = peers.insert_bounded(info, max);
+    if result.is_ok() {
+        peers.take_unverified(&base_url);
+    }
+    result
+}
+
+/// Promotes `contacted` from the unverified pool into the main table after a
+/// successful outbound contact — the pool holds only entries this node has
+/// never confirmed itself, so a successful request to one is exactly that
+/// confirmation. A no-op when `contacted` isn't (or is no longer) in the
+/// pool, including when it was already promoted.
+pub(crate) fn promote_on_contact(peers: &PeerTable, adm: &PeerAdmission, contacted: &str) {
+    let Some(info) = peers.take_unverified(contacted) else {
+        return;
+    };
+    match peers.insert_bounded(info, adm.cfg.max_known_peers) {
+        Ok(evicted) => {
+            if let Some(evicted) = evicted {
+                tracing::info!(
+                    event = "peer_evicted_for_capacity",
+                    evicted = %evicted,
+                    admitted = %contacted,
+                    "peer table full: evicted the oldest inactive entry",
+                );
+            }
+            tracing::info!(
+                event = "peer_promoted_from_unverified_pool",
+                peer = %contacted,
+                "promoted a gossip-learned peer into the peer table after a successful \
+                 outbound contact",
+            );
+        }
+        Err(TableFull) => {
+            tracing::warn!(
+                event = "peer_table_full",
+                peer = %contacted,
+                "peer table full; could not promote a contacted gossip-learned peer",
+            );
+        }
+    }
+}
+
 /// Counts of gossip entries skipped by [`merge_gossip`].
 #[derive(Debug, Default, PartialEq, Eq)]
 struct GossipSkipped {
@@ -639,10 +766,13 @@ struct GossipSkipped {
     over_limit: usize,
 }
 
-/// Merges the peers a neighbor returned into the table. Known entries are
-/// refreshed; unknown ones are shape- and address-checked (no reachability
-/// contact) and at most `max_new_per_exchange` are accepted. Returns the
-/// entries now in the table plus the skip counts.
+/// Merges the peers a neighbor returned. Entries already in the main table
+/// are refreshed there; unknown ones are shape- and address-checked (no
+/// reachability contact) and, at most `max_new_per_exchange` of them, land in
+/// the unverified pool, never the main table — gossip alone never admits a
+/// peer this node hasn't confirmed itself. Returns the entries admitted
+/// (refreshed in the table, or newly placed in the pool) plus the skip
+/// counts.
 async fn merge_gossip(
     peers: &PeerTable,
     adm: &PeerAdmission,
@@ -684,13 +814,7 @@ async fn merge_gossip(
             skipped.rejected += 1;
             continue;
         }
-        if peers
-            .insert_bounded(info.clone(), adm.cfg.max_known_peers)
-            .is_err()
-        {
-            skipped.rejected += 1;
-            continue;
-        }
+        peers.insert_unverified(info.clone());
         accepted += 1;
         admitted.push(info);
     }
@@ -1298,6 +1422,7 @@ pub async fn run_worker(
                     Ok((discovered, rtt)) => {
                         neighbors.observe_coordinate(peer, &discovered.coordinate, rtt);
                         let adm = admission();
+                        promote_on_contact(&peers, adm, peer);
                         let (admitted, skipped) =
                             merge_gossip(&peers, adm, &network_id, discovered.peers).await;
                         if skipped != GossipSkipped::default() {
@@ -1354,10 +1479,18 @@ pub async fn run_worker(
 
         let cutoff = OffsetDateTime::now_utc() - config.interval * PRUNE_INTERVAL_MULTIPLE;
         peers.prune_older_than(cutoff);
+        peers.prune_unverified_older_than(cutoff);
         shard_registry.prune_older_than(cutoff);
 
-        let known_base_urls: HashSet<String> =
-            peers.list_all().into_iter().map(|p| p.base_url).collect();
+        // Includes the unverified pool: a peer only just gossiped in has to
+        // survive at least one more announce cycle to get the outbound
+        // contact that would promote it, or it would never get the chance.
+        let known_base_urls: HashSet<String> = peers
+            .list_all()
+            .into_iter()
+            .chain(peers.list_unverified())
+            .map(|p| p.base_url)
+            .collect();
         retain_reachable_active_peers(&mut active_peers, &config.peers, &known_base_urls);
         neighbors.set_active(&active_peers, &config.peers);
 
@@ -2231,7 +2364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gossip_accepts_at_most_the_per_exchange_cap_of_new_entries() {
+    async fn gossip_accepts_at_most_the_per_exchange_cap_of_new_entries_into_the_unverified_pool() {
         let table = PeerTable::new();
         let adm = admission_for_tests(true, |c| c.max_new_per_exchange = 3);
         let now = OffsetDateTime::now_utc();
@@ -2241,7 +2374,10 @@ mod tests {
             incoming.push(supported(&format!("http://127.0.0.1:{}", 9100 + i), now));
         }
         let (admitted, skipped) = merge_gossip(&table, &adm, "avalon-dev-local", incoming).await;
-        assert_eq!(table.len(), 4);
+        // The one already-known entry is refreshed in the main table; the
+        // three newly admitted ones land only in the unverified pool.
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.unverified_len(), 3);
         assert_eq!(admitted.len(), 4);
         assert_eq!(skipped.over_limit, 7);
     }
@@ -2267,11 +2403,19 @@ mod tests {
         assert_eq!(skipped.rejected, 7);
         assert_eq!(admitted.len(), 1);
         assert_eq!(admitted[0].base_url, "http://8.8.4.4:8080");
-        assert_eq!(table.len(), 1);
+        assert_eq!(
+            table.len(),
+            0,
+            "gossip alone must never place an entry into the main table"
+        );
+        assert_eq!(table.unverified_len(), 1);
     }
 
+    /// A hostile neighbor relaying fabricated entries
+    /// can never touch the main table at all, so it can never evict a real
+    /// bootstrap/active peer, however full the unverified pool gets.
     #[tokio::test]
-    async fn gossip_into_a_full_table_evicts_inactive_entries_only() {
+    async fn gossip_never_evicts_from_the_main_table_even_when_it_would_have_been_admitted() {
         let table = PeerTable::new();
         let adm = admission_for_tests(true, |c| c.max_known_peers = 2);
         let now = OffsetDateTime::now_utc();
@@ -2293,8 +2437,13 @@ mod tests {
             vec![supported("http://127.0.0.1:3", now)],
         )
         .await;
-        assert!(!table.contains("http://127.0.0.1:1"));
-        assert!(table.contains("http://127.0.0.1:2") && table.contains("http://127.0.0.1:3"));
+        assert!(
+            table.contains("http://127.0.0.1:1"),
+            "gossip must not evict a main-table entry"
+        );
+        assert!(table.contains("http://127.0.0.1:2"));
+        assert!(!table.contains("http://127.0.0.1:3"));
+        assert!(table.unverified_len() == 1 && !table.list_unverified().is_empty());
     }
 
     #[tokio::test]
@@ -2309,8 +2458,116 @@ mod tests {
             vec![supported("http://127.0.0.1:9", future)],
         )
         .await;
-        let stored = table.list_all().pop().unwrap();
+        let stored = table.list_unverified().pop().unwrap();
         assert!(stored.last_announced_at < OffsetDateTime::now_utc() + time::Duration::minutes(1));
+    }
+
+    // --- unverified gossip pool ------------------------------------
+
+    #[tokio::test]
+    async fn a_direct_announce_promotes_a_gossip_learned_entry_and_clears_the_pool() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let now = OffsetDateTime::now_utc();
+        // First heard about only via gossip relay — sits in the pool, not
+        // the main table.
+        merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![supported("http://127.0.0.1:9500", now)],
+        )
+        .await;
+        assert!(!table.contains("http://127.0.0.1:9500"));
+        assert!(table
+            .list_unverified()
+            .iter()
+            .any(|p| p.base_url == "http://127.0.0.1:9500"));
+
+        // The same entry now announces itself directly — the path
+        // `admit_new_announcer` takes for a brand-new base URL.
+        let result = admit_promoted(&table, supported("http://127.0.0.1:9500", now), 50);
+        assert_eq!(result, Ok(None));
+        assert!(table.contains("http://127.0.0.1:9500"));
+        assert!(
+            !table
+                .list_unverified()
+                .iter()
+                .any(|p| p.base_url == "http://127.0.0.1:9500"),
+            "a promoted entry must not linger in the unverified pool"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_successful_outbound_contact_promotes_a_gossip_learned_entry() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let now = OffsetDateTime::now_utc();
+        merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![supported("http://127.0.0.1:9600", now)],
+        )
+        .await;
+        assert!(!table.contains("http://127.0.0.1:9600"));
+
+        promote_on_contact(&table, &adm, "http://127.0.0.1:9600");
+        assert!(table.contains("http://127.0.0.1:9600"));
+        assert!(!table
+            .list_unverified()
+            .iter()
+            .any(|p| p.base_url == "http://127.0.0.1:9600"));
+
+        // A second contact of an already-promoted (or never-unverified) URL
+        // is a harmless no-op.
+        promote_on_contact(&table, &adm, "http://127.0.0.1:9600");
+        assert!(table.contains("http://127.0.0.1:9600"));
+        promote_on_contact(&table, &adm, "http://127.0.0.1:9601");
+        assert!(!table.contains("http://127.0.0.1:9601"));
+    }
+
+    #[tokio::test]
+    async fn an_unpromoted_pool_entry_expires_on_the_same_rule_as_the_main_table() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let now = OffsetDateTime::now_utc();
+        merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![supported(
+                "http://127.0.0.1:9700",
+                now - time::Duration::minutes(10),
+            )],
+        )
+        .await;
+        assert_eq!(table.unverified_len(), 1);
+
+        table.prune_unverified_older_than(now - time::Duration::minutes(5));
+        assert_eq!(table.unverified_len(), 0);
+        assert!(!table.contains("http://127.0.0.1:9700"));
+    }
+
+    #[test]
+    fn the_unverified_pool_is_bounded_independently_of_the_main_table() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        for i in 0..(MAX_UNVERIFIED_PEERS + 5) {
+            table.insert_unverified(supported(
+                &format!("http://127.0.0.1:{}", 20000 + i),
+                now - time::Duration::seconds(((MAX_UNVERIFIED_PEERS + 5 - i) * 10) as i64),
+            ));
+        }
+        assert_eq!(table.unverified_len(), MAX_UNVERIFIED_PEERS);
+        // The oldest entries were evicted to make room for the newest.
+        assert!(table.list_unverified().iter().any(
+            |p| p.base_url == format!("http://127.0.0.1:{}", 20000 + MAX_UNVERIFIED_PEERS + 4)
+        ));
+        assert!(!table
+            .list_unverified()
+            .iter()
+            .any(|p| p.base_url == "http://127.0.0.1:20000"));
     }
 
     #[tokio::test]

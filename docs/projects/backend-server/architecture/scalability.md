@@ -152,7 +152,7 @@ the release profile is reported separately for the throughput scenarios.
 | Announce flood, one source, 50 distinct fabricated URLs | 10 new URLs per source per minute | exactly 10 admitted, 40 `429` `rate_limited` with `Retry-After`; refreshing a known URL and a second source address were still accepted | limit holds |
 | Announce flood, fabricated URLs, cap | peer table cap 50, source limit off | 200 of 200 announces answered `200` (about 5,000/s on the debug build); table size 50; oldest entries evicted, newest present | cap holds |
 | Announce of forbidden addresses | private peers not allowed | private, loopback and metadata addresses `403 base_url_not_allowed`; userinfo and non-http schemes `400 invalid_base_url`; a 300-character host `400 base_url_too_long`; table stays empty | validation holds |
-| Three-node mesh, one node flooded with 300 fabricated URLs | cap 60 on each node | flooded node 60 entries (58 fabricated, both real peers kept); the other two 42 each (40 fabricated) after 8 s; every node kept serving | bounded, but see the gossip note below |
+| Three-node mesh, one node flooded with 300 fabricated URLs | cap 60 on each node | flooded node 60 entries (58 fabricated, both real peers kept); the other two 42 each (40 fabricated) after 8 s; every node kept serving | bounded; numbers predate the unverified-pool fix below — a re-run would show the two non-flooded nodes' main tables unaffected, since gossip no longer reaches them |
 | Concurrency cap 4, 64 workers on `GET /me` | `AVALON_MAX_CONCURRENT_REQUESTS=4` | 68,800 to 69,300 requests in 20 s, all `200`: no drops, no `5xx`, no `429`; a well-behaved client's p50 rose from 7.2-8.3 ms (idle, 20 ms apart) to 18.4-18.6 ms (2.2x to 2.6x) and p99 stayed near 20 ms | backpressure, not drops |
 | DB pool 10, 96 workers, mixed 50% writes / 30% history / 20% search | `AVALON_MAX_DB_CONNECTIONS=10` | 3,170 to 3,540 requests/s, all `200`; pool 10 of 10 in use mid-load and 0 after; p50 26-28 ms, p99 38-49 ms | queues on the pool without errors |
 | DB pool 2, reads only | pool 2 | 1,650 to 1,665 requests/s, all `200`; p50 49 ms, p99 75-77 ms | queues without errors |
@@ -225,10 +225,18 @@ defaults do today. Run with default node settings.
   in every test. The stall points at a write path needing two connections at
   once, or at the outbox drain competing with writers for a pool that small;
   the cause is not isolated.
-- Announce gossip carries fabricated entries to neighbors: in the mesh test,
-  neighbors of the flooded node took up 40 fabricated entries within 8
-  seconds (20 per exchange, the per-exchange cap), bounded by each node's own
-  cap but not prevented. Bootstrap and active peers were never displaced.
+- ~~Announce gossip carries fabricated entries to neighbors~~ — fixed: a
+  gossip-relayed entry no longer lands in a neighbor's main peer table at
+  all. It goes into a separate, smaller unverified pool (fixed at 256
+  entries, independent of the table's own cap) and is promoted into the main
+  table only if it announces itself directly or this node successfully
+  contacts it; an entry that never gets promoted ages out of the pool on the
+  same expiry rule as the table. In the original mesh test a hostile node's
+  40 fabricated entries per neighbor within 8 seconds occupied real table
+  slots (bounded, never displacing bootstrap/active peers, but still
+  occupying slots until they expired); the same flood now never touches the
+  neighbors' main tables, only their unverified pools. See "Peer table
+  bounds" in `nodes.md`.
 - The request-processing limits are per process. Loopback runs cannot show
   behavior behind a real proxy chain, real network latency, TLS, or a
   multi-host mesh larger than three nodes.

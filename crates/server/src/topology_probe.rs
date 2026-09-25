@@ -1,11 +1,13 @@
 //! `POST /nodes/probe`: this node measures the round trip to a peer it already
 //! knows and reports timings only.
 //!
-//! The target must be in this node's peer table on this node's network, and
-//! every address it resolves to must pass [`crate::outbound_policy`]. The
-//! endpoint sends at most [`MAX_SAMPLES`] sequential `GET /nodes/status`
-//! requests, follows no redirects, and never returns anything the target
-//! sent back. Timings are this node's own observations.
+//! The target must be in this node's peer table or its unverified gossip
+//! pool, on this node's network, and every address it resolves to must pass
+//! [`crate::outbound_policy`]. The endpoint sends at most [`MAX_SAMPLES`]
+//! sequential `GET /nodes/status` requests, follows no redirects, and never
+//! returns anything the target sent back. Timings are this node's own
+//! observations. A successful probe of an unverified-pool target promotes it
+//! into the peer table — see `crate::nodes::promote_on_contact`.
 
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -175,6 +177,7 @@ pub async fn probe(
         .peers
         .list_all()
         .into_iter()
+        .chain(state.peers.list_unverified())
         .find(|p| canonical_base_url(&p.base_url) == wanted)
         .ok_or_else(|| {
             TopologyError::new(
@@ -196,7 +199,15 @@ pub async fn probe(
         .check_base_url(&known.base_url)
         .await
         .map_err(policy_error)?;
-    Ok(Json(measure(&checked, samples, SAMPLE_TIMEOUT).await))
+    let result = measure(&checked, samples, SAMPLE_TIMEOUT).await;
+    if result.ok {
+        crate::nodes::promote_on_contact(
+            &state.peers,
+            crate::peer_admission::admission(),
+            &known.base_url,
+        );
+    }
+    Ok(Json(result))
 }
 
 #[cfg(test)]

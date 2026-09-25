@@ -1143,13 +1143,31 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
   `AVALON_ANNOUNCE_NEW_PEERS_PER_SOURCE_PER_MINUTE` (default 10) distinct new
   base URLs per minute, counted before any resolution or fetch, on top of the
   node-wide per-IP limit. Refreshing a known entry does not count.
-- **Gossip exchange cap.** At most `AVALON_GOSSIP_MAX_NEW_PEERS_PER_EXCHANGE`
-  (default 20) new entries are accepted from one announce response; the rest
-  are skipped and counted in a `gossip_peers_skipped` log event, as are entries
-  that fail validation. Gossip entries are never contacted for admission; they
-  are checked syntactically and by address only. Gossiped `last_announced_at`
+- **Gossip never writes into the main table directly.** An entry a peer
+  relayed (as opposed to one that announced itself, or one this node
+  contacted itself) is shape- and address-checked exactly as before, but
+  lands in a separate, smaller unverified pool (`PeerTable::unverified`,
+  fixed at 256 entries, not hoster-configurable) — at most
+  `AVALON_GOSSIP_MAX_NEW_PEERS_PER_EXCHANGE` (default 20) of them per
+  announce response, the rest skipped and counted in a
+  `gossip_peers_skipped` log event, as are entries that fail validation.
+  Gossip entries are never contacted for admission at this stage; they are
+  checked syntactically and by address only. Gossiped `last_announced_at`
   values in the future are clamped to now so a peer cannot pin an entry
-  against eviction and pruning.
+  against eviction and pruning. An entry already in the main table is
+  refreshed there directly, as before — this only changes where a
+  previously-unseen base URL first lands.
+- **Promotion out of the unverified pool.** An entry moves from the pool into
+  the main table only when it announces itself directly to this node
+  (`POST /nodes/announce`, same admission path as any first-time announcer),
+  or when this node successfully contacts it itself — a `run_worker`
+  announce to an active peer that started out gossip-learned, or a
+  successful `POST /nodes/probe`. Gossip relay alone can never place or keep
+  an entry in the main table, so a hostile neighbor relaying fabricated
+  entries can occupy the unverified pool but can never evict a real peer
+  from the main table. An entry that never gets promoted ages out of the
+  pool on the same `last_announced_at` expiry rule as the main table, pruned
+  on the same cycle.
 - **Reachability.** Before a brand-new entry from `POST /nodes/announce` is
   admitted, this node fetches its `/nodes/status` through the pinned outbound
   client (3 second timeout, body capped at 256 KiB) and requires the same
