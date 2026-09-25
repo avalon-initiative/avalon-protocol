@@ -77,6 +77,7 @@ pub mod replication;
 pub mod resources;
 pub mod retention;
 pub mod rollback;
+pub mod serve;
 pub mod settlement;
 pub mod signature_gate;
 pub mod state;
@@ -89,7 +90,8 @@ pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
 
-use axum::http::{HeaderValue, Method};
+use axum::extract::DefaultBodyLimit;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use state::AppState;
@@ -97,6 +99,7 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 /// The Hub (and any other browser client) is a different origin than
@@ -156,6 +159,58 @@ pub(crate) fn rate_limit_per_minute_from_env() -> u64 {
         .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE)
 }
 
+/// Matches hyper's own default once a timer is configured.
+const DEFAULT_HEADER_READ_TIMEOUT_SECS: u64 = 30;
+/// Bounds request body read plus handler processing; WebSocket upgrades
+/// return immediately and are unaffected.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Node-coordination routes carry small, shape-fixed JSON, never arbitrary
+/// user content.
+const DEFAULT_NODE_COORDINATION_MAX_BODY_BYTES: usize = 256 * 1024;
+
+/// `pub`, not `pub(crate)`: `crate::serve` is called from `main.rs`, a
+/// separate crate, to configure hyper's connection builder directly.
+pub fn header_read_timeout_from_env() -> std::time::Duration {
+    let secs = std::env::var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_HEADER_READ_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+pub(crate) fn request_timeout_from_env() -> std::time::Duration {
+    let secs = std::env::var("AVALON_HTTP_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+pub(crate) fn max_body_bytes_from_env() -> usize {
+    std::env::var("AVALON_HTTP_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
+}
+
+pub(crate) fn node_coordination_max_body_bytes_from_env() -> usize {
+    std::env::var("AVALON_NODE_COORDINATION_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_NODE_COORDINATION_MAX_BODY_BYTES)
+}
+
+/// Route-level override for node-coordination routes — see
+/// `crate::topology_access` for the `/nodes/probe`/`/nodes/trace` uses.
+pub(crate) fn node_coordination_body_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(node_coordination_max_body_bytes_from_env())
+}
+
 /// `redis_limiter` is `Some` only when `AVALON_REDIS_URL` is configured —
 /// built by the caller (`main.rs`), since connecting to
 /// Redis is async and this function isn't. `None` (the default) keeps
@@ -208,6 +263,20 @@ fn apply_common_layers(
     router: Router,
     redis_limiter: Option<redis_limits::RedisLimiterState>,
 ) -> Router {
+    // Explicit default request-body limit (`crate::max_body_bytes_from_env`)
+    // in place of axum's implicit 2 MiB — routes that need a smaller ceiling
+    // (`crate::node_coordination_max_body_bytes_from_env`) override it with
+    // their own `DefaultBodyLimit::max(...)` layer at the route level.
+    let router = router.layer(DefaultBodyLimit::max(max_body_bytes_from_env()));
+
+    // Bounds request-body read plus handler processing; a WebSocket upgrade
+    // handler returns almost immediately (the socket itself moves to a
+    // spawned task), so live `/ws/*` connections are unaffected.
+    let router = router.layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        request_timeout_from_env(),
+    ));
+
     let max_concurrent_requests = max_concurrent_requests_from_env();
     let rate_limit_per_minute = rate_limit_per_minute_from_env();
     let governor_config = GovernorConfigBuilder::default()
@@ -291,17 +360,25 @@ fn settlement_only_routes(state: AppState) -> Router {
         .route("/ledger/mirror-progress", get(settlement::mirror_progress))
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above.
-        .route("/nodes/announce", post(nodes::announce))
+        .route(
+            "/nodes/announce",
+            post(nodes::announce).layer(node_coordination_body_limit()),
+        )
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
         .route("/nodes/discover", get(nodes::discover))
         // Issue #658: hoster-only runtime log-level control.
         .route(
             "/nodes/log-level",
-            get(admin::get_log_level).post(admin::set_log_level),
+            get(admin::get_log_level)
+                .post(admin::set_log_level)
+                .layer(node_coordination_body_limit()),
         )
         // Issue #596: push-based mirror-sync notification.
-        .route("/mirror/notify", post(mirror_push::notify))
+        .route(
+            "/mirror/notify",
+            post(mirror_push::notify).layer(node_coordination_body_limit()),
+        )
         .merge(topology_access::mount(Router::new()))
         .with_state(state)
 }
@@ -786,7 +863,10 @@ fn full_routes(state: AppState) -> Router {
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above, since a peer table isn't
         // sensitive the way ledger-write endpoints are.
-        .route("/nodes/announce", post(nodes::announce))
+        .route(
+            "/nodes/announce",
+            post(nodes::announce).layer(node_coordination_body_limit()),
+        )
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
         .route("/nodes/discover", get(nodes::discover))
@@ -796,7 +876,9 @@ fn full_routes(state: AppState) -> Router {
         // other `/nodes/*` route above takes.
         .route(
             "/nodes/log-level",
-            get(admin::get_log_level).post(admin::set_log_level),
+            get(admin::get_log_level)
+                .post(admin::set_log_level)
+                .layer(node_coordination_body_limit()),
         )
         // Issue #539: one-hop live realtime event relay across nodes,
         // built on the peer table above — see `crate::realtime_relay`.
@@ -805,7 +887,10 @@ fn full_routes(state: AppState) -> Router {
         // `crate::mirror_push`. No auth, same public posture as the
         // `/ledger/*` block above: the body is never trusted for anything
         // beyond waking this node's own mirror-watcher loop early.
-        .route("/mirror/notify", post(mirror_push::notify))
+        .route(
+            "/mirror/notify",
+            post(mirror_push::notify).layer(node_coordination_body_limit()),
+        )
         // Issue #540: async at-rest chat/conversation replication — see
         // `crate::chat_replication`.
         .route(
@@ -829,4 +914,80 @@ fn full_routes(state: AppState) -> Router {
         )
         .merge(topology_access::mount(Router::new()))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod http_config_tests {
+    use super::*;
+
+    #[test]
+    fn timeout_and_body_limit_env_vars_default_when_unset() {
+        let _env = test_env::guard();
+        unsafe {
+            std::env::remove_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS");
+            std::env::remove_var("AVALON_HTTP_REQUEST_TIMEOUT_SECS");
+            std::env::remove_var("AVALON_HTTP_MAX_BODY_BYTES");
+            std::env::remove_var("AVALON_NODE_COORDINATION_MAX_BODY_BYTES");
+        }
+        assert_eq!(
+            header_read_timeout_from_env(),
+            std::time::Duration::from_secs(DEFAULT_HEADER_READ_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            request_timeout_from_env(),
+            std::time::Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)
+        );
+        assert_eq!(max_body_bytes_from_env(), DEFAULT_MAX_BODY_BYTES);
+        assert_eq!(
+            node_coordination_max_body_bytes_from_env(),
+            DEFAULT_NODE_COORDINATION_MAX_BODY_BYTES
+        );
+    }
+
+    #[test]
+    fn timeout_and_body_limit_env_vars_are_honored_when_set() {
+        let _env = test_env::guard();
+        unsafe {
+            std::env::set_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS", "5");
+            std::env::set_var("AVALON_HTTP_REQUEST_TIMEOUT_SECS", "7");
+            std::env::set_var("AVALON_HTTP_MAX_BODY_BYTES", "4096");
+            std::env::set_var("AVALON_NODE_COORDINATION_MAX_BODY_BYTES", "1024");
+        }
+        assert_eq!(
+            header_read_timeout_from_env(),
+            std::time::Duration::from_secs(5)
+        );
+        assert_eq!(
+            request_timeout_from_env(),
+            std::time::Duration::from_secs(7)
+        );
+        assert_eq!(max_body_bytes_from_env(), 4096);
+        assert_eq!(node_coordination_max_body_bytes_from_env(), 1024);
+        unsafe {
+            std::env::remove_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS");
+            std::env::remove_var("AVALON_HTTP_REQUEST_TIMEOUT_SECS");
+            std::env::remove_var("AVALON_HTTP_MAX_BODY_BYTES");
+            std::env::remove_var("AVALON_NODE_COORDINATION_MAX_BODY_BYTES");
+        }
+    }
+
+    #[test]
+    fn zero_and_unparseable_values_fall_back_to_the_default() {
+        let _env = test_env::guard();
+        for value in ["0", "not-a-number", ""] {
+            unsafe {
+                std::env::set_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS", value);
+                std::env::set_var("AVALON_HTTP_MAX_BODY_BYTES", value);
+            }
+            assert_eq!(
+                header_read_timeout_from_env(),
+                std::time::Duration::from_secs(DEFAULT_HEADER_READ_TIMEOUT_SECS)
+            );
+            assert_eq!(max_body_bytes_from_env(), DEFAULT_MAX_BODY_BYTES);
+        }
+        unsafe {
+            std::env::remove_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS");
+            std::env::remove_var("AVALON_HTTP_MAX_BODY_BYTES");
+        }
+    }
 }

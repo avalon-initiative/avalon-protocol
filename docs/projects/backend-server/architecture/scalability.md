@@ -192,33 +192,40 @@ limit as the node itself.
 
 ### Slow connections and oversized requests
 
-These have no configured limit; the numbers describe what the framework
-defaults do today. Run with default node settings.
-
 - **Slow connections.** 150 connections each of three kinds were held for 75
   seconds: idle (nothing sent), slow headers (a request line and one header
   byte per second, never terminated), and slow body (complete headers with a
-  declared 100,000-byte body, one byte per second). The server closed none of
-  them in any of three runs and returned no response to any. Well-behaved
-  requests made during that time were all served with a p50 of 2.4-2.5 ms. The
-  node has no header-read timeout, no body-read timeout and no idle-connection
-  timeout; the only bound on held connections is the process's file
-  descriptor limit.
-- **Body size.** Requests are cut off at axum's default JSON body limit of 2
-  MiB: a 2,047 KiB body reached the handler, a 2,049 KiB body got `413`, and 8
-  MiB and 64 MiB bodies got `413` (public `POST /nodes/announce` and
-  authenticated `PATCH /me` alike). Server RSS stayed at 58-60 MB across all
-  of it. No explicit body-size layer exists; this is the framework default,
-  and it applies to every JSON route.
+  declared 100,000-byte body, one byte per second). Against default node
+  settings, the server closed none of them in any of three runs and returned
+  no response to any — the only bound on held connections was the process's
+  file descriptor limit. `AVALON_HTTP_HEADER_READ_TIMEOUT_SECS` (default 30)
+  now closes the idle and slow-header cases: it's hyper's own HTTP/1
+  `header_read_timeout`, which also re-arms between keep-alive requests, so
+  it covers "never sends a byte" and "already served a request, now sitting
+  idle" the same way. `AVALON_HTTP_REQUEST_TIMEOUT_SECS` (default 30) closes
+  the slow-body case with a `408`, bounding request-body read plus handler
+  processing; a WebSocket upgrade handler returns almost immediately (the
+  socket moves to a spawned task), so live `/ws/*` connections are
+  unaffected by either timeout. Well-behaved requests made while slow
+  connections are held open were served with a p50 of 2.4-2.5 ms and are
+  unaffected by the new timeouts.
+- **Body size.** Requests were cut off at axum's implicit default JSON body
+  limit of 2 MiB: a 2,047 KiB body reached the handler, a 2,049 KiB body got
+  `413`, and 8 MiB and 64 MiB bodies got `413` (public `POST /nodes/announce`
+  and authenticated `PATCH /me` alike). That 2 MiB ceiling is now explicit
+  and configurable (`AVALON_HTTP_MAX_BODY_BYTES`), and node-coordination
+  routes (`/nodes/announce`, `/nodes/probe`, `/nodes/trace`,
+  `/mirror/notify`, `/nodes/log-level`) — small, shape-fixed JSON, never
+  arbitrary user content — get their own explicit, much smaller default of
+  256 KiB (`AVALON_NODE_COORDINATION_MAX_BODY_BYTES`) instead of sharing the
+  2 MiB general ceiling. Server RSS stayed at 58-60 MB across all of it.
 - **Header size.** A single header value of 64 KiB was accepted (`200`) and 1
   MiB got `431`. A 16 KiB request target was accepted, 64 KiB got `414` and 1
-  MiB got `431`. 400 headers got `431`. These are hyper's defaults.
+  MiB got `431`. 400 headers got `431`. These are hyper's defaults and stay
+  unconfigured — they were not the finding either #894 or #896 acted on.
 
 ### Known gaps
 
-- No header-read, body-read or idle timeout (measured above): a client can
-  hold connections open indefinitely at almost no cost to itself. The per-address
-  request limit does not apply, since no request ever completes.
 - `AVALON_MAX_DB_CONNECTIONS=2` stalls the whole node under concurrent
   writes: all in-flight requests wait for the 30 s pool acquire timeout and
   fail with `500`, then the node recovers. Three connections and above worked
@@ -256,9 +263,11 @@ defaults do today. Run with default node settings.
   `AVALON_TRUSTED_PROXIES` so clients are distinguished, otherwise every client
   shares the proxy's bucket. `AVALON_PRINCIPAL_RATE_LIMIT_PER_MINUTE` bounds a
   single identity independently.
-- Put a reverse proxy with header, body and idle timeouts in front of a
-  public node until the node has its own; raise the process file descriptor
-  limit to match the connection count you accept.
+- The node now closes idle/slow-header/slow-body connections itself
+  (`AVALON_HTTP_HEADER_READ_TIMEOUT_SECS`, `AVALON_HTTP_REQUEST_TIMEOUT_SECS`);
+  a reverse proxy's own timeouts are still worth setting as a second layer,
+  not a required substitute. Raise the process file descriptor limit to
+  match the connection count you accept.
 - `AVALON_NODE_MAX_KNOWN_PEERS` bounds memory used by the peer table; the
   per-source announce limit (default 10 new URLs per minute) is what slows
   fabricated announces, and a node that does not need private peers should

@@ -928,6 +928,19 @@ probe and trace routes are served; when `false` they return 404.
 `/nodes/peers` and `/nodes/discover` are always served, since peers rely on
 them. New routes in that group are added in `crates/server/src/topology_access.rs`.
 
+### Connection timeouts and request-body limits
+
+Every route sits behind a header-read timeout, a request timeout and an
+explicit request-body size limit — see `.env.example`'s
+`AVALON_HTTP_HEADER_READ_TIMEOUT_SECS`, `AVALON_HTTP_REQUEST_TIMEOUT_SECS`
+and `AVALON_HTTP_MAX_BODY_BYTES` (defaults 30s/30s/2 MiB), and
+`docs/projects/backend-server/architecture/scalability.md`'s "Slow
+connections and oversized requests" section for the load-test findings that
+motivated them. `POST /nodes/announce`, `/nodes/probe`, `/nodes/trace`,
+`/mirror/notify` and `/nodes/log-level` carry small, shape-fixed JSON and
+get their own smaller explicit limit, `AVALON_NODE_COORDINATION_MAX_BODY_BYTES`
+(default 256 KiB), instead of sharing the general default.
+
 ### Probe: `POST /nodes/probe`
 
 A client asks any node it can reach to measure its round trip to another node

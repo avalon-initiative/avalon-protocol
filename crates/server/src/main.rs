@@ -666,15 +666,9 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("failed to bind address");
-    // Issue #363: the rate limiter's IP-fallback key extractor
-    // (`IntegratorOrIpKeyExtractor`) needs the real peer address in
-    // `ConnectInfo`, which only `into_make_service_with_connect_info`
-    // populates — the plain `into_make_service()` this used to be leaves
-    // it unset.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await
-    .expect("server error");
+    // `crate::serve` in place of `axum::serve`: it inserts `ConnectInfo`
+    // itself (the rate limiter's IP-fallback key extractor needs it) and
+    // also configures hyper's HTTP/1 header-read timeout, which
+    // `axum::serve` has no hook for.
+    avalon_server::serve::serve(listener, app, avalon_server::header_read_timeout_from_env()).await;
 }

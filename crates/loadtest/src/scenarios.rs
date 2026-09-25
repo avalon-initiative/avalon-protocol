@@ -915,11 +915,15 @@ pub async fn oversized(ctx: &Ctx) -> Result<Report> {
     ];
     sizes.dedup();
     let mut body_results = Vec::new();
+    // `/nodes/announce` has its own, much smaller, node-coordination body
+    // limit — checked separately below, not against the general-limit sizes
+    // here. `/identities/register/start` shares the general limit, is
+    // public like announce was, and reuses the same padded-body technique.
     for (label, method, path, auth) in [
         (
-            "POST /nodes/announce (public)",
+            "POST /identities/register/start (public)",
             "POST",
-            "/nodes/announce",
+            "/identities/register/start",
             false,
         ),
         ("PATCH /me (authenticated)", "PATCH", "/me", true),
@@ -937,6 +941,30 @@ pub async fn oversized(ctx: &Ctx) -> Result<Report> {
             r.metric(&format!("{label} body {} KiB", size / kib), status);
             body_results.push((label, *size, status));
         }
+    }
+    // Node-coordination routes carry a smaller, dedicated body limit
+    // (256 KiB by default) instead of the general one exercised above.
+    let node_coordination_kib = 256usize;
+    let mut node_coordination_results = Vec::new();
+    for size in [
+        kib,
+        64 * kib,
+        node_coordination_kib * kib - kib,
+        node_coordination_kib * kib + kib,
+        1024 * kib,
+    ] {
+        let overhead = 10;
+        let filler = size.saturating_sub(overhead);
+        let head = format!(
+            "POST /nodes/announce HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{\"pad\":\"",
+            filler + overhead,
+        );
+        let status = raw_request(&addr, head, filler, b"\"}").await;
+        r.metric(
+            &format!("POST /nodes/announce (public) body {} KiB", size / kib),
+            status,
+        );
+        node_coordination_results.push((size, status));
     }
     let mut header_results = Vec::new();
     for size in [8 * kib, 32 * kib, 64 * kib, 1024 * kib] {
@@ -999,6 +1027,24 @@ pub async fn oversized(ctx: &Ctx) -> Result<Report> {
         .filter(|(_, s, _)| *s >= 8 * 1024 * kib)
         .all(|(_, _, st)| *st == 413 || *st == 0);
     r.check(big_rejected, "bodies of 8 MiB and larger are refused", "");
+    let node_coordination_small_ok = node_coordination_results
+        .iter()
+        .filter(|(s, _)| *s <= node_coordination_kib * kib - kib)
+        .all(|(_, st)| *st != 413 && *st != 0);
+    r.check(
+        node_coordination_small_ok,
+        "node-coordination bodies at or under 256 KiB reach the handler",
+        "",
+    );
+    let node_coordination_big_rejected = node_coordination_results
+        .iter()
+        .filter(|(s, _)| *s > node_coordination_kib * kib)
+        .all(|(_, st)| *st == 413 || *st == 0);
+    r.check(
+        node_coordination_big_rejected,
+        "node-coordination bodies over 256 KiB are refused",
+        "",
+    );
     Ok(r)
 }
 

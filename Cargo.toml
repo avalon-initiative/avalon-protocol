@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 axum = "0.8"
 tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tower-http = { version = "0.7", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "timeout"] }
 # issue #363: ConcurrencyLimitLayer (AVALON_MAX_CONCURRENT_REQUESTS) in the
 # same ServiceBuilder chain tower-http's TraceLayer/CorsLayer already live
 # in.
