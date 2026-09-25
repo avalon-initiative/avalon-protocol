@@ -642,6 +642,16 @@ async fn main() {
         ));
     }
 
+    if let Some(witness) = avalon_server::witness_cosign::WitnessCosignConfig::from_env() {
+        tokio::spawn(avalon_server::witness_cosign::run_reattest_worker(
+            chain.clone(),
+            pool.clone(),
+            witness,
+            head_gossip.clone(),
+            avalon_server::witness_cosign::reattest_interval_from_env(),
+        ));
+    }
+
     // Minimum replication guarantee — spawned unconditionally,
     // same posture the announce worker just below takes: even a node with
     // no peers known yet still needs this loop running so it picks up

@@ -483,6 +483,124 @@ async fn ensure_own_cosignature_stored(
     );
 }
 
+/// How often this witness re-attests its current head; a third of the cosignature freshness
+/// window unless `AVALON_WITNESS_REATTEST_SECS` overrides it.
+pub fn reattest_interval_from_env() -> std::time::Duration {
+    let default = crate::cosign_verify::COSIGNATURE_FRESHNESS_WINDOW / 3;
+    std::env::var("AVALON_WITNESS_REATTEST_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(default)
+}
+
+/// A new cosignature over the same head as `existing` with a fresh `observed_at`.
+fn reattested(
+    config: &WitnessCosignConfig,
+    existing: &avalon_protocol::witness::WitnessCosignature,
+    now: OffsetDateTime,
+) -> avalon_protocol::witness::WitnessCosignature {
+    sign_witness_cosignature(
+        &config.signing_key,
+        &config.witness_key_id,
+        existing.tree_size,
+        &existing.root_hash,
+        &existing.network_id,
+        existing.author_created_at,
+        now,
+    )
+}
+
+/// Refreshes this node's cosignature over the head it last cosigned for every log it holds a
+/// checkpoint for, so an unchanged head keeps a fresh attestation. Returns how many were
+/// refreshed. Logs with a recorded equivocation are skipped.
+pub async fn reattest_once(
+    chain: &PostgresSettlementProvider,
+    pool: &PgPool,
+    config: &WitnessCosignConfig,
+    head_gossip: &HeadGossipTracker,
+    now: OffsetDateTime,
+) -> usize {
+    let checkpoints = match mirror::all_witness_checkpoints(pool).await {
+        Ok(checkpoints) => checkpoints,
+        Err(err) => {
+            tracing::error!(error = %err, "witness-reattest: failed to read checkpoints");
+            return 0;
+        }
+    };
+    let mut refreshed = 0;
+    for checkpoint in checkpoints {
+        if checkpoint.witness_key_id != config.witness_key_id
+            || head_gossip.is_equivocating(&checkpoint.shard_id)
+        {
+            continue;
+        }
+        let existing = match chain
+            .list_witness_cosignatures(
+                &checkpoint.network_id,
+                &checkpoint.shard_id,
+                checkpoint.tree_size,
+            )
+            .await
+        {
+            Ok(list) => list,
+            Err(err) => {
+                tracing::error!(error = %err, "witness-reattest: failed to read cosignatures");
+                continue;
+            }
+        };
+        let Some(own) = existing.iter().find(|c| {
+            c.witness_key_id == config.witness_key_id && c.root_hash == checkpoint.root_hash
+        }) else {
+            continue;
+        };
+        let fresh = reattested(config, own, now);
+        match chain
+            .refresh_witness_cosignature(&checkpoint.shard_id, &fresh)
+            .await
+        {
+            Ok(true) => refreshed += 1,
+            Ok(false) => {}
+            Err(err) => {
+                tracing::error!(
+                    shard_id = %checkpoint.shard_id,
+                    error = %err,
+                    "witness-reattest: failed to store the refreshed cosignature",
+                );
+            }
+        }
+    }
+    refreshed
+}
+
+/// Runs [`reattest_once`] on a fixed interval. Never returns.
+pub async fn run_reattest_worker(
+    chain: PostgresSettlementProvider,
+    pool: PgPool,
+    config: WitnessCosignConfig,
+    head_gossip: HeadGossipTracker,
+    interval: std::time::Duration,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let n = reattest_once(
+            &chain,
+            &pool,
+            &config,
+            &head_gossip,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+        if n > 0 {
+            tracing::debug!(refreshed = n, "witness-reattest: refreshed cosignatures");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +694,123 @@ mod tests {
         let good = "ab".repeat(32);
         assert!(decode_proof_nodes(&[good.clone(), good.clone()]).is_some());
         assert!(decode_proof_nodes(&[good, "not-hex".to_string()]).is_none());
+    }
+
+    #[test]
+    fn an_unchanged_head_stays_verifiable_past_the_freshness_window_when_reattested() {
+        use avalon_protocol::cosigned_sth::{verify_cosigned_tree_head, CosignedTreeHead};
+        use avalon_protocol::sth::sign_tree_head;
+        use avalon_protocol::witness::sign_witness_cosignature;
+
+        let window = time::Duration::seconds(600);
+        let author = SigningKey::from_bytes(&[1u8; 32]);
+        let cfg_keys: Vec<WitnessCosignConfig> = (2u8..5)
+            .map(|b| {
+                let k = SigningKey::from_bytes(&[b; 32]);
+                let id = hex::encode(k.verifying_key().to_bytes());
+                WitnessCosignConfig::new(k, id)
+            })
+            .collect();
+        let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let known: Vec<(String, ed25519_dalek::VerifyingKey)> = cfg_keys
+            .iter()
+            .map(|c| (c.witness_key_id.clone(), c.signing_key.verifying_key()))
+            .collect();
+        let mut cosigs: Vec<_> = cfg_keys
+            .iter()
+            .map(|c| {
+                sign_witness_cosignature(
+                    &c.signing_key,
+                    &c.witness_key_id,
+                    sth.tree_size,
+                    &sth.root_hash,
+                    &sth.network_id,
+                    sth.created_at,
+                    t0,
+                )
+            })
+            .collect();
+        let accepts = |cosigs: &[_], now: OffsetDateTime| {
+            let head = CosignedTreeHead {
+                sth: sth.clone(),
+                cosignatures: cosigs.to_vec(),
+            };
+            verify_cosigned_tree_head(&author.verifying_key(), &head, &known, now - window, now)
+        };
+
+        let mut now = t0;
+        assert!(accepts(&cosigs, now));
+        for _ in 0..6 {
+            now += window / 3;
+            cosigs = cfg_keys
+                .iter()
+                .zip(&cosigs)
+                .map(|(c, old)| reattested(c, old, now))
+                .collect();
+            assert!(accepts(&cosigs, now));
+        }
+        assert!(now - t0 > window);
+    }
+
+    #[test]
+    fn without_reattestation_the_same_head_stops_verifying() {
+        use avalon_protocol::cosigned_sth::{verify_cosigned_tree_head, CosignedTreeHead};
+        use avalon_protocol::sth::sign_tree_head;
+        use avalon_protocol::witness::sign_witness_cosignature;
+
+        let window = time::Duration::seconds(600);
+        let author = SigningKey::from_bytes(&[1u8; 32]);
+        let witnesses: Vec<(String, SigningKey)> = (2u8..5)
+            .map(|b| {
+                let k = SigningKey::from_bytes(&[b; 32]);
+                (hex::encode(k.verifying_key().to_bytes()), k)
+            })
+            .collect();
+        let known: Vec<_> = witnesses
+            .iter()
+            .map(|(id, k)| (id.clone(), k.verifying_key()))
+            .collect();
+        let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let cosignatures = witnesses
+            .iter()
+            .map(|(id, k)| {
+                sign_witness_cosignature(
+                    k,
+                    id,
+                    sth.tree_size,
+                    &sth.root_hash,
+                    &sth.network_id,
+                    sth.created_at,
+                    t0,
+                )
+            })
+            .collect();
+        let head = CosignedTreeHead { sth, cosignatures };
+        let now = t0 + window * 2;
+        assert!(!verify_cosigned_tree_head(
+            &author.verifying_key(),
+            &head,
+            &known,
+            now - window,
+            now
+        ));
+    }
+
+    #[test]
+    fn reattest_interval_defaults_to_a_third_of_the_freshness_window() {
+        let _env = crate::test_env::guard();
+        unsafe { std::env::remove_var("AVALON_WITNESS_REATTEST_SECS") };
+        assert_eq!(
+            reattest_interval_from_env(),
+            crate::cosign_verify::COSIGNATURE_FRESHNESS_WINDOW / 3
+        );
+        unsafe { std::env::set_var("AVALON_WITNESS_REATTEST_SECS", "45") };
+        assert_eq!(
+            reattest_interval_from_env(),
+            std::time::Duration::from_secs(45)
+        );
+        unsafe { std::env::remove_var("AVALON_WITNESS_REATTEST_SECS") };
     }
 }
