@@ -268,7 +268,7 @@ async fn explicit_registration_round_trips_and_write_path_no_longer_needs_to_aut
     let pubkey_b64 = BASE64.encode(issuer.signing_key.verifying_key().as_bytes());
 
     let network_id: serde_json::Value = http
-        .get(format!("{base}/ledger/sth/latest"))
+        .get(format!("{base}/nodes/status"))
         .send()
         .await
         .unwrap()
@@ -336,7 +336,7 @@ async fn a_registration_challenge_is_single_use() {
     let pubkey_b64 = BASE64.encode(issuer.signing_key.verifying_key().as_bytes());
 
     let network_id: serde_json::Value = http
-        .get(format!("{base}/ledger/sth/latest"))
+        .get(format!("{base}/nodes/status"))
         .send()
         .await
         .unwrap()
@@ -433,7 +433,7 @@ async fn a_proof_of_possession_signed_by_the_wrong_key_is_rejected() {
     let pubkey_b64 = BASE64.encode(issuer.signing_key.verifying_key().as_bytes());
 
     let network_id: serde_json::Value = http
-        .get(format!("{base}/ledger/sth/latest"))
+        .get(format!("{base}/nodes/status"))
         .send()
         .await
         .unwrap()
