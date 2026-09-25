@@ -70,7 +70,7 @@ done it, same as any other signed statement in this protocol.
 |---|---|---|
 | Known-list size (Y) | 5, hard cap (`AVALON_KNOWN_LIST_CAPACITY`) | Bounded verification cost per node/client regardless of network size; small enough to gossip and check cheaply. At Y=5 the required count is 3 and the list tolerates 2 failures. The capacity is configurable; the required count is always a strict majority of the actual list size and is not separately configurable. |
 | Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 3 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=5 cap, X=3 (tolerance 2). |
-| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.2, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger only (see below) — never head validity. |
+| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.4, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger only (see below) — never head validity. |
 | Anchor slots | 2 of the 5 (clamped to the capacity when it is set lower) | Reserved for bundled anchors (see below); never filled by ordinary refill. |
 | Diversity cap | 2 slots per prefix | Applies to every slot, anchors included. |
 | Head-gossip cap | ≤5 head summaries per exchange | Matches the existing per-exchange gossip discipline (#882/#948) — small, bounded payload, not full cosignature bytes on every exchange. |
@@ -152,10 +152,10 @@ else's).
 10 minutes by default, scaled for confirmed slots by how many failures the
 list can still absorb. With n confirmed slots, `tolerance(n) = n -
 majority_threshold(n)` and the effective window is `freshness_window *
-max(floor, tolerance(n) / tolerance(capacity))`, floor defaulting to 0.2
+max(floor, tolerance(n) / tolerance(capacity))`, floor defaulting to 0.4
 (`AVALON_KNOWN_LIST_FRESHNESS_FLOOR`, in (0, 1], invalid values fall back to
 the default). At capacity 5 that is the full 10 minutes with 5 confirmed, 5
-minutes with 3 or 4, and 2 minutes with 2. With zero or one confirmed slot the
+minutes with 3 or 4, and 4 minutes with 2 (twice the 2-minute refill interval). With zero or one confirmed slot the
 window is unchanged. Probationary slots always use the base window. The
 window is computed once per prune pass from the pre-eviction confirmed count,
 so a pass never tightens as it evicts. The tradeoff: a small list drops a

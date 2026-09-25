@@ -48,7 +48,7 @@ const DEFAULT_ANCHOR_CAPACITY: usize = 2;
 const DEFAULT_MAX_PER_PREFIX: usize = 2;
 /// Default lower bound on the freshness scale factor, see
 /// [`KnownListInner::effective_freshness_window`].
-const DEFAULT_FRESHNESS_FLOOR: f64 = 0.2;
+const DEFAULT_FRESHNESS_FLOOR: f64 = 0.4;
 /// Default freshness window: a slot unobserved this long is stale and
 /// eligible for replacement — same 10-minute default the design doc gives.
 const DEFAULT_FRESHNESS_SECS: u64 = 10 * 60;
@@ -1166,7 +1166,7 @@ mod tests {
         let d = KnownListConfig::default();
         assert_eq!(d.capacity, 5);
         assert!(d.anchor_capacity <= d.capacity);
-        assert_eq!(d.freshness_floor, 0.2);
+        assert_eq!(d.freshness_floor, 0.4);
     }
 
     #[test]
