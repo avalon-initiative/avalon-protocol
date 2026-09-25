@@ -472,11 +472,16 @@ currently report full route coverage against the published API.
   verified via the same `GET /ledger/sth/latest` STH check `verify_network()`
   uses for an already-known URL — so a candidate that answers but isn't
   cryptographically the target network is rejected, not silently accepted.
-  First candidate that verifies wins; every rejected candidate is retained so
-  a caller can see why. Explicit-URL construction remains fully supported for
+  Verified candidates (up to 5, collected for at most 2s after the first
+  verifies) are timed in parallel with `GET /nodes/status` (2s per probe) and
+  the lowest round trip wins; a failed probe ranks after measured ones, ties
+  keep candidate order, and a single verified candidate costs no extra request.
+  Every rejected candidate is retained so a caller can see why. Explicit-URL construction remains fully supported for
   self-hosted/local-dev connections — this is additive. No SDK yet consumes
   the server's `GET /nodes/discover` peer-set expansion or ranks candidates by
-  latency/health/role. Capability negotiation for
+  health/role. `walkTopology()`/`walk_topology()`/`WalkTopologyAsync()` build a
+  bounded graph of the overlay by walking `GET /nodes/topology` outward from
+  seed nodes. Capability negotiation for
   an already-known URL is real, across all three official SDKs:
   `GET /nodes/status` reports a node's own `roles`
   (settlement/indexer/realtime/gateway), exposed as
