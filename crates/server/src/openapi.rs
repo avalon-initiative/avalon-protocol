@@ -3,7 +3,7 @@
 //! social graph, chat, devices/passkeys/recovery, guilds, integrator/
 //! achievements/registry) — deliberately excludes `/ledger/*`, `/mirror/*`,
 //! `/internal/*` and the node-infra `/nodes/*` routes (no SDK wraps these),
-//! except the public topology endpoints a client app calls (`/nodes/probe`, `/nodes/trace`).
+//! except the public topology endpoints a client app calls (`/nodes/topology`, `/nodes/probe`, `/nodes/trace`).
 //!
 //! Generated from the real handler signatures/types via
 //! `#[utoipa::path]`/`#[derive(ToSchema)]` on each in-scope handler, not
@@ -29,7 +29,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
-        version = "0.5.0"
+        version = "0.6.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -186,10 +186,26 @@ use utoipa::OpenApi;
         crate::rollback::list_rollback_candidates,
         crate::rollback::reverse_event,
         crate::registry::get_integrator_registry,
+        crate::topology::topology,
         crate::topology_probe::probe,
         crate::topology_trace::trace,
     ),
     components(schemas(
+        crate::topology::TopologyResponse,
+        crate::topology::SelfView,
+        crate::topology::ShardHead,
+        crate::topology::Neighbor,
+        crate::topology::ObservedLatency,
+        crate::topology::KnownPeer,
+        crate::topology::MirrorSource,
+        crate::topology::OpenFinding,
+        crate::neighbors::RoundTripStats,
+        crate::network_coordinates::Coordinate,
+        crate::resources::NodeResourceMetrics,
+        crate::resources::CpuMetrics,
+        crate::resources::MemoryMetrics,
+        crate::resources::DiskMetrics,
+        crate::resources::DbPoolMetrics,
         crate::topology_probe::ProbeRequest,
         crate::topology_probe::ProbeResponse,
         crate::topology_trace::StopReason,

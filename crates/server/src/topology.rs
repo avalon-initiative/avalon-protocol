@@ -26,21 +26,23 @@ const DEFAULT_KNOWN_LIMIT: usize = 100;
 const MAX_KNOWN_LIMIT: usize = 500;
 const CACHE_CONTROL_VALUE: &str = "public, max-age=5";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TopologyQuery {
     /// Maximum number of `known` entries returned (default 100, capped at 500).
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ShardHead {
     pub shard_id: String,
     pub tree_size: i64,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub sth_created_at: OffsetDateTime,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SelfView {
     pub base_url: Option<String>,
     pub libp2p_peer_id: Option<String>,
@@ -56,14 +58,14 @@ pub struct SelfView {
 }
 
 /// A round-trip measurement together with the node that took it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ObservedLatency {
     pub observed_by: Option<String>,
     #[serde(flatten)]
     pub stats: RoundTripStats,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Neighbor {
     pub base_url: String,
     pub bootstrap: bool,
@@ -72,6 +74,7 @@ pub struct Neighbor {
     pub protocol_version: Option<String>,
     pub libp2p_peer_id: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub last_announced_at: Option<OffsetDateTime>,
     /// `None` until an announce to this peer has been attempted.
     pub latency: Option<ObservedLatency>,
@@ -79,17 +82,18 @@ pub struct Neighbor {
     pub coordinate: Option<Coordinate>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct KnownPeer {
     pub base_url: String,
     pub roles: Vec<String>,
     pub protocol_version: String,
     pub libp2p_peer_id: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub last_announced_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct OpenFinding {
     pub tree_size: i64,
     pub source_a: String,
@@ -108,16 +112,18 @@ pub struct MirrorInputs {
     pub open_findings: Vec<OpenFinding>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MirrorSource {
     pub shard_id: String,
     pub source_url: String,
     /// Tree size of the latest signed tree head observed from the source.
     pub observed_tree_size: Option<i64>,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub last_observed_at: Option<OffsetDateTime>,
     pub mirrored_entries: i64,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub last_mirrored_at: Option<OffsetDateTime>,
     /// Observed tree size minus mirrored entries, never negative; `None`
     /// until a tree head has been observed from the source.
@@ -125,7 +131,7 @@ pub struct MirrorSource {
     pub open_equivocations: Vec<OpenFinding>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TopologyResponse {
     #[serde(rename = "self")]
     pub self_node: SelfView,
@@ -135,6 +141,7 @@ pub struct TopologyResponse {
     pub known_total: usize,
     pub mirrors: Vec<MirrorSource>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub generated_at: OffsetDateTime,
 }
 
@@ -262,6 +269,17 @@ async fn collect_mirrors(state: &AppState) -> Result<Vec<MirrorInputs>, AppError
 
 /// `GET /nodes/topology`: this node's own view of its neighbors, known
 /// peers, and mirror sources. Public and read-only.
+#[utoipa::path(
+    get,
+    path = "/nodes/topology",
+    tag = "nodes",
+    params(TopologyQuery),
+    responses(
+        (status = 200, description = "This node's topology view", body = TopologyResponse),
+        (status = 404, description = "Topology is disabled on this node (AVALON_TOPOLOGY_PUBLIC=false)"),
+        (status = 429, description = "Rate limit hit; see Retry-After"),
+    ),
+)]
 pub async fn topology(
     State(state): State<AppState>,
     Query(query): Query<TopologyQuery>,

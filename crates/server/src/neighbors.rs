@@ -22,7 +22,7 @@ pub const RTT_WINDOW: usize = 20;
 pub const LOSS_WINDOW: usize = 20;
 
 /// Rolling round-trip statistics for one neighbor, as observed by this node.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoundTripStats {
     /// Always `"application_round_trip"`: announce request to parsed response.
     pub measurement: &'static str,
@@ -43,6 +43,7 @@ pub struct RoundTripStats {
     /// Fraction of recent attempts that failed, 0.0 when none were made.
     pub loss_ratio: f64,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub last_success_at: Option<OffsetDateTime>,
 }
 

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use sysinfo::{Disks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
 pub struct CpuMetrics {
     pub core_count: Option<usize>,
     pub usage_percent: Option<f32>,
@@ -33,7 +33,7 @@ pub struct CpuMetrics {
     pub load_average_15m: Option<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
 pub struct MemoryMetrics {
     pub used_bytes: Option<u64>,
     pub total_bytes: Option<u64>,
@@ -44,7 +44,7 @@ pub struct MemoryMetrics {
 /// One configured path's disk usage — `label` says which config value it
 /// came from (`"node_storage"` / `"postgres_data"`), since a node may
 /// report more than one and a dashboard client needs to tell them apart.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DiskMetrics {
     pub label: String,
     pub mount_point: Option<String>,
@@ -52,7 +52,7 @@ pub struct DiskMetrics {
     pub total_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
 pub struct DbPoolMetrics {
     pub size: Option<u32>,
     pub in_use: Option<u32>,
@@ -61,7 +61,7 @@ pub struct DbPoolMetrics {
 /// The `resources` block itself — every field individually optional per
 /// #517's acceptance criteria, so a client can render whatever a given
 /// node/platform actually managed to report.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
 pub struct NodeResourceMetrics {
     pub cpu: CpuMetrics,
     pub memory: MemoryMetrics,
