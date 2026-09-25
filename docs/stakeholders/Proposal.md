@@ -136,6 +136,19 @@ without being trusted first. One protocol event is never one chain
 transaction — events are batched behind a commitment — and real-time
 gameplay never touches settlement.
 
+Trust in the log's head does not have to rest on one key. Every node can
+also act as a witness: it independently checks that a head only ever grew
+from the last one it saw, then cosigns it. Each node keeps its own small,
+self-filling list of witnesses it knows (bounded, diversity-limited, kept
+across restarts) and accepts a head once a majority of that list has
+cosigned it; two conflicting heads that both reach a majority must share a
+witness, which makes a forked log provable from signatures alone. A network
+of one node runs the same rule as a network of many. Shard identity is
+self-certifying (derived from the shard's own key), so joining needs no
+registry, and readable names are claims proven through the owner's domain
+rather than entries in a central list. Design and current state:
+`docs/projects/backend-server/architecture/witness-cosigning.md`.
+
 ## Permission Model
 
 An integrator never automatically receives everything associated with an
@@ -211,9 +224,14 @@ trust which other server, the way federated systems make it.
 - **No portable assets.** Ownership and provenance for in-game items is
   unbuilt; an achievement is a claim about an event, not an asset.
 - **Login is not fully usernameless yet** — see Identity above.
-- **No validator-set consensus.** The ledger is a single-operator
-  transparency log today, not a BFT-replicated chain with a validator
-  set; that's a separate, still-open piece of design.
+- **No validator-set consensus, and no committee.** Ordering is never
+  contested, so there is nothing to vote on; the network instead relies on
+  witness cosigning to make a rewritten or forked log detectable. This is
+  resistance, not proof: an attacker who controls most of a victim's known
+  witnesses can still mislead that victim, which is why the known list is
+  diversity-limited and anchored. Clients and SDKs still verify a head by
+  its author's key today; verifying cosignatures client-side is not
+  shipped yet.
 - **Not a launcher, store, or distribution platform, and not an
   integrator authority.** Avalon does not own, rank, or curate the
   integrators that connect to it, and there is no score or
@@ -258,8 +276,9 @@ trust which other server, the way federated systems make it.
   the edges — contested transfers, abandoned guilds?
 - How much social information should be portable by default versus
   opt-in only?
-- What is the long-term technical and consensus design if Avalon ever
-  moves past a single-operator log toward a validator set?
+- How should released clients and SDKs adopt a witness policy (their own
+  known list, the trust-anchor entry) without breaking clients pinned to a
+  single key?
 - What does the settlement log ultimately anchor to or become, if
   anything, beyond its own verifiable history?
 - Should integrator data (assets, schemas) ever standardize across

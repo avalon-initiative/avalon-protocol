@@ -147,6 +147,32 @@ logs one warning at startup:
 this node authors the named shard `<shard>` but AVALON_MIRROR_PEERS is empty, so it mirrors no core history: clients pinned to the network cannot verify a node that serves no mirrored core history, and this node cannot verify sibling shards while the core authority is unreachable. Set AVALON_MIRROR_PEERS to the core authority
 ```
 
+## Witness cosigning
+
+Every node can act as a witness: a node that mirrors a shard checks that each new
+head extends the last head it cosigned (an RFC 6962 consistency proof), refuses to
+cosign two different roots at one size, and stores and serves its cosignature. Nothing
+here needs registration or a named shard, and it does not change how clients pinned
+to the network verify heads.
+
+| Setting | Meaning |
+|---|---|
+| `AVALON_WITNESS_SIGNING_KEY` | Hex 32-byte Ed25519 seed for this node's witness key. If unset, a node that already has `AVALON_SETTLEMENT_SIGNING_KEY` cosigns with that key; a pure mirror with neither only verifies. |
+| `AVALON_WITNESS_SIGNING_KEY_ID` | Override for the key id. Leave it unset: the default is the hex verifying key, which is what other nodes match against. A non-hex id makes the node advertise no witness key. |
+| `AVALON_WITNESS_COSIGNING_ENABLED` | `false` or `0` turns cosigning off (verify only). On by default. This is also the rollback switch, see [`witness-policy-rollout.md`](../for-maintainers/witness-policy-rollout.md). |
+| `AVALON_DATA_DIR` | Directory for node-local, non-secret state, currently the known list (`known_list.json`). Back it up with the node's data; losing it only means the list refills. |
+| `AVALON_KNOWN_LIST_*` | Capacity (10), reserved anchor slots (2), per-prefix cap (2), freshness (10 min), probation (30 min) and refill interval. The defaults are the design's; change them only for tests. |
+
+A node advertises its witness key in `POST /nodes/announce` with a signature proving it
+holds the key. Other nodes only count a key toward their known list when it comes back
+in that peer's own announce response, so a key someone else gossips for your URL never
+occupies a slot. Nothing to configure for that. A node whose key is never proven, or
+that runs with cosigning off, still joins the peer table and gossip and serves the
+network as before; it is just not a witness for anyone.
+
+Keep the witness seed like the settlement key: owner-only file or secret store, never
+committed, never logged. A witness key does not need a registration.
+
 ## High availability for one operator
 
 One shard is one ledger with one signing history. Two patterns keep it available;

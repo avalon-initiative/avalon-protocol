@@ -96,6 +96,18 @@ it. A claim can be valid without being recognized by anyone, and recognized
 without being especially meaningful. Recognition is never the same thing as
 validity.
 
+## Trust in the log itself is a separate question
+
+Authenticity, validity and recognition are about claims made *in* the log. Whether the
+log's own head can be trusted, and whether a fork would be caught, is a different
+question and has its own mechanism: independent witnesses cosign heads they have checked
+for append-only growth, each verifier keeps its own bounded known list of them, and two
+conflicting majority-cosigned heads must share a witness, which is proof of equivocation
+from signatures alone. That is resistance to a captured or rewriting operator, not a
+proof, and it does not decide what any consumer recognizes. See
+[`witness-cosigning.md`](./witness-cosigning.md) and
+[`network-trust-anchors.md`](./network-trust-anchors.md).
+
 ## Current implementation
 
 - **Authentic** — `avalon_chain::attestations::verify_authenticity`

@@ -37,6 +37,7 @@ settings; only the timings change, never the rules.
 | `witness-loss` | A known-list member is frozen (`SIGSTOP`) without leaving anyone's peer list. Asserts it is dropped once past the freshness window and a newly joined node takes the slot. | no |
 | `long-offline` | A mirroring node is stopped, a write lands elsewhere, ten seconds pass (well past the sped-up windows), and it restarts on the same schema. Asserts it rejoins the peer table. | no |
 | `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork. A third node mirrors both. Asserts it logs and records `equivocation_detected`. | no |
+| `rollout` | A single-key author writes history; two mirrors start with witness keys and cosign it. Asserts history is unchanged, the default head body is the same shape, an old single-key client verifies before, during and after, a witness-aware client accepts the head with both cosignatures and rejects it with one, the log keeps growing, and turning cosigning off on one node changes nothing else. See [`witness-policy-rollout.md`](./witness-policy-rollout.md). | no |
 
 The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
 (`lifecycle` and a 4-node `eclipse`, about half a minute of scenario time).
@@ -46,14 +47,13 @@ The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
 - `fork` exercises source-based equivocation detection in
   `mirror_watcher::check_equivocation`, which does not need cosignatures. It
   does not exercise gossip-driven confirmation
-  (`crate::equivocation::confirm_and_record`) or cosigned-majority proofs,
-  because no node produces a real witness cosignature yet: nothing calls
-  `sign_witness_cosignature` (the cosigning-decision ticket, #963). Once it
-  lands, extend `fork` to show two disjoint witness groups cosigning different
-  heads and assert the stored `witness_equivocation` evidence.
-- Until then every verification runs in the single-signer degenerate case
-  (known-list size below two), so the scenarios prove admission, loss,
-  refill and diversity, not cosigned-majority verification across nodes.
+  (`crate::equivocation::confirm_and_record`) or a cosigned-majority proof
+  across two disjoint witness groups. Cosigning now exists, so extending it is
+  the follow-up tracked in #966.
+- Only `rollout` runs with real cosignatures (two cosigning mirrors of a
+  single-key author). The other scenarios prove admission, loss, refill and
+  diversity, and every drill node advertises its own witness key so the known
+  lists can fill.
 - The eclipse scenario floods from one prefix. Prefix diversity across many
   real prefixes needs hosts on different subnets, i.e. the fleet.
 
