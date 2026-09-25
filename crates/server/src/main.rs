@@ -630,6 +630,8 @@ async fn main() {
                 wake: mirror_wake.clone(),
                 own_shard_id: own_shard_id.clone(),
                 known_list: state.known_list.clone(),
+                head_gossip: head_gossip.clone(),
+                witness: avalon_server::witness_cosign::WitnessCosignConfig::from_env(),
             },
         ));
     }
