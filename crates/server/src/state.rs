@@ -316,4 +316,12 @@ pub struct AppState {
     /// Gateway was chosen over telling the client to connect to the
     /// Realtime node directly.
     pub realtime_remote_url: Option<String>,
+    /// This node's own witness known list — read live (never a
+    /// startup-time snapshot) by every cosigned-STH verification site
+    /// (`crate::settlement`, `crate::mirror_watcher`, `crate::cross_shard`,
+    /// `crate::cross_shard_fetch`) via `crate::cosign_verify::known_list_verifying_keys`,
+    /// and mutated by `known_list::run_worker`'s own refill/probation
+    /// ticks. See `crate::known_list`'s module doc comment for the
+    /// persistence/membership model.
+    pub known_list: crate::known_list::KnownListHandle,
 }

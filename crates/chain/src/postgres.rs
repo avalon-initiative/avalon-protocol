@@ -24,29 +24,6 @@ use crate::{merkle, sth, SettlementError, SettlementProvider};
 pub(crate) const GENESIS_HASH: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Durable, self-contained proof that a shard's log showed two different
-/// roots at the same `tree_size` to (possibly disjoint) witness groups —
-/// `cosignatures_a`/`cosignatures_b` and
-/// `equivocating_witness_key_ids` are stored as JSON so this row carries
-/// everything a third party needs to re-verify the proof from signatures
-/// alone, without depending on this node's own `witness_cosignatures` table
-/// still holding the same rows later.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EquivocationEvidence {
-    pub network_id: String,
-    pub shard_id: String,
-    pub tree_size: i64,
-    pub root_hash_a: String,
-    pub root_hash_b: String,
-    /// Hex-encoded Ed25519 key of the author both conflicting heads were
-    /// signed under.
-    pub author_verify_key: String,
-    pub cosignatures_a: serde_json::Value,
-    pub cosignatures_b: serde_json::Value,
-    pub equivocating_witness_key_ids: serde_json::Value,
-    pub detected_at: time::OffsetDateTime,
-}
-
 /// The fields that make up an entry's content hash — grouped so recomputing
 /// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
 /// stored row) takes one argument, not eight.
@@ -705,30 +682,38 @@ impl PostgresSettlementProvider {
         row.map(sth_from_row).transpose()
     }
 
-    /// Stores one witness's cosignature over an already-known STH — the
-    /// storage half of `avalon_protocol::witness`/`cosigned_sth`'s
-    /// primitives; a node deciding to cosign others' heads, and gossiping
-    /// cosignatures around, are separate concerns from this storage layer.
-    /// Idempotent on a replayed
-    /// `(network_id, tree_size, witness_key_id)` — re-receiving the same
-    /// witness's cosignature for a head this node already has (e.g. via
-    /// gossip from more than one peer) is a no-op, not a conflict; two
-    /// *different* cosignatures for the same key at the same tree_size
-    /// would violate that witness's own no-double-cosign rule and are
-    /// rejected outright rather than silently overwritten.
+    /// Stores one witness's cosignature over an already-known STH for
+    /// `shard_id` — the storage half of `avalon_protocol::witness`/
+    /// `cosigned_sth`'s primitives; a node deciding to cosign others' heads,
+    /// and gossiping cosignatures around, are separate concerns from this
+    /// storage layer. Idempotent on a replayed
+    /// `(network_id, shard_id, tree_size, witness_key_id)` — re-receiving
+    /// the same witness's cosignature for a head this node already has
+    /// (e.g. via gossip from more than one peer) is a no-op, not a
+    /// conflict; two *different* cosignatures for the same key at the same
+    /// tree_size would violate that witness's own no-double-cosign rule and
+    /// are rejected outright rather than silently overwritten.
+    ///
+    /// `shard_id` scopes this independently of `network_id`/`tree_size` —
+    /// every shard under a network has its own tree_size numbering, applied
+    /// here the same way `observed_sths`/`mirrored_entries` already are, so
+    /// two unrelated shards legitimately reaching the same `tree_size` must
+    /// never share cosignature rows.
     pub async fn store_witness_cosignature(
         &self,
+        shard_id: &str,
         cosig: &WitnessCosignature,
     ) -> Result<(), SettlementError> {
         let outcome = sqlx::query(
             r#"
             INSERT INTO witness_cosignatures
-                (network_id, tree_size, witness_key_id, root_hash, author_created_at, observed_at, signature)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (network_id, tree_size, witness_key_id) DO NOTHING
+                (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at, observed_at, signature)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (network_id, shard_id, tree_size, witness_key_id) DO NOTHING
             "#,
         )
         .bind(&cosig.network_id)
+        .bind(shard_id)
         .bind(cosig.tree_size)
         .bind(&cosig.witness_key_id)
         .bind(&cosig.root_hash)
@@ -744,16 +729,17 @@ impl PostgresSettlementProvider {
         }
 
         // `ON CONFLICT DO NOTHING` skipped the insert — a row for this
-        // witness/tree_size already exists. Check whether it's the same
-        // cosignature being replayed (fine) or a genuinely different one
-        // (a real equivocation this node must not silently discard).
+        // witness/shard/tree_size already exists. Check whether it's the
+        // same cosignature being replayed (fine) or a genuinely different
+        // one (a real equivocation this node must not silently discard).
         let existing_signature: String = sqlx::query_scalar(
             r#"
             SELECT signature FROM witness_cosignatures
-            WHERE network_id = $1 AND tree_size = $2 AND witness_key_id = $3
+            WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
             "#,
         )
         .bind(&cosig.network_id)
+        .bind(shard_id)
         .bind(cosig.tree_size)
         .bind(&cosig.witness_key_id)
         .fetch_one(&self.pool)
@@ -762,29 +748,31 @@ impl PostgresSettlementProvider {
 
         if existing_signature != cosig.signature {
             return Err(SettlementError::Storage(format!(
-                "witness {} already cosigned tree_size {} for network {} with a different \
-                 signature — refusing to overwrite a possible equivocation",
-                cosig.witness_key_id, cosig.tree_size, cosig.network_id
+                "witness {} already cosigned tree_size {} for network {} shard {} with a \
+                 different signature — refusing to overwrite a possible equivocation",
+                cosig.witness_key_id, cosig.tree_size, cosig.network_id, shard_id
             )));
         }
         Ok(())
     }
 
-    /// Every stored cosignature for one network's tree head at `tree_size`,
+    /// Every stored cosignature for one shard's tree head at `tree_size`,
     /// in no particular order — the read half of [`Self::store_witness_cosignature`].
     pub async fn list_witness_cosignatures(
         &self,
         network_id: &str,
+        shard_id: &str,
         tree_size: i64,
     ) -> Result<Vec<WitnessCosignature>, SettlementError> {
         let rows = sqlx::query(
             r#"
             SELECT tree_size, root_hash, network_id, author_created_at, witness_key_id, observed_at, signature
             FROM witness_cosignatures
-            WHERE network_id = $1 AND tree_size = $2
+            WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3
             "#,
         )
         .bind(network_id)
+        .bind(shard_id)
         .bind(tree_size)
         .fetch_all(&self.pool)
         .await
@@ -806,109 +794,27 @@ impl PostgresSettlementProvider {
         Ok(cosigs)
     }
 
-    /// Assembles a [`CosignedTreeHead`] for `tree_size` from stored state:
-    /// the author STH ([`Self::signed_tree_head_at`]) plus every stored
-    /// cosignature for it. `None` if this node has no STH at that
-    /// `tree_size` at all — the same "not found, not an error" contract
-    /// `signed_tree_head_at` already has. Read-only assembly only; callers
-    /// still run the result through
+    /// Assembles a [`CosignedTreeHead`] for `shard_id`/`tree_size` from
+    /// stored state: the author STH ([`Self::signed_tree_head_at`]) plus
+    /// every stored cosignature for it. `None` if this node has no STH at
+    /// that `tree_size` at all — the same "not found, not an error"
+    /// contract `signed_tree_head_at` already has. Read-only assembly only;
+    /// callers still run the result through
     /// `avalon_protocol::cosigned_sth::verify_cosigned_tree_head` against
     /// their own known list, exactly as they would for a head learned via
     /// gossip instead of storage.
     pub async fn cosigned_tree_head_at(
         &self,
+        shard_id: &str,
         tree_size: i64,
     ) -> Result<Option<CosignedTreeHead>, SettlementError> {
         let Some(sth) = self.signed_tree_head_at(tree_size).await? else {
             return Ok(None);
         };
         let cosignatures = self
-            .list_witness_cosignatures(&sth.network_id, tree_size)
+            .list_witness_cosignatures(&sth.network_id, shard_id, tree_size)
             .await?;
         Ok(Some(CosignedTreeHead { sth, cosignatures }))
-    }
-
-    /// Durable evidence of a confirmed equivocation — the gossip layer
-    /// calls this once [`avalon_protocol::cosigned_sth::find_equivocating_witnesses`]
-    /// has returned a non-empty result for two independently-fetched,
-    /// independently-majority-cosigned heads. Idempotent on a replayed
-    /// `(network_id, shard_id, tree_size, root_hash_a, root_hash_b)` — the
-    /// same conflict re-confirmed by a later gossip round is a no-op, not
-    /// an error.
-    ///
-    /// Storage shape is this ticket's own reasonable design (no
-    /// equivocation-evidence table existed yet); reconcile with any
-    /// separately-landed mirror-sync change that independently added one.
-    pub async fn store_equivocation_evidence(
-        &self,
-        evidence: &EquivocationEvidence,
-    ) -> Result<(), SettlementError> {
-        sqlx::query(
-            r#"
-            INSERT INTO equivocation_evidence
-                (network_id, shard_id, tree_size, root_hash_a, root_hash_b,
-                 author_verify_key, cosignatures_a, cosignatures_b,
-                 equivocating_witness_key_ids, detected_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (network_id, shard_id, tree_size, root_hash_a, root_hash_b) DO NOTHING
-            "#,
-        )
-        .bind(&evidence.network_id)
-        .bind(&evidence.shard_id)
-        .bind(evidence.tree_size)
-        .bind(&evidence.root_hash_a)
-        .bind(&evidence.root_hash_b)
-        .bind(&evidence.author_verify_key)
-        .bind(&evidence.cosignatures_a)
-        .bind(&evidence.cosignatures_b)
-        .bind(&evidence.equivocating_witness_key_ids)
-        .bind(evidence.detected_at)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Every confirmed equivocation on record for `shard_id`, newest first
-    /// — the read half of [`Self::store_equivocation_evidence`].
-    pub async fn list_equivocation_evidence(
-        &self,
-        shard_id: &str,
-    ) -> Result<Vec<EquivocationEvidence>, SettlementError> {
-        let rows = sqlx::query(
-            r#"
-            SELECT network_id, shard_id, tree_size, root_hash_a, root_hash_b,
-                   author_verify_key, cosignatures_a, cosignatures_b,
-                   equivocating_witness_key_ids, detected_at
-            FROM equivocation_evidence
-            WHERE shard_id = $1
-            ORDER BY detected_at DESC
-            "#,
-        )
-        .bind(shard_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| SettlementError::Storage(e.to_string()))?;
-
-        let mut evidence = Vec::with_capacity(rows.len());
-        for row in rows {
-            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
-            evidence.push(EquivocationEvidence {
-                network_id: row.try_get("network_id").map_err(get)?,
-                shard_id: row.try_get("shard_id").map_err(get)?,
-                tree_size: row.try_get("tree_size").map_err(get)?,
-                root_hash_a: row.try_get("root_hash_a").map_err(get)?,
-                root_hash_b: row.try_get("root_hash_b").map_err(get)?,
-                author_verify_key: row.try_get("author_verify_key").map_err(get)?,
-                cosignatures_a: row.try_get("cosignatures_a").map_err(get)?,
-                cosignatures_b: row.try_get("cosignatures_b").map_err(get)?,
-                equivocating_witness_key_ids: row
-                    .try_get("equivocating_witness_key_ids")
-                    .map_err(get)?,
-                detected_at: row.try_get("detected_at").map_err(get)?,
-            });
-        }
-        Ok(evidence)
     }
 
     /// The first `tree_size` entries' `entry_hash`, oldest first — the

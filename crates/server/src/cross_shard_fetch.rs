@@ -43,6 +43,7 @@
 use std::collections::HashMap;
 
 use avalon_chain::{hash_entry, merkle, EntryContent};
+use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -50,6 +51,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::cross_shard::resolve_shard_verify_keys_from_db;
 
 /// Entries fetched per `subject` lookup — generous enough for any real
@@ -103,6 +105,10 @@ struct SignedTreeHeadDto {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    /// Additive (`#[serde(default)]`): an older peer's response without
+    /// this field still decodes as an empty cosignature list.
+    #[serde(default)]
+    cosignatures: Vec<WitnessCosignatureDto>,
 }
 
 impl From<SignedTreeHeadDto> for SignedTreeHead {
@@ -115,6 +121,18 @@ impl From<SignedTreeHeadDto> for SignedTreeHead {
             signature: dto.signature,
             created_at: dto.created_at,
         }
+    }
+}
+
+impl From<SignedTreeHeadDto> for CosignedTreeHead {
+    fn from(dto: SignedTreeHeadDto) -> Self {
+        let cosignature_dtos = dto.cosignatures.clone();
+        let sth: SignedTreeHead = dto.into();
+        let cosignatures = cosignature_dtos
+            .iter()
+            .map(|c| c.to_witness_cosignature(&sth))
+            .collect();
+        CosignedTreeHead { sth, cosignatures }
     }
 }
 
@@ -143,11 +161,16 @@ struct InclusionProofDto {
     proof: Vec<String>,
 }
 
-/// Fetches a signature-verified Signed Tree Head for `shard_id` from
-/// `base_url` — step 1 of this module's own trust chain (see module doc
-/// comment). Split out from [`fetch_verified_entries`] so a future caller
-/// that only needs the STH itself (not a specific entry) doesn't have to
-/// go through the whole entry-fetch path to get one.
+/// Fetches a majority-cosignature-verified Signed Tree Head for `shard_id`
+/// from `base_url` — step 1 of this module's own trust chain (see module
+/// doc comment). Split out from [`fetch_verified_entries`] so a future
+/// caller that only needs the STH itself (not a specific entry) doesn't
+/// have to go through the whole entry-fetch path to get one.
+///
+/// Verification is by `cosign_verify::verify_cosigned_against_any_key`
+/// against `known_list`, replacing a bare author-signature check outright —
+/// a `known_list` of 0 or 1 degenerates to exactly that check, per that
+/// function's own doc comment.
 async fn fetch_verified_sth(
     client: &reqwest::Client,
     pool: &PgPool,
@@ -155,6 +178,7 @@ async fn fetch_verified_sth(
     shard_id: &str,
     base_url: &str,
     static_verify_keys: &HashMap<String, VerifyingKey>,
+    known_list: &[(String, VerifyingKey)],
 ) -> Result<SignedTreeHead, CrossShardFetchError> {
     let sth_dto: SignedTreeHeadDto = client
         .get(format!("{base_url}/ledger/sth/latest"))
@@ -166,25 +190,28 @@ async fn fetch_verified_sth(
         .json()
         .await
         .map_err(|e| CrossShardFetchError::SthFetchFailed(base_url.to_string(), e.to_string()))?;
-    let sth: SignedTreeHead = sth_dto.into();
+    let head: CosignedTreeHead = sth_dto.into();
 
-    if sth.network_id != this_network_id {
+    if head.sth.network_id != this_network_id {
         return Err(CrossShardFetchError::NetworkMismatch);
     }
 
     let db_keys = resolve_shard_verify_keys_from_db(pool, this_network_id, shard_id).await;
     let static_key = static_verify_keys.get(shard_id);
-    let verified = db_keys
-        .iter()
-        .chain(static_key)
-        .any(|key| avalon_protocol::sth::verify_tree_head(key, &sth));
-    if !verified {
+    let now = OffsetDateTime::now_utc();
+    let verified = cosign_verify::verify_cosigned_against_any_key(
+        db_keys.iter().chain(static_key).copied(),
+        &head,
+        known_list,
+        now,
+    );
+    if verified.is_none() {
         return Err(CrossShardFetchError::SthVerificationFailed(
             shard_id.to_string(),
         ));
     }
 
-    Ok(sth)
+    Ok(head.sth)
 }
 
 /// Fetches, and fully verifies (see module doc comment for the four-step
@@ -192,6 +219,12 @@ async fn fetch_verified_sth(
 /// `base_url`. Entries whose payload has been pruned are
 /// skipped — a pruned payload can never be hash-recomputed, so there is
 /// nothing here to verify, not a failure of this fetch itself.
+///
+/// `known_list` is the caller's own witness known list
+/// (`cosign_verify::known_list_verifying_keys`), threaded through to step 1
+/// — an empty slice (a caller with no known list of its own, e.g. a
+/// standalone test) behaves exactly like plain author-signature
+/// verification, same as everywhere else this pattern is used.
 pub async fn fetch_verified_entries(
     pool: &PgPool,
     this_network_id: &str,
@@ -199,6 +232,7 @@ pub async fn fetch_verified_entries(
     base_url: &str,
     subject: &str,
     static_verify_keys: &HashMap<String, VerifyingKey>,
+    known_list: &[(String, VerifyingKey)],
 ) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
     let client = reqwest::Client::new();
 
@@ -209,6 +243,7 @@ pub async fn fetch_verified_entries(
         shard_id,
         base_url,
         static_verify_keys,
+        known_list,
     )
     .await?;
 

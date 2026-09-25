@@ -587,9 +587,13 @@ impl KnownListHandle {
     }
 
     /// Directly exposed for tests exercising admission without going
-    /// through a full [`Self::tick`].
+    /// through a full [`Self::tick`]. `pub(crate)` (not module-private) so
+    /// other modules' own `#[cfg(test)]` code — `crate::cosign_verify`,
+    /// `crate::mirror_watcher` — can build a known list with specific
+    /// membership directly, rather than only through `tick`'s
+    /// discovery-candidate shape.
     #[cfg(test)]
-    fn try_admit(
+    pub(crate) fn try_admit(
         &self,
         witness_key_id: &str,
         prefix: &str,
@@ -609,7 +613,7 @@ impl KnownListHandle {
     }
 
     #[cfg(test)]
-    fn remove(&self, witness_key_id: &str) -> bool {
+    pub(crate) fn remove(&self, witness_key_id: &str) -> bool {
         let removed = self.lock_write().remove(witness_key_id);
         if removed {
             self.save();

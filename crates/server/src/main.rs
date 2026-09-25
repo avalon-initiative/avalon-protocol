@@ -296,6 +296,19 @@ async fn main() {
     // "cheap, no config" posture as `interest` above.
     let mirror_wake = std::sync::Arc::new(tokio::sync::Notify::new());
 
+    // This node's own witness known list, built here
+    // (rather than down by its own `run_worker` spawn, its previous
+    // location) so `AppState::known_list` can hold the same handle that
+    // `/ledger/sth/*` verification and mirror sync read live — a
+    // membership change (new witness admitted, one dropped) is visible to
+    // every reader immediately, with no restart.
+    let known_list_handle = avalon_server::known_list::KnownListHandle::load_or_new(
+        avalon_server::known_list::KnownListConfig::from_env(),
+        Some(avalon_server::known_list::known_list_path(
+            &avalon_server::known_list::data_dir_from_env(),
+        )),
+    );
+
     // Issue #313/#532: built here (rather than down by `run_worker`'s own
     // spawn, its previous location) so its issue #526 failure-tracking
     // handle can be threaded into `AppState` below, before `remote_submit`
@@ -534,6 +547,7 @@ async fn main() {
         mirror_confirmations: mirror_confirmations.clone(),
         replication_gate,
         realtime_remote_url,
+        known_list: known_list_handle.clone(),
     };
 
     // Node-tiered durable history retention, implementing
@@ -615,6 +629,7 @@ async fn main() {
                 own_base_url: state.own_base_url.clone(),
                 wake: mirror_wake.clone(),
                 own_shard_id: own_shard_id.clone(),
+                known_list: state.known_list.clone(),
             },
         ));
     }
@@ -639,17 +654,13 @@ async fn main() {
     // boundary). Spawned unconditionally, same posture the announce worker
     // just below takes: even a node with no peers yet still has its
     // bundled anchors to try to admit, and needs probation/freshness
-    // maintenance running regardless.
-    let known_list_handle = avalon_server::known_list::KnownListHandle::load_or_new(
-        avalon_server::known_list::KnownListConfig::from_env(),
-        Some(avalon_server::known_list::known_list_path(
-            &avalon_server::known_list::data_dir_from_env(),
-        )),
-    );
+    // maintenance running regardless. The handle itself was built earlier
+    // (before `state`) and lives on in `state.known_list`; this worker gets
+    // its own clone, mutating the same underlying persisted list.
     tokio::spawn(avalon_server::known_list::run_worker(
         peers.clone(),
         chain.network_id().to_string(),
-        known_list_handle,
+        state.known_list.clone(),
         avalon_server::known_list::refill_interval_from_env(),
     ));
 

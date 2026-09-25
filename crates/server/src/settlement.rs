@@ -151,42 +151,6 @@ impl WitnessesQuery {
     }
 }
 
-/// One witness's cosignature, as served over `?witnesses=1` — the wire
-/// shape of `avalon_protocol::witness::WitnessCosignature`, carrying
-/// `tree_size`/`root_hash`/`network_id` redundantly (they match the parent
-/// [`SignedTreeHeadResponse`]) so a caller can independently re-verify one
-/// cosignature at a time without having to reassemble context from the
-/// enclosing response.
-#[derive(Serialize)]
-pub struct WitnessCosignatureResponse {
-    pub tree_size: i64,
-    pub root_hash: String,
-    pub network_id: String,
-    pub witness_key_id: String,
-    #[serde(with = "time::serde::rfc3339")]
-    pub author_created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub observed_at: OffsetDateTime,
-    /// Lowercase hex-encoded Ed25519 signature — verifiable with
-    /// `avalon_protocol::witness::verify_witness_cosignature` against the
-    /// witness's own key.
-    pub signature: String,
-}
-
-impl From<avalon_protocol::witness::WitnessCosignature> for WitnessCosignatureResponse {
-    fn from(c: avalon_protocol::witness::WitnessCosignature) -> Self {
-        Self {
-            tree_size: c.tree_size,
-            root_hash: c.root_hash,
-            network_id: c.network_id,
-            witness_key_id: c.witness_key_id,
-            author_created_at: c.author_created_at,
-            observed_at: c.observed_at,
-            signature: c.signature,
-        }
-    }
-}
-
 #[derive(Serialize)]
 pub struct SignedTreeHeadResponse {
     pub tree_size: i64,
@@ -206,17 +170,28 @@ pub struct SignedTreeHeadResponse {
     /// compatibility/availability signal a peer's mirror-watcher checks
     /// against its own `crate::version::MIN_SUPPORTED_PEER_VERSION` floor.
     pub protocol_version: String,
-    /// Populated only when the request asked for
+    /// Populated only when the local-authority path's caller asked for
     /// `?witnesses=1` — omitted from the JSON body entirely otherwise, so
-    /// an ordinary read stays exactly the small payload it always was; the
-    /// whole point of gossiping bounded summaries instead of cosignature
-    /// bytes is that most reads never need this.
+    /// an ordinary read stays exactly the small payload it always was (the
+    /// mirror-fallback path below always attaches whatever it has, matching
+    /// its own already-heavier verification cost). Never part of the
+    /// signed bytes either (a witness's own signature already covers its
+    /// own contribution; see `avalon_protocol::witness::witness_signing_message`).
+    /// A caller verifies these against *its own* known list via
+    /// `avalon_protocol::cosigned_sth::verify_cosigned_tree_head`, never by
+    /// trusting this node's count. Empty on a single-witness/no-witness
+    /// deployment, or simply while this node hasn't yet collected any —
+    /// callers fall back to plain author-signature verification either way,
+    /// per that function's own documented degenerate case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cosignatures: Vec<WitnessCosignatureResponse>,
+    pub cosignatures: Vec<crate::cosign_verify::WitnessCosignatureDto>,
 }
 
-impl From<SignedTreeHead> for SignedTreeHeadResponse {
-    fn from(sth: SignedTreeHead) -> Self {
+impl SignedTreeHeadResponse {
+    fn new(
+        sth: SignedTreeHead,
+        cosignatures: Vec<avalon_protocol::witness::WitnessCosignature>,
+    ) -> Self {
         Self {
             tree_size: sth.tree_size,
             root_hash: sth.root_hash,
@@ -225,8 +200,17 @@ impl From<SignedTreeHead> for SignedTreeHeadResponse {
             signature: sth.signature,
             created_at: sth.created_at,
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
-            cosignatures: Vec::new(),
+            cosignatures: cosignatures
+                .iter()
+                .map(crate::cosign_verify::WitnessCosignatureDto::from_witness_cosignature)
+                .collect(),
         }
+    }
+}
+
+impl From<SignedTreeHead> for SignedTreeHeadResponse {
+    fn from(sth: SignedTreeHead) -> Self {
+        Self::new(sth, Vec::new())
     }
 }
 
@@ -250,11 +234,15 @@ pub async fn latest_sth(
         .unwrap_or(default_shard_id());
     if shard_id == state.own_shard_id {
         if let Some(sth) = state.chain.latest_signed_tree_head().await? {
-            let mut response: SignedTreeHeadResponse = sth.clone().into();
-            if witnesses_query.requested() {
-                response.cosignatures = attach_cosignatures(&state, sth.tree_size).await?;
-            }
-            return Ok(Json(response));
+            let cosigs = if witnesses_query.requested() {
+                state
+                    .chain
+                    .list_witness_cosignatures(&sth.network_id, shard_id, sth.tree_size)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            return Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)));
         }
     }
     // A mirrored head has no locally-stored cosignatures at
@@ -266,22 +254,11 @@ pub async fn latest_sth(
     let sth = mirror_latest_sth(&state.pool, state.chain.network_id(), shard_id, source_url)
         .await?
         .ok_or_else(|| sth_not_found_error(source_url))?;
-    Ok(Json(sth.into()))
-}
-
-/// The cosignatures currently stored for this node's own
-/// authored head at `tree_size` — the read half of `?witnesses=1`. Never
-/// fabricated: an STH with no stored cosignatures yet (or a network not
-/// running witness cosigning at all) simply returns an empty list.
-async fn attach_cosignatures(
-    state: &AppState,
-    tree_size: i64,
-) -> Result<Vec<WitnessCosignatureResponse>, AppError> {
-    let cosignatures = state
+    let cosigs = state
         .chain
-        .list_witness_cosignatures(state.chain.network_id(), tree_size)
+        .list_witness_cosignatures(&sth.network_id, shard_id, sth.tree_size)
         .await?;
-    Ok(cosignatures.into_iter().map(Into::into).collect())
+    Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)))
 }
 
 /// Issue #519: `GET /ledger/sth/latest` and `/ledger/sth/{tree_size}`
@@ -325,11 +302,15 @@ pub async fn sth_at_tree_size(
         .unwrap_or(default_shard_id());
     if shard_id == state.own_shard_id {
         if let Some(sth) = state.chain.signed_tree_head_at(tree_size).await? {
-            let mut response: SignedTreeHeadResponse = sth.into();
-            if witnesses_query.requested() {
-                response.cosignatures = attach_cosignatures(&state, tree_size).await?;
-            }
-            return Ok(Json(response));
+            let cosigs = if witnesses_query.requested() {
+                state
+                    .chain
+                    .list_witness_cosignatures(&sth.network_id, shard_id, tree_size)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            return Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)));
         }
     }
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
@@ -342,7 +323,11 @@ pub async fn sth_at_tree_size(
     )
     .await?
     .ok_or_else(|| sth_not_found_error(source_url))?;
-    Ok(Json(sth.into()))
+    let cosigs = state
+        .chain
+        .list_witness_cosignatures(&sth.network_id, shard_id, tree_size)
+        .await?;
+    Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)))
 }
 
 /// Issue #520: `GET /ledger/sth/latest`'s mirror-backed fallback, reached

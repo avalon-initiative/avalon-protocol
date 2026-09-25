@@ -480,6 +480,15 @@ what makes the aggregation deterministic: two nodes with the same *set* of
 currently-known shard STHs always produce the same sorted leaf order, and therefore
 the same tree, regardless of the order they happened to learn about each shard in.
 
+**Each shard's contributing STH is verified by majority witness cosignature,
+not a bare signature** (#938, see `docs/projects/backend-server/architecture/witness-cosigning.md`) — a
+degenerate known list of size 0 or 1 (today's and most real deployments')
+behaves exactly like the plain signature check described below; a larger
+known list additionally requires a majority of it to have cosigned before a
+shard's STH is trusted enough to contribute a leaf. A shard whose STH fails
+this check is folded into `missing_shard_ids` the same as an unreachable
+one, never included unverified.
+
 **Aggregation recipe.** For each currently-known shard, compute a leaf hash
 `SHA-256(shard_id ‖ sth.tree_size ‖ sth.root_hash ‖ sth.signing_key_id ‖
 sth.signature)` — the STH's own signature is included in the leaf so the cross-shard

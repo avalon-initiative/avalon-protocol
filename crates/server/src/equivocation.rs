@@ -16,14 +16,16 @@
 //! is deliberate: the proof this module produces must stand on its own,
 //! reproducible by any third party from just the two heads' signed bytes.
 //!
-//! No equivocation-evidence table existed in this schema before this
-//! ticket; [`EquivocationEvidence`]/`store_equivocation_evidence` is this
-//! own reasonable storage shape. Reconcile with any separately-landed
-//! mirror-sync change that independently adds its own.
+//! Confirmed evidence is stored via `avalon_chain::mirror::
+//! record_witness_equivocation_evidence` — the same durable table mirror
+//! sync's own equivocation detection writes to (`crate::mirror_watcher`),
+//! so a confirmed equivocation is on record exactly once regardless of
+//! which path (gossip-driven confirmation here, or a mirror poll tick
+//! observing two disagreeing heads directly) caught it first.
 
-use avalon_chain::{EquivocationEvidence, PostgresSettlementProvider};
+use avalon_chain::mirror::{record_witness_equivocation_evidence, WitnessEquivocationEvidence};
+use avalon_chain::PostgresSettlementProvider;
 use avalon_protocol::cosigned_sth::{find_equivocating_witnesses, CosignedTreeHead};
-use avalon_protocol::witness::WitnessCosignature;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -37,37 +39,16 @@ use crate::nodes::{HeadConflict, HeadGossipTracker};
 /// this confirmation's majority check.
 const CONFIRMATION_FRESHNESS_WINDOW: time::Duration = time::Duration::minutes(10);
 
-/// Mirrors `crate::settlement::WitnessCosignatureResponse`'s wire shape —
+/// Mirrors `crate::settlement::SignedTreeHeadResponse`'s wire shape —
 /// duplicated rather than shared, matching this codebase's established
 /// "small per-module DTO, not a shared internal type" convention
-/// (`crate::cross_shard`'s own `FetchedSth`).
-#[derive(Deserialize)]
-struct FetchedCosignature {
-    tree_size: i64,
-    root_hash: String,
-    network_id: String,
-    witness_key_id: String,
-    #[serde(with = "time::serde::rfc3339")]
-    author_created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    observed_at: OffsetDateTime,
-    signature: String,
-}
-
-impl From<FetchedCosignature> for WitnessCosignature {
-    fn from(c: FetchedCosignature) -> Self {
-        WitnessCosignature {
-            tree_size: c.tree_size,
-            root_hash: c.root_hash,
-            network_id: c.network_id,
-            author_created_at: c.author_created_at,
-            witness_key_id: c.witness_key_id,
-            observed_at: c.observed_at,
-            signature: c.signature,
-        }
-    }
-}
-
+/// (`crate::cross_shard`'s own `FetchedSth`). Cosignatures ride
+/// `crate::cosign_verify::WitnessCosignatureDto` directly: that type
+/// deliberately omits `tree_size`/`root_hash`/`network_id`/
+/// `author_created_at` (they're this struct's own fields, and every
+/// cosignature in the array is over this exact head by construction), so
+/// [`CosignedTreeHead`] is reassembled by binding each DTO back to the STH
+/// via [`crate::cosign_verify::WitnessCosignatureDto::to_witness_cosignature`].
 #[derive(Deserialize)]
 struct FetchedSthWithWitnesses {
     tree_size: i64,
@@ -78,22 +59,25 @@ struct FetchedSthWithWitnesses {
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(default)]
-    cosignatures: Vec<FetchedCosignature>,
+    cosignatures: Vec<crate::cosign_verify::WitnessCosignatureDto>,
 }
 
 impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
     fn from(dto: FetchedSthWithWitnesses) -> Self {
-        CosignedTreeHead {
-            sth: avalon_protocol::sth::SignedTreeHead {
-                tree_size: dto.tree_size,
-                root_hash: dto.root_hash,
-                network_id: dto.network_id,
-                signing_key_id: dto.signing_key_id,
-                signature: dto.signature,
-                created_at: dto.created_at,
-            },
-            cosignatures: dto.cosignatures.into_iter().map(Into::into).collect(),
-        }
+        let sth = avalon_protocol::sth::SignedTreeHead {
+            tree_size: dto.tree_size,
+            root_hash: dto.root_hash,
+            network_id: dto.network_id,
+            signing_key_id: dto.signing_key_id,
+            signature: dto.signature,
+            created_at: dto.created_at,
+        };
+        let cosignatures = dto
+            .cosignatures
+            .iter()
+            .map(|c| c.to_witness_cosignature(&sth))
+            .collect();
+        CosignedTreeHead { sth, cosignatures }
     }
 }
 
@@ -166,25 +150,6 @@ fn confirm_equivocation(
     })
 }
 
-fn cosignatures_to_json(cosignatures: &[WitnessCosignature]) -> serde_json::Value {
-    serde_json::Value::Array(
-        cosignatures
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "tree_size": c.tree_size,
-                    "root_hash": c.root_hash,
-                    "network_id": c.network_id,
-                    "witness_key_id": c.witness_key_id,
-                    "author_created_at": c.author_created_at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                    "observed_at": c.observed_at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                    "signature": c.signature,
-                })
-            })
-            .collect(),
-    )
-}
-
 /// Fetches, confirms, and (on success) durably records the equivocation
 /// `conflict` signals — spawned from `crate::nodes::announce` and
 /// `crate::nodes::run_worker` whenever [`crate::nodes::HeadGossipTracker::merge`]
@@ -251,7 +216,7 @@ pub async fn confirm_and_record(
             .collect();
 
     let now = OffsetDateTime::now_utc();
-    let Some((author_key, equivocators)) =
+    let Some((_author_key, equivocators)) =
         confirm_equivocation(&candidate_author_keys, &head_a, &head_b, now)
     else {
         return;
@@ -271,24 +236,16 @@ pub async fn confirm_and_record(
 
     head_gossip.mark_equivocating(&conflict.shard_id);
 
-    let evidence = EquivocationEvidence {
+    let evidence = WitnessEquivocationEvidence {
         network_id: network_id.to_string(),
         shard_id: conflict.shard_id.clone(),
         tree_size: conflict.tree_size,
-        root_hash_a: head_a.sth.root_hash.clone(),
-        root_hash_b: head_b.sth.root_hash.clone(),
-        author_verify_key: hex::encode(author_key.to_bytes()),
-        cosignatures_a: cosignatures_to_json(&head_a.cosignatures),
-        cosignatures_b: cosignatures_to_json(&head_b.cosignatures),
-        equivocating_witness_key_ids: serde_json::Value::Array(
-            equivocators
-                .into_iter()
-                .map(serde_json::Value::String)
-                .collect(),
-        ),
-        detected_at: now,
+        head_a,
+        head_b,
+        equivocating_witness_key_ids: equivocators,
+        detected_at: None,
     };
-    if let Err(e) = chain.store_equivocation_evidence(&evidence).await {
+    if let Err(e) = record_witness_equivocation_evidence(chain.pool(), &evidence).await {
         tracing::error!(
             event = "equivocation_evidence_storage_failed",
             shard_id = %conflict.shard_id,

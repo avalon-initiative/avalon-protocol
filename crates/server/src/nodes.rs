@@ -1706,7 +1706,7 @@ pub async fn run_worker(
                 // snapshot gossiped out this tick too — see
                 // `HeadGossipTracker::record_own`'s own doc comment.
                 let cosignature_count = chain
-                    .list_witness_cosignatures(&sth.network_id, sth.tree_size)
+                    .list_witness_cosignatures(&sth.network_id, &own_shard_id, sth.tree_size)
                     .await
                     .map(|c| c.len())
                     .unwrap_or(0);
