@@ -108,6 +108,118 @@ pub struct PeerInfo {
     /// (see `crate::dht::start`).
     #[serde(default)]
     pub libp2p_listen_addrs: Vec<String>,
+    /// This peer's witness key advertisement. Only ever holds an advert whose
+    /// proof of possession verified for this `base_url`; unproven adverts are
+    /// dropped before an entry is stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness: Option<WitnessAdvert>,
+}
+
+/// A witness key advertisement: the hex Ed25519 verifying key a node
+/// cosigns under plus a signature by that key over
+/// `(base_url, key_id, announced_at)`, so the key cannot be claimed by a
+/// party that cannot sign with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WitnessAdvert {
+    pub key_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub announced_at: OffsetDateTime,
+    pub proof: String,
+    /// Set only when verified from the announce response of this exact
+    /// `base_url`, i.e. the URL's own endpoint vouches for the key. Never
+    /// serialized, so relayed or inbound adverts always start `false`.
+    #[serde(skip)]
+    pub direct: bool,
+}
+
+/// This node's own witness signing identity, used to build [`WitnessAdvert`]s.
+#[derive(Clone)]
+pub struct WitnessSigner {
+    signing_key: ed25519_dalek::SigningKey,
+    key_id: String,
+}
+
+impl WitnessSigner {
+    /// `None` unless `key_id` is the hex verifying key of `signing_key`: an
+    /// overridden, non-key id cannot be proven and is never advertised.
+    pub fn new(signing_key: ed25519_dalek::SigningKey, key_id: String) -> Option<Self> {
+        (hex::encode(signing_key.verifying_key().to_bytes()) == key_id).then_some(Self {
+            signing_key,
+            key_id,
+        })
+    }
+
+    /// A fresh advert binding this key to `base_url`.
+    pub fn advert(&self, base_url: &str, now: OffsetDateTime) -> WitnessAdvert {
+        let base_url = normalized_base_url(base_url);
+        WitnessAdvert {
+            key_id: self.key_id.clone(),
+            announced_at: now,
+            proof: avalon_protocol::witness::sign_witness_announce(
+                &self.signing_key,
+                &base_url,
+                &self.key_id,
+                now,
+            ),
+            direct: false,
+        }
+    }
+}
+
+/// The form of `raw` peer entries are stored and proven under.
+pub fn normalized_base_url(raw: &str) -> String {
+    admission()
+        .check_shape(raw)
+        .unwrap_or_else(|_| raw.trim_end_matches('/').to_string())
+}
+
+/// Returns `advert` only if its proof verifies for `base_url` (already
+/// normalized) and is fresh; a forged, mismatched or stale advert yields
+/// `None` so the peer is still admitted, just without a witness key.
+pub fn verified_advert(
+    base_url: &str,
+    advert: Option<WitnessAdvert>,
+    now: OffsetDateTime,
+) -> Option<WitnessAdvert> {
+    let advert = advert?;
+    if avalon_protocol::witness::verify_witness_announce(
+        base_url,
+        &advert.key_id,
+        advert.announced_at,
+        &advert.proof,
+        now,
+    ) {
+        Some(advert)
+    } else {
+        tracing::warn!(
+            event = "witness_advert_rejected",
+            peer = %base_url,
+            "ignored a witness key advertisement with an invalid or stale proof",
+        );
+        None
+    }
+}
+
+/// Whether `new` may replace `old`: a direct advert is never displaced by a
+/// non-direct one; otherwise the newer advert wins.
+fn advert_replaces(old: &WitnessAdvert, new: &WitnessAdvert) -> bool {
+    match (old.direct, new.direct) {
+        (true, false) => false,
+        (false, true) => true,
+        _ => new.announced_at >= old.announced_at,
+    }
+}
+
+/// Applies the advert-replacement rule when `info` is stored over an existing
+/// entry; an entry without an advert never erases a held one.
+fn carry_witness(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
+    let Some(old) = existing.and_then(|e| e.witness.as_ref()) else {
+        return;
+    };
+    match &info.witness {
+        Some(new) if advert_replaces(old, new) => {}
+        _ => info.witness = Some(old.clone()),
+    }
 }
 
 /// The peer table is at its cap and every entry is active or a bootstrap peer.
@@ -147,11 +259,39 @@ impl PeerTable {
     }
 
     /// Inserts or refreshes `info`, keyed by its own `base_url`.
-    pub fn upsert(&self, info: PeerInfo) {
-        self.peers
+    pub fn upsert(&self, mut info: PeerInfo) {
+        let mut peers = self.peers.write().expect("peer table lock poisoned");
+        carry_witness(peers.get(&info.base_url), &mut info);
+        peers.insert(info.base_url.clone(), info);
+    }
+
+    /// Records a verified witness advert on an existing entry (main table or
+    /// unverified pool) under the replacement rule; a no-op for an unknown
+    /// peer.
+    pub fn attach_witness(&self, base_url: &str, advert: WitnessAdvert) {
+        let mut peers = self.peers.write().expect("peer table lock poisoned");
+        if let Some(p) = peers.get_mut(base_url) {
+            if p.witness
+                .as_ref()
+                .is_none_or(|old| advert_replaces(old, &advert))
+            {
+                p.witness = Some(advert);
+            }
+            return;
+        }
+        drop(peers);
+        let mut pool = self
+            .unverified
             .write()
-            .expect("peer table lock poisoned")
-            .insert(info.base_url.clone(), info);
+            .expect("unverified pool lock poisoned");
+        if let Some(p) = pool.get_mut(base_url) {
+            if p.witness
+                .as_ref()
+                .is_none_or(|old| advert_replaces(old, &advert))
+            {
+                p.witness = Some(advert);
+            }
+        }
     }
 
     pub fn contains(&self, base_url: &str) -> bool {
@@ -165,9 +305,14 @@ impl PeerTable {
     /// entry into a full table evicts the entry with the oldest
     /// `last_announced_at` that is neither active nor a bootstrap peer, and
     /// returns its base URL; with nothing evictable the newcomer is refused.
-    pub fn insert_bounded(&self, info: PeerInfo, max: usize) -> Result<Option<String>, TableFull> {
+    pub fn insert_bounded(
+        &self,
+        mut info: PeerInfo,
+        max: usize,
+    ) -> Result<Option<String>, TableFull> {
         let protected = self.neighbors.protected_urls();
         let mut peers = self.peers.write().expect("peer table lock poisoned");
+        carry_witness(peers.get(&info.base_url), &mut info);
         let mut evicted = None;
         if !peers.contains_key(&info.base_url) && peers.len() >= max {
             let victim = peers
@@ -251,11 +396,12 @@ impl PeerTable {
     /// `base_url`. A new entry into a full pool evicts the entry with the
     /// oldest `last_announced_at` — unlike [`Self::insert_bounded`], nothing
     /// here is protected, so this never refuses a newcomer.
-    pub fn insert_unverified(&self, info: PeerInfo) {
+    pub fn insert_unverified(&self, mut info: PeerInfo) {
         let mut pool = self
             .unverified
             .write()
             .expect("unverified pool lock poisoned");
+        carry_witness(pool.get(&info.base_url), &mut info);
         if !pool.contains_key(&info.base_url) && pool.len() >= MAX_UNVERIFIED_PEERS {
             if let Some(victim) = pool
                 .values()
@@ -806,6 +952,9 @@ pub struct AnnounceRequest {
     /// an older peer's announce still decodes with nothing to merge.
     #[serde(default)]
     pub head_summaries: Vec<HeadSummary>,
+    /// The sender's witness key advertisement, when it cosigns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness: Option<WitnessAdvert>,
     /// The sender's own network coordinate.
     pub coordinate: Coordinate,
 }
@@ -823,6 +972,9 @@ pub struct AnnounceResponse {
     /// comment; the same exchange in the other direction.
     #[serde(default)]
     pub head_summaries: Vec<HeadSummary>,
+    /// The responder's own witness key advertisement, when it cosigns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness: Option<WitnessAdvert>,
     /// The responder's own network coordinate.
     pub coordinate: Coordinate,
 }
@@ -860,11 +1012,13 @@ pub async fn announce(
         last_announced_at: OffsetDateTime::now_utc(),
         libp2p_peer_id: body.libp2p_peer_id,
         libp2p_listen_addrs: body.libp2p_listen_addrs,
+        witness: None,
     };
     if crate::version::is_supported(&info.protocol_version) {
         info.base_url = adm
             .check_shape(&info.base_url)
             .map_err(TopologyError::from)?;
+        info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
         if state.peers.contains(&info.base_url) {
             state.peers.upsert(info);
         } else {
@@ -930,7 +1084,13 @@ pub async fn announce(
         });
     }
 
+    let own_witness = state
+        .own_witness
+        .as_ref()
+        .zip(state.own_base_url.as_deref())
+        .map(|(w, url)| w.advert(url, OffsetDateTime::now_utc()));
     Ok(Json(AnnounceResponse {
+        witness: own_witness,
         peers: state.peers.list_excluding(&caller_base_url),
         known_shards: state.shard_registry.snapshot(),
         head_summaries: state.head_gossip.snapshot(),
@@ -1094,6 +1254,7 @@ async fn merge_gossip(
         };
         info.base_url = base;
         info.last_announced_at = info.last_announced_at.min(now);
+        info.witness = verified_advert(&info.base_url, info.witness.take(), now);
         if !crate::version::is_supported(&info.protocol_version) {
             peers.admit_if_supported(info);
             continue;
@@ -1361,6 +1522,8 @@ pub struct AnnounceConfig {
     /// are never evicted to make room — see [`run_worker`]'s own doc
     /// comment.
     pub max_peers: usize,
+    /// This node's witness identity, when it cosigns; advertised in announces.
+    pub witness: Option<WitnessSigner>,
 }
 
 /// Upper bound on one announce round trip; a slower peer counts as loss.
@@ -1439,6 +1602,7 @@ impl AnnounceConfig {
             interval,
             own_base_url,
             max_peers,
+            witness: None,
         }
     }
 }
@@ -1649,6 +1813,7 @@ pub async fn run_worker(
     config: AnnounceConfig,
     dht_identity: Option<DhtIdentity>,
 ) {
+    let witness_signer = config.witness.clone();
     if config.peers.is_empty() {
         tracing::info!(
             "node-announce: no bootstrap/seed peers configured — this node can still be \
@@ -1682,6 +1847,7 @@ pub async fn run_worker(
     let neighbors = peers.neighbors().clone();
     neighbors.set_own_libp2p_peer_id(dht_identity.as_ref().map(|d| d.peer_id.clone()));
 
+    let mut vouch_cursor = 0usize;
     loop {
         neighbors.set_active(&active_peers, &config.peers);
         // Issue #599, Layer 2: before announcing, refresh this node's own
@@ -1731,6 +1897,9 @@ pub async fn run_worker(
                             dht_identity.as_ref(),
                             &shard_registry.snapshot(),
                             &head_gossip.snapshot(),
+                            witness_signer
+                                .as_ref()
+                                .map(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
                             neighbors.own_coordinate(),
                         ),
                     ),
@@ -1741,6 +1910,17 @@ pub async fn run_worker(
                         neighbors.observe_coordinate(peer, &discovered.coordinate, rtt);
                         let adm = admission();
                         promote_on_contact(&peers, adm, peer);
+                        if let Some(advert) = verified_advert(
+                            &normalized_base_url(peer),
+                            discovered.witness.clone(),
+                            OffsetDateTime::now_utc(),
+                        ) {
+                            let advert = WitnessAdvert {
+                                direct: true,
+                                ..advert
+                            };
+                            peers.attach_witness(&normalized_base_url(peer), advert);
+                        }
                         let (admitted, skipped) =
                             merge_gossip(&peers, adm, &network_id, discovered.peers).await;
                         if skipped != GossipSkipped::default() {
@@ -1834,6 +2014,29 @@ pub async fn run_worker(
             }
         }
 
+        if let Some(own_base_url) = &config.own_base_url {
+            let targets =
+                pick_vouch_targets(&peers, &active_peers, vouch_cursor, VOUCH_CONTACTS_PER_TICK);
+            vouch_cursor = vouch_cursor.wrapping_add(VOUCH_CONTACTS_PER_TICK);
+            if !targets.is_empty() {
+                let request = announce_request(
+                    own_base_url,
+                    &roles,
+                    &network_id,
+                    dht_identity.as_ref(),
+                    &shard_registry.snapshot(),
+                    &head_gossip.snapshot(),
+                    witness_signer
+                        .as_ref()
+                        .map(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
+                    neighbors.own_coordinate(),
+                );
+                for peer in &targets {
+                    vouch_contact(&client, &peers, admission(), peer, &request).await;
+                }
+            }
+        }
+
         let cutoff = OffsetDateTime::now_utc() - config.interval * PRUNE_INTERVAL_MULTIPLE;
         peers.prune_older_than(cutoff);
         peers.prune_unverified_older_than(cutoff);
@@ -1852,6 +2055,66 @@ pub async fn run_worker(
         neighbors.set_active(&active_peers, &config.peers);
 
         tokio::time::sleep(config.interval).await;
+    }
+}
+
+/// Peers with only a non-direct witness advert contacted per worker tick.
+const VOUCH_CONTACTS_PER_TICK: usize = 5;
+
+/// Up to `limit` peers holding a non-direct advert and no direct one, not in
+/// `skip`, taken in base-URL order starting at `cursor` (wrapping) so every
+/// such peer gets a turn.
+fn pick_vouch_targets(
+    peers: &PeerTable,
+    skip: &[String],
+    cursor: usize,
+    limit: usize,
+) -> Vec<String> {
+    let mut urls: Vec<String> = peers
+        .list_all()
+        .into_iter()
+        .filter(|p| p.witness.as_ref().is_some_and(|w| !w.direct) && !skip.contains(&p.base_url))
+        .map(|p| p.base_url)
+        .collect();
+    urls.sort();
+    if urls.is_empty() {
+        return urls;
+    }
+    let shift = cursor % urls.len();
+    urls.rotate_left(shift);
+    urls.truncate(limit);
+    urls
+}
+
+/// Announces to `peer` only to obtain its own witness advert from the
+/// response; the peer is not added to the active set or the neighbors table
+/// and nothing else in the response is merged. Only the URL's own response
+/// can create a direct advert.
+async fn vouch_contact(
+    client: &reqwest::Client,
+    peers: &PeerTable,
+    adm: &PeerAdmission,
+    peer: &str,
+    request: &AnnounceRequest,
+) {
+    if adm.check_address(peer).await.is_err() {
+        return;
+    }
+    let Ok(response) = announce_to(client, peer, request).await else {
+        return;
+    };
+    if let Some(advert) = verified_advert(
+        &normalized_base_url(peer),
+        response.witness,
+        OffsetDateTime::now_utc(),
+    ) {
+        peers.attach_witness(
+            &normalized_base_url(peer),
+            WitnessAdvert {
+                direct: true,
+                ..advert
+            },
+        );
     }
 }
 
@@ -1877,6 +2140,7 @@ async fn measured<T>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn announce_request(
     own_base_url: &str,
     roles: &[String],
@@ -1884,6 +2148,7 @@ fn announce_request(
     dht_identity: Option<&DhtIdentity>,
     known_shards: &[ShardAnnouncement],
     head_summaries: &[HeadSummary],
+    witness: Option<WitnessAdvert>,
     coordinate: Coordinate,
 ) -> AnnounceRequest {
     AnnounceRequest {
@@ -1897,6 +2162,7 @@ fn announce_request(
             .unwrap_or_default(),
         known_shards: known_shards.to_vec(),
         head_summaries: head_summaries.to_vec(),
+        witness,
         coordinate,
     }
 }
@@ -1936,6 +2202,7 @@ mod tests {
             last_announced_at: announced_at,
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            witness: None,
         }
     }
 
@@ -1969,7 +2236,16 @@ mod tests {
                 announce_to(
                     &client,
                     peer,
-                    &announce_request("http://me", &[], "n", None, &[], &[], Coordinate::default()),
+                    &announce_request(
+                        "http://me",
+                        &[],
+                        "n",
+                        None,
+                        &[],
+                        &[],
+                        None,
+                        Coordinate::default(),
+                    ),
                 ),
             )
             .await;
@@ -2024,6 +2300,7 @@ mod tests {
                         None,
                         &[],
                         &[],
+                        None,
                         neighbors.own_coordinate(),
                     ),
                 ),
@@ -2100,6 +2377,7 @@ mod tests {
             last_announced_at: OffsetDateTime::now_utc(),
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            witness: None,
         }
     }
 
@@ -2827,6 +3105,179 @@ mod tests {
         .await;
         let stored = table.list_unverified().pop().unwrap();
         assert!(stored.last_announced_at < OffsetDateTime::now_utc() + time::Duration::minutes(1));
+    }
+
+    // --- witness key adverts ---------------------------------------
+
+    #[tokio::test]
+    async fn gossip_admits_a_proven_witness_key_and_strips_forged_mismatched_or_stale_ones() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let now = OffsetDateTime::now_utc();
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let signer = WitnessSigner::new(key, id.clone()).unwrap();
+
+        let mut good = supported("http://127.0.0.1:9601", now);
+        good.witness = Some(signer.advert("http://127.0.0.1:9601", now));
+
+        // Proof made for a different URL.
+        let mut mismatched = supported("http://127.0.0.1:9602", now);
+        mismatched.witness = Some(signer.advert("http://127.0.0.1:9601", now));
+
+        // Someone else's key id with this signer's proof.
+        let other = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let mut forged = supported("http://127.0.0.1:9603", now);
+        let mut advert = signer.advert("http://127.0.0.1:9603", now);
+        advert.key_id = hex::encode(other.verifying_key().to_bytes());
+        forged.witness = Some(advert);
+
+        let mut stale = supported("http://127.0.0.1:9604", now);
+        stale.witness = Some(signer.advert(
+            "http://127.0.0.1:9604",
+            now - avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW - time::Duration::minutes(1),
+        ));
+
+        merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![good, mismatched, forged, stale],
+        )
+        .await;
+        let pool = table.list_unverified();
+        assert_eq!(pool.len(), 4, "no peer is denied participation");
+        for p in &pool {
+            if p.base_url.ends_with(":9601") {
+                assert_eq!(
+                    p.witness.as_ref().map(|w| w.key_id.as_str()),
+                    Some(id.as_str())
+                );
+            } else {
+                assert!(p.witness.is_none(), "{} kept an unproven key", p.base_url);
+            }
+        }
+    }
+
+    #[test]
+    fn a_relayed_entry_without_a_key_does_not_erase_a_proven_one() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let signer = WitnessSigner::new(key, id).unwrap();
+        let mut with_key = supported("http://127.0.0.1:9605", now);
+        with_key.witness = Some(signer.advert("http://127.0.0.1:9605", now));
+        table.upsert(with_key);
+        table.upsert(supported("http://127.0.0.1:9605", now));
+        assert!(table.list_all()[0].witness.is_some());
+    }
+
+    #[test]
+    fn a_direct_advert_is_never_displaced_by_a_gossiped_one_with_another_key() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        let url = "http://127.0.0.1:9606";
+        let mk = |direct: bool, at: OffsetDateTime| {
+            let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+            let id = hex::encode(key.verifying_key().to_bytes());
+            let mut a = WitnessSigner::new(key, id).unwrap().advert(url, at);
+            a.direct = direct;
+            a
+        };
+        let direct = mk(true, now - time::Duration::minutes(5));
+        table.upsert(supported(url, now));
+        table.attach_witness(url, direct.clone());
+
+        let mut gossiped = supported(url, now);
+        gossiped.witness = Some(mk(false, now));
+        table.upsert(gossiped);
+        assert_eq!(table.list_all()[0].witness, Some(direct.clone()));
+
+        table.upsert(supported(url, now));
+        assert_eq!(table.list_all()[0].witness, Some(direct));
+
+        let newer = mk(true, now);
+        table.attach_witness(url, newer.clone());
+        assert_eq!(table.list_all()[0].witness, Some(newer));
+    }
+
+    #[tokio::test]
+    async fn an_inbound_only_peer_gets_a_direct_advert_only_from_its_own_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let now = OffsetDateTime::now_utc();
+        let server = MockServer::start().await;
+        let url = server.uri();
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let signer = WitnessSigner::new(key, id).unwrap();
+        let body = serde_json::json!({
+            "peers": [],
+            "witness": signer.advert(&url, now),
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+        });
+        Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let table = PeerTable::new();
+        let silent = "http://127.0.0.1:9";
+        for u in [url.as_str(), silent] {
+            let mut p = supported(u, now);
+            p.witness = Some(signer.advert(u, now));
+            table.upsert(p);
+        }
+        let targets = pick_vouch_targets(&table, &[], 0, VOUCH_CONTACTS_PER_TICK);
+        assert_eq!(targets.len(), 2);
+
+        let adm = admission_for_tests(true, |_| {});
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let request = announce_request(
+            "http://me",
+            &[],
+            "avalon-dev-local",
+            None,
+            &[],
+            &[],
+            None,
+            Coordinate::default(),
+        );
+        for t in &targets {
+            vouch_contact(&client, &table, &adm, t, &request).await;
+        }
+        let direct = |u: &str| {
+            table
+                .list_all()
+                .into_iter()
+                .find(|p| p.base_url == u)
+                .and_then(|p| p.witness)
+                .map(|w| w.direct)
+        };
+        assert_eq!(direct(&url), Some(true));
+        assert_eq!(direct(silent), Some(false));
+        assert!(table.neighbors().protected_urls().is_empty());
+        // Once direct, a peer is no longer a vouch target.
+        assert_eq!(
+            pick_vouch_targets(&table, &[], 0, 5),
+            vec![silent.to_string()]
+        );
+
+        let policy = crate::outbound_policy::OutboundPolicy::new(true);
+        let candidates =
+            crate::known_list::build_candidates(&policy, &table, "avalon-dev-local", now).await;
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn a_non_key_witness_id_is_never_advertised() {
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        assert!(WitnessSigner::new(key, "custom-label".to_string()).is_none());
     }
 
     // --- unverified gossip pool ------------------------------------

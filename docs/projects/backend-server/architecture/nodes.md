@@ -1145,6 +1145,16 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
   URLs get the same checks (known `(shard, url)` pairs are not re-resolved),
   and at most `AVALON_GOSSIP_MAX_NEW_SHARD_URLS_PER_EXCHANGE` (default 256)
   unseen URLs are examined per exchange.
+- **Witness key adverts.** `PeerInfo`, `AnnounceRequest` and
+  `AnnounceResponse` carry an optional `witness` advert (hex Ed25519 key id,
+  `announced_at`, proof of possession over `(base_url, key_id, announced_at)`;
+  see `witness-cosigning.md`). It is verified against the normalized
+  `base_url` on announce, on gossip merge and on an announce response; an
+  invalid or stale one is dropped without refusing the peer. A relayed entry
+  without an advert never erases a proven one.
+  Only an advert from the peer's own announce response is stored as direct
+  and eligible as a witness candidate; each worker tick contacts up to 5
+  peers holding only non-direct adverts to obtain it, outside the active set.
 - **Announce rejections are explicit.** `{ "error", "code" }` bodies:
   `invalid_base_url` and `base_url_too_long` (400), `base_url_not_allowed`
   (403), `base_url_unresolvable` and `peer_unreachable` and

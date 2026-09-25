@@ -627,6 +627,7 @@ mod tests {
             last_announced_at: time::OffsetDateTime::now_utc(),
             libp2p_peer_id: peer_id.map(|s| s.to_string()),
             libp2p_listen_addrs: addrs.into_iter().map(|s| s.to_string()).collect(),
+            witness: None,
         }
     }
 

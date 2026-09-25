@@ -324,4 +324,7 @@ pub struct AppState {
     /// ticks. See `crate::known_list`'s module doc comment for the
     /// persistence/membership model.
     pub known_list: crate::known_list::KnownListHandle,
+    /// This node's witness signing identity, when it cosigns; used to prove
+    /// possession of its witness key in announce responses.
+    pub own_witness: Option<crate::nodes::WitnessSigner>,
 }

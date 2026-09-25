@@ -227,7 +227,10 @@ async fn main() {
     // is available here too, for issue #583's interest-refresh worker
     // below — reusing the exact same `AVALON_NODE_URL` identity rather
     // than a second parse of it.
-    let announce_config = avalon_server::nodes::AnnounceConfig::from_env(chain.network_id());
+    let mut announce_config = avalon_server::nodes::AnnounceConfig::from_env(chain.network_id());
+    let witness_signer = avalon_server::witness_cosign::WitnessCosignConfig::from_env()
+        .and_then(|w| w.announce_signer());
+    announce_config.witness = witness_signer.clone();
 
     // Issue #583: always constructed (cheap, no config) so `crate::chat`'s
     // subscribe handlers have one code path regardless of whether the DHT
@@ -521,6 +524,7 @@ async fn main() {
         shard_mirror_sources: avalon_server::settlement::ShardMirrorSources::from_env(),
         interest,
         dht_commands,
+        own_witness: witness_signer.clone(),
         own_base_url: announce_config.own_base_url.clone(),
         own_libp2p_peer_id: dht_identity.as_ref().map(|d| d.peer_id.clone()),
         interest_redis_fast_path,

@@ -44,6 +44,7 @@ FAST_KNOWN_LIST=(
   AVALON_KNOWN_LIST_FRESHNESS_SECS=6
   AVALON_KNOWN_LIST_PROBATION_SECS=3
   AVALON_ANNOUNCE_INTERVAL_SECS=2
+  AVALON_MIRROR_POLL_INTERVAL_SECS=3
 )
 
 # node <name> <bootstrap-csv> [VAR=value ...]: starts one node with its own
@@ -56,7 +57,13 @@ node() {
   next_port; port="$NEXT_PORT"
   new_schema "$schema" || return 1
   mkdir -p "$data_dir"
+  # Every node gets its own witness key: a known list only admits peers that
+  # prove one, so a keyless node could never be a slot. Callers may override.
+  LAST_SEED="$(openssl rand -hex 32)"
+  LAST_KEY_ID="$( (printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'; echo "$LAST_SEED" | xxd -r -p) \
+    | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | xxd -p -c 64)"
   start_node "$name" "$schema" "$port" "${FAST_KNOWN_LIST[@]}" \
+    AVALON_WITNESS_SIGNING_KEY="$LAST_SEED" \
     AVALON_DATA_DIR="$data_dir" AVALON_BOOTSTRAP_PEERS="$bootstrap" \
     AVALON_ALLOW_PRIVATE_PEERS=true AVALON_ANNOUNCE_VERIFY_REACHABILITY=false "$@" || return 1
   LAST_PORT="$port"
@@ -201,23 +208,23 @@ scenario_witness_loss() {
   node a "" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
   local port_a="$LAST_PORT" data_a="$LAST_DATA_DIR"
   node b "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
-  local port_b="$LAST_PORT" pid_b="$LAST_PID"
+  local port_b="$LAST_PORT" pid_b="$LAST_PID" key_b="$LAST_KEY_ID"
   node c "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
 
   wait_until "A admits B and C" 30 known_list_has_at_least "$data_a" 2
-  check "B is in A's known list before it drops" known_list_contains "$data_a" "http://127.0.0.1:$port_b"
+  check "B is in A's known list before it drops" known_list_contains "$data_a" "$key_b"
 
   # B stops responding without ever being removed from anyone's peer list:
   # a dropped, unresponsive witness rather than a graceful departure.
   kill -STOP "$pid_b" 2>/dev/null
 
   node d "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
-  local port_d="$LAST_PORT"
+  local port_d="$LAST_PORT" key_d="$LAST_KEY_ID"
 
   wait_until "A's known list drops the unresponsive B past the freshness window" 40 \
-    known_list_lacks "$data_a" "http://127.0.0.1:$port_b"
+    known_list_lacks "$data_a" "$key_b"
   wait_until "A's known list refills the freed slot with the newly joined D" 40 \
-    known_list_contains "$data_a" "http://127.0.0.1:$port_d"
+    known_list_contains "$data_a" "$key_d"
 
   kill -CONT "$pid_b" 2>/dev/null
 }
@@ -267,7 +274,7 @@ scenario_long_offline() {
   local port_a="$LAST_PORT"
   node b "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 \
     AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a" || return 1
-  local port_b="$LAST_PORT" schema_b="live_drill_b" pid_b="$LAST_PID"
+  local port_b="$LAST_PORT" schema_b="live_drill_b" pid_b="$LAST_PID" seed_b="$LAST_SEED"
 
   check "wrote something through A before B goes offline" is_2xx "$(register_integrator "$port_a" drill-long-offline)"
 
@@ -280,7 +287,7 @@ scenario_long_offline() {
   start_node b "$schema_b" "$port_b" "${FAST_KNOWN_LIST[@]}" \
     AVALON_DATA_DIR="$DATA_ROOT/b" AVALON_BOOTSTRAP_PEERS="http://127.0.0.1:$port_a" \
     AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a" AVALON_ALLOW_PRIVATE_PEERS=true \
-    AVALON_ANNOUNCE_VERIFY_REACHABILITY=false || return 1
+    AVALON_ANNOUNCE_VERIFY_REACHABILITY=false AVALON_WITNESS_SIGNING_KEY="$seed_b" || return 1
   check "B answers again after a long offline stretch" alive "$port_b"
   wait_until "B rejoins A's peer table with no special-casing for the gap" 30 \
     peer_table_has_at_least "$port_a" 1

@@ -1026,6 +1026,7 @@ mod tests {
                     crate::known_list::KnownListConfig::default(),
                     None,
                 ),
+                own_witness: None,
             }
         }
 

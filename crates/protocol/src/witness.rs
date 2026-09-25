@@ -122,6 +122,74 @@ pub fn verify_witness_cosignature(
     witness_verifying_key.verify(&message, &signature).is_ok()
 }
 
+/// How far `announced_at` may differ from the verifier's clock for a witness
+/// announce proof to be accepted.
+pub const WITNESS_ANNOUNCE_MAX_SKEW: time::Duration = time::Duration::hours(1);
+
+/// The exact bytes a witness announce proof covers, under its own domain tag
+/// so it can never be mistaken for a cosignature or an STH signature.
+pub fn witness_announce_message(
+    base_url: &str,
+    witness_key_id: &str,
+    announced_at: OffsetDateTime,
+) -> Vec<u8> {
+    let mut message = Vec::new();
+    message.extend_from_slice(b"avalon-witness-announce-v1");
+    message.extend_from_slice(&(base_url.len() as u32).to_be_bytes());
+    message.extend_from_slice(base_url.as_bytes());
+    message.extend_from_slice(&(witness_key_id.len() as u32).to_be_bytes());
+    message.extend_from_slice(witness_key_id.as_bytes());
+    message.extend_from_slice(&announced_at.unix_timestamp().to_be_bytes());
+    message
+}
+
+/// Signs a proof that the holder of `witness_signing_key` (whose hex verifying
+/// key is `witness_key_id`) advertises itself at `base_url`. Lowercase hex.
+pub fn sign_witness_announce(
+    witness_signing_key: &SigningKey,
+    base_url: &str,
+    witness_key_id: &str,
+    announced_at: OffsetDateTime,
+) -> String {
+    let message = witness_announce_message(base_url, witness_key_id, announced_at);
+    hex::encode(witness_signing_key.sign(&message).to_bytes())
+}
+
+/// Verifies a witness announce proof: `witness_key_id` must be a hex Ed25519
+/// verifying key, the signature must verify under it over the announce
+/// message, and `announced_at` must be within [`WITNESS_ANNOUNCE_MAX_SKEW`]
+/// of `now`. Never panics on attacker-controlled input.
+pub fn verify_witness_announce(
+    base_url: &str,
+    witness_key_id: &str,
+    announced_at: OffsetDateTime,
+    proof_hex: &str,
+    now: OffsetDateTime,
+) -> bool {
+    if (now - announced_at).abs() > WITNESS_ANNOUNCE_MAX_SKEW {
+        return false;
+    }
+    let Ok(key_bytes) = hex::decode(witness_key_id) else {
+        return false;
+    };
+    let Ok(key_array) = <[u8; 32]>::try_from(key_bytes.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
+        return false;
+    };
+    let Ok(sig_bytes) = hex::decode(proof_hex) else {
+        return false;
+    };
+    let Ok(sig_array) = <[u8; 64]>::try_from(sig_bytes.as_slice()) else {
+        return false;
+    };
+    let message = witness_announce_message(base_url, witness_key_id, announced_at);
+    verifying_key
+        .verify(&message, &Signature::from_bytes(&sig_array))
+        .is_ok()
+}
+
 /// The smallest X such that any two size-X subsets of a `list_size`-element
 /// known list are guaranteed to share at least one member: `list_size / 2 +
 /// 1`. This is the entire fork-detection guarantee — two heads each cosigned
@@ -271,6 +339,66 @@ mod tests {
         assert!(!verify_witness_cosignature(
             &verifying_key,
             &tampered_observed_at
+        ));
+    }
+
+    #[test]
+    fn witness_announce_round_trips_and_rejects_tampering_and_staleness() {
+        let key = SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(100);
+        let proof = sign_witness_announce(&key, "http://a.example", &id, now);
+        assert!(verify_witness_announce(
+            "http://a.example",
+            &id,
+            now,
+            &proof,
+            now
+        ));
+        assert!(!verify_witness_announce(
+            "http://b.example",
+            &id,
+            now,
+            &proof,
+            now
+        ));
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &id,
+            now + time::Duration::seconds(1),
+            &proof,
+            now
+        ));
+        let other = SigningKey::generate(&mut rand::rng());
+        let other_id = hex::encode(other.verifying_key().to_bytes());
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &other_id,
+            now,
+            &proof,
+            now
+        ));
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &id,
+            now,
+            "zz",
+            now
+        ));
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            "not-hex",
+            now,
+            &proof,
+            now
+        ));
+        let later = now + WITNESS_ANNOUNCE_MAX_SKEW + time::Duration::seconds(1);
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &id,
+            now,
+            &proof,
+            later
         ));
     }
 

@@ -61,6 +61,7 @@ fn cross_register(a_peers: &PeerTable, a_handle: &dht::DhtHandle, b_base_url: &s
             .iter()
             .map(|a| a.to_string())
             .collect(),
+        witness: None,
     });
 }
 
