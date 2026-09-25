@@ -336,6 +336,7 @@ mod tests {
             }),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         }
     }
 

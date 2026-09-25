@@ -1140,6 +1140,7 @@ impl LedgerEntryView {
             payload: self.payload.clone()?,
             timestamp: self.event_timestamp,
             version: u32::try_from(self.version).ok()?,
+            identity_chain: None,
         })
     }
 }

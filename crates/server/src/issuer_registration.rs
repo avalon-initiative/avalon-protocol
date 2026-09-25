@@ -293,6 +293,7 @@ async fn enqueue_registration_event(
         .expect("IssuerRegisteredPayload should serialize"),
         timestamp: registered_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(tx, &event).await?;
     Ok(())

@@ -302,6 +302,25 @@ impl<'de> Deserialize<'de> for ProtocolEventKind {
     }
 }
 
+/// One event's position in its identity's own per-identity chain —
+/// `crate::identity_chain`'s deterministic conflict rule operates on
+/// exactly these two numbers plus the event's own content hash (recomputed
+/// by `identity_chain::compute_event_hash`, never stored redundantly here).
+///
+/// `prev_hash` is hex-encoded on the wire (`sha256` digest,
+/// `identity_chain::EventHash`), matching every other hash-as-string
+/// convention in this codebase (`SignedTreeHead::root_hash`,
+/// `WitnessCosignature::root_hash`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityChainPosition {
+    /// Monotonic within this one identity's own chain — unrelated to the
+    /// global ledger sequence a node commits events in.
+    pub seq: u64,
+    /// The previous event's hash in this identity's chain; `None` only for
+    /// `seq == 1`, the chain's genesis event.
+    pub prev_hash: Option<String>,
+}
+
 /// A durable, versioned fact Avalon considers part of protocol history.
 ///
 /// Examples: `achievement.issued`, `guild.created`, `guild.member_added`,
@@ -320,6 +339,16 @@ pub struct ProtocolEvent {
     pub payload: serde_json::Value,
     pub timestamp: OffsetDateTime,
     pub version: u32,
+    /// This event's place in its identity's own chain
+    /// (`crate::identity_chain`) — populated for layer-1 events whose kind
+    /// classifies to `Some(_)` under `identity_chain::ActionClass::classify`
+    /// (profile edits, friend actions, guild-membership changes, key/
+    /// recovery events), `None` for every other kind. Additive: a `None`
+    /// here behaves exactly as every event did before this field existed,
+    /// so already-emitted history and any event kind that never
+    /// participates in a chain are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_chain: Option<IdentityChainPosition>,
 }
 
 /// A group of protocol events committed together, so a durable commitment can

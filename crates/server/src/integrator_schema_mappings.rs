@@ -214,6 +214,7 @@ pub async fn publish_mapping(
         .expect("GameSchemaMappingPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

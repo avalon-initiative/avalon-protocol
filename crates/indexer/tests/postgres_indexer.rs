@@ -43,6 +43,7 @@ fn identity_created_event(identity_id: Uuid) -> ProtocolEvent {
         }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     }
 }
 
@@ -85,6 +86,7 @@ async fn unknown_kind_is_skipped_not_error() {
         payload: serde_json::json!({ "anything": "at all" }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
 
     indexer
@@ -141,6 +143,7 @@ async fn server_owned_kinds_from_678_are_a_noop_not_an_error() {
                 payload: serde_json::json!({ "anything": "at all" }),
                 timestamp: OffsetDateTime::now_utc(),
                 version: 1,
+                identity_chain: None,
             }
         })
         .collect();

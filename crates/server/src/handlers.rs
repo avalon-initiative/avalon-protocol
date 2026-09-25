@@ -347,6 +347,7 @@ pub async fn register_finish(
         .expect("IdentityCreatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
 
     let mut tx = state.pool.begin().await?;
@@ -422,6 +423,7 @@ pub async fn register_finish(
         .expect("IdentityPasskeyRegisteredPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &passkey_event).await?;
     state.indexer.apply_in_tx(&mut tx, &passkey_event).await?;
@@ -474,6 +476,7 @@ pub async fn register_finish(
         .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: signing_key_added_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &signing_key_event).await?;
     state
@@ -1513,6 +1516,7 @@ pub async fn update_profile(
             ),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         });
 
     let mut tx = state.pool.begin().await?;

@@ -1117,6 +1117,7 @@ fn protocol_event_from_mirrored(entry: &mirror::MirroredEntry) -> Option<Protoco
         payload: entry.payload.clone()?,
         timestamp: entry.event_timestamp,
         version: u32::try_from(entry.version).ok()?,
+        identity_chain: None,
     })
 }
 

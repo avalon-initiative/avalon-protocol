@@ -196,6 +196,7 @@ pub async fn create_friend_request(
         .expect("FriendRequestedPayload should serialize"),
         timestamp: requested_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -291,6 +292,7 @@ pub async fn accept_friend_request(
         .expect("FriendAcceptedPayload should serialize"),
         timestamp: since,
         version: 1,
+        identity_chain: None,
     };
     // Issue #506: `friendships` is a projection now — the row is written
     // by the indexer applying `event`, not a bespoke `INSERT` here, same
@@ -373,6 +375,7 @@ pub async fn remove_friend(
             .expect("FriendRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;

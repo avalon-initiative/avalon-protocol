@@ -787,6 +787,7 @@ pub async fn create_guild(
         .expect("GuildCreatedPayload should serialize"),
         timestamp: created_at,
         version: 1,
+        identity_chain: None,
     };
     // Owner membership (role_index 0) is derived from this same event —
     // see `avalon_indexer::projections::guild_rosters`'s module doc comment:
@@ -1024,6 +1025,7 @@ pub async fn update_guild(
         .expect("GuildUpdatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1276,6 +1278,7 @@ pub async fn create_role(
         .expect("GuildRoleDefinedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1414,6 +1417,7 @@ pub async fn update_role(
         .expect("GuildRoleDefinedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1526,6 +1530,7 @@ pub async fn delete_role(
         .expect("GuildRoleDeletedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1866,6 +1871,7 @@ pub async fn transfer_ownership(
         .expect("GuildOwnerTransferredPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1950,6 +1956,7 @@ pub async fn associate_integrator(
         .expect("GuildGameAssociatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -2255,6 +2262,7 @@ async fn add_member(
         .expect("GuildMemberAddedPayload should serialize"),
         timestamp: joined_at,
         version: 1,
+        identity_chain: None,
     };
     indexer.apply_in_tx(tx, &event).await?;
     outbox::enqueue(tx, &event).await?;
@@ -2462,6 +2470,7 @@ pub async fn leave_guild(
             ),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         };
         state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
@@ -2484,6 +2493,7 @@ pub async fn leave_guild(
         .expect("GuildMemberRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
@@ -2547,6 +2557,7 @@ pub async fn remove_member(
         .expect("GuildMemberRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
@@ -3062,6 +3073,7 @@ pub async fn update_member_role(
         .expect("GuildRoleChangedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
@@ -3754,6 +3766,7 @@ pub async fn set_favorite_games(
         .expect("GuildFavoriteGamesUpdatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

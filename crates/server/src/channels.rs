@@ -384,6 +384,7 @@ pub async fn create_channel(
         .expect("GuildChannelCreatedPayload should serialize"),
         timestamp: created_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -483,6 +484,7 @@ pub async fn update_channel(
         .expect("GuildChannelRenamedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -546,6 +548,7 @@ pub async fn archive_channel(
         .expect("GuildChannelArchivedPayload should serialize"),
         timestamp: archived_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

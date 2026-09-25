@@ -217,6 +217,7 @@ pub async fn publish_instance(
         .expect("GameDataPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -341,6 +342,7 @@ pub async fn delete_instance(
         .expect("GameDataDeletedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;

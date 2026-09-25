@@ -245,6 +245,7 @@ pub async fn publish_schema_version(
         .expect("GameSchemaPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

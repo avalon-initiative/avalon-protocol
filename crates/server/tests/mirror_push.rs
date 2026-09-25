@@ -120,6 +120,7 @@ async fn enqueue_real_event(pool: &PgPool) {
         payload: serde_json::json!({ "display_name": format!("mirror-push-test-{actor}") }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     // Serialized exactly the way `crate::outbox::enqueue` does — a hand-built
     // JSON literal here (rather than a real `ProtocolEvent`) previously used

@@ -604,6 +604,7 @@ pub async fn reverse_event(
             .expect("FriendRelationshipReversedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         },
         ReversalPlan::RemoveMembership { guild_id }
         | ReversalPlan::RestoreMembership { guild_id } => {
@@ -634,6 +635,7 @@ pub async fn reverse_event(
                 .expect("GuildMembershipReversedPayload should serialize"),
                 timestamp: now,
                 version: 1,
+                identity_chain: None,
             }
         }
     };
@@ -693,6 +695,7 @@ async fn main_guild_clear_event(
         ),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     }))
 }
 

@@ -1115,6 +1115,7 @@ async fn tampering_a_ledger_entry_breaks_the_chain() {
                 payload: serde_json::json!({ "seq": i }),
                 timestamp: time::OffsetDateTime::now_utc(),
                 version: 1,
+                identity_chain: None,
             }],
             created_at: time::OffsetDateTime::now_utc(),
         };

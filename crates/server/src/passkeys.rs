@@ -279,6 +279,7 @@ pub async fn register_finish(
         .expect("IdentityPasskeyRegisteredPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
@@ -472,6 +473,7 @@ pub async fn revoke_passkey(
         .expect("IdentityPasskeyRevokedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
