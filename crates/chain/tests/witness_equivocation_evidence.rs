@@ -7,7 +7,7 @@
 
 use avalon_chain::mirror::{
     record_witness_equivocation_evidence, witness_equivocation_evidence_for,
-    WitnessEquivocationEvidence,
+    EquivocationEvidenceKind, WitnessEquivocationEvidence,
 };
 use avalon_protocol::cosigned_sth::{find_equivocating_witnesses, CosignedTreeHead};
 use avalon_protocol::sth::sign_tree_head;
@@ -116,6 +116,7 @@ async fn stored_evidence_round_trips_and_stays_independently_verifiable() {
     assert_eq!(equivocators, vec!["witness-b".to_string()]);
 
     let evidence = WitnessEquivocationEvidence {
+        kind: EquivocationEvidenceKind::Witness,
         network_id: network_id.clone(),
         shard_id: shard_id.to_string(),
         tree_size,
@@ -145,6 +146,7 @@ async fn stored_evidence_round_trips_and_stays_independently_verifiable() {
     );
     let row = &stored[0];
     assert!(row.detected_at.is_some());
+    assert_eq!(row.kind, EquivocationEvidenceKind::Witness);
     assert_eq!(row.tree_size, tree_size);
     assert_eq!(
         row.equivocating_witness_key_ids,
@@ -206,6 +208,7 @@ async fn evidence_is_recorded_the_same_regardless_of_which_head_is_passed_first(
     record_witness_equivocation_evidence(
         &pool,
         &WitnessEquivocationEvidence {
+            kind: EquivocationEvidenceKind::Witness,
             network_id: network_id.clone(),
             shard_id: shard_id.to_string(),
             tree_size,
@@ -224,6 +227,7 @@ async fn evidence_is_recorded_the_same_regardless_of_which_head_is_passed_first(
     record_witness_equivocation_evidence(
         &pool,
         &WitnessEquivocationEvidence {
+            kind: EquivocationEvidenceKind::Witness,
             network_id: network_id.clone(),
             shard_id: shard_id.to_string(),
             tree_size,
@@ -240,4 +244,79 @@ async fn evidence_is_recorded_the_same_regardless_of_which_head_is_passed_first(
         .await
         .unwrap();
     assert_eq!(stored.len(), 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn author_level_evidence_round_trips_with_no_cosignatures_or_witnesses() {
+    let pool = test_pool().await;
+    let network_id = format!("avalon-witness-equivocation-live-test-{}", Uuid::new_v4());
+    let shard_id = "game:author-fork";
+    let tree_size = fresh_test_tree_size();
+    let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000);
+    let author_key = SigningKey::generate(&mut rand::rng());
+
+    let head_a = head(&author_key, tree_size, &root_hash(5), &network_id, now, &[]);
+    let head_b = head(&author_key, tree_size, &root_hash(6), &network_id, now, &[]);
+    let evidence = WitnessEquivocationEvidence {
+        kind: EquivocationEvidenceKind::Author,
+        network_id: network_id.clone(),
+        shard_id: shard_id.to_string(),
+        tree_size,
+        head_a: head_b.clone(),
+        head_b: head_a.clone(),
+        equivocating_witness_key_ids: Vec::new(),
+        detected_at: None,
+    };
+    record_witness_equivocation_evidence(&pool, &evidence)
+        .await
+        .expect("author-level evidence with an empty witness list should be storable");
+    record_witness_equivocation_evidence(&pool, &evidence)
+        .await
+        .unwrap();
+
+    let stored = witness_equivocation_evidence_for(&pool, &network_id, shard_id)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    let row = &stored[0];
+    assert_eq!(row.kind, EquivocationEvidenceKind::Author);
+    assert!(row.equivocating_witness_key_ids.is_empty());
+    assert!(row.head_a.cosignatures.is_empty() && row.head_b.cosignatures.is_empty());
+    assert_eq!(row.head_a.sth, head_a.sth);
+    assert_eq!(row.head_b.sth, head_b.sth);
+    assert!(avalon_protocol::sth::verify_tree_head(
+        &author_key.verifying_key(),
+        &row.head_a.sth
+    ));
+    assert!(avalon_protocol::sth::verify_tree_head(
+        &author_key.verifying_key(),
+        &row.head_b.sth
+    ));
+}
+
+#[tokio::test]
+#[ignore]
+async fn witness_level_evidence_must_name_a_witness() {
+    let pool = test_pool().await;
+    let network_id = format!("avalon-witness-equivocation-live-test-{}", Uuid::new_v4());
+    let tree_size = fresh_test_tree_size();
+    let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000);
+    let author_key = SigningKey::generate(&mut rand::rng());
+
+    let result = record_witness_equivocation_evidence(
+        &pool,
+        &WitnessEquivocationEvidence {
+            kind: EquivocationEvidenceKind::Witness,
+            network_id,
+            shard_id: "core".to_string(),
+            tree_size,
+            head_a: head(&author_key, tree_size, &root_hash(7), "n", now, &[]),
+            head_b: head(&author_key, tree_size, &root_hash(8), "n", now, &[]),
+            equivocating_witness_key_ids: Vec::new(),
+            detected_at: None,
+        },
+    )
+    .await;
+    assert!(result.is_err());
 }

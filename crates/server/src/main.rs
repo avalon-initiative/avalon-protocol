@@ -683,6 +683,7 @@ async fn main() {
         peers,
         shard_registry.clone(),
         head_gossip.clone(),
+        known_list_handle.clone(),
         own_shard_id.clone(),
         announce_config,
         dht_identity,

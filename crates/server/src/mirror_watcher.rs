@@ -979,6 +979,7 @@ async fn record_verified_head(
                 );
                 if !equivocators.is_empty() {
                     let evidence = mirror::WitnessEquivocationEvidence {
+                        kind: mirror::EquivocationEvidenceKind::Witness,
                         network_id: head.sth.network_id.clone(),
                         shard_id: shard_id.to_string(),
                         tree_size: head.sth.tree_size,

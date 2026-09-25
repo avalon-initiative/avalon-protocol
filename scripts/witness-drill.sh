@@ -301,13 +301,16 @@ scenario_long_offline() {
 # other at the same tree_size — a real fork, not a fabricated one. A third
 # node mirrors both and must record the disagreement.
 #
-# This exercises the source-based equivocation detection
+# Part one exercises the source-based equivocation detection
 # (mirror_watcher::check_equivocation -> equivocation_findings), which does
-# not depend on witness cosigning. The gossip-driven cosigned confirmation
-# (crate::equivocation::confirm_and_record) needs several cosigning nodes
-# with proven witness keys and is covered by the follow-up drill work.
+# not depend on witness cosigning. Part two adds a gossip-only node that
+# mirrors nothing and only learns both heads through announce gossip; both
+# authors are bare (no mirror, no cosignatures), so it must confirm the fork
+# from the two author signatures alone
+# (crate::equivocation::confirm_and_record) and store author-level evidence.
 # ---------------------------------------------------------------------------
 scenario_fork() {
+  cargo build -q -p avalon-server --example witness_evidence || return 1
   node fork-a "" || return 1
   local port_a="$LAST_PORT" log_a="$LOG_DIR/fork-a.log"
   node fork-b "" || return 1
@@ -325,6 +328,23 @@ scenario_fork() {
     log_contains "$log_watcher" equivocation_detected
   check "fork-a itself logs nothing (equivocation is the mirror's finding, not either author's)" \
     log_lacks "$log_a" equivocation_detected
+
+  node fork-gossip "http://127.0.0.1:$port_a,http://127.0.0.1:$port_b" || return 1
+  local port_g="$LAST_PORT" log_g="$LOG_DIR/fork-gossip.log" schema_g="live_drill_fork_gossip"
+  wait_until "the gossip-only node confirms the fork from two author signatures" 60 \
+    log_contains "$log_g" equivocation_confirmed
+  wait_until "the gossip-only node stores author-level evidence naming no witness" 30 \
+    author_evidence_stored "$schema_g" core
+  check "the gossip-only node logged the confirmation as author-level" \
+    log_contains "$log_g" 'evidence_kind.*Author'
+}
+
+evidence_json() {
+  DATABASE_URL="$(schema_url "$1")" "$ROOT/target/debug/examples/witness_evidence" \
+    "$AVALON_NETWORK_ID" "$2" 2>/dev/null
+}
+author_evidence_stored() {
+  evidence_json "$1" "$2" | jq -es 'length >= 1 and all(.[]; .kind == "author" and (.equivocating_witnesses | length) == 0)' >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
