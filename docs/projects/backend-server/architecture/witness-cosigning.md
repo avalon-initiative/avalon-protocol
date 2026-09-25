@@ -41,10 +41,11 @@ Fields, and why each is there: `tree_size`/`root_hash`/`network_id`/
 identifies which witness signed (the known list is keyed by this, never by
 network address — an address can be spoofed or change; a key can't).
 `observed_at` is the witness's own timestamp, separate from the author's —
-what freshness checks use (below). An old cosignature for a since-superseded
-head stays valid forever (the head it attests to was real); a witness that
-hasn't produced a *fresh* one lately is a stale slot, which is a different
-concern from "is this cosignature real."
+what freshness checks use (below). A cosignature attests to the head it names and
+never becomes false, but a verifier only counts cosignatures observed within the
+freshness window when it accepts a head. A witness therefore re-attests its current
+head on an interval (see "Re-attestation"), so an unchanged head stays acceptable
+on a quiet network.
 
 **What a witness checks before cosigning** (this is the actual security
 work; the signature is just how the result gets published):
@@ -70,7 +71,7 @@ done it, same as any other signed statement in this protocol.
 |---|---|---|
 | Known-list size (Y) | 5, hard cap (`AVALON_KNOWN_LIST_CAPACITY`) | Bounded verification cost per node/client regardless of network size; small enough to gossip and check cheaply. At Y=5 the required count is 3 and the list tolerates 2 failures. The capacity is configurable; the required count is always a strict majority of the actual list size and is not separately configurable. |
 | Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 3 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=5 cap, X=3 (tolerance 2). |
-| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.4, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger only (see below) — never head validity. |
+| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.4, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger, and the age limit a verifier applies to cosignatures when accepting a head. Witnesses re-attest their current head every third of this window so an unchanged head stays acceptable. |
 | Anchor slots | 2 of the 5 (clamped to the capacity when it is set lower) | Reserved for bundled anchors (see below); never filled by ordinary refill. |
 | Diversity cap | 2 slots per prefix | Applies to every slot, anchors included. |
 | Head-gossip cap | ≤5 head summaries per exchange | Matches the existing per-exchange gossip discipline (#882/#948) — small, bounded payload, not full cosignature bytes on every exchange. |
@@ -162,13 +163,20 @@ so a pass never tightens as it evicts. The tradeoff: a small list drops a
 silent member sooner, and a fast drop can leave it at one confirmed witness,
 the plain author-signature case, until a probationary slot clears probation.
 A witness whose most recent `observed_at` for a
- whose most recent `observed_at` for a
 network's current head is older than the window is a **stale slot** — eligible
-for replacement by ordinary refill — not a signal that anything it signed in
-the past becomes invalid. Old cosigned heads remain valid forever (consistency
-proofs only ever extend forward); freshness is entirely about "is this slot's
-occupant still alive and worth a seat," the input to refill, never an input
-to verifying a past head.
+for replacement by ordinary refill. The same window is the age limit a verifier
+applies to cosignatures when it accepts a head, so there is one rule: freshness
+applies to head acceptance, and witnesses keep their attestations fresh.
+
+### Re-attestation
+
+Every witness re-signs, on an interval (a third of the cosignature freshness window,
+`AVALON_WITNESS_REATTEST_SECS` to override), its cosignature over the last head it
+cosigned for each log, with a new `observed_at`. It never signs a different root at that
+size and skips any shard with a recorded equivocation. The refreshed signature replaces
+the stored one, so `GET /ledger/sth/{n}?witnesses=1` serves it. Without this, a head with
+no writes for longer than the window would stop verifying for clients that require a
+majority.
 
 ## Head gossip
 

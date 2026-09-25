@@ -1428,6 +1428,34 @@ pub async fn witness_checkpoint_for(
     }))
 }
 
+/// Every log this node holds a last-cosigned checkpoint for.
+pub async fn all_witness_checkpoints(
+    pool: &PgPool,
+) -> Result<Vec<WitnessCheckpoint>, SettlementError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT network_id, shard_id, tree_size, root_hash, witness_key_id, cosigned_at
+        FROM witness_checkpoints
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    rows.into_iter()
+        .map(|row| {
+            Ok(WitnessCheckpoint {
+                network_id: row.try_get("network_id").map_err(get)?,
+                shard_id: row.try_get("shard_id").map_err(get)?,
+                tree_size: row.try_get("tree_size").map_err(get)?,
+                root_hash: row.try_get("root_hash").map_err(get)?,
+                witness_key_id: row.try_get("witness_key_id").map_err(get)?,
+                cosigned_at: row.try_get("cosigned_at").map_err(get)?,
+            })
+        })
+        .collect()
+}
+
 /// Advances this node's checkpoint for `network_id`/`shard_id` to
 /// `tree_size`/`root_hash` after a cosigning decision has actually
 /// produced and stored a cosignature for it. Upserts, but only ever
