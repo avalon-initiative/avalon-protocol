@@ -626,6 +626,26 @@ async fn main() {
         replication::ReplicationConfig::from_env(),
     ));
 
+    // Issue #946: this node's own witness known list — a much smaller,
+    // purpose-specific structure than the peer table above (see
+    // `avalon_server::known_list`'s own module doc comment for the
+    // boundary). Spawned unconditionally, same posture the announce worker
+    // just below takes: even a node with no peers yet still has its
+    // bundled anchors to try to admit, and needs probation/freshness
+    // maintenance running regardless.
+    let known_list_handle = avalon_server::known_list::KnownListHandle::load_or_new(
+        avalon_server::known_list::KnownListConfig::from_env(),
+        Some(avalon_server::known_list::known_list_path(
+            &avalon_server::known_list::data_dir_from_env(),
+        )),
+    );
+    tokio::spawn(avalon_server::known_list::run_worker(
+        peers.clone(),
+        chain.network_id().to_string(),
+        known_list_handle,
+        avalon_server::known_list::refill_interval_from_env(),
+    ));
+
     // Node-to-node announce/bootstrap discovery — spawned
     // unconditionally, unlike the mirror-watcher above: even this
     // network's anchor node (an empty resolved peer list) still needs to

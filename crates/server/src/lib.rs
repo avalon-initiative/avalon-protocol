@@ -49,6 +49,7 @@ pub mod integrators;
 pub mod interest;
 pub mod internal_role;
 pub mod issuer_registration;
+pub mod known_list;
 pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
