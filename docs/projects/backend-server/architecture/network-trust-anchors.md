@@ -108,6 +108,29 @@ independently re-verifies the STH's Ed25519 signature against that entry's
   against it and correctly reports **unknown network** unless its STH
   happens to verify against an already-pinned entry's key.
 
+## Witness cosigning alongside the pinned key
+
+The pinned `verify_key` above is still the log's own signer, and a client that checks
+only that signature behaves exactly as before. Witness cosigning is additive: independent
+nodes cosign heads they have checked for append-only growth, and a verifier that wants
+more than one key's word accepts a head once a majority of its own known witnesses has
+cosigned it (`avalon_protocol::cosigned_sth::verify_cosigned_tree_head`). With zero or one
+known witness the rule reduces to the plain author-signature check, so no network is
+special-cased. Full design and parameters: [`witness-cosigning.md`](./witness-cosigning.md).
+
+What is and is not in place today:
+
+- Nodes cosign, store, serve (`?witnesses=1`), gossip head summaries and verify mirrored
+  and cross-shard heads by majority. The trust-anchor entry format is unchanged and
+  carries no witness list: each verifier builds its own known list from discovery, with
+  the bundled seed nodes as anchors whose witness keys come from their own announces.
+- The SDKs and the Hub do not verify cosignatures yet; they check the author signature
+  against the pinned key as described above. Until they do, a pinned client gets the
+  same assurance it always had. The default `GET /ledger/sth/latest` body is unchanged,
+  which is what keeps them working; `scripts/witness-drill.sh rollout` asserts that.
+- A network can move onto witness cosigning without a reset and back off again:
+  [`witness-policy-rollout.md`](../for-maintainers/witness-policy-rollout.md).
+
 ## What this does NOT solve
 
 Client-side pinning stops a *server* from impersonating a network it doesn't
