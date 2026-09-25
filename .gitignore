@@ -81,3 +81,6 @@ Session.vim
 tmp/
 temp/
 scratch/
+
+# Node-local state (known list); the default AVALON_DATA_DIR.
+/data/
