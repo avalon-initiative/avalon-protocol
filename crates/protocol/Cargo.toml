@@ -22,6 +22,10 @@ utoipa.workspace = true
 # for this pure Ed25519 signing scheme).
 ed25519-dalek.workspace = true
 hex.workspace = true
+# Self-certifying shard ids (crates/protocol/src/shard_identity.rs) hash a
+# shard's tree-head public key; same version `avalon-chain` already uses for
+# RFC 6962 Merkle hashing.
+sha2 = "0.11"
 
 [dev-dependencies]
 rand.workspace = true

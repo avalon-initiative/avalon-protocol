@@ -1,14 +1,25 @@
-//! Shard identifier grammar: `core`, or `{namespace}:{owner}[/{instance}]`.
+//! Shard identifier grammar: `core`, `{namespace}:{owner}[/{instance}]`, or
+//! `node:<key-hash>` (self-certifying — see [`SELF_CERTIFYING_NAMESPACE`]).
 //!
 //! `namespace` is `game`, `app` or `service`; `owner` is the integrator slug
 //! and is the only component used for key and authority resolution;
 //! `instance` distinguishes sibling shards operated by the same owner.
+//! `node:<key-hash>` is a distinct, third form: see
+//! `crate::shard_identity` for its derivation and verification.
 
 /// The reserved shard label of a network's pinned core authority.
 pub const CORE_SHARD_ID: &str = "core";
 
 /// Longest permitted `instance` component.
 pub const MAX_INSTANCE_LEN: usize = 64;
+
+/// Namespace of a self-certifying shard id (`node:<key-hash>`) — see
+/// `crate::shard_identity`.
+pub const SELF_CERTIFYING_NAMESPACE: &str = "node";
+
+/// Length in hex characters of a self-certifying id's key hash: SHA-256
+/// (32 bytes), full-length, lowercase hex.
+pub const KEY_HASH_HEX_LEN: usize = 64;
 
 /// A syntactically valid shard identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +29,12 @@ pub enum ParsedShardId<'a> {
         namespace: &'a str,
         owner: &'a str,
         instance: Option<&'a str>,
+    },
+    /// `node:<key-hash>` — self-certifying, resolved from the id alone
+    /// (`crate::shard_identity::resolve_self_certifying_key`), never through
+    /// [`shard_authority`].
+    SelfCertifying {
+        key_hash_hex: &'a str,
     },
 }
 
@@ -29,6 +46,7 @@ pub enum ShardIdError {
     EmptyOwner,
     InvalidOwner(String),
     InvalidInstance(String),
+    InvalidKeyHash(String),
 }
 
 impl std::fmt::Display for ShardIdError {
@@ -37,7 +55,8 @@ impl std::fmt::Display for ShardIdError {
             ShardIdError::Empty => write!(f, "shard id is empty"),
             ShardIdError::UnknownNamespace(ns) => write!(
                 f,
-                "unknown shard namespace {ns:?} (expected `core` or `game|app|service:<owner>[/<instance>]`)"
+                "unknown shard namespace {ns:?} (expected `core`, `node:<key-hash>`, or \
+                 `game|app|service:<owner>[/<instance>]`)"
             ),
             ShardIdError::EmptyOwner => write!(f, "shard id has an empty owner"),
             ShardIdError::InvalidOwner(o) => write!(
@@ -47,6 +66,10 @@ impl std::fmt::Display for ShardIdError {
             ShardIdError::InvalidInstance(i) => write!(
                 f,
                 "invalid shard instance {i:?} (1-{MAX_INSTANCE_LEN} chars of [a-z0-9-], starting with [a-z0-9])"
+            ),
+            ShardIdError::InvalidKeyHash(h) => write!(
+                f,
+                "invalid self-certifying key hash {h:?} ({KEY_HASH_HEX_LEN} lowercase hex chars expected)"
             ),
         }
     }
@@ -64,6 +87,12 @@ fn valid_instance(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+fn valid_key_hash_hex(s: &str) -> bool {
+    s.len() == KEY_HASH_HEX_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 /// Parses and validates a shard identifier.
 pub fn parse_shard_id(id: &str) -> Result<ParsedShardId<'_>, ShardIdError> {
     if id.is_empty() {
@@ -75,6 +104,13 @@ pub fn parse_shard_id(id: &str) -> Result<ParsedShardId<'_>, ShardIdError> {
     let Some((namespace, rest)) = id.split_once(':') else {
         return Err(ShardIdError::UnknownNamespace(id.to_string()));
     };
+    if namespace == SELF_CERTIFYING_NAMESPACE {
+        return if valid_key_hash_hex(rest) {
+            Ok(ParsedShardId::SelfCertifying { key_hash_hex: rest })
+        } else {
+            Err(ShardIdError::InvalidKeyHash(rest.to_string()))
+        };
+    }
     if !matches!(namespace, "game" | "app" | "service") {
         return Err(ShardIdError::UnknownNamespace(namespace.to_string()));
     }
@@ -104,7 +140,8 @@ pub fn parse_shard_id(id: &str) -> Result<ParsedShardId<'_>, ShardIdError> {
 }
 
 /// `(namespace, owner)` used for key and authority resolution, or `None` for
-/// `core` and anything that does not parse.
+/// `core`, a self-certifying `node:<key-hash>` id (resolved via
+/// `crate::shard_identity` instead), and anything that does not parse.
 pub fn shard_authority(id: &str) -> Option<(&str, &str)> {
     match parse_shard_id(id) {
         Ok(ParsedShardId::Owned {
@@ -188,5 +225,39 @@ mod tests {
         let too_long = format!("game:wow/{}", "a".repeat(65));
         assert!(parse_shard_id(&ok).is_ok());
         assert!(parse_shard_id(&too_long).is_err());
+    }
+
+    #[test]
+    fn self_certifying_id_parses() {
+        let hash = "ab".repeat(32);
+        assert_eq!(
+            parse_shard_id(&format!("node:{hash}")),
+            Ok(ParsedShardId::SelfCertifying {
+                key_hash_hex: &hash
+            })
+        );
+        // Self-certifying ids resolve no `(namespace, owner)` — they carry
+        // no registry-resolvable authority at all.
+        assert_eq!(shard_authority(&format!("node:{hash}")), None);
+    }
+
+    #[test]
+    fn self_certifying_id_rejects_wrong_length_or_case() {
+        assert!(matches!(
+            parse_shard_id("node:ab"),
+            Err(ShardIdError::InvalidKeyHash(_))
+        ));
+        assert!(matches!(
+            parse_shard_id(&format!("node:{}", "AB".repeat(32))),
+            Err(ShardIdError::InvalidKeyHash(_))
+        ));
+        assert!(matches!(
+            parse_shard_id(&format!("node:{}", "zz".repeat(32))),
+            Err(ShardIdError::InvalidKeyHash(_))
+        ));
+        assert!(matches!(
+            parse_shard_id("node:"),
+            Err(ShardIdError::InvalidKeyHash(_))
+        ));
     }
 }

@@ -242,6 +242,45 @@ purpose over the real API, purpose-gating is unit-tested directly
 and a live test resolves a key from seeded mirrored entries with no local row
 and stops resolving it after a mirrored revocation.
 
+## Self-certifying shard ids
+
+Everything above resolves a shard's key by tracing it back, through the core
+ledger, to a registered integrator — a real mechanism, but one that only
+works once that integrator has registered at all, and only while the core
+authority (or a mirror of it) is reachable. A second, permanent form exists
+alongside it for exactly the case where neither is true: `node:<key-hash>`,
+where `<key-hash>` is the lowercase hex SHA-256 digest of the shard's own
+tree-head Ed25519 public key
+(`avalon_protocol::shard_identity::derive_self_certifying_id`). A verifier
+handed this id, a candidate key, and a signed tree head checks all three
+purely locally
+(`avalon_protocol::shard_identity::verify_self_certifying_tree_head`):
+re-derive the id from the candidate key and compare, then verify the head's
+signature against that same key. No core-ledger inclusion proof, no
+`issuer.key_added` event, no database — the id is exactly as much trust
+anchor as the key itself needs, and nothing more is ever consulted.
+
+**Named and self-certifying ids are both first-class, permanent forms, told
+apart by parsing alone.** `avalon_protocol::shard::parse_shard_id` returns a
+distinct `ParsedShardId::SelfCertifying` variant for `node:<key-hash>`,
+alongside the existing `Core`/`Owned` variants; `shard_authority` (the
+`(namespace, owner)` extraction the registry-based resolvers above key off
+of) returns `None` for it, the same as it already does for `core`. Neither
+form is deprecated in favor of the other, and a network runs shards of both
+kinds side by side.
+
+**A name is a claim on top, never a gate underneath.** A self-certifying
+shard has no human-readable name unless its own key signs one:
+`avalon_protocol::shard_identity::NameBindingClaim` binds a name to a
+self-certifying id, carrying the raw public key alongside the id so the
+claim verifies in total isolation — no lookup of who "owns" the name, no
+confirmation the id is even real beyond what the claim's own signature
+proves. `sign_name_binding_claim`/`verify_name_binding_claim` are the
+claim's sign/verify pair; resolving conflicting claims, proving a claim
+against a domain, and any registry that indexes claims by name are the
+naming layer's job, not this claim's. A self-certifying shard with no name
+at all authors and is verified exactly the same as one with a claimed name.
+
 ## Genesis reset / migration
 
 A deliberate `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset —
@@ -310,6 +349,18 @@ and re-run without any risk to the network being migrated from.
 - Not built: a "manually add a custom trust anchor" UI in the Hub (the Hub's
   own invariant is satisfied by clearly flagging an unpinned network as
   unverified rather than requiring a manual-add flow — see Invariants below).
+- `crates/protocol/src/shard_identity.rs` — self-certifying shard ids
+  (`derive_self_certifying_id`, `resolve_self_certifying_key`,
+  `verify_self_certifying_tree_head`) and the `NameBindingClaim` sign/verify
+  pair, both pure functions, unit-tested including forged id/key mismatches
+  and a tampered claim. `avalon_server::core_author_guard::evaluate` is
+  unchanged in behavior for a self-certifying `AVALON_OWN_SHARD_ID` (it
+  already fell through to `NotApplicable`, the same as a named shard), now
+  with a dedicated test and doc comment making that explicit rather than
+  incidental. Not yet built: the naming/registry layer that resolves and
+  disputes `NameBindingClaim`s, and wiring a self-certifying shard's raw key
+  into the cross-shard STH fetch path (today's `resolve_shard_verify_keys_from_db`
+  only resolves named/registered shards) — both separate, later work.
 
 ## Invariants
 

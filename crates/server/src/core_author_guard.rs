@@ -4,6 +4,19 @@
 //! A node whose `AVALON_OWN_SHARD_ID` is `core` and whose signing key differs
 //! from the key pinned for its network in `docs/trusted-networks.json` produces
 //! tree heads that clients pinned to that network report as a mismatch.
+//!
+//! Only `core` needs this: it is the one shard id with a key pinned outside
+//! any registry. A named shard (`game:<slug>`) has no startup-time check at
+//! all — its key is authorized later, at verification time, by whoever
+//! resolves `issuer.key_added(purpose: shard_settlement)`
+//! (`avalon_server::mirrored_shard_keys`), not by this node itself. A
+//! self-certifying shard (`node:<key-hash>`,
+//! `avalon_protocol::shard_identity`) needs no check for the same reason
+//! `core` needs one specifically because it's the odd case: its id already
+//! *is* a function of its key, so nothing can ever be pinned to the wrong
+//! one — [`evaluate`] falls through to [`CoreAuthorDecision::NotApplicable`]
+//! for both named and self-certifying ids alike, correctly, since neither
+//! has a pinned key to check against.
 
 use std::sync::OnceLock;
 
@@ -233,5 +246,28 @@ mod tests {
             &[anchor(NetworkEnvironment::Prod)],
         );
         assert_eq!(d, CoreAuthorDecision::NotApplicable);
+    }
+
+    /// A self-certifying id needs no registration or pinned-key check at
+    /// all, regardless of key or peer configuration — its own id already
+    /// certifies whichever key it's authored with, so there is nothing to
+    /// mismatch. Same `NotApplicable` outcome as a named shard, exercised
+    /// here as its own case so a future change to `evaluate` can't
+    /// accidentally start gating self-certifying startup without a test
+    /// catching it.
+    #[test]
+    fn self_certifying_shard_is_not_applicable_even_with_peers_and_no_anchor_match() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]).verifying_key();
+        let self_certifying_id = avalon_protocol::shard_identity::derive_self_certifying_id(&key);
+        let node_key_hex = hex::encode(key.to_bytes());
+
+        for peers in [true, false] {
+            let d = evaluate(
+                &inputs(&self_certifying_id, &node_key_hex, peers),
+                &[anchor(NetworkEnvironment::Prod)],
+            );
+            assert_eq!(d, CoreAuthorDecision::NotApplicable);
+            assert_eq!(d.pinned(), None);
+        }
     }
 }
