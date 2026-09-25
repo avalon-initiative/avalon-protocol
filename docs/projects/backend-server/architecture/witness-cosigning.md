@@ -194,14 +194,10 @@ spike's* prototype, not the production implementation:
   and by brute-force/random subset enumeration); a known list with anchor
   reservation and a diversity cap resists a same-prefix flood and correctly
   refills to capacity after losing members, staying diverse throughout.
-- **Does not include**: real discovery integration, tenure-weighted
-  selection, probation periods, or the gossip transport itself — those are
-  #931 (self-certifying ids, done), #932 (cosigned tree head format/
-  verification wired into the server, done), #936 (naming layer), #938
-  (mirror sync/cross-shard roots verify by cosigned heads, done — see
-  "Today in the repo"), #939 (migration from single-key networks), #944
-  (per-identity chains), #946 (production known-list management, done),
-  #947 (proactive cosigning/head gossip between nodes, still open).
+- **Does not include** what the production code added afterwards: server
+  wiring, storage, real discovery, tenure-weighted selection, probation, the
+  gossip transport and the cosigning decision. See "Today in the repo" for
+  what exists now and "Not done yet" for what does not.
 
 ## Today in the repo
 
@@ -322,8 +318,10 @@ this scheme carries no format version and is discarded on load. Cosignatures
 reach a node's `witness_cosignatures` table from its own cosigning decision
 as well as from `store_valid_cosignatures` while mirroring; #947's gossip
 carries bounded *summaries*, not a proactive push of new cosignatures. The
-network still runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
-`sth.rs`/`network-trust-anchors.md` describe until #939's migration lands.
+pinned `AVALON_SETTLEMENT_VERIFY_KEY` remains the log's own signer and what
+released clients check; cosigning is additive and needs no reset. The
+procedure for moving a running network onto it and back is
+[`../for-maintainers/witness-policy-rollout.md`](../for-maintainers/witness-policy-rollout.md).
 The proof alone shows only that the key holder bound the key to that URL,
 not that the URL's operator agrees, so it is not enough to become a
 candidate: an attacker could otherwise gossip an innocent host's URL bound to
@@ -340,6 +338,24 @@ anyway), so a node with no outbound bootstrap peers, such as a seed that only
 receives announces, still vouches its inbound-only peers. These contacts
 pass the outbound address policy, use the announce timeout, take only the
 advert from the response, and never touch the active set or neighbors table.
+
+## Not done yet
+
+- **Clients do not verify cosignatures.** The SDKs and the Hub check the author
+  signature against the pinned key. Cosigned verification in all three SDKs, with the
+  conformance vectors, is avalon-initiative/avalon-sdks#37 and ships in the
+  coordinated SDK release.
+- **No witness policy in the trust-anchor entry.** `docs/trusted-networks.json` is
+  unchanged: same pinned key, same seed nodes. Whether an entry should carry witness
+  keys or a client policy is decided together with the SDK work.
+- **The live drill has not been run on the dev fleet with cosigning on**, and the
+  `fork` scenario does not yet exercise two disjoint witness groups. Tracked in #966.
+- **Layer-1 per-identity chains are not wired into the server.** The pure conflict
+  rule and types exist (`identity_chain.rs`); chain state, emission sites, the indexer
+  and the freeze on a forked identity are #961, with conformance vectors.
+- **Resistance, not proof.** An attacker who controls most of a victim's known
+  witnesses can still mislead that victim. The diversity cap, probation, anchors and
+  the vouch requirement raise the cost; they do not remove it.
 
 The scenario suite that exercises growth, loss of the original node, witness loss, eclipse and fork attempts against real processes, plus the live-fleet drill procedure, is in [`../for-maintainers/witness-drill.md`](../for-maintainers/witness-drill.md) (`scripts/witness-drill.sh`).
 

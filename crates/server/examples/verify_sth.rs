@@ -93,12 +93,11 @@ fn main() {
                     std::process::exit(2);
                 }
                 for dto in &response.cosignatures {
-                    if !cosignatures
-                        .iter()
-                        .any(|c: &avalon_protocol::witness::WitnessCosignature| {
+                    if !cosignatures.iter().any(
+                        |c: &avalon_protocol::witness::WitnessCosignature| {
                             c.witness_key_id == dto.witness_key_id
-                        })
-                    {
+                        },
+                    ) {
                         cosignatures.push(dto.to_witness_cosignature(&sth));
                     }
                 }

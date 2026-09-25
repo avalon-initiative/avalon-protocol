@@ -348,7 +348,7 @@ cosigned_by() {
 }
 not_cosigned_by() {
   sth_json "$1" "?shard_id=core&witnesses=1" | jq -e --arg k "$2" \
-    '([.cosignatures[].witness_key_id] | index($k)) == null' >/dev/null 2>&1
+    '([(.cosignatures // [])[].witness_key_id] | index($k)) == null' >/dev/null 2>&1
 }
 has_no_cosignatures_field() { printf '%s' "$1" | jq -e 'has("cosignatures") | not' >/dev/null 2>&1; }
 history_unchanged() {

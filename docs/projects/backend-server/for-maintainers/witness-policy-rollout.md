@@ -104,10 +104,13 @@ sign a head that does not extend it.
 - Local, isolated, real processes: `make witness-drill SCENARIOS=rollout`. It starts a
   single-key author, writes history, starts two cosigning mirrors, checks the list above,
   keeps writing, then turns one witness off and repeats the old-client and history checks.
-  See [`witness-drill.md`](./witness-drill.md).
-- Dev fleet: not yet run. It is part of the live drill tracked in #966, to be run once with
-  cosigning on across the fleet including removal of the original node. Update this
-  section with the result.
+  See [`witness-drill.md`](./witness-drill.md). Result on the release that introduced
+  this runbook: 25 of 25 checks pass, twice in a row, including the rollback half (the
+  disabled node still mirrors, produces no cosignature, and every earlier head still
+  verifies).
+- Dev fleet: not yet run, so this procedure is not yet rehearsed on the fleet. It is part
+  of the live drill tracked in #966, to be run once with cosigning on across the fleet
+  including removal of the original node. Update this section with that result.
 
 ## Limits worth knowing
 
