@@ -521,6 +521,7 @@ async fn resolve_signing_key_cross_shard(
     }
 
     let verify_keys = core_shard_verify_keys(state.chain.network_id());
+    let known_list = crate::cosign_verify::known_list_verifying_keys(&state.known_list);
     let signing_key_id_str = signing_key_id.to_string();
     let added_subject = format!("identity:{identity_id}:self:signing_key_added");
     let revoked_subject = format!("identity:{identity_id}:self:signing_key_revoked");
@@ -533,6 +534,7 @@ async fn resolve_signing_key_cross_shard(
             &base_url,
             &added_subject,
             &verify_keys,
+            &known_list,
         )
         .await
         else {
@@ -552,6 +554,7 @@ async fn resolve_signing_key_cross_shard(
             &base_url,
             &revoked_subject,
             &verify_keys,
+            &known_list,
         )
         .await
         .unwrap_or_default();
@@ -601,6 +604,7 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
 
     let locations = crate::identity_locator::resolve(state, identity_id).await;
     let verify_keys = core_shard_verify_keys(state.chain.network_id());
+    let known_list = crate::cosign_verify::known_list_verifying_keys(&state.known_list);
     let created_subject = format!("identity:{identity_id}:self:created");
 
     for base_url in locations {
@@ -611,6 +615,7 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
             &base_url,
             &created_subject,
             &verify_keys,
+            &known_list,
         )
         .await
         else {

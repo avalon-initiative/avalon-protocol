@@ -22,8 +22,8 @@ pub mod retention;
 pub use avalon_protocol::sth;
 
 pub use postgres::{
-    hash_entry, EntryContent, EquivocationEvidence, GenesisError, IssuerHistoryEntry,
-    LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
+    hash_entry, EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,
+    PostgresSettlementProvider,
 };
 
 use async_trait::async_trait;

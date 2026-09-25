@@ -25,6 +25,8 @@
 //! served this content, for multi-peer-failover/audit purposes) — the
 //! scoping/uniqueness key is `shard_id`, not `source_url`.
 
+use avalon_protocol::cosigned_sth::CosignedTreeHead;
+use avalon_protocol::witness::WitnessCosignature;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
@@ -492,6 +494,246 @@ pub async fn discard_mirrored_entries_from(
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
     Ok(result.rows_affected())
+}
+
+/// Durable, independently-verifiable proof that two different
+/// witness-majorities each cosigned a different tree head at the same
+/// `network_id`/`shard_id`/`tree_size` — the storage half of
+/// `avalon_protocol::cosigned_sth::find_equivocating_witnesses`. Distinct
+/// from [`EquivocationFinding`] above: that struct records disagreement
+/// between two *sources* serving raw, singly-signed STHs (the original
+/// model, no witness cosigning involved); this one records disagreement
+/// between two *cryptographically majority-attested* heads, provable from
+/// signatures alone, independent of which source(s) happened to relay
+/// either one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessEquivocationEvidence {
+    pub network_id: String,
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub head_a: CosignedTreeHead,
+    pub head_b: CosignedTreeHead,
+    /// The witness id(s) present, valid and fresh in both heads' cosignature
+    /// sets — `cosigned_sth::find_equivocating_witnesses`'s own return
+    /// value, never empty for a row that was actually recorded (an empty
+    /// result there means "not a genuine conflict," which never reaches
+    /// [`record_witness_equivocation_evidence`] at all — see its own doc
+    /// comment).
+    pub equivocating_witness_key_ids: Vec<String>,
+    /// `None` for evidence not yet round-tripped through storage; always
+    /// `Some` once read back via [`witness_equivocation_evidence_for`].
+    pub detected_at: Option<OffsetDateTime>,
+}
+
+/// The exact bytes `equivocation_evidence.cosignatures_a`/`cosignatures_b`
+/// store — just enough per cosignature to re-derive
+/// `avalon_protocol::witness::witness_signing_message` and re-verify: the
+/// head-level fields (`tree_size`/`root_hash`/`network_id`/
+/// `author_created_at`) are already columns of the same row, stored once
+/// rather than repeated per witness.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CosignatureRecord {
+    witness_key_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    observed_at: OffsetDateTime,
+    signature: String,
+}
+
+fn cosignatures_to_json(cosigs: &[WitnessCosignature]) -> serde_json::Value {
+    let records: Vec<CosignatureRecord> = cosigs
+        .iter()
+        .map(|c| CosignatureRecord {
+            witness_key_id: c.witness_key_id.clone(),
+            observed_at: c.observed_at,
+            signature: c.signature.clone(),
+        })
+        .collect();
+    serde_json::to_value(records).unwrap_or(serde_json::Value::Array(Vec::new()))
+}
+
+fn cosignatures_from_json(
+    value: serde_json::Value,
+    tree_size: i64,
+    root_hash: &str,
+    network_id: &str,
+    author_created_at: OffsetDateTime,
+) -> Result<Vec<WitnessCosignature>, SettlementError> {
+    let records: Vec<CosignatureRecord> = serde_json::from_value(value)
+        .map_err(|e| SettlementError::Storage(format!("invalid stored cosignature JSON: {e}")))?;
+    Ok(records
+        .into_iter()
+        .map(|r| WitnessCosignature {
+            tree_size,
+            root_hash: root_hash.to_string(),
+            network_id: network_id.to_string(),
+            author_created_at,
+            witness_key_id: r.witness_key_id,
+            observed_at: r.observed_at,
+            signature: r.signature,
+        })
+        .collect())
+}
+
+/// Records `evidence`'s two conflicting heads durably — idempotent on a
+/// replayed `(network_id, shard_id, tree_size, root_hash_a, root_hash_b)`
+/// (`ON CONFLICT DO NOTHING`: the same conflicting pair, rediscovered on a
+/// later poll tick, is not a second finding). `head_a`/`head_b` are stored
+/// under whichever root hash sorts first lexically, regardless of the order
+/// a caller happens to pass them in, so the same pair is never recorded
+/// twice under swapped labels. Callers are expected to have already called
+/// `cosigned_sth::find_equivocating_witnesses` themselves and only call this
+/// when it returned a non-empty result — this function does not
+/// re-derive or re-check that the conflict is genuine, only stores what
+/// it's told.
+pub async fn record_witness_equivocation_evidence(
+    pool: &PgPool,
+    evidence: &WitnessEquivocationEvidence,
+) -> Result<(), SettlementError> {
+    let (first, second) = if evidence.head_a.sth.root_hash <= evidence.head_b.sth.root_hash {
+        (&evidence.head_a, &evidence.head_b)
+    } else {
+        (&evidence.head_b, &evidence.head_a)
+    };
+
+    tracing::error!(
+        event = "witness_equivocation_detected",
+        network_id = %evidence.network_id,
+        shard_id = %evidence.shard_id,
+        tree_size = evidence.tree_size,
+        root_hash_a = %first.sth.root_hash,
+        root_hash_b = %second.sth.root_hash,
+        equivocating_witnesses = ?evidence.equivocating_witness_key_ids,
+        "witness equivocation detected: a majority-cosigned witness set disagrees with itself \
+         about this tree head",
+    );
+
+    sqlx::query(
+        r#"
+        INSERT INTO equivocation_evidence
+            (network_id, shard_id, tree_size,
+             root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
+             root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
+             equivocating_witness_key_ids)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (network_id, shard_id, tree_size, root_hash_a, root_hash_b) DO NOTHING
+        "#,
+    )
+    .bind(&evidence.network_id)
+    .bind(&evidence.shard_id)
+    .bind(evidence.tree_size)
+    .bind(&first.sth.root_hash)
+    .bind(&first.sth.signing_key_id)
+    .bind(&first.sth.signature)
+    .bind(first.sth.created_at)
+    .bind(cosignatures_to_json(&first.cosignatures))
+    .bind(&second.sth.root_hash)
+    .bind(&second.sth.signing_key_id)
+    .bind(&second.sth.signature)
+    .bind(second.sth.created_at)
+    .bind(cosignatures_to_json(&second.cosignatures))
+    .bind(&evidence.equivocating_witness_key_ids)
+    .execute(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// Every recorded [`WitnessEquivocationEvidence`] row for `network_id`/
+/// `shard_id`, newest first — independently reconstructable and
+/// re-verifiable by anyone from the stored signatures alone.
+pub async fn witness_equivocation_evidence_for(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+) -> Result<Vec<WitnessEquivocationEvidence>, SettlementError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT network_id, shard_id, tree_size,
+               root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
+               root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
+               equivocating_witness_key_ids, detected_at
+        FROM equivocation_evidence
+        WHERE network_id = $1 AND shard_id = $2
+        ORDER BY detected_at DESC
+        "#,
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let network_id: String = row.try_get("network_id").map_err(get)?;
+        let shard_id: String = row.try_get("shard_id").map_err(get)?;
+        let tree_size: i64 = row.try_get("tree_size").map_err(get)?;
+
+        let root_hash_a: String = row.try_get("root_hash_a").map_err(get)?;
+        let signing_key_id_a: String = row.try_get("signing_key_id_a").map_err(get)?;
+        let signature_a: String = row.try_get("signature_a").map_err(get)?;
+        let author_created_at_a: OffsetDateTime =
+            row.try_get("author_created_at_a").map_err(get)?;
+        let cosignatures_a_json: serde_json::Value = row.try_get("cosignatures_a").map_err(get)?;
+
+        let root_hash_b: String = row.try_get("root_hash_b").map_err(get)?;
+        let signing_key_id_b: String = row.try_get("signing_key_id_b").map_err(get)?;
+        let signature_b: String = row.try_get("signature_b").map_err(get)?;
+        let author_created_at_b: OffsetDateTime =
+            row.try_get("author_created_at_b").map_err(get)?;
+        let cosignatures_b_json: serde_json::Value = row.try_get("cosignatures_b").map_err(get)?;
+
+        let equivocating_witness_key_ids: Vec<String> =
+            row.try_get("equivocating_witness_key_ids").map_err(get)?;
+        let detected_at: OffsetDateTime = row.try_get("detected_at").map_err(get)?;
+
+        let head_a = CosignedTreeHead {
+            sth: SignedTreeHead {
+                tree_size,
+                root_hash: root_hash_a.clone(),
+                network_id: network_id.clone(),
+                signing_key_id: signing_key_id_a,
+                signature: signature_a,
+                created_at: author_created_at_a,
+            },
+            cosignatures: cosignatures_from_json(
+                cosignatures_a_json,
+                tree_size,
+                &root_hash_a,
+                &network_id,
+                author_created_at_a,
+            )?,
+        };
+        let head_b = CosignedTreeHead {
+            sth: SignedTreeHead {
+                tree_size,
+                root_hash: root_hash_b.clone(),
+                network_id: network_id.clone(),
+                signing_key_id: signing_key_id_b,
+                signature: signature_b,
+                created_at: author_created_at_b,
+            },
+            cosignatures: cosignatures_from_json(
+                cosignatures_b_json,
+                tree_size,
+                &root_hash_b,
+                &network_id,
+                author_created_at_b,
+            )?,
+        };
+
+        out.push(WitnessEquivocationEvidence {
+            network_id,
+            shard_id,
+            tree_size,
+            head_a,
+            head_b,
+            equivocating_witness_key_ids,
+            detected_at: Some(detected_at),
+        });
+    }
+    Ok(out)
 }
 
 /// The highest `tree_size` this node has observed from `source_url` for

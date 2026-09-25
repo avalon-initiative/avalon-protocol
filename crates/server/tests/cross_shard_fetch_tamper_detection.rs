@@ -194,6 +194,7 @@ async fn an_honestly_served_payload_verifies() {
         &server.uri(),
         &real.subject,
         &verify_keys,
+        &[],
     )
     .await
     .expect("an honestly-served payload should verify");
@@ -231,6 +232,7 @@ async fn a_forged_payload_alongside_a_valid_unrelated_proof_is_rejected() {
         &server.uri(),
         &real.subject,
         &verify_keys,
+        &[],
     )
     .await;
 

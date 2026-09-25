@@ -1022,6 +1022,10 @@ mod tests {
                 mirror_confirmations: crate::replication::MirrorConfirmationRegistry::new(),
                 replication_gate: crate::replication::ReplicationGateConfig::from_env(),
                 realtime_remote_url: None,
+                known_list: crate::known_list::KnownListHandle::load_or_new(
+                    crate::known_list::KnownListConfig::default(),
+                    None,
+                ),
             }
         }
 

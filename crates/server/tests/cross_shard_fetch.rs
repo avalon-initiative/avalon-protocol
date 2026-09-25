@@ -163,6 +163,7 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
             &base,
             &subject,
             &core_verify_keys(),
+            &[],
         )
         .await;
         match attempt {
@@ -206,6 +207,7 @@ async fn an_unknown_subject_returns_no_entries() {
         &server_url(),
         &subject,
         &core_verify_keys(),
+        &[],
     )
     .await
     .expect("an unknown subject should succeed with zero entries, not error");
@@ -230,6 +232,7 @@ async fn a_shard_with_no_resolvable_verify_key_fails_closed() {
         &base,
         &subject,
         &HashMap::new(),
+        &[],
     )
     .await;
 
@@ -254,8 +257,16 @@ async fn a_wrong_verify_key_fails_closed() {
     let wrong_key = SigningKey::generate(&mut rand::rng()).verifying_key();
     let wrong_keys = HashMap::from([("core".to_string(), wrong_key)]);
 
-    let result =
-        fetch_verified_entries(&pool, &network_id(), "core", &base, &subject, &wrong_keys).await;
+    let result = fetch_verified_entries(
+        &pool,
+        &network_id(),
+        "core",
+        &base,
+        &subject,
+        &wrong_keys,
+        &[],
+    )
+    .await;
 
     assert!(matches!(
         result,

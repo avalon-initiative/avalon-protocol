@@ -42,7 +42,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use avalon_chain::cross_shard::{compute_cross_shard_root_checked, CrossShardRoot, ShardTreeHead};
-use avalon_protocol::sth::{self, SignedTreeHead};
+use avalon_protocol::cosigned_sth::CosignedTreeHead;
+use avalon_protocol::sth::SignedTreeHead;
 use axum::extract::State;
 use axum::Json;
 use ed25519_dalek::VerifyingKey;
@@ -50,6 +51,7 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
+use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::error::AppError;
 use crate::nodes::ShardRegistry;
 use crate::state::AppState;
@@ -187,6 +189,10 @@ struct FetchedSth {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    /// Additive (`#[serde(default)]`): an older peer's response without
+    /// this field still decodes as an empty cosignature list.
+    #[serde(default)]
+    cosignatures: Vec<WitnessCosignatureDto>,
 }
 
 impl From<FetchedSth> for SignedTreeHead {
@@ -199,6 +205,18 @@ impl From<FetchedSth> for SignedTreeHead {
             signature: dto.signature,
             created_at: dto.created_at,
         }
+    }
+}
+
+impl From<FetchedSth> for CosignedTreeHead {
+    fn from(dto: FetchedSth) -> Self {
+        let cosignature_dtos = dto.cosignatures.clone();
+        let sth: SignedTreeHead = dto.into();
+        let cosignatures = cosignature_dtos
+            .iter()
+            .map(|c| c.to_witness_cosignature(&sth))
+            .collect();
+        CosignedTreeHead { sth, cosignatures }
     }
 }
 
@@ -274,11 +292,19 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
 /// statically-configured shard). Either source succeeding is sufficient;
 /// neither resolving at all is exactly "no verify key configured," folded
 /// into `missing_shard_ids` like any other unverifiable shard.
+///
+/// The resolved key only gets a shard's STH as far as a
+/// majority-cosignature check (`known_list`) — this replaces a bare
+/// author-signature check outright, not alongside it; see
+/// `cosign_verify::verify_cosigned_against_any_key`'s own doc comment for
+/// why a `known_list` of 0 or 1 behaves exactly as a bare signature check
+/// would.
 pub async fn fetch_and_compute(
     pool: &PgPool,
     network_id: &str,
     urls: &HashMap<String, String>,
     static_verify_keys: &HashMap<String, VerifyingKey>,
+    known_list: &[(String, VerifyingKey)],
 ) -> (CrossShardRoot, Vec<ShardTreeHead>) {
     let client = reqwest::Client::new();
     let mut shards = Vec::new();
@@ -318,7 +344,7 @@ pub async fn fetch_and_compute(
         }
         .await;
 
-        let sth: SignedTreeHead = match fetched {
+        let head: CosignedTreeHead = match fetched {
             Ok(dto) => dto.into(),
             Err(err) => {
                 tracing::warn!(
@@ -330,23 +356,30 @@ pub async fn fetch_and_compute(
             }
         };
 
-        let verified = db_keys
-            .iter()
-            .chain(static_key)
-            .chain(pinned_key.as_ref())
-            .any(|key| sth::verify_tree_head(key, &sth));
-        if !verified {
+        let now = OffsetDateTime::now_utc();
+        let verified = cosign_verify::verify_cosigned_against_any_key(
+            db_keys
+                .iter()
+                .chain(static_key)
+                .chain(pinned_key.as_ref())
+                .copied(),
+            &head,
+            known_list,
+            now,
+        );
+        let Some(_matched_key) = verified else {
             tracing::warn!(
                 shard_id,
-                "cross-shard root: STH signature verification failed against every resolved \
-                 key, treating as missing"
+                "cross-shard root: STH verification failed against every resolved key (either \
+                 the signature itself, or — with a known list of more than one — insufficient \
+                 majority cosignature), treating as missing"
             );
             continue;
-        }
+        };
 
         shards.push(ShardTreeHead {
             shard_id: shard_id.clone(),
-            sth,
+            sth: head.sth,
         });
     }
 
@@ -381,11 +414,13 @@ pub async fn compute_for_this_node(
         (Vec::new(), BTreeSet::new())
     } else {
         let static_verify_keys = config.map(|c| c.verify_keys.clone()).unwrap_or_default();
+        let known_list = cosign_verify::known_list_verifying_keys(&state.known_list);
         let (_urls_only_root, ext_shards) = fetch_and_compute(
             &state.pool,
             state.chain.network_id(),
             &urls,
             &static_verify_keys,
+            &known_list,
         )
         .await;
         (ext_shards, urls.keys().cloned().collect())

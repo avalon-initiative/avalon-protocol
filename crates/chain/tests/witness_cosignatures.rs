@@ -80,24 +80,24 @@ async fn store_then_read_back_assembles_a_verifiable_cosigned_head() {
         observed_at,
     );
     chain
-        .store_witness_cosignature(&cosig)
+        .store_witness_cosignature("core", &cosig)
         .await
         .expect("storing a fresh cosignature should succeed");
 
     // Idempotent replay of the exact same cosignature is a no-op.
     chain
-        .store_witness_cosignature(&cosig)
+        .store_witness_cosignature("core", &cosig)
         .await
         .expect("replaying the same cosignature should not error");
 
     let stored = chain
-        .list_witness_cosignatures(&network_id, tree_size)
+        .list_witness_cosignatures(&network_id, "core", tree_size)
         .await
         .expect("listing cosignatures should succeed");
     assert_eq!(stored, vec![cosig.clone()]);
 
     let head = chain
-        .cosigned_tree_head_at(tree_size)
+        .cosigned_tree_head_at("core", tree_size)
         .await
         .expect("assembling the cosigned head should succeed")
         .expect("an STH exists at this tree_size, so a head should be assembled");
@@ -144,7 +144,7 @@ async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
         observed_at,
     );
     chain
-        .store_witness_cosignature(&first)
+        .store_witness_cosignature("core", &first)
         .await
         .expect("storing the first cosignature should succeed");
 
@@ -153,14 +153,14 @@ async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
     // first, whichever one happens to be genuine.
     let mut conflicting: WitnessCosignature = first.clone();
     conflicting.signature = "ff".repeat(64);
-    let result = chain.store_witness_cosignature(&conflicting).await;
+    let result = chain.store_witness_cosignature("core", &conflicting).await;
     assert!(
         result.is_err(),
         "a conflicting cosignature must be rejected"
     );
 
     let stored = chain
-        .list_witness_cosignatures(&network_id, tree_size)
+        .list_witness_cosignatures(&network_id, "core", tree_size)
         .await
         .expect("listing cosignatures should succeed");
     assert_eq!(stored, vec![first]);

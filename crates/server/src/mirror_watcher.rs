@@ -55,15 +55,19 @@ use std::time::Duration;
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_indexer::postgres::PostgresIndexer;
+use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
-use avalon_protocol::sth::{self, SignedTreeHead};
+use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sqlx::Acquire;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+use crate::cosign_verify::{self, WitnessCosignatureDto};
+use crate::known_list::KnownListHandle;
 
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
@@ -185,13 +189,19 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// Verifies (never trusts by discovery alone) every
 /// gossip-discovered shard this node hasn't already explicitly
 /// configured, when `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`. See this
-/// module's own doc comment for why this uses a different verification
-/// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`)
-/// than [`fetch_and_verify_sth`] below. Returns `(shard_id, url,
-/// SignedTreeHead)` for every discovered shard whose STH verified — a
-/// shard that's unreachable, has no registered key yet, or fails
-/// verification is simply left out this tick (retried again next tick,
-/// never trusted on spec alone).
+/// module's own doc comment for why this uses a different key-resolution
+/// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`) than
+/// [`fetch_and_verify_sth`] below — the acceptance rule itself (majority
+/// cosignature against `known_list`, degenerating to plain
+/// author-signature verification at 0 or 1) is the same.
+/// Returns `(shard_id, url, CosignedTreeHead, author_verify_key)` for every
+/// discovered shard whose STH verified — a shard that's unreachable, has no
+/// registered key yet, or fails verification is simply left out this tick
+/// (retried again next tick, never trusted on spec alone). The matched
+/// author key is returned alongside the head for the same reason
+/// [`fetch_and_verify_sth`] returns one: a caller cross-checking two
+/// accepted heads for equivocation needs the exact key both verified
+/// against.
 async fn discover_and_verify_shard_peers(
     client: &reqwest::Client,
     pool: &PgPool,
@@ -199,7 +209,8 @@ async fn discover_and_verify_shard_peers(
     shard_registry: &crate::nodes::ShardRegistry,
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
-) -> Vec<(String, String, SignedTreeHead)> {
+    known_list: &[(String, VerifyingKey)],
+) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
     for shard_id in shard_registry.known_shard_ids() {
         if already_configured.contains(&shard_id) {
@@ -226,23 +237,34 @@ async fn discover_and_verify_shard_peers(
         }
 
         match fetch_latest_sth(client, &url, Some(&shard_id)).await {
-            Ok((sth, _peer_protocol_version)) => {
-                if db_keys.iter().any(|key| sth::verify_tree_head(key, &sth)) {
-                    tracing::info!(
-                        event = "auto_mirror_discovered_shard",
-                        shard_id,
-                        url = %url,
-                        "auto-mirroring a newly discovered shard whose STH verified against a \
-                         #543-registered shard_settlement key",
-                    );
-                    verified.push((shard_id, url, sth));
-                } else {
-                    tracing::warn!(
-                        shard_id,
-                        url = %url,
-                        "mirror-watcher: discovered shard's STH failed verification against \
-                         every #543-registered key — not auto-mirroring",
-                    );
+            Ok((dto, _peer_protocol_version)) => {
+                let head: CosignedTreeHead = dto.into();
+                let now = OffsetDateTime::now_utc();
+                match cosign_verify::verify_cosigned_against_any_key(
+                    db_keys.iter().copied(),
+                    &head,
+                    known_list,
+                    now,
+                ) {
+                    Some(matched_key) => {
+                        tracing::info!(
+                            event = "auto_mirror_discovered_shard",
+                            shard_id,
+                            url = %url,
+                            "auto-mirroring a newly discovered shard whose STH verified against \
+                             a #543-registered shard_settlement key",
+                        );
+                        verified.push((shard_id, url, head, matched_key));
+                    }
+                    None => {
+                        tracing::warn!(
+                            shard_id,
+                            url = %url,
+                            "mirror-watcher: discovered shard's STH failed verification against \
+                             every #543-registered key (or lacked majority cosignature) — not \
+                             auto-mirroring",
+                        );
+                    }
                 }
             }
             Err(err) => tracing::warn!(
@@ -283,6 +305,12 @@ pub struct MirrorWatcherHandles {
     pub own_base_url: Option<String>,
     pub wake: std::sync::Arc<tokio::sync::Notify>,
     pub own_shard_id: String,
+    /// This node's own witness known list, read live on every
+    /// verification — never a snapshot taken once at startup, so admitting
+    /// or dropping a witness takes effect on this worker's very next poll
+    /// tick, no restart needed. See `crate::cosign_verify`'s own module doc
+    /// comment for the identity-bridging caveat.
+    pub known_list: KnownListHandle,
 }
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
@@ -306,6 +334,7 @@ pub async fn run_worker(
         own_base_url,
         wake,
         own_shard_id,
+        known_list,
     } = handles;
     let client = reqwest::Client::new();
 
@@ -346,6 +375,11 @@ pub async fn run_worker(
     let mut network_interest: HashMap<String, crate::interest::InterestGuard> = HashMap::new();
 
     loop {
+        // Read live at the top of every tick — never a snapshot taken once
+        // at startup — so an admitted or dropped known-list witness is
+        // reflected starting this very tick, no restart needed.
+        let known_list_pairs = cosign_verify::known_list_verifying_keys(&known_list);
+
         // Phase 1: poll every peer independently for its latest STH,
         // verify + store + equivocation-check each one. Peers that
         // succeed are grouped by (network_id, shard_id), since that's
@@ -353,7 +387,7 @@ pub async fn run_worker(
         // shards under the same network_id must never be corroborated or
         // backfilled together, even if they happen to report the same
         // tree_size.
-        let mut verified_by_shard: HashMap<(String, String), Vec<(String, SignedTreeHead)>> =
+        let mut verified_by_shard: HashMap<(String, String), Vec<(String, CosignedTreeHead)>> =
             HashMap::new();
         for (shard_id, peer) in &config.peers {
             match fetch_and_verify_sth(
@@ -361,41 +395,24 @@ pub async fn run_worker(
                 avalon_protocol::network_trust::bundled_trust_anchors(),
                 peer,
                 shard_id,
+                &known_list_pairs,
             )
             .await
             {
-                Ok(sth) => {
-                    let observed =
-                        ObservedSth::from_sth(peer, shard_id, &sth, OffsetDateTime::now_utc());
-                    match mirror::insert_observation(&pool, &observed).await {
-                        Ok(is_new) => {
-                            if is_new {
-                                if let Err(err) =
-                                    check_equivocation(&pool, &chain, &own_shard_id, &observed)
-                                        .await
-                                {
-                                    tracing::error!("mirror-watcher: {peer}: {err}");
-                                }
-                            }
-                            network_interest
-                                .entry(sth.network_id.clone())
-                                .or_insert_with(|| {
-                                    tracing::info!(
-                                        network_id = %sth.network_id,
-                                        "mirror-watcher: registering interest for push-based \
-                                         mirror sync (issue #596)"
-                                    );
-                                    interest.register(crate::interest::InterestScope::for_network(
-                                        &sth.network_id,
-                                    ))
-                                });
-                            verified_by_shard
-                                .entry((sth.network_id.clone(), shard_id.clone()))
-                                .or_default()
-                                .push((peer.clone(), sth));
-                        }
-                        Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
-                    }
+                Ok((head, author_key)) => {
+                    record_verified_head(
+                        &pool,
+                        &chain,
+                        Some((&interest, &mut network_interest)),
+                        &mut verified_by_shard,
+                        &own_shard_id,
+                        shard_id,
+                        peer,
+                        head,
+                        author_key,
+                        &known_list_pairs,
+                    )
+                    .await;
                 }
                 Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
             }
@@ -409,36 +426,49 @@ pub async fn run_worker(
                 &shard_registry,
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
+                &known_list_pairs,
             )
             .await;
-            for (shard_id, peer, sth) in discovered {
-                let observed =
-                    ObservedSth::from_sth(&peer, &shard_id, &sth, OffsetDateTime::now_utc());
-                match mirror::insert_observation(&pool, &observed).await {
-                    Ok(is_new) => {
-                        if is_new {
-                            if let Err(err) =
-                                check_equivocation(&pool, &chain, &own_shard_id, &observed).await
-                            {
-                                tracing::error!("mirror-watcher: {peer}: {err}");
-                            }
-                        }
-                        verified_by_shard
-                            .entry((sth.network_id.clone(), shard_id.clone()))
-                            .or_default()
-                            .push((peer.clone(), sth));
-                    }
-                    Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
-                }
+            for (shard_id, peer, head, author_key) in discovered {
+                // Unlike the statically-configured loop above,
+                // a purely gossip-discovered shard never registers
+                // push-based mirror-sync interest — discovering a shard's
+                // existence is not the same as this node committing to
+                // keep watching it the way an explicit
+                // `AVALON_MIRROR_PEERS` entry does.
+                record_verified_head(
+                    &pool,
+                    &chain,
+                    None,
+                    &mut verified_by_shard,
+                    &own_shard_id,
+                    &shard_id,
+                    &peer,
+                    head,
+                    author_key,
+                    &known_list_pairs,
+                )
+                .await;
             }
         }
 
         // Phase 2: for each (network, shard) at least one peer reported
         // this tick, pick a corroborated tree head and backfill against
         // every peer that agreed on it.
-        for ((network_id, shard_id), observations) in &verified_by_shard {
-            if let Err(err) =
-                backfill_network(&client, &pool, &indexer, network_id, shard_id, observations).await
+        for ((network_id, shard_id), heads) in &verified_by_shard {
+            let observations: Vec<(String, SignedTreeHead)> = heads
+                .iter()
+                .map(|(peer, head)| (peer.clone(), head.sth.clone()))
+                .collect();
+            if let Err(err) = backfill_network(
+                &client,
+                &pool,
+                &indexer,
+                network_id,
+                shard_id,
+                &observations,
+            )
+            .await
             {
                 tracing::error!("mirror-watcher: {network_id}/{shard_id}: {err}");
             }
@@ -511,6 +541,12 @@ struct SignedTreeHeadDto {
     /// as a genuinely malformed version string.
     #[serde(default)]
     protocol_version: String,
+    /// Additive (`#[serde(default)]`) so an older peer's
+    /// response without this field still decodes fine — an empty list,
+    /// which `cosigned_sth::verify_cosigned_tree_head` treats exactly like
+    /// a head this node simply hasn't collected any cosignatures for yet.
+    #[serde(default)]
+    cosignatures: Vec<WitnessCosignatureDto>,
 }
 
 impl From<SignedTreeHeadDto> for SignedTreeHead {
@@ -523,6 +559,18 @@ impl From<SignedTreeHeadDto> for SignedTreeHead {
             signature: dto.signature,
             created_at: dto.created_at,
         }
+    }
+}
+
+impl From<SignedTreeHeadDto> for CosignedTreeHead {
+    fn from(dto: SignedTreeHeadDto) -> Self {
+        let cosignature_dtos = dto.cosignatures.clone();
+        let sth: SignedTreeHead = dto.into();
+        let cosignatures = cosignature_dtos
+            .iter()
+            .map(|c| c.to_witness_cosignature(&sth))
+            .collect();
+        CosignedTreeHead { sth, cosignatures }
     }
 }
 
@@ -578,44 +626,60 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
     })
 }
 
-/// Fetches `peer`'s latest STH for `shard_id` and verifies its signature —
-/// the one step every peer goes through in phase 1, regardless of what
-/// happens next. Issue #604: `shard_id` is sent as an explicit `?shard_id=`
-/// query param (#573's documented footgun) — a peer serving more than one
-/// shard (mirroring one, authoring another) answers a bare request with
-/// whichever it treats as its own default, not necessarily the one this
-/// config entry means.
+/// Fetches `peer`'s latest STH for `shard_id` and verifies it by majority
+/// cosignature against `known_list` — the one step every peer goes through
+/// in phase 1, regardless of what happens next. This replaces the old
+/// plain-author-signature check outright, not alongside it —
+/// `cosigned_sth::verify_cosigned_tree_head`'s own documented `len() <= 1`
+/// degenerate case *is* that check, for a `known_list` of 0 or 1 (today's
+/// and most real deployments'), so nothing here behaves differently for
+/// them. Issue #604: `shard_id` is sent as an explicit `?shard_id=` query
+/// param (#573's documented footgun) — a peer serving more than one shard
+/// (mirroring one, authoring another) answers a bare request with whichever
+/// it treats as its own default, not necessarily the one this config entry
+/// means.
+///
+/// Returns the accepted head alongside the author key it verified against
+/// — a caller cross-checking two accepted heads for equivocation
+/// (`run_worker`) needs the same key both were checked against.
 async fn fetch_and_verify_sth(
     client: &reqwest::Client,
     anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
     peer: &str,
     shard_id: &str,
-) -> Result<SignedTreeHead, MirrorWatcherError> {
-    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer, Some(shard_id)).await?;
+    known_list: &[(String, VerifyingKey)],
+) -> Result<(CosignedTreeHead, VerifyingKey), MirrorWatcherError> {
+    let (dto, peer_protocol_version) = fetch_latest_sth(client, peer, Some(shard_id)).await?;
     check_peer_version(peer, &peer_protocol_version)?;
 
-    let Some(verify_key) = verify_key_for_network(anchors, &sth.network_id) else {
+    let Some(verify_key) = verify_key_for_network(anchors, &dto.network_id) else {
         tracing::error!(
             event = "mirror_peer_network_unpinned",
             peer = %peer,
-            network_id = %sth.network_id,
+            network_id = %dto.network_id,
             "peer claims a network_id with no pinned trust anchor — not mirroring",
         );
-        return Err(MirrorWatcherError::UnpinnedNetwork(sth.network_id));
+        return Err(MirrorWatcherError::UnpinnedNetwork(dto.network_id));
     };
 
-    if !sth::verify_tree_head(&verify_key, &sth) {
+    let head: CosignedTreeHead = dto.into();
+    let now = OffsetDateTime::now_utc();
+    let Some(matched_key) =
+        cosign_verify::verify_cosigned_against_any_key([verify_key], &head, known_list, now)
+    else {
         tracing::error!(
-            event = "sth_signature_invalid",
+            event = "sth_verification_failed",
             peer = %peer,
-            network_id = %sth.network_id,
-            tree_size = sth.tree_size,
-            "STH signature verification failed against its claimed network's pinned key — not \
+            network_id = %head.sth.network_id,
+            tree_size = head.sth.tree_size,
+            known_list_size = known_list.len(),
+            "STH failed verification — either the author signature itself is invalid, or (with \
+             a known list of more than one) the attached cosignatures don't reach majority — not \
              storing, not trusting",
         );
         return Err(MirrorWatcherError::InvalidSignature);
-    }
-    Ok(sth)
+    };
+    Ok((head, matched_key))
 }
 
 /// Resolves the verify key for whatever `network_id` a peer's STH actually
@@ -658,7 +722,7 @@ async fn fetch_latest_sth(
     client: &reqwest::Client,
     peer: &str,
     shard_id: Option<&str>,
-) -> Result<(SignedTreeHead, String), MirrorWatcherError> {
+) -> Result<(SignedTreeHeadDto, String), MirrorWatcherError> {
     let url = format!("{peer}/ledger/sth/latest");
     let mut request = client.get(&url);
     if let Some(shard_id) = shard_id {
@@ -671,7 +735,7 @@ async fn fetch_latest_sth(
         .await
         .map_err(|e| MirrorWatcherError::Decode(e.to_string()))?;
     let protocol_version = dto.protocol_version.clone();
-    Ok((dto.into(), protocol_version))
+    Ok((dto, protocol_version))
 }
 
 /// Sends `request`, retrying with backoff on HTTP 429 — live
@@ -726,6 +790,153 @@ async fn send_with_rate_limit_retry(
         );
         tokio::time::sleep(wait).await;
     }
+}
+
+/// Durably stores every cosignature attached to `head` that
+/// this node can itself vouch for — signature-valid against a key its own
+/// known list currently recognizes. Cosignatures from a witness this node
+/// doesn't (yet, or ever) recognize are never stored: an unbounded stream
+/// of junk cosignatures from an adversarial peer would otherwise grow this
+/// table forever for no benefit, and this node has no way to tell a
+/// legitimate-but-unrecognized witness from a fabricated one anyway.
+/// Best-effort — a storage failure here never fails verification of the
+/// head itself, which already succeeded before this is ever called; a
+/// cosignature this node fails to persist is simply not available to
+/// re-serve to further mirrors, not a correctness problem for this node's
+/// own view.
+async fn store_valid_cosignatures(
+    chain: &PostgresSettlementProvider,
+    shard_id: &str,
+    head: &CosignedTreeHead,
+    known_list: &[(String, VerifyingKey)],
+) {
+    for cosig in &head.cosignatures {
+        let Some((_, verifying_key)) = known_list
+            .iter()
+            .find(|(witness_key_id, _)| *witness_key_id == cosig.witness_key_id)
+        else {
+            continue;
+        };
+        if !avalon_protocol::witness::verify_witness_cosignature(verifying_key, cosig) {
+            continue;
+        }
+        if let Err(err) = chain.store_witness_cosignature(shard_id, cosig).await {
+            tracing::warn!(
+                witness_key_id = %cosig.witness_key_id,
+                shard_id,
+                error = %err,
+                "mirror-watcher: failed to durably store a valid witness cosignature",
+            );
+        }
+    }
+}
+
+/// The shared bookkeeping every head accepted by
+/// [`fetch_and_verify_sth`] or [`discover_and_verify_shard_peers`] goes
+/// through — recording the raw observation (feeding the original
+/// source-based equivocation detection, unchanged by cosigning), durably
+/// storing whatever cosignatures this node can itself vouch for, checking
+/// for a genuine *witness*-cosigned equivocation against every other head
+/// already accepted this tick for the same network/shard/tree_size, and
+/// finally recording the head for phase 2's corroboration/backfill
+/// decision. `interest` is `Some` only for the statically-configured peer
+/// loop — see that call site's own comment for why a purely
+/// gossip-discovered shard never registers push interest.
+#[allow(clippy::too_many_arguments)]
+async fn record_verified_head(
+    pool: &PgPool,
+    chain: &PostgresSettlementProvider,
+    interest: Option<(
+        &crate::interest::InterestRegistry,
+        &mut HashMap<String, crate::interest::InterestGuard>,
+    )>,
+    verified_by_shard: &mut HashMap<(String, String), Vec<(String, CosignedTreeHead)>>,
+    own_shard_id: &str,
+    shard_id: &str,
+    peer: &str,
+    head: CosignedTreeHead,
+    author_key: VerifyingKey,
+    known_list: &[(String, VerifyingKey)],
+) {
+    let observed = ObservedSth::from_sth(peer, shard_id, &head.sth, OffsetDateTime::now_utc());
+    match mirror::insert_observation(pool, &observed).await {
+        Ok(is_new) => {
+            if is_new {
+                if let Err(err) = check_equivocation(pool, chain, own_shard_id, &observed).await {
+                    tracing::error!("mirror-watcher: {peer}: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::error!("mirror-watcher: {peer}: {err}");
+            return;
+        }
+    }
+
+    store_valid_cosignatures(chain, shard_id, &head, known_list).await;
+
+    // A genuinely provable *witness* equivocation — only meaningful once
+    // real cosigning was actually required to accept a head at all
+    // (`known_list.len() > 1`; at or below that, both heads were only ever
+    // checked against the bare author signature per
+    // `verify_cosigned_tree_head`'s own degenerate case, which the
+    // source-based `check_equivocation` above already covers as an author
+    // equivocation, not a witness one).
+    if known_list.len() > 1 {
+        if let Some(existing_heads) =
+            verified_by_shard.get(&(head.sth.network_id.clone(), shard_id.to_string()))
+        {
+            let now = OffsetDateTime::now_utc();
+            let freshness_cutoff = now - cosign_verify::COSIGNATURE_FRESHNESS_WINDOW;
+            for (_, other_head) in existing_heads {
+                let equivocators = avalon_protocol::cosigned_sth::find_equivocating_witnesses(
+                    &author_key,
+                    known_list,
+                    freshness_cutoff,
+                    now,
+                    other_head,
+                    &head,
+                );
+                if !equivocators.is_empty() {
+                    let evidence = mirror::WitnessEquivocationEvidence {
+                        network_id: head.sth.network_id.clone(),
+                        shard_id: shard_id.to_string(),
+                        tree_size: head.sth.tree_size,
+                        head_a: other_head.clone(),
+                        head_b: head.clone(),
+                        equivocating_witness_key_ids: equivocators,
+                        detected_at: None,
+                    };
+                    if let Err(err) =
+                        mirror::record_witness_equivocation_evidence(pool, &evidence).await
+                    {
+                        tracing::error!(
+                            "mirror-watcher: {peer}: failed to durably record witness \
+                             equivocation evidence: {err}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((interest, network_interest)) = interest {
+        network_interest
+            .entry(head.sth.network_id.clone())
+            .or_insert_with(|| {
+                tracing::info!(
+                    network_id = %head.sth.network_id,
+                    "mirror-watcher: registering interest for push-based mirror sync (issue #596)"
+                );
+                interest.register(crate::interest::InterestScope::for_network(
+                    &head.sth.network_id,
+                ))
+            });
+    }
+    verified_by_shard
+        .entry((head.sth.network_id.clone(), shard_id.to_string()))
+        .or_default()
+        .push((peer.to_string(), head));
 }
 
 /// Compares `observed` against every other observation this node has

@@ -194,13 +194,14 @@ spike's* prototype, not the production implementation:
   and by brute-force/random subset enumeration); a known list with anchor
   reservation and a diversity cap resists a same-prefix flood and correctly
   refills to capacity after losing members, staying diverse throughout.
-- **Does not include**: server wiring, storage, real discovery integration,
-  tenure-weighted selection, probation periods, or the gossip transport
-  itself — those are #931 (self-certifying ids), #932 (cosigned tree head
-  format/verification wired into the server), #936 (naming layer), #938
-  (mirror sync with cosigned heads), #939 (migration from single-key
-  networks), #944 (per-identity chains), #946 (production known-list
-  management), #947 (head gossip).
+- **Does not include**: real discovery integration, tenure-weighted
+  selection, probation periods, or the gossip transport itself — those are
+  #931 (self-certifying ids, done), #932 (cosigned tree head format/
+  verification wired into the server, done), #936 (naming layer), #938
+  (mirror sync/cross-shard roots verify by cosigned heads, done — see
+  "Today in the repo"), #939 (migration from single-key networks), #944
+  (per-identity chains), #946 (production known-list management, done),
+  #947 (proactive cosigning/head gossip between nodes, still open).
 
 ## Today in the repo
 
@@ -213,12 +214,17 @@ cosignature check, degenerating to exactly `sth::verify_tree_head` at a
 known-list size of 0 or 1), and `find_equivocating_witnesses` (the
 concrete equivocation proof for two conflicting majority-cosigned heads).
 `crates/chain::PostgresSettlementProvider` gained storage for cosignatures
-(`witness_cosignatures` table, migration `0073_witness_cosignatures`) and
-a read path (`cosigned_tree_head_at`) that assembles a `CosignedTreeHead`
+(`witness_cosignatures` table, migration `0073_witness_cosignatures`,
+shard-scoped by migration `0075_witness_cosignatures_shard_scoping`) and a
+read path (`cosigned_tree_head_at`) that assembles a `CosignedTreeHead`
 from stored state for a caller to verify. `conformance/vectors/
 witness-cosigned-tree-head.json` covers accepted/below-threshold/
 unknown-witness/stale/conflicting-heads, asserted from
-`crates/protocol/tests/conformance.rs`.
+`crates/protocol/tests/conformance.rs`. #946 landed production known-list
+management (`crates/server/src/known_list.rs`): persistence across
+restarts, real `PeerTable`-sourced discovery, probation, tenure-weighted
+refill — held in `AppState::known_list`, read live by every verification
+site below.
 
 #947 added `avalon-server`'s head-summary gossip: `crate::nodes::HeadSummary`/
 `HeadGossipTracker` (its own bounded structure, never folded into
@@ -234,25 +240,69 @@ full cosignature detail from both reporting peers, builds its known list
 directly from the hex-encoded witness keys present in the two heads (so the
 resulting proof is independently checkable from signatures alone, not
 dependent on any node's own trusted list), and calls
-`find_equivocating_witnesses`. A confirmed equivocation is recorded in a new
-`equivocation_evidence` table (migration `0074_equivocation_evidence`,
-this ticket's own reasonable storage shape — reconcile with whatever #938
-independently adds if the two land separately) and marks the shard in
+`find_equivocating_witnesses`. A confirmed equivocation is recorded via
+`avalon_chain::mirror::record_witness_equivocation_evidence` — the same
+table and function #938 (landed the same day) uses for equivocations it
+finds directly during mirror sync, reconciled into one write path rather
+than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
 
-**Still not wired in** (left for #938/#946, and one real gap #947 itself
-flags): nothing in `avalon-server` yet *decides* to cosign another node's
-head at all — no code calls `witness::sign_witness_cosignature` — so
-`is_equivocating`'s "stop cosigning this shard" gate has no consumer today;
-whatever lands that cosigning-decision logic must check it first. Production
-known-list management (anchors, diversity cap, refill, persistence) is still
-only the `known_list.rs` prototype, and it has no real mapping from a
-witness's `witness_key_id` to its actual Ed25519 key yet (`known_list.rs`'s
-own module doc comment) — #947's equivocation confirmation sidesteps this by
-deriving its known list straight from the two conflicting heads' own
-cosignatures instead of any node's production known list. The network still
-runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
-`sth.rs`/`network-trust-anchors.md` describe until real cosigning lands.
+**Still not wired in**: nothing in `avalon-server` yet *decides* to cosign
+another node's head at all — no code calls `witness::sign_witness_cosignature`
+— so `is_equivocating`'s "stop cosigning this shard" gate has no consumer
+today; whatever lands that cosigning-decision logic must check it first.
+`#947`'s equivocation confirmation deliberately sidesteps the known-list
+identity gap below by deriving its known list straight from the two
+conflicting heads' own cosignatures instead of any node's production known
+list — its proof stands on its own regardless of that gap.
+
+#938 wired cosigned verification into `avalon-server` itself:
+`crates/server/src/cosign_verify.rs` bridges `KnownListHandle`'s confirmed
+witness identities into `verify_cosigned_tree_head`'s
+`(witness_key_id, VerifyingKey)` shape and holds the shared
+`WitnessCosignatureDto` wire format. `GET /ledger/sth/latest`/
+`GET /ledger/sth/{tree_size}` now serve every stored cosignature for that
+head alongside it (`SignedTreeHeadResponse::cosignatures`). Every mirror/
+cross-shard verification call site that used to check a bare author
+signature now checks by majority cosignature instead —
+`mirror_watcher::fetch_and_verify_sth`/`discover_and_verify_shard_peers`,
+`cross_shard::fetch_and_compute`, `cross_shard_fetch::fetch_verified_sth`
+— replacing the old check outright (not running alongside it), since
+`verify_cosigned_tree_head`'s own `known_list.len() <= 1` degenerate case
+already reproduces it exactly. The known list is read fresh at the top of
+every mirror-watcher poll tick, so an admitted or dropped witness takes
+effect on the very next tick, no restart. A newly-observed head's valid,
+known-list-recognized cosignatures are durably stored
+(`store_valid_cosignatures`) so this node can re-serve them to further
+mirrors. When two heads accepted this tick for the same
+network/shard/tree_size disagree and the known list has more than one
+witness, `find_equivocating_witnesses` runs and any non-empty result is
+durably recorded in a new `equivocation_evidence` table (migration
+`0076_equivocation_evidence`, `avalon_chain::mirror::
+record_witness_equivocation_evidence`/`witness_equivocation_evidence_for`)
+— both full heads' signed fields and both cosignature sets, so the proof
+is reconstructable and re-verifiable from the stored row alone, by anyone,
+independent of this node. This is separate from #299's original
+source-based `equivocation_findings` table (any two peers disagreeing,
+cosigning or not), which is unchanged and still the broader net.
+
+**Known limitation, carried over from #946**: a known-list slot's id is
+still a libp2p peer id or bare `base_url`, not a witness's real cosigning
+key — `cosign_verify::known_list_verifying_keys` bridges this by treating
+the id as "the hex verifying key, if it parses as one," so today's real
+deployments (ids that don't parse as key material) get an empty pairing
+and fall straight into the single-signature degenerate case, exactly
+today's behavior. Once a slot is genuinely keyed by a cosigning key, no
+code change is needed on the verification side — only whatever process
+starts admitting slots by real key instead of by address. Still not wired
+in: nothing yet decides *to* cosign another node's own head at all — a
+cosignature only reaches a node's `witness_cosignatures` table via
+`store_valid_cosignatures` while mirroring, or by some other process
+calling `store_witness_cosignature` directly; #947's gossip carries bounded
+*summaries* of heads already cosigned elsewhere, not a proactive push of
+new cosignatures. The network still runs on the single pinned
+`AVALON_SETTLEMENT_VERIFY_KEY` model `sth.rs`/`network-trust-anchors.md`
+describe until real cosigning-decision logic and #939's migration land.
 
 ## Decisions and tickets
 
