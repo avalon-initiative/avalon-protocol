@@ -40,3 +40,54 @@ jobs:
       # fmt, clippy, tests, OpenAPI freshness and version bump, trust-anchor table.
       - name: Checks
         run: make check
+
+  # Smoke-scale run of the load harness against nodes it starts itself, so the
+  # harness cannot bit-rot. Not part of `make check` (which needs no database).
+  load-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: avalon
+          POSTGRES_PASSWORD: avalon
+          POSTGRES_DB: avalon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avalon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Write env file
+        run: |
+          cat > "$RUNNER_TEMP/load.env" <<'ENV'
+          DATABASE_URL=postgres://avalon:avalon@127.0.0.1:5432/avalon
+          AVALON_SERVER_ADDR=127.0.0.1:8080
+          AVALON_NETWORK_ID=avalon-dev-local
+          AVALON_WEBAUTHN_RP_ID=localhost
+          AVALON_WEBAUTHN_ORIGIN=http://localhost:5173
+          AVALON_HUB_ORIGIN=http://localhost:5173
+          ENV
+
+      - name: Load harness (smoke scale)
+        env:
+          AVALON_ENV_FILE: ${{ runner.temp }}/load.env
+          LOAD_SCALE: smoke
+        run: >-
+          scripts/load-tests.sh flood-public flood-auth-principal flood-auth-ip many-identities
+          announce-source announce-cap announce-strict mesh concurrency db-pool-large
+          slow-conn oversized sustained

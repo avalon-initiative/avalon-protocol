@@ -8,7 +8,7 @@ PID_FILE := $(PID_DIR)/avalon-server.pid
 LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
-	build run start stop restart status test test-live test-live-raw fmt fmt-check lint check clean \
+	build run start stop restart status test test-live test-live-raw load-test fmt fmt-check lint check clean \
 	openapi openapi-check openapi-version-check check-trust-anchors \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
@@ -30,6 +30,7 @@ help:
 	@echo "  make test          cargo test --workspace"
 	@echo "  make test-live     scripts/live-tests.sh: --ignored suite against private, isolated servers (GROUPS=... to pick)"
 	@echo "  make test-live-raw cargo test --workspace -- --ignored (needs a matching server already running)"
+	@echo "  make load-test     scripts/load-tests.sh: load scenarios against private, isolated servers (SCENARIOS=... to pick, LOAD_SCALE=full for a real run)"
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
@@ -109,6 +110,12 @@ test:
 # running node.
 test-live:
 	scripts/live-tests.sh $(GROUPS)
+
+# Load scenarios against servers the script starts itself on 127.0.0.1 with
+# throwaway schemas (see scripts/load-tests.sh). The generator refuses
+# non-loopback targets.
+load-test:
+	scripts/load-tests.sh $(SCENARIOS)
 
 # Plain `--ignored` run against whatever server AVALON_SERVER_URL points at;
 # the multi-process tests fail without their extra processes and env vars.

@@ -1,0 +1,18 @@
+[package]
+name = "avalon-loadtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Load generator for isolated avalon-server nodes. Refuses non-loopback targets unless explicitly overridden."
+publish = false
+
+[dependencies]
+tokio = { workspace = true, features = ["io-util"] }
+reqwest.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+time.workspace = true
+anyhow.workspace = true
+url.workspace = true
