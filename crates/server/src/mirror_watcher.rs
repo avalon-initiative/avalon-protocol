@@ -367,7 +367,7 @@ pub async fn run_worker(
     } = handles;
     let mut held_logged = HeldHeads::new();
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
-    let client = reqwest::Client::new();
+    let client = crate::outbound_policy::peer_client();
 
     if config.peers.is_empty() {
         tracing::info!(

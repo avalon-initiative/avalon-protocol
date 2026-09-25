@@ -195,7 +195,7 @@ pub async fn confirm_and_record(
         return;
     }
 
-    let client = reqwest::Client::new();
+    let client = crate::outbound_policy::peer_client();
     let (head_a, head_b) = tokio::join!(
         fetch_cosigned_head(
             &client,

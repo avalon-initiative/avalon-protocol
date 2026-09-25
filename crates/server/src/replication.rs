@@ -292,7 +292,7 @@ pub async fn run_worker(
     own_shard_id: String,
     config: ReplicationConfig,
 ) {
-    let client = reqwest::Client::new();
+    let client = crate::outbound_policy::peer_client();
     loop {
         let mut shard_ids = shard_registry.known_shard_ids();
         shard_ids.insert(own_shard_id.clone());

@@ -22,6 +22,19 @@ use std::time::Duration;
 
 use url::{Host, Url};
 
+const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// HTTP client for requests to other nodes: a peer that accepts the connection but never answers
+/// costs one bounded attempt instead of stalling the caller.
+pub fn peer_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(PEER_CONNECT_TIMEOUT)
+        .timeout(PEER_REQUEST_TIMEOUT)
+        .build()
+        .expect("static reqwest client configuration is valid")
+}
+
 /// Why a URL or address was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
@@ -413,5 +426,27 @@ mod tests {
             .unwrap();
         assert!(t.addr.ip().is_loopback());
         assert_eq!(t.pinned_host.as_deref(), Some("localhost"));
+    }
+}
+
+#[cfg(test)]
+mod peer_client_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peer_client_gives_up_on_a_peer_that_never_answers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _held = tokio::spawn(async move {
+            let mut conns = Vec::new();
+            while let Ok((c, _)) = listener.accept().await {
+                conns.push(c);
+            }
+        });
+        let started = Instant::now();
+        let res = peer_client().get(format!("http://{addr}/x")).send().await;
+        assert!(res.is_err());
+        assert!(started.elapsed() < PEER_REQUEST_TIMEOUT + Duration::from_secs(5));
     }
 }

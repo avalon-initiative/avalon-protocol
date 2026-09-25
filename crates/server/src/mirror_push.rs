@@ -70,7 +70,7 @@ impl MirrorPushConfig {
             dht_commands,
             redis_fast_path,
             own_base_url,
-            client: reqwest::Client::new(),
+            client: crate::outbound_policy::peer_client(),
         }
     }
 }
