@@ -241,7 +241,7 @@ pub async fn fetch_verified_entries(
     known_list: &[(String, VerifyingKey)],
     sources: &[cosign_gather::WitnessSource],
 ) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
-    let client = reqwest::Client::new();
+    let client = crate::outbound_policy::peer_client();
 
     let sth = fetch_verified_sth(
         &client,
