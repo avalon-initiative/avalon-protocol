@@ -51,7 +51,8 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::cosign_verify::{self, WitnessCosignatureDto};
+use crate::cosign_gather;
+use crate::cosign_verify::WitnessCosignatureDto;
 use crate::cross_shard::resolve_shard_verify_keys_from_db;
 
 /// Entries fetched per `subject` lookup — generous enough for any real
@@ -171,6 +172,7 @@ struct InclusionProofDto {
 /// against `known_list`, replacing a bare author-signature check outright —
 /// a `known_list` of 0 or 1 degenerates to exactly that check, per that
 /// function's own doc comment.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_verified_sth(
     client: &reqwest::Client,
     pool: &PgPool,
@@ -179,6 +181,7 @@ async fn fetch_verified_sth(
     base_url: &str,
     static_verify_keys: &HashMap<String, VerifyingKey>,
     known_list: &[(String, VerifyingKey)],
+    sources: &[cosign_gather::WitnessSource],
 ) -> Result<SignedTreeHead, CrossShardFetchError> {
     let sth_dto: SignedTreeHeadDto = client
         .get(format!("{base_url}/ledger/sth/latest"))
@@ -198,18 +201,20 @@ async fn fetch_verified_sth(
 
     let db_keys = resolve_shard_verify_keys_from_db(pool, this_network_id, shard_id).await;
     let static_key = static_verify_keys.get(shard_id);
-    let now = OffsetDateTime::now_utc();
-    let verified = cosign_verify::verify_cosigned_against_any_key(
+    let verified = cosign_gather::verify_with_gathering(
+        crate::outbound_policy::OutboundPolicy::from_env(),
         db_keys.iter().chain(static_key).copied(),
-        &head,
+        head,
         known_list,
-        now,
-    );
-    if verified.is_none() {
+        sources,
+        shard_id,
+    )
+    .await;
+    let Some(head) = verified else {
         return Err(CrossShardFetchError::SthVerificationFailed(
             shard_id.to_string(),
         ));
-    }
+    };
 
     Ok(head.sth)
 }
@@ -225,6 +230,7 @@ async fn fetch_verified_sth(
 /// — an empty slice (a caller with no known list of its own, e.g. a
 /// standalone test) behaves exactly like plain author-signature
 /// verification, same as everywhere else this pattern is used.
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_verified_entries(
     pool: &PgPool,
     this_network_id: &str,
@@ -233,6 +239,7 @@ pub async fn fetch_verified_entries(
     subject: &str,
     static_verify_keys: &HashMap<String, VerifyingKey>,
     known_list: &[(String, VerifyingKey)],
+    sources: &[cosign_gather::WitnessSource],
 ) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
     let client = reqwest::Client::new();
 
@@ -244,6 +251,7 @@ pub async fn fetch_verified_entries(
         base_url,
         static_verify_keys,
         known_list,
+        sources,
     )
     .await?;
 

@@ -51,6 +51,7 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
+use crate::cosign_gather;
 use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::error::AppError;
 use crate::nodes::ShardRegistry;
@@ -305,6 +306,7 @@ pub async fn fetch_and_compute(
     urls: &HashMap<String, String>,
     static_verify_keys: &HashMap<String, VerifyingKey>,
     known_list: &[(String, VerifyingKey)],
+    sources: &[cosign_gather::WitnessSource],
 ) -> (CrossShardRoot, Vec<ShardTreeHead>) {
     let client = reqwest::Client::new();
     let mut shards = Vec::new();
@@ -356,18 +358,20 @@ pub async fn fetch_and_compute(
             }
         };
 
-        let now = OffsetDateTime::now_utc();
-        let verified = cosign_verify::verify_cosigned_against_any_key(
+        let verified = cosign_gather::verify_with_gathering(
+            crate::outbound_policy::OutboundPolicy::from_env(),
             db_keys
                 .iter()
                 .chain(static_key)
                 .chain(pinned_key.as_ref())
                 .copied(),
-            &head,
+            head,
             known_list,
-            now,
-        );
-        let Some(_matched_key) = verified else {
+            sources,
+            shard_id,
+        )
+        .await;
+        let Some(head) = verified else {
             tracing::warn!(
                 shard_id,
                 "cross-shard root: STH verification failed against every resolved key (either \
@@ -415,12 +419,14 @@ pub async fn compute_for_this_node(
     } else {
         let static_verify_keys = config.map(|c| c.verify_keys.clone()).unwrap_or_default();
         let known_list = cosign_verify::known_list_verifying_keys(&state.known_list);
+        let sources = cosign_gather::witness_sources(&known_list, &state.peers.list_all());
         let (_urls_only_root, ext_shards) = fetch_and_compute(
             &state.pool,
             state.chain.network_id(),
             &urls,
             &static_verify_keys,
             &known_list,
+            &sources,
         )
         .await;
         (ext_shards, urls.keys().cloned().collect())
