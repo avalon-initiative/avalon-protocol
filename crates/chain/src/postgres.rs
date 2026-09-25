@@ -119,7 +119,19 @@ pub fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>)
     hex::encode(hasher.finalize())
 }
 
+/// The payload as stored in the ledger: the event's own payload with its
+/// identity-chain position (when it has one) embedded under a reserved key.
+fn stored_payload(event: &ProtocolEvent) -> serde_json::Value {
+    match &event.identity_chain {
+        Some(position) => {
+            avalon_protocol::identity_chain_wire::embed_position(&event.payload, position)
+        }
+        None => event.payload.clone(),
+    }
+}
+
 fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> String {
+    let payload = stored_payload(event);
     hash_entry(
         network_id,
         prev_hash,
@@ -128,7 +140,7 @@ fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> Strin
             kind: &event.kind,
             issuer: event.issuer.as_str(),
             subject: event.subject.as_str(),
-            payload: &event.payload,
+            payload: &payload,
             timestamp: event.timestamp,
             version: event.version as i32,
         },
@@ -1153,15 +1165,17 @@ impl LedgerEntryView {
     /// `mirror_watcher::protocol_event_from_mirrored` does for a
     /// peer-mirrored entry.
     pub fn to_protocol_event(&self) -> Option<ProtocolEvent> {
+        let (payload, identity_chain) =
+            avalon_protocol::identity_chain_wire::split_position(self.payload.clone()?);
         Some(ProtocolEvent {
             id: self.event_id,
             kind: self.kind.clone(),
             issuer: global_id_from_str(&self.issuer)?,
             subject: global_id_from_str(&self.subject)?,
-            payload: self.payload.clone()?,
+            payload,
             timestamp: self.event_timestamp,
             version: u32::try_from(self.version).ok()?,
-            identity_chain: None,
+            identity_chain,
         })
     }
 }
@@ -1253,7 +1267,7 @@ impl PostgresSettlementProvider {
             .bind(&event.kind)
             .bind(event.issuer.as_str())
             .bind(event.subject.as_str())
-            .bind(&event.payload)
+            .bind(stored_payload(event))
             .bind(event.timestamp)
             .bind(event.version as i32)
             .bind(&prev_hash)
@@ -1805,6 +1819,32 @@ mod tests {
             },
         );
         assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn chain_position_is_stored_in_the_payload_and_covered_by_the_entry_hash() {
+        use avalon_protocol::events::IdentityChainPosition;
+        let mut event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "profile.updated".to_string(),
+            issuer: global_id_from_str("identity:x:self:profile_updated").unwrap(),
+            subject: global_id_from_str("identity:x:self:profile_updated").unwrap(),
+            payload: serde_json::json!({"bio": "hi"}),
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            version: 1,
+            identity_chain: None,
+        };
+        let unchained = hash_event("avalon-test", GENESIS_HASH, &event);
+        assert_eq!(stored_payload(&event), event.payload);
+        event.identity_chain = Some(IdentityChainPosition {
+            seq: 1,
+            prev_hash: None,
+        });
+        assert_ne!(hash_event("avalon-test", GENESIS_HASH, &event), unchained);
+        let (payload, position) =
+            avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
+        assert_eq!(payload, event.payload);
+        assert_eq!(position, event.identity_chain);
     }
 
     /// Issue #173's core guarantee: two networks never share a hash space,

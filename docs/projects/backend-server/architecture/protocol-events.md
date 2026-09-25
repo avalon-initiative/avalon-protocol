@@ -66,6 +66,16 @@ previous-event hash pointer independent of the global ledger order — see
 resolution" for the deterministic rule this exists to support
 (`crates/protocol::identity_chain`). `None` for every non-chained kind.
 
+In the ledger the position is stored inside the entry's payload under the
+reserved top-level key `_identity_chain` (`{seq, prev_hash}`), added by
+`SettlementProvider::commit` and stripped again when an entry is decoded
+back into a `ProtocolEvent` (local rebuild, mirrored entries). It is
+therefore covered by the entry hash and reaches every mirror without a
+wire-format change; a pruned payload loses it along with the rest of the
+content. The chain hash (`identity_chain::compute_event_hash`) is taken over
+the event's own payload without that key, canonical JSON, timestamp at
+microsecond precision.
+
 ## The pipeline
 
 ```text

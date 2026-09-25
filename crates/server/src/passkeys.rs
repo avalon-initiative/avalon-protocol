@@ -240,6 +240,7 @@ pub async fn register_finish(
     let credential_id: &[u8] = passkey.cred_id().as_ref();
 
     let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     let inserted = sqlx::query(
         r#"
@@ -262,7 +263,7 @@ pub async fn register_finish(
     // `avalon_protocol::event_payloads::IdentityPasskeyRegisteredPayload`'s
     // doc comment for why this carries the full serialized `Passkey`
     // rather than just an opaque reference.
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityPasskeyRegistered
             .as_str()
@@ -281,6 +282,7 @@ pub async fn register_finish(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
@@ -417,6 +419,7 @@ pub async fn revoke_passkey(
     let identity_id = authenticate(&state, &headers).await?;
 
     let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     // Row-locks every passkey of this identity for the duration of the
     // transaction, so a concurrent revoke of a different passkey from
@@ -459,7 +462,7 @@ pub async fn revoke_passkey(
     // same "revocation must be durable, not just locally deleted"
     // invariant `devices::revoke_device`'s `identity.signing_key_revoked`
     // already establishes for the signing-key domain.
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityPasskeyRevoked
             .as_str()
@@ -475,6 +478,7 @@ pub async fn revoke_passkey(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 

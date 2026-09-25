@@ -364,6 +364,7 @@ pub async fn approve_device_grant(
     }
 
     let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     let new_key_row = sqlx::query(
         "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
@@ -392,7 +393,7 @@ pub async fn approve_device_grant(
         return Err(AppError::DeviceGrantNotFound);
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentitySigningKeyAdded
             .as_str()
@@ -411,6 +412,7 @@ pub async fn approve_device_grant(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
@@ -535,6 +537,7 @@ pub async fn revoke_device(
     let identity_id = authenticate(&state, &headers).await?;
 
     let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     let revoked = sqlx::query(
         "UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
@@ -547,7 +550,7 @@ pub async fn revoke_device(
         return Err(AppError::SigningKeyNotFound);
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentitySigningKeyRevoked
             .as_str()
@@ -560,6 +563,7 @@ pub async fn revoke_device(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 

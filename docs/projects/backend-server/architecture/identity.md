@@ -548,18 +548,56 @@ same person editing from two devices), while a `ChainCritical` conflict is
 the case that must never be settled by picking whichever branch merely
 claims the later timestamp.
 
-**Current implementation.** `crates/protocol/src/identity_chain.rs` has the
-full rule and its test coverage: convergence regardless of arrival order,
-out-of-order arrival, the timestamp clamp rejecting a forged far-future
-value, a concurrent revocation beating an edit, and a forked rotation
-freezing the chain. Not yet wired into `server`/the indexer: populating
-`identity_chain` at each layer-1 emission site (a new per-identity
-chain-state table tracking each identity's current `seq`/head hash),
-running `identity_chain::apply_chain` in the indexer to resolve actual
-multi-node conflicts, and enforcing the freeze on a forked identity in the
-handlers that gate on signing-key state. `avalon-sdks` also needs a
-matching update (event shape, conformance vectors) once server-side wiring
-lands.
+**Today in the repo.** The pure rule and its tests are in
+`crates/protocol/src/identity_chain.rs`; the glue (chain owner, canonical
+event hash, position-in-payload encoding, recovery-aware replay) is
+`crates/protocol/src/identity_chain_wire.rs`; the shared vectors are
+`conformance/vectors/identity-chain.json` (Rust only; `avalon-sdks` still
+needs a vendored copy and, when SDKs handle chains, matching support).
+
+- **Storage.** Migration `0078_identity_chain_state` adds
+  `identity_chain_events` (every chained event known for an identity, own and
+  mirrored, with its clamped timestamp) and `identity_chain_state` (resolved
+  head `seq`/`head_hash` and `forked_at_seq`). Both are derived from events
+  and are truncated and rebuilt with the other projections.
+- **Emission.** `crates/server/src/identity_chain.rs::assign` runs inside the
+  same transaction as the write and the outbox entry: it locks the
+  identity's state row, sets `identity_chain` to `seq = head + 1`,
+  `prev_hash = head`, and records the event. Chained at: profile update
+  (`PATCH /me` and the guild-join main-guild clear), friend
+  requested/accepted/removed, guild member added/removed, passkey
+  registered/revoked, signing key added/revoked, and every recovery step
+  (configured, requested, approved, cancelled, recovered). The owning
+  identity is the event's issuer, except guardian approvals and
+  cancellations, which belong to the recovering identity (the subject).
+  All emitted timestamps are the node's own clock. Not chained yet:
+  `friend.relationship_reversed` and `guild.membership_reversed` (rollback
+  compensations) and any kind `ActionClass::classify` returns `None` for.
+- **Convergence.** `PostgresIndexer::apply_in_tx` records every chained event
+  (local or mirrored) via `identity_chain_store::record` and re-resolves the
+  chain with `resolve_identity_chain` over all recorded events, so the
+  outcome depends only on the event set. A mirrored event whose timestamp is
+  beyond the clock-skew bound is dropped. Only the `profiles` projection
+  consumes the outcome: a `profile.updated` that is not on the resolved chain
+  is not applied, and when the accepted set changes (a winner displacing an
+  applied loser, or an out-of-order event filling a gap) the displaced
+  events' optional fields are cleared and every accepted profile event is
+  replayed in chain order (`display_name` is never reverted). The friendship,
+  guild-roster, passkey and signing-key projections still apply every event as
+  before; their events are recorded so forks are detected, but a concurrent
+  same-position conflict in those projections is not undone.
+- **Fork and freeze.** A fork is set when the rule reports one. While it is
+  set, signing-key add/revoke, passkey register/revoke and guardian
+  reconfiguration return `409 IDENTITY_CHAIN_FORKED`; recovery request,
+  approval and completion stay available, since that is how the fork is
+  resolved. Profile, friend and guild edits continue but are emitted without
+  a chain position while forked. An `identity.recovered` event that extends
+  the last unforked head at the fork position, and is the only such
+  candidate, wins that position and clears the fork on every node
+  (`resolve_identity_chain`).
+- **Not wired.** Rollback compensations, guild and friend projection
+  convergence under displacement, chain positions for events authored on
+  behalf of another shard, and SDK support.
 
 ## What identity is not
 
