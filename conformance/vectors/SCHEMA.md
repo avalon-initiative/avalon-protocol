@@ -62,8 +62,9 @@ Each file has this shape:
   construction, verified against pinned trust anchors.
 - `witness-cosigned-tree-head.json` — witness-cosigned tree head
   acceptance (`avalon_protocol::cosigned_sth::verify_cosigned_tree_head`):
-  accepted, below-threshold, unknown-witness, stale, and conflicting-heads
-  (equivocation) cases, all against precomputed signatures under one fixed
+  accepted, below-threshold, unknown-witness, stale, conflicting-heads
+  (equivocation) and author-as-known-witness cases (the author's own valid
+  signature counts as the vote of a known witness holding its key), all against precomputed signatures under one fixed
   set of author/witness key seeds. Rust only today — production
   known-list management and cosignature gossip (#946/#947) haven't landed
   in any SDK yet.

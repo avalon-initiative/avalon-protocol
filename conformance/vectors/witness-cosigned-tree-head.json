@@ -20,7 +20,8 @@
     "witness-1": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
     "witness-2": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
     "witness-3": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
-    "witness-stranger": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242"
+    "witness-stranger": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242",
+    "author": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
   },
   "networkId": "avalon-conformance-test",
   "vectors": [
@@ -55,6 +56,54 @@
       },
       "expected": {
         "accepted": true
+      }
+    },
+    {
+      "name": "author key as a known witness: the author's own signature counts, so author + one cosigning witness reach a majority of two",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [
+          {
+            "witnessKeyId": "witness-1",
+            "observedAtUnixSeconds": 1790000600,
+            "signatureHex": "b205600969a8af3df872e216923906ccefd6c952836c5e28d4e5e2041894c660307189966c50642a7be3e269e6dfb6fdc2a7fbc36554d70e7d4b68def065040d"
+          }
+        ],
+        "knownList": [
+          "author",
+          "witness-1"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "name": "author key as a known witness: the author alone does not reach a majority of two",
+      "input": {
+        "sth": {
+          "treeSize": 12,
+          "rootHashHex": "abababababababababababababababababababababababababababababababab",
+          "createdAtUnixSeconds": 1790000000,
+          "signatureHex": "0b219c258d45576b0bde9f61789c95a4c367813d064df208bb24d6bc06b78610016d2e31f07a9b8b82e49825b64e17a349929146b14cd99746d8050f3d513b08"
+        },
+        "cosignatures": [],
+        "knownList": [
+          "author",
+          "witness-1"
+        ],
+        "freshnessCutoffUnixSeconds": 1790000000,
+        "nowUnixSeconds": 1790000600
+      },
+      "expected": {
+        "accepted": false
       }
     },
     {

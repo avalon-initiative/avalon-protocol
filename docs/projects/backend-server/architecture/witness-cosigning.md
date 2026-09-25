@@ -89,6 +89,15 @@ at the same `tree_size`, each independently majority-cosigned by
 cosigned both — which is either impossible (no fork) or that witness broke
 rule 3 above, which is now provable from the two cosignature sets themselves.
 
+**The author counts as the witness that holds its key.** A head's own author
+signature already proves that key vouches for it, so `verify_cosigned_tree_head`
+credits a known witness whose key is the author's without a separate
+cosignature (the author signature is still verified first, and a head with a bad
+author signature earns no credit). Without this, a known list that contains the
+shard's own author, which happens whenever the author also announces a witness key
+and holds a slot, could never reach a majority for that shard, since an author never
+cosigns its own log. The rule is part of the cosigned-head conformance vectors.
+
 ## The known list: anchors, diversity, refill
 
 Prototype: `crates/protocol/src/known_list.rs`, `KnownList`. Every node and
