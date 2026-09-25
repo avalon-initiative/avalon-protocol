@@ -482,6 +482,12 @@ currently report full route coverage against the published API.
   (settlement/indexer/realtime/gateway), exposed as
   `AvalonClient.status()`/`getNodeStatus()` (TypeScript),
   `AvalonClient::node_status()` (Rust), and `GetNodeStatusAsync()` (C#).
+  The node topology read model is exposed the same way: `GET /nodes/topology`,
+  `POST /nodes/probe` and `POST /nodes/trace` are `getTopology()`/`probeNode()`/
+  `traceRoute()` (TypeScript), `topology()`/`probe()`/`trace()` (Rust) and
+  `TopologyAsync()`/`ProbeAsync()`/`TraceAsync()` (C#). They are unauthenticated
+  and read-only, and every trace hop is self-reported by the node it names, so a
+  path is advisory rather than verified.
 - **Visibility scoping is partial.** Presence reads and guild rosters are
   scoped server-side by the subject's own visibility settings. Guild
   `channels()`/`messages()` are not — any member with `guilds.chat` sees
