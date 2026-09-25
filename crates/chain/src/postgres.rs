@@ -24,6 +24,29 @@ use crate::{merkle, sth, SettlementError, SettlementProvider};
 pub(crate) const GENESIS_HASH: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// Durable, self-contained proof that a shard's log showed two different
+/// roots at the same `tree_size` to (possibly disjoint) witness groups —
+/// `cosignatures_a`/`cosignatures_b` and
+/// `equivocating_witness_key_ids` are stored as JSON so this row carries
+/// everything a third party needs to re-verify the proof from signatures
+/// alone, without depending on this node's own `witness_cosignatures` table
+/// still holding the same rows later.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EquivocationEvidence {
+    pub network_id: String,
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub root_hash_a: String,
+    pub root_hash_b: String,
+    /// Hex-encoded Ed25519 key of the author both conflicting heads were
+    /// signed under.
+    pub author_verify_key: String,
+    pub cosignatures_a: serde_json::Value,
+    pub cosignatures_b: serde_json::Value,
+    pub equivocating_witness_key_ids: serde_json::Value,
+    pub detected_at: time::OffsetDateTime,
+}
+
 /// The fields that make up an entry's content hash — grouped so recomputing
 /// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
 /// stored row) takes one argument, not eight.
@@ -343,6 +366,15 @@ impl PostgresSettlementProvider {
     /// hash it computes or verifies is rooted in this value.
     pub fn network_id(&self) -> &str {
         &self.network_id
+    }
+
+    /// This provider's underlying pool — for a caller that needs a raw
+    /// query this trait doesn't expose (e.g. `avalon-server`'s
+    /// `equivocation` module resolving a shard's `issuer_keys` rows),
+    /// rather than threading a second, separately-cloned `PgPool` alongside
+    /// `Self` everywhere.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Takes an executor rather than always using `self.pool` — a caller
@@ -794,6 +826,89 @@ impl PostgresSettlementProvider {
             .list_witness_cosignatures(&sth.network_id, tree_size)
             .await?;
         Ok(Some(CosignedTreeHead { sth, cosignatures }))
+    }
+
+    /// Durable evidence of a confirmed equivocation — the gossip layer
+    /// calls this once [`avalon_protocol::cosigned_sth::find_equivocating_witnesses`]
+    /// has returned a non-empty result for two independently-fetched,
+    /// independently-majority-cosigned heads. Idempotent on a replayed
+    /// `(network_id, shard_id, tree_size, root_hash_a, root_hash_b)` — the
+    /// same conflict re-confirmed by a later gossip round is a no-op, not
+    /// an error.
+    ///
+    /// Storage shape is this ticket's own reasonable design (no
+    /// equivocation-evidence table existed yet); reconcile with any
+    /// separately-landed mirror-sync change that independently added one.
+    pub async fn store_equivocation_evidence(
+        &self,
+        evidence: &EquivocationEvidence,
+    ) -> Result<(), SettlementError> {
+        sqlx::query(
+            r#"
+            INSERT INTO equivocation_evidence
+                (network_id, shard_id, tree_size, root_hash_a, root_hash_b,
+                 author_verify_key, cosignatures_a, cosignatures_b,
+                 equivocating_witness_key_ids, detected_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (network_id, shard_id, tree_size, root_hash_a, root_hash_b) DO NOTHING
+            "#,
+        )
+        .bind(&evidence.network_id)
+        .bind(&evidence.shard_id)
+        .bind(evidence.tree_size)
+        .bind(&evidence.root_hash_a)
+        .bind(&evidence.root_hash_b)
+        .bind(&evidence.author_verify_key)
+        .bind(&evidence.cosignatures_a)
+        .bind(&evidence.cosignatures_b)
+        .bind(&evidence.equivocating_witness_key_ids)
+        .bind(evidence.detected_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Every confirmed equivocation on record for `shard_id`, newest first
+    /// — the read half of [`Self::store_equivocation_evidence`].
+    pub async fn list_equivocation_evidence(
+        &self,
+        shard_id: &str,
+    ) -> Result<Vec<EquivocationEvidence>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT network_id, shard_id, tree_size, root_hash_a, root_hash_b,
+                   author_verify_key, cosignatures_a, cosignatures_b,
+                   equivocating_witness_key_ids, detected_at
+            FROM equivocation_evidence
+            WHERE shard_id = $1
+            ORDER BY detected_at DESC
+            "#,
+        )
+        .bind(shard_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut evidence = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            evidence.push(EquivocationEvidence {
+                network_id: row.try_get("network_id").map_err(get)?,
+                shard_id: row.try_get("shard_id").map_err(get)?,
+                tree_size: row.try_get("tree_size").map_err(get)?,
+                root_hash_a: row.try_get("root_hash_a").map_err(get)?,
+                root_hash_b: row.try_get("root_hash_b").map_err(get)?,
+                author_verify_key: row.try_get("author_verify_key").map_err(get)?,
+                cosignatures_a: row.try_get("cosignatures_a").map_err(get)?,
+                cosignatures_b: row.try_get("cosignatures_b").map_err(get)?,
+                equivocating_witness_key_ids: row
+                    .try_get("equivocating_witness_key_ids")
+                    .map_err(get)?,
+                detected_at: row.try_get("detected_at").map_err(get)?,
+            });
+        }
+        Ok(evidence)
     }
 
     /// The first `tree_size` entries' `entry_hash`, oldest first — the

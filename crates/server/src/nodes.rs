@@ -53,6 +53,15 @@
 //! `crate::cross_shard`/`crate::mirror_watcher` for how a discovered shard
 //! is consumed once learned — discovering it never implies trusting it;
 //! #543's key-resolution/verification step is unconditional and unchanged.
+//!
+//! **Layer 3: bounded head-summary gossip.**
+//! [`HeadSummary`]/[`HeadGossipTracker`] ride the same announce exchange
+//! (`known_shards`'s sibling field, `head_summaries`) but are deliberately
+//! their own small, bounded structure — see [`HeadGossipTracker`]'s own doc
+//! comment for why it never touches [`PeerTable`] or [`ShardRegistry`]. A
+//! conflicting pair of summaries is only a *signal*; confirming it as a
+//! real equivocation (fetching full cosignature detail, checking majority
+//! intersection) is `crate::equivocation::confirm_and_record`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -525,6 +534,258 @@ impl ShardRegistry {
     }
 }
 
+/// Bound on head-summary gossip per exchange — the design doc's "Head
+/// gossip" section (`docs/projects/backend-server/architecture/witness-cosigning.md`):
+/// small and fixed, matching the `MAX_UNVERIFIED_PEERS` size discipline
+/// already established for node-coordination gossip, not
+/// hoster-configurable.
+const MAX_HEAD_SUMMARIES_PER_EXCHANGE: usize = 5;
+
+/// Bound on the total number of distinct `(shard_id, tree_size, root_hash)`
+/// combinations [`HeadGossipTracker`] holds at once, independent of the
+/// per-exchange cap above — a peer spread across many exchanges must not be
+/// able to grow this without bound either.
+const MAX_TRACKED_HEAD_SUMMARIES: usize = 4096;
+
+/// One node's most-recently-observed cosigned-head summary for a shard it
+/// tracks — gossip payload. Deliberately not the full
+/// cosignature set: only a count. A node that wants the underlying
+/// signatures fetches them directly (`crate::settlement::latest_sth`/
+/// `sth_at_tree_size` with `?witnesses=1`), never receives them over this
+/// gossip path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HeadSummary {
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub root_hash: String,
+    pub cosignature_count: usize,
+}
+
+fn head_summary_well_formed(adm: &PeerAdmission, summary: &HeadSummary) -> bool {
+    adm.shard_id_ok(&summary.shard_id)
+        && summary.tree_size >= 0
+        && hex::decode(&summary.root_hash).is_ok_and(|bytes| bytes.len() == 32)
+}
+
+/// Two different roots reported for the same `(shard_id, tree_size)` — the
+/// fork signal the design doc calls out ("Fork detection is a side effect
+/// of this gossip, not a separate mechanism"). Carries which peer reported
+/// each side, so a caller knows where to fetch full cosignature detail
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadConflict {
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub root_hash_a: String,
+    pub source_a: String,
+    pub root_hash_b: String,
+    pub source_b: String,
+}
+
+#[derive(Clone)]
+struct TrackedHeadSummary {
+    summary: HeadSummary,
+    reported_by: String,
+    last_seen_at: OffsetDateTime,
+}
+
+/// `(shard_id, tree_size, root_hash)` — [`HeadGossipTracker`]'s key.
+type TrackedHeadKey = (String, i64, String);
+
+/// This node's bounded, in-memory view of "what root has each peer most
+/// recently claimed for this shard at this tree_size".
+///
+/// **Deliberately its own structure, never folded into [`PeerTable`] or
+/// [`ShardRegistry`].** Those exist for peer/shard *discovery* — admitting
+/// something here never places an entry into either of them, and merging
+/// gossip into either of them never touches this. A head summary is log
+/// data, not an address to dial or a peer to trust.
+#[derive(Clone, Default)]
+pub struct HeadGossipTracker {
+    seen: Arc<RwLock<HashMap<TrackedHeadKey, TrackedHeadSummary>>>,
+    /// `shard_id`s a confirmed equivocation has been recorded for — the
+    /// gate a node's own future cosigning decision must consult before
+    /// cosigning anything for this shard again. No code in this server
+    /// currently makes a cosigning decision at all (nothing calls
+    /// `avalon_protocol::witness::sign_witness_cosignature` yet), so this
+    /// gate has no consumer today — see [`Self::is_equivocating`]'s own
+    /// doc comment.
+    equivocating_shards: Arc<RwLock<HashSet<String>>>,
+}
+
+impl HeadGossipTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Evicts the least-recently-seen tracked entry if `seen` is already at
+    /// [`MAX_TRACKED_HEAD_SUMMARIES`] and `key` isn't already present —
+    /// same bounded-with-LRU-eviction shape [`PeerTable::insert_unverified`]
+    /// already establishes.
+    fn evict_if_full(seen: &mut HashMap<TrackedHeadKey, TrackedHeadSummary>, key: &TrackedHeadKey) {
+        if seen.contains_key(key) || seen.len() < MAX_TRACKED_HEAD_SUMMARIES {
+            return;
+        }
+        if let Some(victim) = seen
+            .iter()
+            .min_by(|a, b| {
+                a.1.last_seen_at
+                    .cmp(&b.1.last_seen_at)
+                    .then_with(|| a.0.cmp(b.0))
+            })
+            .map(|(key, _)| key.clone())
+        {
+            seen.remove(&victim);
+        }
+    }
+
+    /// Merges `incoming` (a gossip exchange from `from_peer`, or this
+    /// node's own current head via [`Self::record_own`]) — validates each
+    /// entry before ever admitting it (never relayed or stored unchecked),
+    /// examines at most [`MAX_HEAD_SUMMARIES_PER_EXCHANGE`] of them
+    /// regardless of how many `incoming` actually holds (defense in depth:
+    /// a well-behaved peer already caps its own [`Self::snapshot`] to this
+    /// same bound, but a malicious one might not), and returns what was
+    /// admitted, any new conflicts this merge surfaced, and how many
+    /// entries were rejected outright (malformed, or past the per-exchange
+    /// cap).
+    ///
+    /// A conflict already confirmed as an equivocation
+    /// (`shard_id` in `equivocating_shards`) is not re-reported — the
+    /// network-wide "stop trusting this log" fact is already on record; a
+    /// fresh gossip round repeating the same two roots has nothing new to
+    /// prove.
+    pub fn merge(
+        &self,
+        from_peer: &str,
+        incoming: &[HeadSummary],
+        now: OffsetDateTime,
+    ) -> (Vec<HeadSummary>, Vec<HeadConflict>, usize) {
+        let adm = admission();
+        let mut admitted = Vec::new();
+        let mut conflicts = Vec::new();
+        let mut rejected = incoming
+            .len()
+            .saturating_sub(MAX_HEAD_SUMMARIES_PER_EXCHANGE);
+
+        for summary in incoming.iter().take(MAX_HEAD_SUMMARIES_PER_EXCHANGE) {
+            if !head_summary_well_formed(adm, summary) {
+                rejected += 1;
+                continue;
+            }
+
+            let already_equivocating = self
+                .equivocating_shards
+                .read()
+                .expect("head gossip tracker lock poisoned")
+                .contains(&summary.shard_id);
+
+            let key = (
+                summary.shard_id.clone(),
+                summary.tree_size,
+                summary.root_hash.clone(),
+            );
+            {
+                let mut seen = self
+                    .seen
+                    .write()
+                    .expect("head gossip tracker lock poisoned");
+                Self::evict_if_full(&mut seen, &key);
+                seen.insert(
+                    key,
+                    TrackedHeadSummary {
+                        summary: summary.clone(),
+                        reported_by: from_peer.to_string(),
+                        last_seen_at: now,
+                    },
+                );
+
+                if !already_equivocating {
+                    for ((other_shard, other_size, other_root), tracked) in seen.iter() {
+                        if other_shard == &summary.shard_id
+                            && *other_size == summary.tree_size
+                            && other_root != &summary.root_hash
+                        {
+                            conflicts.push(HeadConflict {
+                                shard_id: summary.shard_id.clone(),
+                                tree_size: summary.tree_size,
+                                root_hash_a: summary.root_hash.clone(),
+                                source_a: from_peer.to_string(),
+                                root_hash_b: other_root.clone(),
+                                source_b: tracked.reported_by.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            admitted.push(summary.clone());
+        }
+
+        (admitted, conflicts, rejected)
+    }
+
+    /// This node's own current head, recorded the same way a peer's gossip
+    /// would be — feeds into [`Self::snapshot`] so this node's own view is
+    /// part of what it gossips out, matching [`ShardRegistry::record_own`]'s
+    /// precedent.
+    pub fn record_own(&self, summary: HeadSummary, own_identity: &str, now: OffsetDateTime) {
+        self.merge(own_identity, &[summary], now);
+    }
+
+    /// The at-most-[`MAX_HEAD_SUMMARIES_PER_EXCHANGE`] most-recently-seen
+    /// summaries this node currently holds — what gets attached to an
+    /// outbound announce request/response, matching the design doc's "not
+    /// full cosignature bytes on every exchange" bound exactly.
+    pub fn snapshot(&self) -> Vec<HeadSummary> {
+        let seen = self.seen.read().expect("head gossip tracker lock poisoned");
+        let mut entries: Vec<&TrackedHeadSummary> = seen.values().collect();
+        entries.sort_by(|a, b| {
+            b.last_seen_at
+                .cmp(&a.last_seen_at)
+                .then_with(|| a.summary.shard_id.cmp(&b.summary.shard_id))
+        });
+        entries
+            .into_iter()
+            .take(MAX_HEAD_SUMMARIES_PER_EXCHANGE)
+            .map(|t| t.summary.clone())
+            .collect()
+    }
+
+    /// Records `shard_id` as having a confirmed equivocation — called once
+    /// a caller has independently fetched full cosignature detail for both
+    /// conflicting sides of a [`HeadConflict`] and confirmed it with
+    /// `avalon_protocol::cosigned_sth::find_equivocating_witnesses`
+    /// (see `crate::equivocation::confirm_and_record`). Idempotent.
+    pub fn mark_equivocating(&self, shard_id: &str) {
+        self.equivocating_shards
+            .write()
+            .expect("head gossip tracker lock poisoned")
+            .insert(shard_id.to_string());
+    }
+
+    /// Whether `shard_id` has a confirmed equivocation on record — the gate
+    /// a node's own cosigning decision must consult before cosigning
+    /// anything else for this shard. **No-op today**: nothing in this
+    /// server decides to cosign another node's head yet (that's still
+    /// unwired, a gap already noted when cosigned-head verification landed), so nothing
+    /// currently calls this before cosigning. Once real cosigning-decision
+    /// logic lands, it must check this first.
+    pub fn is_equivocating(&self, shard_id: &str) -> bool {
+        self.equivocating_shards
+            .read()
+            .expect("head gossip tracker lock poisoned")
+            .contains(shard_id)
+    }
+
+    #[cfg(test)]
+    fn tracked_len(&self) -> usize {
+        self.seen
+            .read()
+            .expect("head gossip tracker lock poisoned")
+            .len()
+    }
+}
+
 /// `Serialize` too: this is also the outbound request body `run_worker`
 /// sends when announcing itself to a peer.
 #[derive(Debug, Serialize, Deserialize)]
@@ -547,6 +808,12 @@ pub struct AnnounceRequest {
     /// merge.
     #[serde(default)]
     pub known_shards: Vec<ShardAnnouncement>,
+    /// This node's own current [`HeadGossipTracker::snapshot`]
+    /// — at most [`MAX_HEAD_SUMMARIES_PER_EXCHANGE`] entries, gossiped
+    /// alongside `known_shards` on every exchange. `#[serde(default)]` so
+    /// an older peer's announce still decodes with nothing to merge.
+    #[serde(default)]
+    pub head_summaries: Vec<HeadSummary>,
     /// The sender's own network coordinate.
     pub coordinate: Coordinate,
 }
@@ -560,6 +827,10 @@ pub struct AnnounceResponse {
     /// doc comment; this is the same exchange in the other direction.
     #[serde(default)]
     pub known_shards: Vec<ShardAnnouncement>,
+    /// See [`AnnounceRequest::head_summaries`]'s own doc
+    /// comment; the same exchange in the other direction.
+    #[serde(default)]
+    pub head_summaries: Vec<HeadSummary>,
     /// The responder's own network coordinate.
     pub coordinate: Coordinate,
 }
@@ -633,9 +904,44 @@ pub async fn announce(
         );
     }
 
+    // Head-summary gossip rides the same exchange, bounded and
+    // validated the same way shard gossip is above — see
+    // `HeadGossipTracker::merge`'s own doc comment.
+    let (_admitted_heads, conflicts, rejected_heads) = state.head_gossip.merge(
+        &caller_base_url,
+        &body.head_summaries,
+        OffsetDateTime::now_utc(),
+    );
+    if rejected_heads > 0 {
+        tracing::warn!(
+            event = "head_summary_gossip_entries_rejected",
+            from_peer = %caller_base_url,
+            rejected = rejected_heads,
+            "skipped head-summary entries that failed validation or exceeded the per-exchange \
+             limit",
+        );
+    }
+    for conflict in conflicts {
+        tracing::warn!(
+            event = "head_summary_conflict_detected",
+            shard_id = %conflict.shard_id,
+            tree_size = conflict.tree_size,
+            root_hash_a = %conflict.root_hash_a,
+            root_hash_b = %conflict.root_hash_b,
+            "two different roots reported for the same shard/tree_size via gossip — fetching \
+             full cosignature detail to confirm",
+        );
+        let chain = state.chain.clone();
+        let head_gossip = state.head_gossip.clone();
+        tokio::spawn(async move {
+            crate::equivocation::confirm_and_record(&chain, &head_gossip, conflict).await;
+        });
+    }
+
     Ok(Json(AnnounceResponse {
         peers: state.peers.list_excluding(&caller_base_url),
         known_shards: state.shard_registry.snapshot(),
+        head_summaries: state.head_gossip.snapshot(),
         coordinate: state.peers.neighbors().own_coordinate(),
     }))
 }
@@ -1346,6 +1652,7 @@ pub async fn run_worker(
     chain: PostgresSettlementProvider,
     peers: PeerTable,
     shard_registry: ShardRegistry,
+    head_gossip: HeadGossipTracker,
     own_shard_id: String,
     config: AnnounceConfig,
     dht_identity: Option<DhtIdentity>,
@@ -1393,8 +1700,26 @@ pub async fn run_worker(
         // has nothing to claim authority over and gossips only what it's
         // learned from others.
         if let Some(own_base_url) = &config.own_base_url {
-            if let Ok(Some(_)) = chain.latest_signed_tree_head().await {
+            if let Ok(Some(sth)) = chain.latest_signed_tree_head().await {
                 shard_registry.record_own(&own_shard_id, own_base_url, OffsetDateTime::now_utc());
+                // This node's own current head joins the
+                // snapshot gossiped out this tick too — see
+                // `HeadGossipTracker::record_own`'s own doc comment.
+                let cosignature_count = chain
+                    .list_witness_cosignatures(&sth.network_id, sth.tree_size)
+                    .await
+                    .map(|c| c.len())
+                    .unwrap_or(0);
+                head_gossip.record_own(
+                    HeadSummary {
+                        shard_id: own_shard_id.clone(),
+                        tree_size: sth.tree_size,
+                        root_hash: sth.root_hash,
+                        cosignature_count,
+                    },
+                    own_base_url,
+                    OffsetDateTime::now_utc(),
+                );
             }
         }
 
@@ -1413,6 +1738,7 @@ pub async fn run_worker(
                             &network_id,
                             dht_identity.as_ref(),
                             &shard_registry.snapshot(),
+                            &head_gossip.snapshot(),
                             neighbors.own_coordinate(),
                         ),
                     ),
@@ -1471,6 +1797,45 @@ pub async fn run_worker(
                                 "learned of a new shard via peer-announce gossip",
                             );
                         }
+
+                        // Head-summary gossip, same bounded/
+                        // validated merge the announce handler runs for an
+                        // inbound exchange — see `HeadGossipTracker::merge`.
+                        let (_admitted_heads, conflicts, rejected_heads) = head_gossip.merge(
+                            peer,
+                            &discovered.head_summaries,
+                            OffsetDateTime::now_utc(),
+                        );
+                        if rejected_heads > 0 {
+                            tracing::warn!(
+                                event = "head_summary_gossip_entries_rejected",
+                                via = %peer,
+                                rejected = rejected_heads,
+                                "skipped head-summary entries that failed validation or \
+                                 exceeded the per-exchange limit",
+                            );
+                        }
+                        for conflict in conflicts {
+                            tracing::warn!(
+                                event = "head_summary_conflict_detected",
+                                shard_id = %conflict.shard_id,
+                                tree_size = conflict.tree_size,
+                                root_hash_a = %conflict.root_hash_a,
+                                root_hash_b = %conflict.root_hash_b,
+                                "two different roots reported for the same shard/tree_size via \
+                                 gossip — fetching full cosignature detail to confirm",
+                            );
+                            let chain = chain.clone();
+                            let head_gossip = head_gossip.clone();
+                            tokio::spawn(async move {
+                                crate::equivocation::confirm_and_record(
+                                    &chain,
+                                    &head_gossip,
+                                    conflict,
+                                )
+                                .await;
+                            });
+                        }
                     }
                     Err(err) => tracing::error!("node-announce: {peer}: {err}"),
                 }
@@ -1526,6 +1891,7 @@ fn announce_request(
     network_id: &str,
     dht_identity: Option<&DhtIdentity>,
     known_shards: &[ShardAnnouncement],
+    head_summaries: &[HeadSummary],
     coordinate: Coordinate,
 ) -> AnnounceRequest {
     AnnounceRequest {
@@ -1538,6 +1904,7 @@ fn announce_request(
             .map(|d| d.listen_addrs.clone())
             .unwrap_or_default(),
         known_shards: known_shards.to_vec(),
+        head_summaries: head_summaries.to_vec(),
         coordinate,
     }
 }
@@ -1610,7 +1977,7 @@ mod tests {
                 announce_to(
                     &client,
                     peer,
-                    &announce_request("http://me", &[], "n", None, &[], Coordinate::default()),
+                    &announce_request("http://me", &[], "n", None, &[], &[], Coordinate::default()),
                 ),
             )
             .await;
@@ -1658,7 +2025,15 @@ mod tests {
                 announce_to(
                     &client,
                     &peer,
-                    &announce_request("http://me", &[], "n", None, &[], neighbors.own_coordinate()),
+                    &announce_request(
+                        "http://me",
+                        &[],
+                        "n",
+                        None,
+                        &[],
+                        &[],
+                        neighbors.own_coordinate(),
+                    ),
                 ),
             )
             .await
@@ -2596,5 +2971,122 @@ mod tests {
         .await;
         assert_eq!((kept.len(), refused), (1, 0));
         assert_eq!(kept[0].url, "http://8.8.8.8");
+    }
+
+    // --- head-summary gossip -------------------------------------
+
+    fn head_summary(shard_id: &str, tree_size: i64, root_byte: u8) -> HeadSummary {
+        HeadSummary {
+            shard_id: shard_id.to_string(),
+            tree_size,
+            root_hash: hex::encode([root_byte; 32]),
+            cosignature_count: 2,
+        }
+    }
+
+    #[test]
+    fn merge_admits_a_well_formed_summary_and_it_is_reflected_in_the_snapshot() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        let (admitted, conflicts, rejected) =
+            tracker.merge("http://peer-a", &[head_summary("core", 5, 1)], now);
+        assert_eq!(admitted.len(), 1);
+        assert!(conflicts.is_empty());
+        assert_eq!(rejected, 0);
+        assert_eq!(tracker.snapshot(), vec![head_summary("core", 5, 1)]);
+        assert_eq!(tracker.tracked_len(), 1);
+    }
+
+    #[test]
+    fn merge_rejects_malformed_summaries_and_never_admits_them() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        let bad_shard = HeadSummary {
+            shard_id: String::new(),
+            ..head_summary("core", 5, 1)
+        };
+        let bad_root = HeadSummary {
+            root_hash: "not-hex".to_string(),
+            ..head_summary("core", 6, 1)
+        };
+        let bad_size = HeadSummary {
+            tree_size: -1,
+            ..head_summary("core", 7, 1)
+        };
+        let (admitted, conflicts, rejected) =
+            tracker.merge("http://peer-a", &[bad_shard, bad_root, bad_size], now);
+        assert!(admitted.is_empty());
+        assert!(conflicts.is_empty());
+        assert_eq!(rejected, 3);
+        assert_eq!(tracker.tracked_len(), 0);
+    }
+
+    /// "gossiping more than 5 summaries in one exchange, only 5 are
+    /// sent/accepted" — the bounded-volume requirement, checked on both the
+    /// receive side (here) and the send side (`snapshot_never_exceeds_the_per_exchange_cap`).
+    #[test]
+    fn merge_accepts_at_most_the_per_exchange_cap_regardless_of_how_many_arrive() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        let incoming: Vec<HeadSummary> =
+            (0..12).map(|i| head_summary("core", i, i as u8)).collect();
+        let (admitted, _conflicts, rejected) = tracker.merge("http://peer-a", &incoming, now);
+        assert_eq!(admitted.len(), MAX_HEAD_SUMMARIES_PER_EXCHANGE);
+        assert_eq!(rejected, 12 - MAX_HEAD_SUMMARIES_PER_EXCHANGE);
+        assert_eq!(tracker.tracked_len(), MAX_HEAD_SUMMARIES_PER_EXCHANGE);
+    }
+
+    #[test]
+    fn snapshot_never_exceeds_the_per_exchange_cap() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        for i in 0..20 {
+            tracker.merge(
+                "http://peer-a",
+                &[head_summary(&format!("shard-{i}"), 1, i as u8)],
+                now + time::Duration::seconds(i),
+            );
+        }
+        assert_eq!(tracker.snapshot().len(), MAX_HEAD_SUMMARIES_PER_EXCHANGE);
+    }
+
+    /// A log shown two different versions to disjoint witness groups is
+    /// detected as soon as the second, conflicting root is gossiped in —
+    /// the fork signal that feeds `crate::equivocation::confirm_and_record`.
+    #[test]
+    fn merge_detects_a_conflicting_root_at_the_same_shard_and_tree_size() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        let (_, conflicts, _) = tracker.merge("http://peer-a", &[head_summary("core", 5, 1)], now);
+        assert!(conflicts.is_empty());
+
+        let (_, conflicts, _) = tracker.merge("http://peer-b", &[head_summary("core", 5, 2)], now);
+        assert_eq!(conflicts.len(), 1);
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.shard_id, "core");
+        assert_eq!(conflict.tree_size, 5);
+        assert_eq!(conflict.source_a, "http://peer-b");
+        assert_eq!(conflict.source_b, "http://peer-a");
+    }
+
+    #[test]
+    fn merge_does_not_re_report_a_conflict_for_a_shard_already_confirmed_equivocating() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        tracker.merge("http://peer-a", &[head_summary("core", 5, 1)], now);
+        tracker.mark_equivocating("core");
+
+        let (_, conflicts, _) = tracker.merge("http://peer-b", &[head_summary("core", 5, 2)], now);
+        assert!(conflicts.is_empty());
+        assert!(tracker.is_equivocating("core"));
+    }
+
+    #[test]
+    fn same_root_reported_twice_is_not_a_conflict() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        tracker.merge("http://peer-a", &[head_summary("core", 5, 1)], now);
+        let (_, conflicts, _) = tracker.merge("http://peer-b", &[head_summary("core", 5, 1)], now);
+        assert!(conflicts.is_empty());
     }
 }

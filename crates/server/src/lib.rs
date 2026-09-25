@@ -34,6 +34,7 @@ pub mod device_pairing;
 pub mod devices;
 pub mod dht;
 pub mod discovery;
+pub mod equivocation;
 pub mod error;
 pub mod friends;
 pub mod guild_events;

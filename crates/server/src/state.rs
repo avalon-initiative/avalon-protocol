@@ -260,6 +260,14 @@ pub struct AppState {
     /// own doc comment; consumed by `crate::cross_shard` (aggregation) and
     /// `crate::mirror_watcher` (opt-in auto-mirroring).
     pub shard_registry: ShardRegistry,
+    /// This node's bounded, in-memory view of the most
+    /// recently gossiped cosigned-head summary per shard/tree_size —
+    /// always present (no config needed, same posture `shard_registry`
+    /// takes), consumed by `crate::nodes::announce`/`run_worker` (merge)
+    /// and `crate::equivocation` (confirmation). See
+    /// `crate::nodes::HeadGossipTracker`'s own doc comment for why it's
+    /// never folded into `peers`/`shard_registry`.
+    pub head_gossip: crate::nodes::HeadGossipTracker,
     /// `AVALON_ADMIN_TOKEN` — the bearer credential
     /// `GET`/`POST /nodes/log-level` require. Deliberately a *separate*
     /// secret from `settlement_submit_key` above — see `crate::admin`'s
