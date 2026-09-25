@@ -91,3 +91,54 @@ jobs:
           scripts/load-tests.sh flood-public flood-auth-principal flood-auth-ip many-identities
           announce-source announce-cap announce-strict mesh concurrency db-pool-large
           slow-conn oversized sustained
+
+  # CI-scale subset of the witness-cosigning drill (growth, loss of the
+  # original node, eclipse flood) against nodes it starts itself.
+  witness-drill-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: avalon
+          POSTGRES_PASSWORD: avalon
+          POSTGRES_DB: avalon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avalon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev jq
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Write env file
+        run: |
+          cat > "$RUNNER_TEMP/drill.env" <<'ENV'
+          DATABASE_URL=postgres://avalon:avalon@127.0.0.1:5432/avalon
+          AVALON_SERVER_ADDR=127.0.0.1:8080
+          AVALON_NETWORK_ID=avalon-dev-local
+          AVALON_WEBAUTHN_RP_ID=localhost
+          AVALON_WEBAUTHN_ORIGIN=http://localhost:5173
+          AVALON_HUB_ORIGIN=http://localhost:5173
+          ENV
+
+      - name: Build server
+        run: cargo build -p avalon-server --bins --examples
+
+      - name: Witness drill (CI subset)
+        env:
+          AVALON_ENV_FILE: ${{ runner.temp }}/drill.env
+          DRILL_ECLIPSE_FLOOD: "4"
+        run: scripts/witness-drill.sh lifecycle eclipse

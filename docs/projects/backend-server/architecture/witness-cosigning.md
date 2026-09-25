@@ -320,6 +320,8 @@ network still runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
 `sth.rs`/`network-trust-anchors.md` describe until that admission change and
 #939's migration land.
 
+The scenario suite that exercises growth, loss of the original node, witness loss, eclipse and fork attempts against real processes, plus the live-fleet drill procedure, is in [`../for-maintainers/witness-drill.md`](../for-maintainers/witness-drill.md) (`scripts/witness-drill.sh`).
+
 ## Decisions and tickets
 
 [#945](https://github.com/avalon-initiative/avalon-protocol/issues/945),

@@ -86,6 +86,10 @@ for the investigation and recovery steps. See
 [`key-rotation.md`](../projects/backend-server/for-maintainers/key-rotation.md)
 for rotating the settlement signing key itself, routine or emergency.
 
+For the witness-cosigning scenario suite (growth, loss of the original node,
+witness loss, eclipse, fork) and the live-fleet drill procedure, see
+[`witness-drill.md`](../projects/backend-server/for-maintainers/witness-drill.md).
+
 Quick reference once you've read that page:
 
 ```bash
