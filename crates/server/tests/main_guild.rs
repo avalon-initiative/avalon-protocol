@@ -63,6 +63,29 @@ fn unique_guild_body() -> serde_json::Value {
     })
 }
 
+/// Creates a guild for `token` and returns its id, asserting the request
+/// actually succeeded before trusting its body. `tag` is a network-wide-
+/// unique 2-5 character field (see `db/migrations/0008_guilds`), so a
+/// random `unique_guild_body()` can collide with a guild another test in
+/// the same run already created — retried with a fresh body rather than
+/// treated as a hard failure.
+async fn create_guild(http: &reqwest::Client, base: &str, token: &str) -> String {
+    for _ in 0..5 {
+        let create = auth(http.post(format!("{base}/guilds")), token)
+            .json(&unique_guild_body())
+            .send()
+            .await
+            .expect("create guild failed — is `make start` running?");
+        if create.status() == reqwest::StatusCode::CONFLICT {
+            continue;
+        }
+        assert!(create.status().is_success(), "{:?}", create.status());
+        let body: serde_json::Value = create.json().await.unwrap();
+        return body["id"].as_str().unwrap().to_string();
+    }
+    panic!("create guild kept colliding with an existing name/tag");
+}
+
 /// Creates a guild owned by `owner_token`, opens it, and has `member_token`
 /// join it — returns the guild id. Used whenever a test needs a member who
 /// isn't the guild's owner (an owner can't leave without transferring
@@ -73,14 +96,7 @@ async fn create_open_guild_and_join(
     owner_token: &str,
     member_token: &str,
 ) -> String {
-    let create = auth(http.post(format!("{base}/guilds")), owner_token)
-        .json(&unique_guild_body())
-        .send()
-        .await
-        .expect("create guild failed — is `make start` running?");
-    assert!(create.status().is_success(), "{:?}", create.status());
-    let body: serde_json::Value = create.json().await.unwrap();
-    let guild_id = body["id"].as_str().unwrap().to_string();
+    let guild_id = create_guild(http, base, owner_token).await;
 
     let open = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
         .json(&serde_json::json!({ "join_policy": "open" }))
@@ -120,13 +136,7 @@ async fn setting_main_guild_to_a_membership_succeeds_and_round_trips() {
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
 
     // Creating a guild makes the creator a member of it.
-    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
-        .json(&unique_guild_body())
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = create.json().await.unwrap();
-    let guild_id = body["id"].as_str().unwrap().to_string();
+    let guild_id = create_guild(&http, &base, &owner_token).await;
 
     let update = auth(http.patch(format!("{base}/me")), &owner_token)
         .json(&serde_json::json!({ "main_guild": guild_id }))
@@ -155,13 +165,7 @@ async fn setting_main_guild_to_a_guild_youre_not_a_member_of_is_rejected() {
 
     // A guild owned by a different identity — `owner_token`'s identity is
     // never a member of it.
-    let create = auth(http.post(format!("{base}/guilds")), &other_owner_token)
-        .json(&unique_guild_body())
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = create.json().await.unwrap();
-    let guild_id = body["id"].as_str().unwrap().to_string();
+    let guild_id = create_guild(&http, &base, &other_owner_token).await;
 
     let update = auth(http.patch(format!("{base}/me")), &owner_token)
         .json(&serde_json::json!({ "main_guild": guild_id }))
@@ -296,13 +300,7 @@ async fn main_guild_can_be_explicitly_cleared() {
     let pool = test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
 
-    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
-        .json(&unique_guild_body())
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = create.json().await.unwrap();
-    let guild_id = body["id"].as_str().unwrap().to_string();
+    let guild_id = create_guild(&http, &base, &owner_token).await;
 
     let set = auth(http.patch(format!("{base}/me")), &owner_token)
         .json(&serde_json::json!({ "main_guild": guild_id }))
