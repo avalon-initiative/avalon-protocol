@@ -32,12 +32,23 @@ pub struct CosignedTreeHead {
 /// `observed_at` would be). Deduplicated by witness id: a witness cannot
 /// count twice toward the same majority by being repeated in the list.
 fn valid_fresh_witness_ids(
+    author_verifying_key: &VerifyingKey,
     head: &CosignedTreeHead,
     known_list: &[(String, VerifyingKey)],
     freshness_cutoff: OffsetDateTime,
     now: OffsetDateTime,
 ) -> BTreeSet<String> {
     let mut verified = BTreeSet::new();
+    // The author's own valid signature over this head is already proof that
+    // its key vouches for it, so a known witness holding the author's key
+    // counts without a separate cosignature. An author never cosigns its own
+    // log as a mirror would, so requiring one would make every list that
+    // contains the author unable to reach a majority.
+    for (witness_key_id, key) in known_list {
+        if key == author_verifying_key {
+            verified.insert(witness_key_id.clone());
+        }
+    }
     for cosig in &head.cosignatures {
         if cosig.tree_size != head.sth.tree_size
             || cosig.root_hash != head.sth.root_hash
@@ -93,7 +104,13 @@ pub fn verify_cosigned_tree_head(
     if known_list.len() <= 1 {
         return true;
     }
-    let verified = valid_fresh_witness_ids(head, known_list, freshness_cutoff, now);
+    let verified = valid_fresh_witness_ids(
+        author_verifying_key,
+        head,
+        known_list,
+        freshness_cutoff,
+        now,
+    );
     witness::is_cosigned_by_majority(known_list.len(), verified.len())
 }
 
@@ -136,8 +153,20 @@ pub fn find_equivocating_witnesses(
         return Vec::new();
     }
 
-    let witnesses_a = valid_fresh_witness_ids(head_a, known_list, freshness_cutoff, now);
-    let witnesses_b = valid_fresh_witness_ids(head_b, known_list, freshness_cutoff, now);
+    let witnesses_a = valid_fresh_witness_ids(
+        author_verifying_key,
+        head_a,
+        known_list,
+        freshness_cutoff,
+        now,
+    );
+    let witnesses_b = valid_fresh_witness_ids(
+        author_verifying_key,
+        head_b,
+        known_list,
+        freshness_cutoff,
+        now,
+    );
     witnesses_a.intersection(&witnesses_b).cloned().collect()
 }
 
@@ -586,5 +615,67 @@ mod tests {
             &head_b
         )
         .is_empty());
+    }
+
+    #[test]
+    fn the_author_counts_as_the_known_witness_that_holds_its_key() {
+        // A two-witness list made of the author and one mirror: majority is
+        // two, so the author's own signature plus the mirror's cosignature
+        // reach it, and the author alone does not.
+        let f = fixture(1);
+        let mut known_list = f.known_list.clone();
+        known_list.push(("author".to_string(), f.author_verifying_key));
+        let mut head = base_head(
+            &f.author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            f.now,
+        );
+
+        assert!(!verify_cosigned_tree_head(
+            &f.author_verifying_key,
+            &head,
+            &known_list,
+            f.freshness_cutoff,
+            f.now
+        ));
+
+        head.cosignatures.push(cosign(
+            &f.witness_keys[0].1,
+            &f.witness_keys[0].0,
+            &head,
+            f.now,
+        ));
+        assert!(verify_cosigned_tree_head(
+            &f.author_verifying_key,
+            &head,
+            &known_list,
+            f.freshness_cutoff,
+            f.now
+        ));
+    }
+
+    #[test]
+    fn a_head_with_an_invalid_author_signature_gets_no_credit_for_the_author_witness() {
+        let f = fixture(1);
+        let mut known_list = f.known_list.clone();
+        known_list.push(("author".to_string(), f.author_verifying_key));
+        let impostor = SigningKey::generate(&mut rand::rng());
+        let mut head = base_head(&impostor, 5, &root_hash_fixture(1), "avalon-test", f.now);
+        head.cosignatures.push(cosign(
+            &f.witness_keys[0].1,
+            &f.witness_keys[0].0,
+            &head,
+            f.now,
+        ));
+
+        assert!(!verify_cosigned_tree_head(
+            &f.author_verifying_key,
+            &head,
+            &known_list,
+            f.freshness_cutoff,
+            f.now
+        ));
     }
 }
