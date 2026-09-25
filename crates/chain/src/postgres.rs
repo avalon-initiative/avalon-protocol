@@ -342,9 +342,17 @@ impl PostgresSettlementProvider {
         &self.network_id
     }
 
-    async fn tip_hash(&self) -> Result<String, SettlementError> {
+    /// Takes an executor rather than always using `self.pool` — a caller
+    /// already holding an open transaction (e.g.
+    /// `insert_batch_and_compute_root`) must pass that transaction's own
+    /// connection, never acquire a second one from the pool while the
+    /// first is still checked out.
+    async fn tip_hash<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+    ) -> Result<String, SettlementError> {
         let row = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(executor)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
         Ok(match row {
@@ -1072,7 +1080,7 @@ impl PostgresSettlementProvider {
             ));
         }
 
-        let mut prev_hash = self.tip_hash().await?;
+        let mut prev_hash = self.tip_hash(&mut **tx).await?;
         let mut first_seq: Option<i64> = None;
         let mut last_seq: i64 = 0;
 
@@ -1253,7 +1261,7 @@ impl PostgresSettlementProvider {
             ));
         }
 
-        let mut prev_hash = self.tip_hash().await?;
+        let mut prev_hash = self.tip_hash(&self.pool).await?;
         let mut entry_hashes = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
             let entry_hash = hash_event(&self.network_id, &prev_hash, event);
