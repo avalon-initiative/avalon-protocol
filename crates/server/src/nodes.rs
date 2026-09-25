@@ -604,12 +604,8 @@ type TrackedHeadKey = (String, i64, String);
 pub struct HeadGossipTracker {
     seen: Arc<RwLock<HashMap<TrackedHeadKey, TrackedHeadSummary>>>,
     /// `shard_id`s a confirmed equivocation has been recorded for — the
-    /// gate a node's own future cosigning decision must consult before
-    /// cosigning anything for this shard again. No code in this server
-    /// currently makes a cosigning decision at all (nothing calls
-    /// `avalon_protocol::witness::sign_witness_cosignature` yet), so this
-    /// gate has no consumer today — see [`Self::is_equivocating`]'s own
-    /// doc comment.
+    /// gate `crate::witness_cosign::decide_and_cosign` consults before
+    /// cosigning anything for this shard.
     equivocating_shards: Arc<RwLock<HashSet<String>>>,
 }
 
@@ -763,13 +759,9 @@ impl HeadGossipTracker {
             .insert(shard_id.to_string());
     }
 
-    /// Whether `shard_id` has a confirmed equivocation on record — the gate
-    /// a node's own cosigning decision must consult before cosigning
-    /// anything else for this shard. **No-op today**: nothing in this
-    /// server decides to cosign another node's head yet (that's still
-    /// unwired, a gap already noted when cosigned-head verification landed), so nothing
-    /// currently calls this before cosigning. Once real cosigning-decision
-    /// logic lands, it must check this first.
+    /// Whether `shard_id` has a confirmed equivocation on record — checked
+    /// by `crate::witness_cosign::decide_and_cosign` before it cosigns
+    /// anything for this shard.
     pub fn is_equivocating(&self, shard_id: &str) -> bool {
         self.equivocating_shards
             .read()

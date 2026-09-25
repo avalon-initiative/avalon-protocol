@@ -93,6 +93,7 @@ pub mod topology_trace;
 pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
+pub mod witness_cosign;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, StatusCode};

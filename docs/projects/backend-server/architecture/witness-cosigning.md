@@ -247,10 +247,27 @@ finds directly during mirror sync, reconciled into one write path rather
 than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
 
-**Still not wired in**: nothing in `avalon-server` yet *decides* to cosign
-another node's head at all — no code calls `witness::sign_witness_cosignature`
-— so `is_equivocating`'s "stop cosigning this shard" gate has no consumer
-today; whatever lands that cosigning-decision logic must check it first.
+#963 added the cosigning decision itself (`crates/server/src/witness_cosign.rs`),
+called from `mirror_watcher::record_verified_head` right after a head passes
+author-signature and majority-cosignature verification. It refuses first if
+`HeadGossipTracker::is_equivocating` is set for the shard, then compares the
+head against this node's own last-cosigned checkpoint for that network/shard
+(`witness_checkpoints`, migration `0077_witness_checkpoints`,
+`avalon_chain::mirror::witness_checkpoint_for`/`record_witness_checkpoint`):
+no checkpoint means cosign unconditionally (bootstrap); the same size and
+root is a no-op; the same size with a different root is refused
+(no-double-cosign); a smaller size is refused as stale; a larger size needs an
+RFC 6962 consistency proof, fetched from the peer that served the head and
+verified locally with `avalon_chain::merkle::verify_consistency_proof`
+against the checkpoint root and the head root. The checkpoint advances
+before the cosignature is signed and stored, so a crash between the two
+withholds a cosignature (repaired the next time the head is seen) and can
+never leave a cosignature without a checkpoint. The witness key is
+`AVALON_WITNESS_SIGNING_KEY`, falling back to `AVALON_SETTLEMENT_SIGNING_KEY`
+(the cosignature's own domain tag keeps one key safe across both uses); its
+id defaults to the hex verifying key. `AVALON_WITNESS_COSIGNING_ENABLED=false`
+opts a node out; a node with no usable key never cosigns.
+
 `#947`'s equivocation confirmation deliberately sidesteps the known-list
 identity gap below by deriving its known list straight from the two
 conflicting heads' own cosignatures instead of any node's production known
@@ -294,15 +311,14 @@ deployments (ids that don't parse as key material) get an empty pairing
 and fall straight into the single-signature degenerate case, exactly
 today's behavior. Once a slot is genuinely keyed by a cosigning key, no
 code change is needed on the verification side — only whatever process
-starts admitting slots by real key instead of by address. Still not wired
-in: nothing yet decides *to* cosign another node's own head at all — a
-cosignature only reaches a node's `witness_cosignatures` table via
-`store_valid_cosignatures` while mirroring, or by some other process
-calling `store_witness_cosignature` directly; #947's gossip carries bounded
-*summaries* of heads already cosigned elsewhere, not a proactive push of
-new cosignatures. The network still runs on the single pinned
-`AVALON_SETTLEMENT_VERIFY_KEY` model `sth.rs`/`network-trust-anchors.md`
-describe until real cosigning-decision logic and #939's migration land.
+starts admitting slots by real key instead of by address. Cosignatures
+now reach a node's `witness_cosignatures` table from its own cosigning
+decision as well as from `store_valid_cosignatures` while mirroring; #947's
+gossip carries bounded *summaries*, not a proactive push of new
+cosignatures. Slots are still not keyed by real cosigning keys, so the
+network still runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
+`sth.rs`/`network-trust-anchors.md` describe until that admission change and
+#939's migration land.
 
 ## Decisions and tickets
 

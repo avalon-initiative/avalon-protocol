@@ -9,6 +9,21 @@
 //! architecture decisions are recorded as closed GitHub issues labeled
 //! `architecture-decision-record`, not as files in this repo.
 
+#[cfg(test)]
+pub(crate) mod test_env {
+    //! Serializes unit tests that mutate process-global environment variables.
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Hold the returned guard for the whole test body.
+    pub(crate) fn guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 pub mod achievements;
 pub mod continuation;
 pub mod cosigned_sth;

@@ -156,7 +156,10 @@ pub enum KeyLoadError {
     InvalidKey(&'static str),
 }
 
-fn parse_key_bytes(var_name: &'static str, hex_value: &str) -> Result<[u8; 32], KeyLoadError> {
+pub(crate) fn parse_key_bytes(
+    var_name: &'static str,
+    hex_value: &str,
+) -> Result<[u8; 32], KeyLoadError> {
     let bytes = hex::decode(hex_value).map_err(|e| KeyLoadError::InvalidHex(var_name, e))?;
     let len = bytes.len();
     <[u8; 32]>::try_from(bytes).map_err(|_| KeyLoadError::WrongLength(var_name, len))

@@ -68,6 +68,8 @@ use uuid::Uuid;
 
 use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::known_list::KnownListHandle;
+use crate::nodes::HeadGossipTracker;
+use crate::witness_cosign::{self, WitnessCosignConfig};
 
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
@@ -311,6 +313,12 @@ pub struct MirrorWatcherHandles {
     /// tick, no restart needed. See `crate::cosign_verify`'s own module doc
     /// comment for the identity-bridging caveat.
     pub known_list: KnownListHandle,
+    /// Consulted before every cosigning decision: a shard with a confirmed
+    /// equivocation on record gets no further cosignatures from this node.
+    pub head_gossip: HeadGossipTracker,
+    /// `None` when this node has opted out of cosigning or has no witness
+    /// signing key — see [`WitnessCosignConfig::from_env`].
+    pub witness: Option<WitnessCosignConfig>,
 }
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
@@ -335,6 +343,8 @@ pub async fn run_worker(
         wake,
         own_shard_id,
         known_list,
+        head_gossip,
+        witness,
     } = handles;
     let client = reqwest::Client::new();
 
@@ -403,6 +413,9 @@ pub async fn run_worker(
                     record_verified_head(
                         &pool,
                         &chain,
+                        &client,
+                        witness.as_ref(),
+                        &head_gossip,
                         Some((&interest, &mut network_interest)),
                         &mut verified_by_shard,
                         &own_shard_id,
@@ -439,6 +452,9 @@ pub async fn run_worker(
                 record_verified_head(
                     &pool,
                     &chain,
+                    &client,
+                    witness.as_ref(),
+                    &head_gossip,
                     None,
                     &mut verified_by_shard,
                     &own_shard_id,
@@ -846,6 +862,9 @@ async fn store_valid_cosignatures(
 async fn record_verified_head(
     pool: &PgPool,
     chain: &PostgresSettlementProvider,
+    client: &reqwest::Client,
+    witness: Option<&WitnessCosignConfig>,
+    head_gossip: &HeadGossipTracker,
     interest: Option<(
         &crate::interest::InterestRegistry,
         &mut HashMap<String, crate::interest::InterestGuard>,
@@ -919,6 +938,21 @@ async fn record_verified_head(
             }
         }
     }
+
+    // The head is independently verified at this point (author signature,
+    // majority cosignature of the known list); whether this node also
+    // cosigns it is the separate decision in `witness_cosign`.
+    witness_cosign::decide_and_cosign(
+        chain,
+        pool,
+        client,
+        witness,
+        head_gossip,
+        peer,
+        shard_id,
+        &head,
+    )
+    .await;
 
     if let Some((interest, network_interest)) = interest {
         network_interest

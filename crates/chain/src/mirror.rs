@@ -1342,6 +1342,97 @@ pub async fn check_convergence(
     })
 }
 
+/// This node's own record of the last tree head it has itself cosigned as
+/// a witness, for one `network_id`/`shard_id` — what a fresh cosigning
+/// decision consistency-proofs a newly-verified head against before ever
+/// cosigning again for the same log. Never another node's checkpoint (this
+/// node has no way to observe that, nor would it be relevant): a witness's
+/// no-double-cosign and consistency-extension guarantees are both purely
+/// about its own past behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessCheckpoint {
+    pub network_id: String,
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub root_hash: String,
+    pub witness_key_id: String,
+    pub cosigned_at: OffsetDateTime,
+}
+
+/// This node's last-cosigned checkpoint for `network_id`/`shard_id`, if
+/// it has ever cosigned anything for that log — `None` is the legitimate
+/// bootstrap case (nothing to extend from yet, cosign unconditionally).
+pub async fn witness_checkpoint_for(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+) -> Result<Option<WitnessCheckpoint>, SettlementError> {
+    let row = sqlx::query(
+        r#"
+        SELECT network_id, shard_id, tree_size, root_hash, witness_key_id, cosigned_at
+        FROM witness_checkpoints
+        WHERE network_id = $1 AND shard_id = $2
+        "#,
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    Ok(Some(WitnessCheckpoint {
+        network_id: row.try_get("network_id").map_err(get)?,
+        shard_id: row.try_get("shard_id").map_err(get)?,
+        tree_size: row.try_get("tree_size").map_err(get)?,
+        root_hash: row.try_get("root_hash").map_err(get)?,
+        witness_key_id: row.try_get("witness_key_id").map_err(get)?,
+        cosigned_at: row.try_get("cosigned_at").map_err(get)?,
+    }))
+}
+
+/// Advances this node's checkpoint for `network_id`/`shard_id` to
+/// `tree_size`/`root_hash` after a cosigning decision has actually
+/// produced and stored a cosignature for it. Upserts, but only ever
+/// forward: the `WHERE` clause on the update arm refuses to move
+/// `tree_size` backward or sideways, so a stale or reordered write racing
+/// against a newer one can never regress this node's own record of what
+/// it last cosigned — the exact state the no-double-cosign and
+/// consistency-extension checks both depend on staying monotonic.
+pub async fn record_witness_checkpoint(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    tree_size: i64,
+    root_hash: &str,
+    witness_key_id: &str,
+) -> Result<(), SettlementError> {
+    sqlx::query(
+        r#"
+        INSERT INTO witness_checkpoints (network_id, shard_id, tree_size, root_hash, witness_key_id, cosigned_at)
+        VALUES ($1, $2, $3, $4, $5, now())
+        ON CONFLICT (network_id, shard_id) DO UPDATE
+        SET tree_size = EXCLUDED.tree_size,
+            root_hash = EXCLUDED.root_hash,
+            witness_key_id = EXCLUDED.witness_key_id,
+            cosigned_at = EXCLUDED.cosigned_at
+        WHERE witness_checkpoints.tree_size < EXCLUDED.tree_size
+        "#,
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .bind(tree_size)
+    .bind(root_hash)
+    .bind(witness_key_id)
+    .execute(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

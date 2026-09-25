@@ -144,6 +144,49 @@ pub fn is_cosigned_by_majority(list_size: usize, distinct_witnesses: usize) -> b
     distinct_witnesses >= majority_threshold(list_size)
 }
 
+/// Loads this node's witness-cosigning key: `AVALON_WITNESS_SIGNING_KEY`
+/// (a raw 32-byte Ed25519 seed, same hex-encoding convention as
+/// [`crate::sth::load_signing_key_from_env`]), with `witness_key_id`
+/// defaulting to the hex-encoded verifying key itself — not an arbitrary
+/// label — since `known_list`'s slots are bridged to a verifying key by
+/// parsing the id as hex key material (`avalon-server`'s
+/// `cosign_verify::known_list_verifying_keys`); a witness whose own
+/// cosignatures don't carry that same hex id could never be recognized by
+/// a verifier bridging the known list this way.
+/// `AVALON_WITNESS_SIGNING_KEY_ID` overrides the default for an operator
+/// who has a specific reason to.
+///
+/// **Falls back to this node's settlement-authority key**
+/// (`AVALON_SETTLEMENT_SIGNING_KEY`) when no distinct witness key is
+/// configured. This is a deliberate choice, not an oversight: reusing one
+/// Ed25519 key across the settlement-signing and witness-cosigning domains
+/// is cryptographically sound here specifically because
+/// [`witness_signing_message`] prepends its own domain tag
+/// (`avalon-witness-cosign-v1`), so the exact bytes a witness cosignature
+/// covers can never collide with the exact bytes an author's STH signature
+/// covers, even though both cover overlapping fields — the same reasoning
+/// [`load_verify_key_from_env`](crate::sth::load_verify_key_from_env)
+/// already leans on for its own single-operator fallback. A node that only
+/// mirrors (never authors a shard) has no settlement key to fall back to
+/// and must set `AVALON_WITNESS_SIGNING_KEY` explicitly to cosign anything;
+/// a node that already authors a shard cosigns with the same key it
+/// already runs, with zero extra configuration, unless it wants stronger
+/// domain separation.
+pub fn load_witness_signing_key_from_env() -> Result<(SigningKey, String), crate::sth::KeyLoadError>
+{
+    if let Ok(hex_value) = std::env::var("AVALON_WITNESS_SIGNING_KEY") {
+        let seed = crate::sth::parse_key_bytes("AVALON_WITNESS_SIGNING_KEY", &hex_value)?;
+        let signing_key = SigningKey::from_bytes(&seed);
+        let key_id = std::env::var("AVALON_WITNESS_SIGNING_KEY_ID")
+            .unwrap_or_else(|_| hex::encode(signing_key.verifying_key().to_bytes()));
+        return Ok((signing_key, key_id));
+    }
+    let (signing_key, _settlement_key_id) = crate::sth::load_signing_key_from_env()
+        .map_err(|_| crate::sth::KeyLoadError::Missing("AVALON_WITNESS_SIGNING_KEY"))?;
+    let key_id = hex::encode(signing_key.verifying_key().to_bytes());
+    Ok((signing_key, key_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +378,76 @@ mod tests {
         assert!(is_cosigned_by_majority(10, 10));
         assert!(is_cosigned_by_majority(1, 1));
         assert!(!is_cosigned_by_majority(1, 0));
+    }
+
+    // SAFETY-of-intent note: process-global env vars, same posture
+    // `avalon_server::dht`'s own env-var tests already take — serialized via
+    // `crate::test_env::guard`.
+    mod witness_key_loading {
+        use super::*;
+
+        fn clear_env() {
+            unsafe {
+                std::env::remove_var("AVALON_WITNESS_SIGNING_KEY");
+                std::env::remove_var("AVALON_WITNESS_SIGNING_KEY_ID");
+                std::env::remove_var("AVALON_SETTLEMENT_SIGNING_KEY");
+            }
+        }
+
+        #[test]
+        fn loads_a_distinct_witness_key_when_configured() {
+            let _env = crate::test_env::guard();
+            clear_env();
+            let seed = [7u8; 32];
+            let expected = SigningKey::from_bytes(&seed);
+            unsafe {
+                std::env::set_var("AVALON_WITNESS_SIGNING_KEY", hex::encode(seed));
+            }
+
+            let (key, key_id) = load_witness_signing_key_from_env().unwrap();
+            assert_eq!(key.to_bytes(), expected.to_bytes());
+            assert_eq!(key_id, hex::encode(expected.verifying_key().to_bytes()));
+
+            clear_env();
+        }
+
+        #[test]
+        fn key_id_override_is_respected() {
+            let _env = crate::test_env::guard();
+            clear_env();
+            unsafe {
+                std::env::set_var("AVALON_WITNESS_SIGNING_KEY", hex::encode([3u8; 32]));
+                std::env::set_var("AVALON_WITNESS_SIGNING_KEY_ID", "custom-witness-id");
+            }
+
+            let (_, key_id) = load_witness_signing_key_from_env().unwrap();
+            assert_eq!(key_id, "custom-witness-id");
+
+            clear_env();
+        }
+
+        #[test]
+        fn falls_back_to_the_settlement_key_when_no_witness_key_is_set() {
+            let _env = crate::test_env::guard();
+            clear_env();
+            let seed = [9u8; 32];
+            unsafe {
+                std::env::set_var("AVALON_SETTLEMENT_SIGNING_KEY", hex::encode(seed));
+            }
+
+            let (key, key_id) = load_witness_signing_key_from_env().unwrap();
+            let expected = SigningKey::from_bytes(&seed);
+            assert_eq!(key.to_bytes(), expected.to_bytes());
+            assert_eq!(key_id, hex::encode(expected.verifying_key().to_bytes()));
+
+            clear_env();
+        }
+
+        #[test]
+        fn errors_when_neither_key_is_configured() {
+            let _env = crate::test_env::guard();
+            clear_env();
+            assert!(load_witness_signing_key_from_env().is_err());
+        }
     }
 }
