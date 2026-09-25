@@ -59,6 +59,13 @@ construction goes through a typed struct per kind
 whether it is a ledger hash, a signed tree head, or a Merkle root anchored
 elsewhere.
 
+Layer-1 events (profile, friends, guild membership) additionally carry
+`ProtocolEvent::identity_chain`, a per-identity sequence number and
+previous-event hash pointer independent of the global ledger order — see
+[`./identity.md`](./identity.md)'s "Per-identity event chains and conflict
+resolution" for the deterministic rule this exists to support
+(`crates/protocol::identity_chain`). `None` for every non-chained kind.
+
 ## The pipeline
 
 ```text

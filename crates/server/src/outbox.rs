@@ -694,6 +694,7 @@ mod tests {
                 payload: serde_json::json!({ "n": i }),
                 timestamp: OffsetDateTime::now_utc(),
                 version: 1,
+                identity_chain: None,
             };
             event_ids.push(event.id);
             enqueue(&mut tx, &event).await.expect("enqueue failed");
@@ -745,6 +746,7 @@ mod tests {
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         };
         assert_eq!(shard_id_for_event(&event), "game:ashen-realms");
     }
@@ -760,6 +762,7 @@ mod tests {
                 payload: serde_json::json!({}),
                 timestamp: OffsetDateTime::now_utc(),
                 version: 1,
+                identity_chain: None,
             };
             assert_eq!(
                 shard_id_for_event(&event),
@@ -779,6 +782,7 @@ mod tests {
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         };
         assert_eq!(shard_id_for_event(&event), "core");
     }
@@ -821,6 +825,7 @@ mod tests {
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         };
 
         let integrator_slug = format!("shard-routing-test-{}", Uuid::new_v4().simple());
@@ -837,6 +842,7 @@ mod tests {
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         };
 
         enqueue(&mut tx, &core_event).await.expect("enqueue failed");

@@ -62,6 +62,7 @@ async fn enqueue_one_event(pool: &PgPool, kind: &str) {
         payload: json!({ "note": format!("remote-submit-status test — {kind}") }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     let mut tx = pool.begin().await.expect("begin failed");
     avalon_server::outbox::enqueue(&mut tx, &event)

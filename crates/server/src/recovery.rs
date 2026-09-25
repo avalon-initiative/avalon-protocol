@@ -301,6 +301,7 @@ pub async fn set_guardians(
         .expect("IdentityRecoveryConfiguredPayload should serialize"),
         timestamp: updated_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -748,6 +749,7 @@ pub async fn finish_request(
         .expect("IdentityRecoveryRequestedPayload should serialize"),
         timestamp: requested_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -934,6 +936,7 @@ pub async fn approve_request(
         .expect("IdentityRecoveryApprovedPayload should serialize"),
         timestamp: approved_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1020,6 +1023,7 @@ pub async fn cancel_request(
         .expect("IdentityRecoveryCancelledPayload should serialize"),
         timestamp: cancelled_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1126,6 +1130,7 @@ pub async fn finalize_request(
         .expect("IdentityRecoveredPayload should serialize"),
         timestamp: completed_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

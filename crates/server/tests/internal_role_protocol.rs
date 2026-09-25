@@ -154,6 +154,7 @@ fn identity_created_event(identity_id: Uuid, display_name: &str) -> ProtocolEven
         }),
         timestamp: time::OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     }
 }
 

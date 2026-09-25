@@ -449,6 +449,7 @@ async fn create_definition(
         .expect("ClaimDefinedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -630,6 +631,7 @@ async fn update_definition(
             .expect("ClaimDefinitionUpdatedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
     }
@@ -659,6 +661,7 @@ async fn update_definition(
             .expect("ClaimDefinitionRetiredPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
     }
@@ -1032,6 +1035,7 @@ async fn issue_attestation(
         .expect("ClaimIssuedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1346,6 +1350,7 @@ async fn bulk_issue_attestation(
             .expect("ClaimIssuedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
 
@@ -1606,6 +1611,7 @@ mod tests {
             }),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         }
     }
 
@@ -1629,6 +1635,7 @@ mod tests {
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         }
     }
 

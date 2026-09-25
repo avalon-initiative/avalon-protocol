@@ -78,6 +78,7 @@ async fn enqueue_core_event(pool: &PgPool) -> String {
         payload: serde_json::json!({ "note": "remote-settlement test" }),
         timestamp: time::OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     let mut tx = pool.begin().await.expect("begin failed");
     avalon_server::outbox::enqueue(&mut tx, &event)

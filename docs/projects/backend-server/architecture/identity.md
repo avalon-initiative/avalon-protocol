@@ -485,6 +485,82 @@ friendship, re-inviting into an invite-only guild, restoring previous guild role
 open-ended dispute flow when the owner and another party disagree; and expiry of the
 eligibility window.
 
+## Per-identity event chains and conflict resolution
+
+The ledger orders every event globally, by whichever node committed it
+first. Two nodes that each independently accept a conflicting layer-1 edit
+before either has seen the other's — a profile edit through one node and a
+different edit through another, say — can commit them in different global
+orders. Layer-1 state must still converge to the same value on every honest
+node regardless, so "whichever the ledger says came first" cannot be the
+rule.
+
+Instead, every layer-1 event belongs to its own identity's chain: a
+per-identity sequence number (monotonic within that one identity, unrelated
+to the global ledger sequence) plus a hash pointer to the previous event in
+that same chain. `ProtocolEvent::identity_chain`
+(`crates/protocol/src/events.rs`) carries this position; `None` for any
+event kind that doesn't participate in a chain (achievement issuance,
+integrator/issuer registration, `identity.created` itself). The full
+deterministic conflict rule lives in `crates/protocol::identity_chain`, pure
+logic with no I/O:
+
+- Two events that extend the same predecessor (same `seq`, same
+  `prev_hash`) are concurrent. For an ordinary edit (a profile field, a
+  friend action, joining/leaving a guild), the later signer-claimed
+  timestamp wins, clamped against the receiving node's own clock
+  (`identity_chain::clamp_timestamp` — rejects a value too far in the
+  future outright, the forged-timestamp case); ties break on the smaller
+  event hash, so the outcome depends only on the events' own content, never
+  on arrival order.
+- The sequence number and previous-event hash, not timestamps, define
+  ordering *within* a chain — a timestamp is signer-set data and can be
+  wrong or forged, so it is only ever a tiebreaker between genuinely
+  concurrent branches.
+- A monotonic action (a revocation, or a rollback compensating event) beats
+  any ordinary edit at the same position regardless of timestamp — an older
+  or merely-concurrent edit never undoes it.
+- A conflict between two `ActionClass::ChainCritical` events (signing-key
+  add/revoke, any step of the recovery state machine) is never resolved by
+  timestamp at all — picking a winner that way would let a forged timestamp
+  win control of the identity. It marks the identity **forked** instead;
+  operations that depend on knowing which key currently controls the
+  identity freeze until the owner resolves it through social recovery (see
+  above) — recovery already authenticates a new credential through
+  independent guardian approval plus a public delay, which is exactly the
+  out-of-band resolution a forked chain needs, so this reuses that path
+  rather than inventing a second one.
+
+**Which events are owner-signed vs. node-attributed, and why the rule
+treats them differently.** `identity.created` and the signing-key add/
+revoke events carry a real Ed25519 signature from the identity's own key.
+Profile edits, friend actions, and guild-membership changes do not — per
+`docs/projects/backend-server/architecture/protocol-events.md`, they are
+"network-attributed": the node signs the event on the identity's behalf
+after its *session* (a WebAuthn-authenticated ambient session, or the
+fresh-signature tier for higher-stakes actions) requested it. The conflict
+rule doesn't need these to be signed by the identity's own key to work — a
+network-attributed event still carries a real `seq`/`prev_hash` position in
+the identity's chain, and the rule only cares about that position plus the
+event's `ActionClass`, not about `EventAuthority`. What differs is the
+threat model: an ordinary concurrent edit is expected, normal behavior (the
+same person editing from two devices), while a `ChainCritical` conflict is
+the case that must never be settled by picking whichever branch merely
+claims the later timestamp.
+
+**Current implementation.** `crates/protocol/src/identity_chain.rs` has the
+full rule and its test coverage: convergence regardless of arrival order,
+out-of-order arrival, the timestamp clamp rejecting a forged far-future
+value, a concurrent revocation beating an edit, and a forked rotation
+freezing the chain. Not yet wired into `server`/the indexer: populating
+`identity_chain` at each layer-1 emission site (a new per-identity
+chain-state table tracking each identity's current `seq`/head hash),
+running `identity_chain::apply_chain` in the indexer to resolve actual
+multi-node conflicts, and enforcing the freeze on a forked identity in the
+handlers that gate on signing-key state. `avalon-sdks` also needs a
+matching update (event shape, conformance vectors) once server-side wiring
+lands.
+
 ## What identity is not
 
 - Not a universal integrator account. An integrator asks for scoped capabilities and gets

@@ -57,6 +57,7 @@ fn sample_batch(kind: &str) -> EventBatch {
             payload: json!({ "note": format!("managed hosting HTTP test — {kind}") }),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
+            identity_chain: None,
         }],
         created_at: OffsetDateTime::now_utc(),
     }

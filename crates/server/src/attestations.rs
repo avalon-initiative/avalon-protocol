@@ -722,6 +722,7 @@ pub async fn revoke_attestation(
         .expect("ClaimRevokedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

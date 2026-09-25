@@ -409,6 +409,7 @@ pub async fn approve_device_grant(
         .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: added_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
@@ -557,6 +558,7 @@ pub async fn revoke_device(
             .expect("IdentitySigningKeyRevokedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;

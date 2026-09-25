@@ -55,6 +55,7 @@ fn sample_event(kind: &str) -> ProtocolEvent {
         payload: json!({ "note": format!("settlement test — {kind}") }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     }
 }
 

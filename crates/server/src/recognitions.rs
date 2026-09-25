@@ -137,6 +137,7 @@ pub async fn publish_recognition(
         .expect("IntegratorRecognitionPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
@@ -206,6 +207,7 @@ pub async fn revoke_recognition(
             .expect("IntegratorRecognitionRevokedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
         state.indexer.apply_in_tx(&mut tx, &event).await?;

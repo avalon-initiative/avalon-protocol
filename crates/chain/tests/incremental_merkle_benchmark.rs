@@ -33,6 +33,7 @@ fn sample_event() -> ProtocolEvent {
         payload: json!({ "note": "issue #349 benchmark" }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
+        identity_chain: None,
     }
 }
 

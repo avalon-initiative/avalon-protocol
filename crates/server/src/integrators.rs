@@ -322,6 +322,7 @@ pub async fn register_integrator(
         .expect("GameRegisteredPayload should serialize"),
         timestamp: registered_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -960,6 +961,7 @@ pub async fn add_issuer_key(
         .expect("IssuerKeyAddedPayload should serialize"),
         timestamp: valid_from,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -1050,6 +1052,7 @@ pub async fn revoke_issuer_key(
         .expect("IssuerKeyRevokedPayload should serialize"),
         timestamp: revoked_at,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 

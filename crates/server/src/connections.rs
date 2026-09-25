@@ -182,6 +182,7 @@ pub async fn connect(
             .expect("GameBindingEstablishedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         // outbox::enqueue alone only drives ledger settlement — the Integrator
         // Registry's players/total_players_ever metrics (crate::registry,
@@ -253,6 +254,7 @@ pub async fn connect(
             .expect("PermissionGrantedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
         granted_capabilities.push(capability.clone());
@@ -324,6 +326,7 @@ pub async fn revoke_grant(
         .expect("PermissionRevokedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -393,6 +396,7 @@ pub async fn disconnect(
             .expect("PermissionRevokedPayload should serialize"),
             timestamp: now,
             version: 1,
+            identity_chain: None,
         };
         outbox::enqueue(&mut tx, &event).await?;
     }
@@ -413,6 +417,7 @@ pub async fn disconnect(
         .expect("GameBindingEndedPayload should serialize"),
         timestamp: now,
         version: 1,
+        identity_chain: None,
     };
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;

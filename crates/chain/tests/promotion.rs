@@ -111,6 +111,7 @@ fn batch(events: usize) -> EventBatch {
                     payload: serde_json::json!({ "note": "promotion", "i": i, "z": [1, 2] }),
                     timestamp: OffsetDateTime::now_utc(),
                     version: 1,
+                    identity_chain: None,
                 }
             })
             .collect(),
