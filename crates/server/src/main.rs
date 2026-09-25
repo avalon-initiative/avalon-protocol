@@ -636,6 +636,8 @@ async fn main() {
                 known_list: state.known_list.clone(),
                 head_gossip: head_gossip.clone(),
                 witness: avalon_server::witness_cosign::WitnessCosignConfig::from_env(),
+                peers: state.peers.clone(),
+                trust_anchors: avalon_protocol::network_trust::bundled_trust_anchors().to_vec(),
             },
         ));
     }
