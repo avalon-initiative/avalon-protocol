@@ -125,6 +125,11 @@ pub struct WitnessAdvert {
     #[serde(with = "time::serde::rfc3339")]
     pub announced_at: OffsetDateTime,
     pub proof: String,
+    /// Set only when verified from the announce response of this exact
+    /// `base_url`, i.e. the URL's own endpoint vouches for the key. Never
+    /// serialized, so relayed or inbound adverts always start `false`.
+    #[serde(skip)]
+    pub direct: bool,
 }
 
 /// This node's own witness signing identity, used to build [`WitnessAdvert`]s.
@@ -156,6 +161,7 @@ impl WitnessSigner {
                 &self.key_id,
                 now,
             ),
+            direct: false,
         }
     }
 }
@@ -194,14 +200,24 @@ pub fn verified_advert(
     }
 }
 
-/// Keeps an already-held witness advert when `info` carries none, or a newer
-/// one; a peer relayed without a (valid) advert never erases a proven key.
+/// Whether `new` may replace `old`: a direct advert is never displaced by a
+/// non-direct one; otherwise the newer advert wins.
+fn advert_replaces(old: &WitnessAdvert, new: &WitnessAdvert) -> bool {
+    match (old.direct, new.direct) {
+        (true, false) => false,
+        (false, true) => true,
+        _ => new.announced_at >= old.announced_at,
+    }
+}
+
+/// Applies the advert-replacement rule when `info` is stored over an existing
+/// entry; an entry without an advert never erases a held one.
 fn carry_witness(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
     let Some(old) = existing.and_then(|e| e.witness.as_ref()) else {
         return;
     };
     match &info.witness {
-        Some(new) if new.announced_at >= old.announced_at => {}
+        Some(new) if advert_replaces(old, new) => {}
         _ => info.witness = Some(old.clone()),
     }
 }
@@ -250,11 +266,17 @@ impl PeerTable {
     }
 
     /// Records a verified witness advert on an existing entry (main table or
-    /// unverified pool); a no-op for an unknown peer.
+    /// unverified pool) under the replacement rule; a no-op for an unknown
+    /// peer.
     pub fn attach_witness(&self, base_url: &str, advert: WitnessAdvert) {
         let mut peers = self.peers.write().expect("peer table lock poisoned");
         if let Some(p) = peers.get_mut(base_url) {
-            p.witness = Some(advert);
+            if p.witness
+                .as_ref()
+                .is_none_or(|old| advert_replaces(old, &advert))
+            {
+                p.witness = Some(advert);
+            }
             return;
         }
         drop(peers);
@@ -263,7 +285,12 @@ impl PeerTable {
             .write()
             .expect("unverified pool lock poisoned");
         if let Some(p) = pool.get_mut(base_url) {
-            p.witness = Some(advert);
+            if p.witness
+                .as_ref()
+                .is_none_or(|old| advert_replaces(old, &advert))
+            {
+                p.witness = Some(advert);
+            }
         }
     }
 
@@ -1887,6 +1914,10 @@ pub async fn run_worker(
                             discovered.witness.clone(),
                             OffsetDateTime::now_utc(),
                         ) {
+                            let advert = WitnessAdvert {
+                                direct: true,
+                                ..advert
+                            };
                             peers.attach_witness(&normalized_base_url(peer), advert);
                         }
                         let (admitted, skipped) =
@@ -3056,6 +3087,35 @@ mod tests {
         table.upsert(with_key);
         table.upsert(supported("http://127.0.0.1:9605", now));
         assert!(table.list_all()[0].witness.is_some());
+    }
+
+    #[test]
+    fn a_direct_advert_is_never_displaced_by_a_gossiped_one_with_another_key() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        let url = "http://127.0.0.1:9606";
+        let mk = |direct: bool, at: OffsetDateTime| {
+            let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+            let id = hex::encode(key.verifying_key().to_bytes());
+            let mut a = WitnessSigner::new(key, id).unwrap().advert(url, at);
+            a.direct = direct;
+            a
+        };
+        let direct = mk(true, now - time::Duration::minutes(5));
+        table.upsert(supported(url, now));
+        table.attach_witness(url, direct.clone());
+
+        let mut gossiped = supported(url, now);
+        gossiped.witness = Some(mk(false, now));
+        table.upsert(gossiped);
+        assert_eq!(table.list_all()[0].witness, Some(direct.clone()));
+
+        table.upsert(supported(url, now));
+        assert_eq!(table.list_all()[0].witness, Some(direct));
+
+        let newer = mk(true, now);
+        table.attach_witness(url, newer.clone());
+        assert_eq!(table.list_all()[0].witness, Some(newer));
     }
 
     #[test]

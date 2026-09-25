@@ -215,7 +215,10 @@ mod tests {
         {
             let (key, id) = witness();
             let signer = WitnessSigner::new(key.clone(), id.clone()).unwrap();
-            let advert = verified_advert(url, Some(signer.advert(url, now)), now);
+            let advert = verified_advert(url, Some(signer.advert(url, now)), now).map(|mut a| {
+                a.direct = true;
+                a
+            });
             assert!(advert.is_some());
             table.upsert(PeerInfo {
                 base_url: url.to_string(),
@@ -278,6 +281,39 @@ mod tests {
         assert!(
             verify_cosigned_against_any_key([author_key.verifying_key()], &one, &pairs, now)
                 .is_none()
+        );
+    }
+
+    /// An advert that only arrived by gossip or an inbound announce (an
+    /// attacker binding an innocent URL to its own key) is never a candidate.
+    #[tokio::test]
+    async fn a_gossip_only_advert_never_becomes_a_candidate() {
+        use crate::nodes::{verified_advert, PeerInfo, PeerTable, WitnessSigner};
+        let now = OffsetDateTime::now_utc();
+        let url = "http://127.0.0.1:9711";
+        let (key, id) = witness();
+        let advert = verified_advert(
+            url,
+            Some(WitnessSigner::new(key, id).unwrap().advert(url, now)),
+            now,
+        );
+        assert!(advert.is_some());
+        let table = PeerTable::new();
+        table.upsert(PeerInfo {
+            base_url: url.to_string(),
+            roles: vec!["combined".to_string()],
+            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+            network_id: "avalon-test".to_string(),
+            last_announced_at: now,
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: Vec::new(),
+            witness: advert,
+        });
+        let policy = crate::outbound_policy::OutboundPolicy::new(true);
+        assert!(
+            crate::known_list::build_candidates(&policy, &table, "avalon-test", now)
+                .await
+                .is_empty()
         );
     }
 

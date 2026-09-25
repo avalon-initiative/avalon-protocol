@@ -311,7 +311,7 @@ over `(base_url, key_id, announced_at)` under the domain tag
 sign_witness_announce`/`verify_witness_announce`), accepted only within an
 hour of the verifier's clock. A forged, mismatched or stale proof is dropped
 and the peer is still admitted to the peer table, just without a key. Only
-peers with a fresh proven key become known-list candidates, keyed by that key,
+peers with a fresh direct proven key become known-list candidates, keyed by that key,
 so `cosign_verify::known_list_verifying_keys` yields real
 `(witness_key_id, VerifyingKey)` pairs and a node's own cosignatures count
 toward a majority. Bundled anchors get their key from their own announce
@@ -324,8 +324,15 @@ as well as from `store_valid_cosignatures` while mirroring; #947's gossip
 carries bounded *summaries*, not a proactive push of new cosignatures. The
 network still runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
 `sth.rs`/`network-trust-anchors.md` describe until #939's migration lands.
-The proof shows the key holder authorized binding the key to that URL, not
-that the URL's operator holds the key.
+The proof alone shows only that the key holder bound the key to that URL,
+not that the URL's operator agrees, so it is not enough to become a
+candidate: an attacker could otherwise gossip an innocent host's URL bound to
+its own key and inherit that host's diversity prefix. A stored advert
+therefore carries a non-serialized `direct` flag, set only when it was
+verified from the announce response received from that exact `base_url`
+(the URL's own endpoint vouches for the key). Adverts from inbound announces,
+gossip and the unverified pool are `direct = false`, are never candidates,
+never displace a direct advert, and a keyless entry never erases one.
 
 The scenario suite that exercises growth, loss of the original node, witness loss, eclipse and fork attempts against real processes, plus the live-fleet drill procedure, is in [`../for-maintainers/witness-drill.md`](../for-maintainers/witness-drill.md) (`scripts/witness-drill.sh`).
 

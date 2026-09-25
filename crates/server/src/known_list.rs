@@ -706,9 +706,10 @@ async fn prefix_for(policy: &OutboundPolicy, base_url: &str) -> Option<String> {
         .map(|checked| diversity_prefix(checked.addr.ip()))
 }
 
-/// The advertised witness key of `info`, only while its proof is fresh.
+/// The witness key `info`'s own endpoint vouched for, only while its proof
+/// is fresh; gossiped or inbound adverts never qualify.
 fn fresh_witness_key(info: &crate::nodes::PeerInfo, now: OffsetDateTime) -> Option<&str> {
-    let advert = info.witness.as_ref()?;
+    let advert = info.witness.as_ref().filter(|a| a.direct)?;
     ((now - advert.announced_at).abs() <= avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW)
         .then_some(advert.key_id.as_str())
 }
