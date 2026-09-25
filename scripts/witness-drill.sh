@@ -6,7 +6,7 @@
 # processes and a real Postgres, never in-process function calls.
 #
 # usage: scripts/witness-drill.sh [scenario ...]     (default: all scenarios)
-#   scenarios: lifecycle witness-loss eclipse long-offline fork
+#   scenarios: lifecycle witness-loss eclipse long-offline fork rollout
 #
 # See docs/projects/backend-server/for-maintainers/witness-drill.md for what
 # each scenario proves, which ones run in CI, and how to repeat this as a
@@ -301,14 +301,11 @@ scenario_long_offline() {
 # other at the same tree_size — a real fork, not a fabricated one. A third
 # node mirrors both and must record the disagreement.
 #
-# This exercises #299/#938's source-based equivocation detection
-# (mirror_watcher::check_equivocation -> equivocation_findings), which is
-# already landed and does not depend on witness cosigning. It does NOT
-# exercise #947's cosigned/disjoint-witness-group gossip confirmation
-# (crate::equivocation::confirm_and_record), because nothing in this
-# codebase produces a real witness cosignature yet (issue #963 — no code
-# calls sign_witness_cosignature). Once #963 lands, extend this scenario to
-# assert gossip-driven confirm_and_record's majority-cosigned proof too.
+# This exercises the source-based equivocation detection
+# (mirror_watcher::check_equivocation -> equivocation_findings), which does
+# not depend on witness cosigning. The gossip-driven cosigned confirmation
+# (crate::equivocation::confirm_and_record) needs several cosigning nodes
+# with proven witness keys and is covered by the follow-up drill work.
 # ---------------------------------------------------------------------------
 scenario_fork() {
   node fork-a "" || return 1
@@ -330,7 +327,118 @@ scenario_fork() {
     log_lacks "$log_a" equivocation_detected
 }
 
-ALL=(lifecycle witness-loss eclipse long-offline fork)
+# ---------------------------------------------------------------------------
+# Scenario: rolling a running single-key network onto witness cosigning
+# without a reset, and rolling back. A authors alone (a single-key network,
+# exactly what runs today); B and C then start as cosigning mirrors of A.
+# Asserts: A's history is untouched; an old client (author signature only)
+# verifies before, during and after; a new client accepts A's head only with
+# a majority of the witness keys; cosigning can be turned off on one node
+# again with nothing else breaking.
+# ---------------------------------------------------------------------------
+VERIFY_STH="$ROOT/target/debug/examples/verify_sth"
+
+sth_json() { curl -sf "http://127.0.0.1:$1/ledger/sth/latest${2:-}"; }
+sth_available() { sth_json "$1" | jq -e '.tree_size > 0' >/dev/null 2>&1; }
+head_at_least() { sth_json "$1" "?shard_id=core" | jq -e --argjson s "$2" '.tree_size >= $s' >/dev/null 2>&1; }
+old_client_accepts() { printf '%s' "$1" | "$VERIFY_STH" old; }
+cosigned_by() {
+  sth_json "$1" "?shard_id=core&witnesses=1" | jq -e --arg k "$2" --argjson s "$3" \
+    '.tree_size == $s and ([.cosignatures[].witness_key_id] | index($k)) != null' >/dev/null 2>&1
+}
+not_cosigned_by() {
+  sth_json "$1" "?shard_id=core&witnesses=1" | jq -e --arg k "$2" \
+    '([.cosignatures[].witness_key_id] | index($k)) == null' >/dev/null 2>&1
+}
+has_no_cosignatures_field() { printf '%s' "$1" | jq -e 'has("cosignatures") | not' >/dev/null 2>&1; }
+history_unchanged() {
+  curl -sf "http://127.0.0.1:$1/ledger/sth/$2" | jq -e --arg r "$3" --arg g "$4" \
+    '.root_hash == $r and .signature == $g' >/dev/null 2>&1
+}
+consistency_proof_served() {
+  curl -sf "http://127.0.0.1:$1/ledger/proof/consistency?first=$2&second=$3" >/dev/null 2>&1
+}
+majority_accepts() { printf '[%s,%s]' "$1" "$2" | "$VERIFY_STH" cosigned "$3" "$4"; }
+majority_rejects() { ! printf '[%s]' "$1" | "$VERIFY_STH" cosigned "$2" "$3"; }
+
+scenario_rollout() {
+  cargo build -q -p avalon-server --example verify_sth || return 1
+
+  node ra "" || return 1
+  local port_a="$LAST_PORT"
+  local slug
+  for slug in drill-rollout-1 drill-rollout-2 drill-rollout-3; do
+    check "A accepts a write ($slug) as a single-key network" is_2xx "$(register_integrator "$port_a" "$slug")"
+  done
+  wait_until "A has a signed tree head" 40 sth_available "$port_a" || return 1
+
+  local pre pre_size pre_root pre_sig
+  pre="$(sth_json "$port_a")"
+  pre_size="$(printf '%s' "$pre" | jq .tree_size)"
+  pre_root="$(printf '%s' "$pre" | jq -r .root_hash)"
+  pre_sig="$(printf '%s' "$pre" | jq -r .signature)"
+  check "before: an old single-key client verifies A's head" old_client_accepts "$pre"
+
+  local seed_b seed_c key_b key_c
+  seed_b="$(openssl rand -hex 32)"; seed_c="$(openssl rand -hex 32)"
+  key_b="$("$VERIFY_STH" pubkey "$seed_b")"; key_c="$("$VERIFY_STH" pubkey "$seed_c")"
+
+  node rb "http://127.0.0.1:$port_a" AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a" \
+    AVALON_WITNESS_SIGNING_KEY="$seed_b" || return 1
+  local port_b="$LAST_PORT" pid_b="$LAST_PID"
+  node rc "http://127.0.0.1:$port_a" AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a" \
+    AVALON_WITNESS_SIGNING_KEY="$seed_c" || return 1
+  local port_c="$LAST_PORT"
+
+  wait_until "B cosigns A's head" 60 cosigned_by "$port_b" "$key_b" "$pre_size"
+  wait_until "C cosigns A's head" 60 cosigned_by "$port_c" "$key_c" "$pre_size"
+
+  check "history unchanged: A still serves the same root and signature at the pre-rollout size" \
+    history_unchanged "$port_a" "$pre_size" "$pre_root" "$pre_sig"
+  check "A's default response is the same shape as before (no cosignatures field)" \
+    has_no_cosignatures_field "$(sth_json "$port_a")"
+  check "during: an old single-key client still verifies A's head" old_client_accepts "$(sth_json "$port_a")"
+  check "during: an old single-key client verifies the head B serves" \
+    old_client_accepts "$(sth_json "$port_b" "?shard_id=core")"
+
+  local from_b from_c
+  from_b="$(sth_json "$port_b" "?shard_id=core&witnesses=1")"
+  from_c="$(sth_json "$port_c" "?shard_id=core&witnesses=1")"
+  check "a witness-aware client accepts the head cosigned by both known witnesses" \
+    majority_accepts "$from_b" "$from_c" "$key_b" "$key_c"
+  check "a witness-aware client rejects the same head with only one of two cosignatures" \
+    majority_rejects "$from_b" "$key_b" "$key_c"
+
+  # The network keeps growing with cosigning on, and the log stays continuous.
+  check "A accepts a write after the rollout" is_2xx "$(register_integrator "$port_a" drill-rollout-4)"
+  wait_until "A's head grows past the pre-rollout size" 40 head_at_least "$port_a" $((pre_size + 1))
+  local grown_size; grown_size="$(sth_json "$port_a" | jq .tree_size)"
+  check "consistency proof from the pre-rollout head to the new head is served" \
+    consistency_proof_served "$port_a" "$pre_size" "$grown_size"
+  check "after: an old single-key client verifies A's new head" old_client_accepts "$(sth_json "$port_a")"
+
+  # Rollback: B stops cosigning (restart with the flag off); nothing else moves.
+  kill "$pid_b" 2>/dev/null
+  wait_until "B's process actually exited" 15 proc_gone "$pid_b"
+  start_node rb "live_drill_rb" "$port_b" "${FAST_KNOWN_LIST[@]}" \
+    AVALON_DATA_DIR="$DATA_ROOT/rb" AVALON_BOOTSTRAP_PEERS="http://127.0.0.1:$port_a" \
+    AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a" AVALON_ALLOW_PRIVATE_PEERS=true \
+    AVALON_ANNOUNCE_VERIFY_REACHABILITY=false AVALON_WITNESS_SIGNING_KEY="$seed_b" \
+    AVALON_WITNESS_COSIGNING_ENABLED=false || return 1
+  check "A accepts a write after B's rollback" is_2xx "$(register_integrator "$port_a" drill-rollout-5)"
+  local final_size
+  wait_until "A's head grows again" 40 head_at_least "$port_a" $((grown_size + 1))
+  final_size="$(sth_json "$port_a" | jq .tree_size)"
+  wait_until "B (cosigning off) still mirrors the new head" 60 head_at_least "$port_b" "$final_size"
+  wait_until "C (cosigning on) cosigns the new head" 60 cosigned_by "$port_c" "$key_c" "$final_size"
+  check "after rollback: B produced no cosignature for the new head" not_cosigned_by "$port_b" "$key_b"
+  check "after rollback: an old single-key client verifies the head B serves" \
+    old_client_accepts "$(sth_json "$port_b" "?shard_id=core")"
+  check "after rollback: history from before the rollout is still intact on A" \
+    history_unchanged "$port_a" "$pre_size" "$pre_root" "$pre_sig"
+}
+
+ALL=(lifecycle witness-loss eclipse long-offline fork rollout)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${ALL[@]}")
 
@@ -342,6 +450,7 @@ for s in "${SELECTED[@]}"; do
     eclipse) scenario_eclipse ;;
     long-offline) scenario_long_offline ;;
     fork) scenario_fork ;;
+    rollout) scenario_rollout ;;
     *) echo "unknown scenario: $s" >&2; FAILED=1 ;;
   esac
 done
