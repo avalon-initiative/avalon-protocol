@@ -673,11 +673,11 @@ impl PostgresSettlementProvider {
         row.map(sth_from_row).transpose()
     }
 
-    /// Stores one witness's cosignature over an already-known STH
-    /// (#932: storage half of the design-spike primitives in
-    /// `avalon_protocol::witness`/`cosigned_sth`; a node actually deciding
-    /// to cosign others' heads, and gossiping cosignatures around, are
-    /// #938/#947, not this). Idempotent on a replayed
+    /// Stores one witness's cosignature over an already-known STH — the
+    /// storage half of `avalon_protocol::witness`/`cosigned_sth`'s
+    /// primitives; a node deciding to cosign others' heads, and gossiping
+    /// cosignatures around, are separate concerns from this storage layer.
+    /// Idempotent on a replayed
     /// `(network_id, tree_size, witness_key_id)` — re-receiving the same
     /// witness's cosignature for a head this node already has (e.g. via
     /// gossip from more than one peer) is a no-op, not a conflict; two

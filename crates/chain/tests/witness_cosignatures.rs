@@ -1,5 +1,5 @@
 //! Exercises `PostgresSettlementProvider::store_witness_cosignature`/
-//! `list_witness_cosignatures`/`cosigned_tree_head_at` (#932) against a
+//! `list_witness_cosignatures`/`cosigned_tree_head_at` against a
 //! real Postgres instance — the `witness_cosignatures` table migration
 //! (`0073_witness_cosignatures`) plus the read/write pair built on top of
 //! it. Gated `--ignored`, same convention as `crates/chain/tests/settlement.rs`.
