@@ -1400,15 +1400,17 @@ async fn backfill(
 /// genuine ledger entry but is handled as a skip, not a panic, since this is
 /// peer-derived content.
 fn protocol_event_from_mirrored(entry: &mirror::MirroredEntry) -> Option<ProtocolEvent> {
+    let (payload, identity_chain) =
+        avalon_protocol::identity_chain_wire::split_position(entry.payload.clone()?);
     Some(ProtocolEvent {
         id: entry.event_id,
         kind: entry.kind.clone(),
         issuer: global_id_from_str(&entry.issuer)?,
         subject: global_id_from_str(&entry.subject)?,
-        payload: entry.payload.clone()?,
+        payload,
         timestamp: entry.event_timestamp,
         version: u32::try_from(entry.version).ok()?,
-        identity_chain: None,
+        identity_chain,
     })
 }
 

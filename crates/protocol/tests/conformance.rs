@@ -389,3 +389,82 @@ fn witness_cosigned_tree_head_matches_shared_vectors() {
         }
     }
 }
+
+/// `identity-chain.json`: event-hash bytes and the deterministic conflict
+/// rule, asserted for every ordering of each case's events.
+#[test]
+fn identity_chain_matches_shared_vectors() {
+    use avalon_protocol::identity_chain::{
+        apply_chain, compute_event_hash, ActionClass, ChainedEvent, EventAuthority, EventHash,
+    };
+
+    let doc = load("identity-chain.json");
+    let hash_from_hex = |s: &str| -> EventHash { hex::decode(s).unwrap().try_into().unwrap() };
+
+    for vector in doc["hashVectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap();
+        let nanos: i128 = vector["timestampNanos"].as_str().unwrap().parse().unwrap();
+        let prev = vector["prevHashHex"].as_str().map(hash_from_hex);
+        let got = compute_event_hash(
+            vector["kind"].as_str().unwrap(),
+            vector["issuer"].as_str().unwrap(),
+            vector["subject"].as_str().unwrap(),
+            vector["payloadJson"].as_str().unwrap(),
+            OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap(),
+            vector["seq"].as_u64().unwrap(),
+            prev.as_ref(),
+        );
+        assert_eq!(
+            hex::encode(got),
+            vector["expectedHashHex"].as_str().unwrap(),
+            "hash vector {name}"
+        );
+    }
+
+    for case in doc["resolutionCases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let raw = case["events"].as_array().unwrap();
+        let hash_of = |label: &str| -> EventHash {
+            let entry = raw.iter().find(|e| e["label"] == label).unwrap();
+            hash_from_hex(entry["hashHex"].as_str().unwrap())
+        };
+        let events: Vec<ChainedEvent> = raw
+            .iter()
+            .map(|e| ChainedEvent {
+                seq: e["seq"].as_u64().unwrap(),
+                prev_hash: e["prevLabel"].as_str().map(&hash_of),
+                event_hash: hash_from_hex(e["hashHex"].as_str().unwrap()),
+                timestamp: OffsetDateTime::UNIX_EPOCH
+                    + time::Duration::seconds(e["timestampSeconds"].as_i64().unwrap()),
+                class: match e["class"].as_str().unwrap() {
+                    "ordinary" => ActionClass::OrdinaryEdit,
+                    "monotonic" => ActionClass::Monotonic,
+                    "critical" => ActionClass::ChainCritical,
+                    other => panic!("unknown class {other}"),
+                },
+                authority: EventAuthority::AuthenticatedSession,
+            })
+            .collect();
+        let expected_labels: Vec<EventHash> = case["expected"]["acceptedLabels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| hash_of(l.as_str().unwrap()))
+            .collect();
+        let expected_fork = case["expected"]["forkedAtSeq"].as_u64();
+
+        let mut orderings = vec![events.clone()];
+        let mut reversed = events.clone();
+        reversed.reverse();
+        orderings.push(reversed);
+        let mut rotated = events.clone();
+        rotated.rotate_left(1);
+        orderings.push(rotated);
+        for ordering in orderings {
+            let outcome = apply_chain(ordering);
+            let got: Vec<EventHash> = outcome.accepted.iter().map(|e| e.event_hash).collect();
+            assert_eq!(got, expected_labels, "case {name}: accepted chain");
+            assert_eq!(outcome.forked_at, expected_fork, "case {name}: fork");
+        }
+    }
+}

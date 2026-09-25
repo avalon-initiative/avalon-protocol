@@ -1471,7 +1471,7 @@ pub async fn update_profile(
     // signed by the identity's own key: the same milestone-1 stand-in
     // `friends.rs` uses, since no general per-event signing ceremony exists
     // yet.
-    let event = (body.display_name.is_some()
+    let mut event = (body.display_name.is_some()
         || avatar_url_provided
         || bio_provided
         || favorite_genres_provided
@@ -1520,6 +1520,9 @@ pub async fn update_profile(
         });
 
     let mut tx = state.pool.begin().await?;
+    if let Some(event) = event.as_mut() {
+        crate::identity_chain::assign(&mut tx, event).await?;
+    }
 
     // `profiles` is a projection: the write below happens
     // through the indexer applying `event`, in this same transaction, not

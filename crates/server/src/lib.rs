@@ -44,6 +44,7 @@ pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
 pub mod idempotency;
+pub mod identity_chain;
 pub mod identity_locator;
 pub mod integrator_data;
 pub mod integrator_schema_mappings;

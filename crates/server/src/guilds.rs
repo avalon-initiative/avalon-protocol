@@ -2245,7 +2245,7 @@ async fn add_member(
     }
 
     let joined_at = OffsetDateTime::now_utc();
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::GuildMemberAdded
             .as_str()
@@ -2264,6 +2264,7 @@ async fn add_member(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(tx, &mut event).await?;
     indexer.apply_in_tx(tx, &event).await?;
     outbox::enqueue(tx, &event).await?;
 
@@ -2447,7 +2448,7 @@ pub async fn leave_guild(
             .flatten();
     let mut clear_main_guild_event = None;
     if current_main_guild == Some(guild_id) {
-        let event = ProtocolEvent {
+        let mut event = ProtocolEvent {
             id: Uuid::new_v4(),
             kind: ProtocolEventKindVariant::ProfileUpdated
                 .as_str()
@@ -2472,12 +2473,13 @@ pub async fn leave_guild(
             version: 1,
             identity_chain: None,
         };
+        crate::identity_chain::assign(&mut tx, &mut event).await?;
         state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
         clear_main_guild_event = Some(event);
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::GuildMemberRemoved
             .as_str()
@@ -2495,6 +2497,7 @@ pub async fn leave_guild(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -2541,7 +2544,7 @@ pub async fn remove_member(
         return Err(AppError::NotGuildMember);
     }
 
-    let event = ProtocolEvent {
+    let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::GuildMemberRemoved
             .as_str()
@@ -2559,6 +2562,7 @@ pub async fn remove_member(
         version: 1,
         identity_chain: None,
     };
+    crate::identity_chain::assign(&mut tx, &mut event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 

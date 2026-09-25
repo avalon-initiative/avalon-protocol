@@ -307,6 +307,7 @@ dependencies = [
  "avalon-protocol",
  "base64 0.23.1",
  "dotenvy",
+ "hex",
  "serde",
  "serde_json",
  "sqlx",

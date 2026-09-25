@@ -67,11 +67,22 @@ Each file has this shape:
   set of author/witness key seeds. Rust only today — production
   known-list management and cosignature gossip (#946/#947) haven't landed
   in any SDK yet.
+- `identity-chain.json` — per-identity event chains
+  (`avalon_protocol::identity_chain`). Unlike the files above it has two
+  arrays instead of `vectors`: `hashVectors` (`compute_event_hash` inputs —
+  `kind`, `issuer`, `subject`, `payloadJson`, `timestampNanos` as a decimal
+  string, `seq`, `prevHashHex` — and the `expectedHashHex` sha256 they must
+  produce) and `resolutionCases` (a set of `events` with `label`, `seq`,
+  `prevLabel`, `class` of `ordinary`/`monotonic`/`critical`,
+  `timestampSeconds` and a fixed `hashHex`; `expected.acceptedLabels` is the
+  resolved chain in order and `expected.forkedAtSeq` the fork position or
+  null). Every ordering of a case's events must resolve identically. Rust
+  only today.
 
 ## Both sides of the wire
 
 Unlike the four client-behavior vectors above, `attestation-signing.json`,
-`signed-tree-head.json`, `witness-cosigned-tree-head.json`,
+`signed-tree-head.json`, `witness-cosigned-tree-head.json`, `identity-chain.json`,
 `cross-node-login.json`, `session-continuation.json`, and
 `websocket-interest-claim.json` also describe something the *server*
 verifies. `crates/protocol/tests/conformance.rs`

@@ -78,6 +78,10 @@ pub enum AppError {
     SigningKeyNotFound,
     #[error("passkey not found")]
     PasskeyNotFound,
+    #[error(
+        "this identity's event chain is forked; operations that depend on which key controls it are frozen until social recovery resolves it"
+    )]
+    IdentityChainForked,
     #[error("no completed recovery exists for this identity")]
     RollbackNoCompletedRecovery,
     #[error(
@@ -503,6 +507,7 @@ impl AppError {
             AppError::BlockNotFound => "BLOCK_NOT_FOUND",
             AppError::SigningKeyNotFound => "SIGNING_KEY_NOT_FOUND",
             AppError::PasskeyNotFound => "PASSKEY_NOT_FOUND",
+            AppError::IdentityChainForked => "IDENTITY_CHAIN_FORKED",
             AppError::RollbackNoCompletedRecovery => "ROLLBACK_NO_COMPLETED_RECOVERY",
             AppError::InvalidRollbackWindow => "INVALID_ROLLBACK_WINDOW",
             AppError::RollbackEventNotEligible => "ROLLBACK_EVENT_NOT_ELIGIBLE",
@@ -680,7 +685,9 @@ impl IntoResponse for AppError {
             // integrator. Still a 403: the request is well-formed, the caller
             // just isn't allowed to make this particular claim.
             AppError::PresenceActiveInMismatch => StatusCode::FORBIDDEN,
-            AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
+            AppError::AlreadyFriends
+            | AppError::FriendRequestExists
+            | AppError::IdentityChainForked => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
             AppError::DisplayNameTaken => StatusCode::CONFLICT,

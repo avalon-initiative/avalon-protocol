@@ -1,0 +1,279 @@
+{
+  "$schema": "./SCHEMA.md#identity-chain",
+  "description": "Per-identity event chains (avalon_protocol::identity_chain). hashVectors pin identity_chain::compute_event_hash byte-for-byte; resolutionCases pin the deterministic conflict rule (apply_chain): a runner must reach the same accepted chain and fork position for every ordering of a case's events.",
+  "supportedIn": [
+    "rust"
+  ],
+  "notSupported": {
+    "csharp": "no identity-chain handling in the client SDKs yet",
+    "typescript": "no identity-chain handling in the client SDKs yet"
+  },
+  "hashVectors": [
+    {
+      "name": "genesis-profile-update",
+      "kind": "profile.updated",
+      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "payloadJson": "{\"bio\":\"first\"}",
+      "timestampNanos": "1700000000000000000",
+      "seq": 1,
+      "prevHashHex": null,
+      "expectedHashHex": "b8c9cf3e499c8ced32fb6d4f217055097b5c6c068f1f2c0921477ecdc2ef0582"
+    },
+    {
+      "name": "second-event-points-at-first",
+      "kind": "profile.updated",
+      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "payloadJson": "{\"bio\":\"second\"}",
+      "timestampNanos": "1700000060000000000",
+      "seq": 2,
+      "prevHashHex": "b8c9cf3e499c8ced32fb6d4f217055097b5c6c068f1f2c0921477ecdc2ef0582",
+      "expectedHashHex": "f4a4837ceb1f5fa7bc547dea6e4ffdf8a39e6e65b5a9cf0f2e0b1fe98fb7e7b3"
+    },
+    {
+      "name": "signing-key-added-third",
+      "kind": "identity.signing_key_added",
+      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:signing_key_added",
+      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:signing_key_added",
+      "payloadJson": "{\"public_key\":\"AAAA\"}",
+      "timestampNanos": "1700000120000000000",
+      "seq": 3,
+      "prevHashHex": "f4a4837ceb1f5fa7bc547dea6e4ffdf8a39e6e65b5a9cf0f2e0b1fe98fb7e7b3",
+      "expectedHashHex": "241c89e8e360840fe01af62c5fe49ef70b40c3b489a85906e4c2bed4f5c145af"
+    }
+  ],
+  "resolutionCases": [
+    {
+      "name": "concurrent-edit-later-timestamp-wins",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "a",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "class": "ordinary"
+        },
+        {
+          "label": "b",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 300,
+          "hashHex": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+          "class": "ordinary"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root",
+          "b"
+        ],
+        "forkedAtSeq": null
+      }
+    },
+    {
+      "name": "equal-timestamps-smaller-hash-wins",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "tie-a",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "556b9305242f77669faf84a98ceec320afbf6f58fad5c8ab61b4b855713d6d65",
+          "class": "ordinary"
+        },
+        {
+          "label": "tie-b",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "67499488ad9b1c1a910db44afe14aba62aeaa0ed47970e48aec9641ea160d560",
+          "class": "ordinary"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root",
+          "tie-a"
+        ],
+        "forkedAtSeq": null
+      }
+    },
+    {
+      "name": "monotonic-beats-later-edit",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "edit",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 900,
+          "hashHex": "262121c5372be8af3ae6ff0d3d138d9e6e1249335222c7f0e02535e35073bb0b",
+          "class": "ordinary"
+        },
+        {
+          "label": "revoke",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 150,
+          "hashHex": "777ac4ea0a6e6f4d1301fd1cf8aa9183f44f435be43c75a6615ba307c266e5a7",
+          "class": "monotonic"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root",
+          "revoke"
+        ],
+        "forkedAtSeq": null
+      }
+    },
+    {
+      "name": "chain-critical-conflict-forks",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "rot-a",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "607f758431bc2df562f740f5034dd7f67efea4f8c1c755607db309db430a030e",
+          "class": "critical"
+        },
+        {
+          "label": "rot-b",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 300,
+          "hashHex": "043110878cd4e3af5f1a583a0985702a04a81773c0284dda1b359360ac944c5e",
+          "class": "critical"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root"
+        ],
+        "forkedAtSeq": 2
+      }
+    },
+    {
+      "name": "critical-vs-edit-forks",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "rot",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "7ec879c8c860699e23145733661074c562767d6f860ed0de439e5c2724bc4b18",
+          "class": "critical"
+        },
+        {
+          "label": "edit",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 300,
+          "hashHex": "262121c5372be8af3ae6ff0d3d138d9e6e1249335222c7f0e02535e35073bb0b",
+          "class": "ordinary"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root"
+        ],
+        "forkedAtSeq": 2
+      }
+    },
+    {
+      "name": "chain-continues-on-winner-branch-only",
+      "events": [
+        {
+          "label": "root",
+          "seq": 1,
+          "prevLabel": null,
+          "timestampSeconds": 100,
+          "hashHex": "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2",
+          "class": "ordinary"
+        },
+        {
+          "label": "a",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 200,
+          "hashHex": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "class": "ordinary"
+        },
+        {
+          "label": "b",
+          "seq": 2,
+          "prevLabel": "root",
+          "timestampSeconds": 300,
+          "hashHex": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+          "class": "ordinary"
+        },
+        {
+          "label": "a-child",
+          "seq": 3,
+          "prevLabel": "a",
+          "timestampSeconds": 400,
+          "hashHex": "96f2c8c0830289b842b7977cb9ff67242198fc1d8e45dfdeca2a4ef2db7a9fe8",
+          "class": "ordinary"
+        },
+        {
+          "label": "b-child",
+          "seq": 3,
+          "prevLabel": "b",
+          "timestampSeconds": 350,
+          "hashHex": "8d0c344b37b877ac49e47421a96ae4123ffca9e32ec19ee3f9ee7cc3c75e4f03",
+          "class": "ordinary"
+        }
+      ],
+      "expected": {
+        "acceptedLabels": [
+          "root",
+          "b",
+          "b-child"
+        ],
+        "forkedAtSeq": null
+      }
+    }
+  ]
+}
