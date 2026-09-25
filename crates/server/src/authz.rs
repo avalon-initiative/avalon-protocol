@@ -402,6 +402,7 @@ mod live_tests {
             mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
             shard_registry: crate::nodes::ShardRegistry::new(),
+            head_gossip: crate::nodes::HeadGossipTracker::new(),
             admin_token: None,
             log_reload_handle: tracing_subscriber::reload::Layer::new(
                 tracing_subscriber::EnvFilter::new("info"),

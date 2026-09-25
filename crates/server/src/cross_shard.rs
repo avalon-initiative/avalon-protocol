@@ -157,7 +157,7 @@ pub fn combined_shard_urls(
 /// reserved `core` shard only: the network's core authority signs `core`
 /// tree heads with exactly that key, so any node can verify them without
 /// holding the registrar's database.
-fn pinned_core_verify_key(network_id: &str, shard_id: &str) -> Option<VerifyingKey> {
+pub(crate) fn pinned_core_verify_key(network_id: &str, shard_id: &str) -> Option<VerifyingKey> {
     if shard_id != avalon_protocol::shard::CORE_SHARD_ID {
         return None;
     }

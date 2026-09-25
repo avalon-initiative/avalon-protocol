@@ -195,6 +195,10 @@ async fn main() {
     // and grows purely from gossip plus this node's own authoritative
     // shard, if any.
     let shard_registry = avalon_server::nodes::ShardRegistry::new();
+    // This node's bounded head-summary gossip tracker — see
+    // `avalon_server::nodes::HeadGossipTracker`'s own doc comment. Always
+    // constructed (no config needed), starts empty.
+    let head_gossip = avalon_server::nodes::HeadGossipTracker::new();
 
     // This node's libp2p DHT identity — on by default
     // (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
@@ -513,6 +517,7 @@ async fn main() {
         mirror_wake: mirror_wake.clone(),
         host_metrics: host_metrics_sampler.clone(),
         shard_registry: shard_registry.clone(),
+        head_gossip: head_gossip.clone(),
         // Issue #658: deliberately a *separate* shared secret from
         // `settlement_submit_key` above — see `crate::admin`'s own module
         // doc comment for why that key's trust domain doesn't fit here.
@@ -658,6 +663,7 @@ async fn main() {
         chain.clone(),
         peers,
         shard_registry.clone(),
+        head_gossip.clone(),
         own_shard_id.clone(),
         announce_config,
         dht_identity,
