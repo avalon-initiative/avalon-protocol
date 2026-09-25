@@ -28,6 +28,14 @@ An integrator connecting to Avalon establishes:
 Registering grants nothing. An identity still authorizes each capability through
 their own binding ([`./bindings.md`](./bindings.md)).
 
+`POST /integrations` and `POST /integrations/{slug}/keys` are rate-limited
+per source by default (`AVALON_INTEGRATOR_REGISTRATION_RATE_LIMIT_PER_MINUTE`,
+needing no hoster configuration) — see
+[`network-trust-anchors.md`](./network-trust-anchors.md)'s "Domain-proven
+names" section, which also covers the separate, self-certifying-shard-id
+naming path (`node:<key-hash>`) that exists alongside `game:<slug>` without
+touching this registration flow.
+
 Achievement ids are namespaced under the integrator:
 
 ```text

@@ -316,6 +316,13 @@ public and unauthenticated. The C# SDK does not mirror this yet.
   (recognizing as a different integrator than the authenticated caller;
   recognizing yourself).
 
+A parallel, optional naming path exists alongside `game:<slug>` for
+self-certifying (`node:<key-hash>`) shard ids — domain-proven
+`NameBindingClaim`s, resolved by `POST/GET /shards/.../name-claims`, never
+consulted by or touching this registry's own resolution. See
+[`network-trust-anchors.md`](./network-trust-anchors.md)'s "Domain-proven
+names" section.
+
 ## Open questions
 
 Still open: the rest of the metric table above (achievement popularity,

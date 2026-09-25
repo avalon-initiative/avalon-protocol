@@ -281,6 +281,73 @@ against a domain, and any registry that indexes claims by name are the
 naming layer's job, not this claim's. A self-certifying shard with no name
 at all authors and is verified exactly the same as one with a claimed name.
 
+## Domain-proven names
+
+The naming layer `NameBindingClaim` deferred to above: proving a claim
+against a domain, and resolving two conflicting claims for the same name,
+both with no registry and no Avalon authority needing to be online —
+`avalon_protocol::domain_proof`.
+
+**Proof format.** The published proof value is the claim's own signature,
+prefixed: `avalon-name-proof-v1:<claim.signature>`
+(`domain_proof::expected_domain_proof`). Not a fresh hash of the key — the
+signature already commits to `(self_certifying_id, public_key, name,
+created_at)` as one unforgeable unit, so publishing it as the proof value
+ties the domain directly to that exact claim. A different key, a different
+name, or the same key claiming the same name at a different `created_at`
+produces a different signature and therefore a different required proof
+value, so there is nothing to replay a proof for. The domain publishes this
+value at either:
+
+- a well-known file, `https://<name>/.well-known/avalon-name-proof`
+  (`domain_proof::WELL_KNOWN_PATH`), or
+- a DNS TXT record at `_avalon-challenge.<name>`
+  (`domain_proof::dns_txt_record_name`).
+
+Either is sufficient. `domain_proof::verify_domain_proof(claim,
+fetched_proof)` is the pure check: `claim` must verify on its own
+(`verify_name_binding_claim`) and `fetched_proof` must equal
+`expected_domain_proof(claim)`. Fetching the value is I/O and lives in
+`crates/server` (`crate::name_claims`, well-known-file fetch only today —
+the DNS TXT form is defined but not yet wired to a real resolver); the
+verification logic itself takes no dependency on how the value was
+obtained, matching how `crates/chain` (I/O) and `crates/protocol`
+(verification) are split elsewhere in this codebase.
+
+**Contested names.** Two different keys can each present a validly
+domain-proven claim for the same name (a genuinely contested domain).
+`domain_proof::contested_name_winner` resolves this deterministically:
+earliest `created_at` wins, ties (down to the second) broken by the
+lexicographically smaller `public_key`. Earliest-`created_at` rather than
+"whichever proof was fetched most recently" on purpose — a domain's live
+DNS/HTTP state can flap or be cached differently per verifier, so "most
+recent fetch wins" would let two honest verifiers reach different answers
+for the same pair of claims depending on network timing alone.
+`created_at` is a fixed, signed field inside the claim itself, so every
+verifier holding both claims computes the same answer regardless of when or
+how either proof was fetched.
+
+**Server wiring** (`crate::name_claims`): `POST
+/shards/{self_certifying_id}/name-claims` accepts a signed claim, verifies
+it, fetches and checks its domain proof, and — resolving any contest
+against whatever is already stored for that name — records the result in
+`name_claims` (migration `0074_name_claims`, one row per name, not
+foreign-keyed to anything: a row is a cache of an already-proven fact, not
+the source of trust for it). `GET /shards/name/{name}` and `GET
+/shards/{self_certifying_id}/name-claims` are the read paths a client or
+SDK resolves either direction through. Rate-limited per source
+(`AVALON_NAME_CLAIM_RATE_LIMIT_PER_MINUTE`, default 5/minute, needing no
+hoster configuration) on top of the blanket per-IP request ceiling, the
+same `crate::topology_limits::EndpointLimits` pattern `/nodes/probe` and
+`/nodes/trace` already use. The existing registry-based `game:<slug>`
+integrator/issuer-key write paths (`POST /integrations`, `POST
+/integrations/{slug}/keys`) gained the same per-source default (a separate,
+more generous 60/minute default sized to survive a full local dev/test
+run sharing one loopback source address, via
+`AVALON_INTEGRATOR_REGISTRATION_RATE_LIMIT_PER_MINUTE`) without any change
+to their resolution logic — this is a parallel, additive naming layer, and
+never touches how `game:<slug>` names already resolve.
+
 ## Genesis reset / migration
 
 A deliberate `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset —
@@ -357,10 +424,27 @@ and re-run without any risk to the network being migrated from.
   unchanged in behavior for a self-certifying `AVALON_OWN_SHARD_ID` (it
   already fell through to `NotApplicable`, the same as a named shard), now
   with a dedicated test and doc comment making that explicit rather than
-  incidental. Not yet built: the naming/registry layer that resolves and
-  disputes `NameBindingClaim`s, and wiring a self-certifying shard's raw key
-  into the cross-shard STH fetch path (today's `resolve_shard_verify_keys_from_db`
-  only resolves named/registered shards) — both separate, later work.
+  incidental.
+- `crates/protocol/src/domain_proof.rs` — the naming layer this document's
+  "Domain-proven names" section above describes: `expected_domain_proof`,
+  `verify_domain_proof`, `contested_name_winner`, `WELL_KNOWN_PATH`,
+  `dns_txt_record_name`, all pure and unit-tested (forged proofs, a proof
+  for a different claim, and both tiebreak cases).
+- `crates/server/src/name_claims.rs` — `POST
+  /shards/{self_certifying_id}/name-claims`, `GET /shards/name/{name}`,
+  `GET /shards/{self_certifying_id}/name-claims`, the well-known-file fetch
+  (unit-tested against a `wiremock` server), and the per-source rate limit.
+  Live-verified end to end (claim verification, domain-shape rejection,
+  429s past the default rate limit, and a real Postgres round trip through
+  the `name_claims` table). `crates/server/src/integrators.rs`'s
+  `register_integrator`/`add_issuer_key` gained the matching per-source
+  default rate limit; their own resolution/authorization logic is
+  unchanged.
+- Not yet built: wiring the DNS TXT proof form to a real resolver (only the
+  well-known-file form is fetched today; the format is defined either way),
+  and wiring a self-certifying shard's raw key into the cross-shard STH
+  fetch path (today's `resolve_shard_verify_keys_from_db` only resolves
+  named/registered shards) — both separate, later work.
 
 ## Invariants
 

@@ -3,6 +3,9 @@
 //! for registration, key rotation, and listing details.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use avalon_protocol::event_payloads::{
     GameRegisteredKeyPayload, GameRegisteredPayload, IssuerKeyAddedPayload, IssuerKeyRevokedPayload,
@@ -13,7 +16,7 @@ use avalon_protocol::integrators::{
     IntegratorCategory, IntegratorStatus, IssuerKey, KeyPurpose, KeyRole,
 };
 use avalon_protocol::permissions::Capability;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -32,6 +35,41 @@ use crate::state::AppState;
 
 const GAME_CHALLENGE_TTL_MINUTES: i64 = 5;
 const GAME_CHALLENGE_NONCE_BYTES: usize = 32;
+
+/// Default per-source ceiling on integrator/issuer-key registration write
+/// paths (`AVALON_INTEGRATOR_REGISTRATION_RATE_LIMIT_PER_MINUTE`), needing
+/// no hoster configuration to be effective. Deliberately tighter than the
+/// blanket per-IP request limit (`crate::rate_limit_per_minute_from_env`,
+/// thousands per minute) — that one bounds overall traffic, this one bounds
+/// how fast one source can mint new registry entries. Sized generously
+/// enough (60/min) that a normal local dev/test run — which shares one
+/// loopback source address across every registration the whole live test
+/// suite makes — never trips it; a hoster who wants a tighter production
+/// ceiling sets the env var.
+fn registration_limiter() -> &'static crate::topology_limits::IpRateLimiter {
+    static LIMITER: OnceLock<crate::topology_limits::IpRateLimiter> = OnceLock::new();
+    LIMITER.get_or_init(|| {
+        let per_minute = std::env::var("AVALON_INTEGRATOR_REGISTRATION_RATE_LIMIT_PER_MINUTE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(60);
+        crate::topology_limits::IpRateLimiter::new(per_minute, Duration::from_secs(60))
+    })
+}
+
+/// Applies [`registration_limiter`] to a registration write. Shared by
+/// [`register_integrator`] and [`add_issuer_key`] — both mint new registry
+/// entries and neither has an authenticated caller to key on beforehand
+/// (`register_integrator` is the act of creating one; `add_issuer_key`
+/// authenticates the caller only after this check).
+fn admit_registration(ip: IpAddr) -> Result<(), AppError> {
+    registration_limiter()
+        .check(ip, Instant::now())
+        .map_err(|wait| AppError::RegistrationRateLimited {
+            retry_after_secs: wait.as_secs().max(1),
+        })
+}
 
 /// Default/maximum page size for `GET /integrations` — same
 /// "small default, capped maximum" shape
@@ -217,8 +255,11 @@ pub struct IntegratorResponse {
 )]
 pub async fn register_integrator(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<CreateIntegratorRequest>,
 ) -> Result<Json<IntegratorResponse>, AppError> {
+    admit_registration(crate::topology_limits::client_ip(peer, &headers))?;
     validate_slug(&body.slug)?;
 
     let category = match body.category.as_deref() {
@@ -901,10 +942,12 @@ pub struct IssuerKeyResponse {
 )]
 pub async fn add_issuer_key(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(slug): Path<String>,
     Json(body): Json<AddIssuerKeyRequest>,
 ) -> Result<Json<IssuerKeyResponse>, AppError> {
+    admit_registration(crate::topology_limits::client_ip(peer, &headers))?;
     let path_integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
     let caller_integrator_id = authenticate_integrator_root(&state, &headers).await?;
     if caller_integrator_id != path_integrator_id {
@@ -1122,6 +1165,20 @@ mod tests {
         assert!(validate_slug("a").is_err());
         assert!(validate_slug(&"a".repeat(65)).is_err());
         assert!(validate_slug(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn registration_rate_limit_throttles_one_source_without_affecting_another() {
+        // A dedicated limiter instance, not `registration_limiter()`'s
+        // process-global one — this test's own budget, isolated from every
+        // other test in this binary.
+        let limiter = crate::topology_limits::IpRateLimiter::new(1, Duration::from_secs(60));
+        let source_a: IpAddr = "203.0.113.10".parse().unwrap();
+        let source_b: IpAddr = "203.0.113.11".parse().unwrap();
+        let now = Instant::now();
+        assert!(limiter.check(source_a, now).is_ok());
+        assert!(limiter.check(source_a, now).is_err());
+        assert!(limiter.check(source_b, now).is_ok());
     }
 
     #[test]
