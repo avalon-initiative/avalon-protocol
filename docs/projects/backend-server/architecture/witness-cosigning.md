@@ -268,10 +268,9 @@ never leave a cosignature without a checkpoint. The witness key is
 id defaults to the hex verifying key. `AVALON_WITNESS_COSIGNING_ENABLED=false`
 opts a node out; a node with no usable key never cosigns.
 
-`#947`'s equivocation confirmation deliberately sidesteps the known-list
-identity gap below by deriving its known list straight from the two
-conflicting heads' own cosignatures instead of any node's production known
-list — its proof stands on its own regardless of that gap.
+`#947`'s equivocation confirmation derives its known list straight from the
+two conflicting heads' own cosignatures instead of any node's production
+known list — its proof stands on its own.
 
 #938 wired cosigned verification into `avalon-server` itself:
 `crates/server/src/cosign_verify.rs` bridges `KnownListHandle`'s confirmed
@@ -303,22 +302,30 @@ independent of this node. This is separate from #299's original
 source-based `equivocation_findings` table (any two peers disagreeing,
 cosigning or not), which is unchanged and still the broader net.
 
-**Known limitation, carried over from #946**: a known-list slot's id is
-still a libp2p peer id or bare `base_url`, not a witness's real cosigning
-key — `cosign_verify::known_list_verifying_keys` bridges this by treating
-the id as "the hex verifying key, if it parses as one," so today's real
-deployments (ids that don't parse as key material) get an empty pairing
-and fall straight into the single-signature degenerate case, exactly
-today's behavior. Once a slot is genuinely keyed by a cosigning key, no
-code change is needed on the verification side — only whatever process
-starts admitting slots by real key instead of by address. Cosignatures
-now reach a node's `witness_cosignatures` table from its own cosigning
-decision as well as from `store_valid_cosignatures` while mirroring; #947's
-gossip carries bounded *summaries*, not a proactive push of new
-cosignatures. Slots are still not keyed by real cosigning keys, so the
+**Known-list slots are keyed by the witness's cosigning key (#967).** A node
+that cosigns advertises `witness: {key_id, announced_at, proof}` in
+`POST /nodes/announce` requests and responses and in the peer entries it
+gossips. `key_id` is the hex verifying key; `proof` is that key's signature
+over `(base_url, key_id, announced_at)` under the domain tag
+`avalon-witness-announce-v1` (`avalon_protocol::witness::
+sign_witness_announce`/`verify_witness_announce`), accepted only within an
+hour of the verifier's clock. A forged, mismatched or stale proof is dropped
+and the peer is still admitted to the peer table, just without a key. Only
+peers with a fresh proven key become known-list candidates, keyed by that key,
+so `cosign_verify::known_list_verifying_keys` yields real
+`(witness_key_id, VerifyingKey)` pairs and a node's own cosignatures count
+toward a majority. Bundled anchors get their key from their own announce
+under their seed URL (an anchor with no proven key yet is not a candidate).
+A node whose `AVALON_WITNESS_SIGNING_KEY_ID` override is not the hex
+verifying key advertises nothing. A persisted `known_list.json` from before
+this scheme carries no format version and is discarded on load. Cosignatures
+reach a node's `witness_cosignatures` table from its own cosigning decision
+as well as from `store_valid_cosignatures` while mirroring; #947's gossip
+carries bounded *summaries*, not a proactive push of new cosignatures. The
 network still runs on the single pinned `AVALON_SETTLEMENT_VERIFY_KEY` model
-`sth.rs`/`network-trust-anchors.md` describe until that admission change and
-#939's migration land.
+`sth.rs`/`network-trust-anchors.md` describe until #939's migration lands.
+The proof shows the key holder authorized binding the key to that URL, not
+that the URL's operator holds the key.
 
 The scenario suite that exercises growth, loss of the original node, witness loss, eclipse and fork attempts against real processes, plus the live-fleet drill procedure, is in [`../for-maintainers/witness-drill.md`](../for-maintainers/witness-drill.md) (`scripts/witness-drill.sh`).
 

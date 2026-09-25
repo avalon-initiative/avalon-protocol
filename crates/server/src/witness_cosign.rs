@@ -59,6 +59,12 @@ impl WitnessCosignConfig {
         }
     }
 
+    /// The signer that proves possession of this witness key in announces;
+    /// `None` when the key id is not the hex verifying key.
+    pub fn announce_signer(&self) -> Option<crate::nodes::WitnessSigner> {
+        crate::nodes::WitnessSigner::new(self.signing_key.clone(), self.witness_key_id.clone())
+    }
+
     /// `None` when `AVALON_WITNESS_COSIGNING_ENABLED` is explicitly falsy
     /// (`"false"`/`"0"` — same opt-out convention `AVALON_DHT_ENABLED`
     /// already uses, on by default), or when no witness signing key is

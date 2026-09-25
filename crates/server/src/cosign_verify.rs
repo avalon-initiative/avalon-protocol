@@ -27,22 +27,11 @@ pub const COSIGNATURE_FRESHNESS_WINDOW: std::time::Duration = std::time::Duratio
 /// `(witness_key_id, VerifyingKey)` pairs
 /// `cosigned_sth::verify_cosigned_tree_head` needs.
 ///
-/// **Known limitation, by design, not oversight** (see `crate::known_list`'s
-/// own module doc comment, "Witness identity is a placeholder here"): until
-/// a known-list slot is genuinely keyed by a witness's real Ed25519
-/// cosigning key, `witness_key_id` there is a libp2p peer id or bare
-/// `base_url` — never hex-encoded key material, so decoding it as one
-/// fails and this returns no pair for that slot. This is intentional, not
-/// a bug to work around: an empty or partially-undecoded known list falls
-/// straight into `verify_cosigned_tree_head`'s own documented `len() <= 1`
-/// degenerate case, i.e. verification behaves exactly like today's plain
-/// single-author-signature check — it never silently rejects a genuinely
-/// valid head just because the identity bridge isn't fully wired yet, and
-/// it never silently *accepts* one on a majority it can't actually verify
-/// either. Once a known-list slot really is keyed by a witness's cosigning
-/// key, this function needs no change: it already treats `witness_key_id`
-/// as "the hex verifying key, if it parses as one," which is exactly what
-/// a real slot's id will be.
+/// A slot's `witness_key_id` is the hex verifying key its peer proved
+/// possession of, so it decodes directly; an id that does not decode as a key
+/// yields no pair. An empty or partially-undecoded known list falls into
+/// `verify_cosigned_tree_head`'s `len() <= 1` degenerate case, i.e. the plain
+/// single-author-signature check.
 pub fn known_list_verifying_keys(handle: &KnownListHandle) -> Vec<(String, VerifyingKey)> {
     handle
         .confirmed_witness_key_ids()
@@ -189,8 +178,6 @@ mod tests {
 
     #[test]
     fn a_slot_whose_id_is_not_hex_key_material_bridges_to_no_pair() {
-        // The documented gap: today's real known-list slots are keyed by
-        // peer id / base_url, not a cosigning key.
         let cfg = instant_confirm_config();
         let handle = KnownListHandle::load_or_new(cfg, None);
         let now = OffsetDateTime::now_utc();
@@ -211,6 +198,87 @@ mod tests {
 
         let pairs = known_list_verifying_keys(&handle);
         assert_eq!(pairs, vec![(id, key.verifying_key())]);
+    }
+
+    /// Two nodes advertise witness keys with proofs, are admitted to a third
+    /// node's peer table, become keyed known-list slots, and their own
+    /// cosignatures then meet the majority.
+    #[tokio::test]
+    async fn two_admitted_nodes_cosignatures_count_toward_a_majority() {
+        use crate::nodes::{verified_advert, PeerInfo, PeerTable, WitnessSigner};
+        let now = OffsetDateTime::now_utc();
+        let table = PeerTable::new();
+        let mut signers = Vec::new();
+        for (i, url) in ["http://127.0.0.1:9701", "http://127.0.0.1:9702"]
+            .into_iter()
+            .enumerate()
+        {
+            let (key, id) = witness();
+            let signer = WitnessSigner::new(key.clone(), id.clone()).unwrap();
+            let advert = verified_advert(url, Some(signer.advert(url, now)), now);
+            assert!(advert.is_some());
+            table.upsert(PeerInfo {
+                base_url: url.to_string(),
+                roles: vec!["combined".to_string()],
+                protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+                network_id: "avalon-test".to_string(),
+                last_announced_at: now,
+                libp2p_peer_id: Some(format!("peer-{i}")),
+                libp2p_listen_addrs: Vec::new(),
+                witness: advert,
+            });
+            signers.push((key, id));
+        }
+        // A keyless peer participates in the table but is no candidate.
+        table.upsert(PeerInfo {
+            base_url: "http://127.0.0.1:9703".to_string(),
+            roles: vec!["combined".to_string()],
+            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+            network_id: "avalon-test".to_string(),
+            last_announced_at: now,
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: Vec::new(),
+            witness: None,
+        });
+
+        let policy = crate::outbound_policy::OutboundPolicy::new(true);
+        let candidates =
+            crate::known_list::build_candidates(&policy, &table, "avalon-test", now).await;
+        assert_eq!(candidates.len(), 2);
+
+        let handle = KnownListHandle::load_or_new(instant_confirm_config(), None);
+        handle.tick(&candidates, now);
+        handle.tick(&candidates, now);
+        let pairs = known_list_verifying_keys(&handle);
+        assert_eq!(pairs.len(), 2);
+
+        let author_key = SigningKey::generate(&mut rand::rng());
+        let (k0, id0) = &signers[0];
+        let (k1, id1) = &signers[1];
+        let both = cosigned_head(
+            &author_key,
+            3,
+            &root(2),
+            "avalon-test",
+            now,
+            &[(k0, id0, now), (k1, id1, now)],
+        );
+        assert!(
+            verify_cosigned_against_any_key([author_key.verifying_key()], &both, &pairs, now)
+                .is_some()
+        );
+        let one = cosigned_head(
+            &author_key,
+            3,
+            &root(2),
+            "avalon-test",
+            now,
+            &[(k0, id0, now)],
+        );
+        assert!(
+            verify_cosigned_against_any_key([author_key.verifying_key()], &one, &pairs, now)
+                .is_none()
+        );
     }
 
     /// The ticket's own acceptance scenario: a mirror keeps verifying

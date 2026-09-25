@@ -332,6 +332,7 @@ mod tests {
             last_announced_at: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs),
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            witness: None,
         }
     }
 

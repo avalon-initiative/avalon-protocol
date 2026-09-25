@@ -411,3 +411,45 @@ async fn two_nodes_see_each_other_via_announce() {
         "node A must know about node B after B announced to it"
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_proven_witness_key_is_listed_and_a_forged_one_is_dropped_without_denying_the_peer() {
+    use ed25519_dalek::SigningKey;
+    let http = reqwest::Client::new();
+    let target = server_url();
+    require_isolated_target(&target);
+    let key = SigningKey::generate(&mut rand::rng());
+    let key_id = hex::encode(key.verifying_key().to_bytes());
+    let now = time::OffsetDateTime::now_utc();
+    let stamp = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+
+    let good_url = fabricated_url();
+    let bad_url = fabricated_url();
+    let proof_for =
+        |url: &str| avalon_protocol::witness::sign_witness_announce(&key, url, &key_id, now);
+    for (url, proof_url) in [(&good_url, &good_url), (&bad_url, &good_url)] {
+        let resp = http
+            .post(format!("{target}/nodes/announce"))
+            .json(&serde_json::json!({
+                "base_url": url,
+                "roles": ["combined"],
+                "protocol_version": avalon_server::version::PROTOCOL_VERSION,
+                "network_id": network_id(),
+                "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+                "witness": {"key_id": key_id, "announced_at": stamp, "proof": proof_for(proof_url)},
+            }))
+            .send()
+            .await
+            .expect("announce failed");
+        assert!(resp.status().is_success());
+    }
+    let peers = list_peers(&http, &target).await;
+    let find = |url: &str| peers.iter().find(|p| p["base_url"] == url).cloned();
+    let good = find(&good_url).expect("proven peer admitted");
+    assert_eq!(good["witness"]["key_id"], key_id.as_str());
+    let bad = find(&bad_url).expect("peer with a mismatched proof is still admitted");
+    assert!(bad.get("witness").is_none());
+}

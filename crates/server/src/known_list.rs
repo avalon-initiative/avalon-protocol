@@ -17,13 +17,11 @@
 //! refill candidates, and reuses `crate::outbound_policy::OutboundPolicy`
 //! for address resolution rather than re-deriving IP prefixes by hand.
 //!
-//! **Witness identity is a placeholder here.** The known list is meant to
-//! be keyed by a witness's cosigning key (`witness_key_id`,
-//! `crates/protocol/src/witness.rs`), but no server-side mechanism ties a
-//! peer-table entry to one yet — that's #932. Until then, a candidate's
-//! `witness_key_id` is its libp2p peer id when known, else its `base_url`.
-//! This is an address-shaped stand-in, not a real key, and is expected to
-//! be replaced once #932 lands.
+//! **Slot identity is the witness's cosigning key.** A candidate's
+//! `witness_key_id` is the hex Ed25519 verifying key the peer advertised in
+//! `POST /nodes/announce` or gossip, admitted only with a verified proof of
+//! possession (`crate::nodes::WitnessAdvert`). A peer advertising no proven
+//! key stays in the peer table but is never a candidate.
 //!
 //! **Scope note on "misbehaving."** Automatic replacement here is driven
 //! entirely by the freshness window (a slot not observed recently is
@@ -195,8 +193,14 @@ pub fn known_list_path(data_dir: &Path) -> PathBuf {
     data_dir.join("known_list.json")
 }
 
+/// Bumped whenever slot identity semantics change; files of any other
+/// version are discarded on load.
+const PERSISTED_FORMAT_VERSION: u32 = 2;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedKnownList {
+    #[serde(default)]
+    version: u32,
     slots: Vec<KnownSlot>,
 }
 
@@ -639,7 +643,10 @@ impl KnownListHandle {
                 return;
             }
         }
-        match serde_json::to_vec_pretty(&PersistedKnownList { slots }) {
+        match serde_json::to_vec_pretty(&PersistedKnownList {
+            version: PERSISTED_FORMAT_VERSION,
+            slots,
+        }) {
             Ok(bytes) => {
                 if let Err(e) = std::fs::write(path, bytes) {
                     tracing::warn!(event = "known_list_save_failed", error = %e, "could not write known list to disk");
@@ -655,7 +662,14 @@ impl KnownListHandle {
 fn load_slots(path: &Path) -> Vec<KnownSlot> {
     match std::fs::read(path) {
         Ok(bytes) => match serde_json::from_slice::<PersistedKnownList>(&bytes) {
-            Ok(persisted) => persisted.slots,
+            Ok(persisted) if persisted.version == PERSISTED_FORMAT_VERSION => persisted.slots,
+            Ok(_) => {
+                tracing::info!(
+                    event = "known_list_discarded",
+                    "known list file is from an older format — starting empty"
+                );
+                Vec::new()
+            }
             Err(e) => {
                 tracing::warn!(
                     event = "known_list_load_failed",
@@ -692,40 +706,49 @@ async fn prefix_for(policy: &OutboundPolicy, base_url: &str) -> Option<String> {
         .map(|checked| diversity_prefix(checked.addr.ip()))
 }
 
-/// This node's placeholder witness identity for a peer-table entry — see
-/// this module's own doc comment on why this isn't a real cosigning key
-/// yet.
-fn witness_key_for_peer(info: &crate::nodes::PeerInfo) -> String {
-    info.libp2p_peer_id
-        .clone()
-        .unwrap_or_else(|| info.base_url.clone())
+/// The advertised witness key of `info`, only while its proof is fresh.
+fn fresh_witness_key(info: &crate::nodes::PeerInfo, now: OffsetDateTime) -> Option<&str> {
+    let advert = info.witness.as_ref()?;
+    ((now - advert.announced_at).abs() <= avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW)
+        .then_some(advert.key_id.as_str())
 }
 
-/// Builds this tick's candidate list: this network's bundled anchors
-/// (`docs/trusted-networks.json`'s `seed_nodes`, via
-/// `avalon_protocol::network_trust::bundled_trust_anchors`) first, then
-/// every peer currently in `peers` not already offered as an anchor.
-/// Address resolution (and therefore the diversity prefix) goes through
-/// `policy` for both — an anchor's URL is just as attacker-adjacent to
-/// resolve as a gossiped peer's once DNS is involved, so it gets the same
-/// check, not a bypass.
-async fn build_candidates(
+/// Builds this tick's candidate list, each keyed by a peer's proven witness
+/// key. A bundled anchor (`docs/trusted-networks.json`'s `seed_nodes`) is
+/// keyed by the witness key it announced under its seed URL; then every
+/// other peer in `peers` with a fresh proven key. A peer without a key is
+/// not a witness candidate. Address resolution (and therefore the diversity
+/// prefix) goes through `policy` for both.
+pub(crate) async fn build_candidates(
     policy: &OutboundPolicy,
     peers: &PeerTable,
     network_id: &str,
+    now: OffsetDateTime,
 ) -> Vec<DiscoveredCandidate> {
     let mut candidates = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let by_url: HashMap<String, crate::nodes::PeerInfo> = peers
+        .list_unverified()
+        .into_iter()
+        .chain(peers.list_all())
+        .map(|p| (p.base_url.clone(), p))
+        .collect();
 
     for anchor in avalon_protocol::network_trust::bundled_trust_anchors()
         .iter()
         .filter(|a| a.network_id == network_id)
     {
         for seed in &anchor.seed_nodes {
+            let Some(key) = by_url
+                .get(&crate::nodes::normalized_base_url(seed))
+                .and_then(|p| fresh_witness_key(p, now))
+            else {
+                continue;
+            };
             if let Some(prefix) = prefix_for(policy, seed).await {
-                if seen.insert(seed.clone()) {
+                if seen.insert(key.to_string()) {
                     candidates.push(DiscoveredCandidate {
-                        witness_key_id: seed.clone(),
+                        witness_key_id: key.to_string(),
                         prefix,
                         is_anchor: true,
                     });
@@ -735,13 +758,15 @@ async fn build_candidates(
     }
 
     for info in peers.list_all() {
-        let key = witness_key_for_peer(&info);
-        if !seen.insert(key.clone()) {
+        let Some(key) = fresh_witness_key(&info, now) else {
+            continue;
+        };
+        if !seen.insert(key.to_string()) {
             continue;
         }
         if let Some(prefix) = prefix_for(policy, &info.base_url).await {
             candidates.push(DiscoveredCandidate {
-                witness_key_id: key,
+                witness_key_id: key.to_string(),
                 prefix,
                 is_anchor: false,
             });
@@ -764,7 +789,7 @@ pub async fn run_worker(
     let policy = OutboundPolicy::from_env();
     loop {
         let now = OffsetDateTime::now_utc();
-        let candidates = build_candidates(&policy, &peers, &network_id).await;
+        let candidates = build_candidates(&policy, &peers, &network_id, now).await;
         let report = handle.tick(&candidates, now);
         if report.changed() {
             tracing::info!(
@@ -801,6 +826,16 @@ mod tests {
             prefix: prefix.to_string(),
             is_anchor: false,
         }
+    }
+
+    #[test]
+    fn a_persisted_file_without_the_current_format_version_is_discarded() {
+        let dir = std::env::temp_dir().join(format!("kl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = known_list_path(&dir);
+        std::fs::write(&path, br#"{"slots":[{"witness_key_id":"http://x","prefix":"p","is_anchor":false,"admitted_at":"2026-01-01T00:00:00Z","last_observed_at":"2026-01-01T00:00:00Z","status":"confirmed"}]}"#).unwrap();
+        assert!(load_slots(&path).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
