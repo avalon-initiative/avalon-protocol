@@ -385,7 +385,9 @@ in-use `SettlementProvider`.
   required `AVALON_NETWORK_ID` env var) — written once, on `avalon-server`'s first boot
   against an empty database, and never updated after. `network_id` alone carries no
   cryptographic weight — see [`network-trust-anchors.md`](./network-trust-anchors.md)
-  for how a client pins it to the settlement operator's actual key. Every boot after
+  for how a client pins it to the settlement operator's actual key today, and
+  [`witness-cosigning.md`](./witness-cosigning.md) for the in-progress replacement of
+  that single pinned key with a bounded, self-filling list of witnesses. Every boot after
   that verifies the running process's configured `network_id` against the stored one
   (`PostgresSettlementProvider::connect`); a mismatch is fatal — the process exits
   before binding a listener, not a warning. `network_id` is also hashed into every
