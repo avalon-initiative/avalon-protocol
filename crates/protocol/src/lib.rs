@@ -11,6 +11,7 @@
 
 pub mod achievements;
 pub mod continuation;
+pub mod cosigned_sth;
 pub mod cross_node_login;
 pub mod event_payloads;
 pub mod events;

@@ -205,10 +205,30 @@ spike's* prototype, not the production implementation:
 ## Today in the repo
 
 `crates/protocol/src/witness.rs` and `crates/protocol/src/known_list.rs`
-exist and are tested (see above); nothing else in this document is wired into
-`crates/server` yet — the network still runs on the single pinned
+exist and are tested (see above). #932 added
+`crates/protocol/src/cosigned_sth.rs`: `CosignedTreeHead` (one author
+`sth::SignedTreeHead` plus its `Vec<witness::WitnessCosignature>`),
+`verify_cosigned_tree_head` (author signature + majority-of-known-list
+cosignature check, degenerating to exactly `sth::verify_tree_head` at a
+known-list size of 0 or 1), and `find_equivocating_witnesses` (the
+concrete equivocation proof for two conflicting majority-cosigned heads).
+`crates/chain::PostgresSettlementProvider` gained storage for cosignatures
+(`witness_cosignatures` table, migration `0073_witness_cosignatures`) and
+a read path (`cosigned_tree_head_at`) that assembles a `CosignedTreeHead`
+from stored state for a caller to verify. `conformance/vectors/
+witness-cosigned-tree-head.json` covers accepted/below-threshold/
+unknown-witness/stale/conflicting-heads, asserted from
+`crates/protocol/tests/conformance.rs`.
+
+**Still not wired in** (left for #938/#946/#947): nothing in `avalon-server`
+decides to cosign another node's head, gossips cosignatures around, or
+serves them over HTTP (`GET /ledger/sth/latest?witnesses=1` doesn't exist
+yet) — a cosignature only reaches `witness_cosignatures` if some other
+process calls `store_witness_cosignature` directly. Production known-list
+management (anchors, diversity cap, refill, persistence) is still only the
+`known_list.rs` prototype. The network still runs on the single pinned
 `AVALON_SETTLEMENT_VERIFY_KEY` model `sth.rs`/`network-trust-anchors.md`
-describe until the implementation tickets land.
+describe until those land.
 
 ## Decisions and tickets
 

@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use avalon_protocol::cosigned_sth::CosignedTreeHead;
+use avalon_protocol::witness::WitnessCosignature;
+
 use crate::incremental_merkle::IncrementalMerkleTree;
 use crate::retention::PruneReport;
 use crate::sth::SignedTreeHead;
@@ -668,6 +671,129 @@ impl PostgresSettlementProvider {
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
         row.map(sth_from_row).transpose()
+    }
+
+    /// Stores one witness's cosignature over an already-known STH
+    /// (#932: storage half of the design-spike primitives in
+    /// `avalon_protocol::witness`/`cosigned_sth`; a node actually deciding
+    /// to cosign others' heads, and gossiping cosignatures around, are
+    /// #938/#947, not this). Idempotent on a replayed
+    /// `(network_id, tree_size, witness_key_id)` — re-receiving the same
+    /// witness's cosignature for a head this node already has (e.g. via
+    /// gossip from more than one peer) is a no-op, not a conflict; two
+    /// *different* cosignatures for the same key at the same tree_size
+    /// would violate that witness's own no-double-cosign rule and are
+    /// rejected outright rather than silently overwritten.
+    pub async fn store_witness_cosignature(
+        &self,
+        cosig: &WitnessCosignature,
+    ) -> Result<(), SettlementError> {
+        let outcome = sqlx::query(
+            r#"
+            INSERT INTO witness_cosignatures
+                (network_id, tree_size, witness_key_id, root_hash, author_created_at, observed_at, signature)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (network_id, tree_size, witness_key_id) DO NOTHING
+            "#,
+        )
+        .bind(&cosig.network_id)
+        .bind(cosig.tree_size)
+        .bind(&cosig.witness_key_id)
+        .bind(&cosig.root_hash)
+        .bind(cosig.author_created_at)
+        .bind(cosig.observed_at)
+        .bind(&cosig.signature)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        if outcome.rows_affected() == 1 {
+            return Ok(());
+        }
+
+        // `ON CONFLICT DO NOTHING` skipped the insert — a row for this
+        // witness/tree_size already exists. Check whether it's the same
+        // cosignature being replayed (fine) or a genuinely different one
+        // (a real equivocation this node must not silently discard).
+        let existing_signature: String = sqlx::query_scalar(
+            r#"
+            SELECT signature FROM witness_cosignatures
+            WHERE network_id = $1 AND tree_size = $2 AND witness_key_id = $3
+            "#,
+        )
+        .bind(&cosig.network_id)
+        .bind(cosig.tree_size)
+        .bind(&cosig.witness_key_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        if existing_signature != cosig.signature {
+            return Err(SettlementError::Storage(format!(
+                "witness {} already cosigned tree_size {} for network {} with a different \
+                 signature — refusing to overwrite a possible equivocation",
+                cosig.witness_key_id, cosig.tree_size, cosig.network_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Every stored cosignature for one network's tree head at `tree_size`,
+    /// in no particular order — the read half of [`Self::store_witness_cosignature`].
+    pub async fn list_witness_cosignatures(
+        &self,
+        network_id: &str,
+        tree_size: i64,
+    ) -> Result<Vec<WitnessCosignature>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, author_created_at, witness_key_id, observed_at, signature
+            FROM witness_cosignatures
+            WHERE network_id = $1 AND tree_size = $2
+            "#,
+        )
+        .bind(network_id)
+        .bind(tree_size)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut cosigs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            cosigs.push(WitnessCosignature {
+                tree_size: row.try_get("tree_size").map_err(get)?,
+                root_hash: row.try_get("root_hash").map_err(get)?,
+                network_id: row.try_get("network_id").map_err(get)?,
+                author_created_at: row.try_get("author_created_at").map_err(get)?,
+                witness_key_id: row.try_get("witness_key_id").map_err(get)?,
+                observed_at: row.try_get("observed_at").map_err(get)?,
+                signature: row.try_get("signature").map_err(get)?,
+            });
+        }
+        Ok(cosigs)
+    }
+
+    /// Assembles a [`CosignedTreeHead`] for `tree_size` from stored state:
+    /// the author STH ([`Self::signed_tree_head_at`]) plus every stored
+    /// cosignature for it. `None` if this node has no STH at that
+    /// `tree_size` at all — the same "not found, not an error" contract
+    /// `signed_tree_head_at` already has. Read-only assembly only; callers
+    /// still run the result through
+    /// `avalon_protocol::cosigned_sth::verify_cosigned_tree_head` against
+    /// their own known list, exactly as they would for a head learned via
+    /// gossip instead of storage.
+    pub async fn cosigned_tree_head_at(
+        &self,
+        tree_size: i64,
+    ) -> Result<Option<CosignedTreeHead>, SettlementError> {
+        let Some(sth) = self.signed_tree_head_at(tree_size).await? else {
+            return Ok(None);
+        };
+        let cosignatures = self
+            .list_witness_cosignatures(&sth.network_id, tree_size)
+            .await?;
+        Ok(Some(CosignedTreeHead { sth, cosignatures }))
     }
 
     /// The first `tree_size` entries' `entry_hash`, oldest first — the
