@@ -55,6 +55,7 @@ pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
 pub mod mirrored_shard_keys;
+pub mod name_claims;
 pub mod neighbors;
 pub mod network_coordinates;
 pub mod nodes;
@@ -592,6 +593,15 @@ fn full_routes(state: AppState) -> Router {
         // `docs/projects/backend-server/architecture/registry.md`'s "External read surface"
         // section for the stability policy.
         .route("/registry/{slug}", get(registry::get_integrator_registry))
+        // Domain-proven names for self-certifying (`node:<key-hash>`)
+        // shard ids — a parallel, optional naming layer alongside the
+        // registry-based `/integrations` surface above, never consulted by
+        // it. See `crate::name_claims`.
+        .route(
+            "/shards/{self_certifying_id}/name-claims",
+            post(name_claims::submit_name_claim).get(name_claims::list_names_for_shard),
+        )
+        .route("/shards/name/{name}", get(name_claims::resolve_name))
         // Issue #89: public recognition relationships — an integrator
         // declaring "I recognize <other integrator>'s claims, for
         // <scope>" as a durable fact, queryable in both directions.

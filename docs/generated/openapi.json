@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.6.0"
+    "version": "0.7.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -5687,6 +5687,125 @@
           }
         }
       }
+    },
+    "/shards/name/{name}": {
+      "get": {
+        "tags": [
+          "shard-identity"
+        ],
+        "summary": "Resolves a verified name to its self-certifying shard id.",
+        "operationId": "resolve_name",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameClaimResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no verified claim for this name"
+          }
+        }
+      }
+    },
+    "/shards/{self_certifying_id}/name-claims": {
+      "get": {
+        "tags": [
+          "shard-identity"
+        ],
+        "summary": "Lists every verified name currently bound to `self_certifying_id`.",
+        "operationId": "list_names_for_shard",
+        "parameters": [
+          {
+            "name": "self_certifying_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NameClaimResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "shard-identity"
+        ],
+        "summary": "Submits a signed name-binding claim and, if its domain proof checks out,\nrecords it as this name's verified binding — replacing a previously\nverified claim for the same name only when the new one wins the\ndeterministic contest (`avalon_protocol::domain_proof::\ncontested_name_winner`).",
+        "operationId": "submit_name_claim",
+        "parameters": [
+          {
+            "name": "self_certifying_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameClaimResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "malformed claim, id mismatch, or a name with no domain shape"
+          },
+          "409": {
+            "description": "name already verified for a different, contest-winning claim"
+          },
+          "422": {
+            "description": "domain proof did not match the claim"
+          },
+          "429": {
+            "description": "Rate limit or in-flight cap hit; see Retry-After"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8563,6 +8682,59 @@
           "role_index": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "NameClaimRequest": {
+        "type": "object",
+        "description": "Wire shape of a `NameBindingClaim` — the server's own DTO (rather than\nderiving `ToSchema` on the protocol type directly) so the OpenAPI schema\nstays owned by `crates/server`, matching every other request DTO in this\nmodule family (e.g. `crate::integrators::CreateIntegratorRequest`).",
+        "required": [
+          "self_certifying_id",
+          "public_key",
+          "name",
+          "created_at",
+          "signature"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "self_certifying_id": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
+      },
+      "NameClaimResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "self_certifying_id",
+          "proof_method",
+          "verified_at"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "proof_method": {
+            "type": "string"
+          },
+          "self_certifying_id": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
