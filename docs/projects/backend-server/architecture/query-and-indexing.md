@@ -233,5 +233,3 @@ a first-class scaling dimension — see
   rebuild-from-events guarantee above is what lets the projection catch up
   later. A background retry/backfill mechanism specifically for this gap is
   a possible future improvement, not built yet.
-</content>
-</invoke>

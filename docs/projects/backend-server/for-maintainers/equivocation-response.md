@@ -121,5 +121,3 @@ since the equivocation gate stops backfill the same tick detection fires),
 - **Automatic resolution.** Deliberately never built — see
   `docs/projects/backend-server/architecture/settlement.md` for why this
   stays a human decision.
-</content>
-</invoke>

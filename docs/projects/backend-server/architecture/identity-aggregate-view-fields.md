@@ -64,5 +64,3 @@ integrator/server) is a third, deliberately ephemeral tier — never a
 `ProtocolEvent`, never in scope here. See [`./presence.md`](./presence.md);
 don't add presence fields to either table above even though presence
 describes "this identity, right now" in a colloquial sense.
-</content>
-</invoke>

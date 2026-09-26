@@ -369,5 +369,3 @@ guarantee is actually needed, following the same discipline
   against a real server, including the ownership-rejection and
   nonexistent-schema-rejection paths
   (`crates/server/tests/integrator_schema_mappings.rs`, `--ignored`).
-</content>
-</invoke>

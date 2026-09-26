@@ -266,5 +266,3 @@ into a Hub-only or integrator-only corner.
   (`replicate_to_peers` is a no-op with no eligible target). Live-verified
   with two real `avalon-server` processes: a message sent on node A lands in
   node B's own `guild_messages_replica` (`crates/server/tests/chat_replication.rs`).
-</content>
-</invoke>

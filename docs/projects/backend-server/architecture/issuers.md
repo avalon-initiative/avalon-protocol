@@ -244,5 +244,3 @@ key-role split above — so there is no race against an attacker also holding k1
   /integrations/{slug}/challenge` → `GET /integrations/whoami`, sending the
   `x-avalon-integrator-*` header names) once as a sanity check. A slug
   collision (409) prints a clear message instead of a raw HTTP error.
-</content>
-</invoke>

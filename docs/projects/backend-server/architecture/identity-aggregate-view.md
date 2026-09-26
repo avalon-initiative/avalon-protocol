@@ -350,5 +350,3 @@ than a speculative one now.
 - The Hub's own layer-2 entry does not exist because the Hub has not
   registered as an integrator with its own issuer key — see "Where the Hub
   fits" above.
-</content>
-</invoke>

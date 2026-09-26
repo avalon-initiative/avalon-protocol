@@ -214,5 +214,3 @@ reinstatement remain open.
   stays visible-with-a-marker either way — there's no hidden-vs-visible
   question for this event to answer, so there's nothing for the enum to
   gain here beyond what a free-text reason already gives.
-</content>
-</invoke>

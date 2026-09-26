@@ -754,5 +754,3 @@ it already knows it wrote; there's no owner-level "everything about this identit
 regardless of verb" query yet. A subject with no entries returns an empty list, not an
 error. Filtering never changes an entry's hash-chain position — inclusion proofs for a
 filtered row still verify against the same global tree.
-</content>
-</invoke>

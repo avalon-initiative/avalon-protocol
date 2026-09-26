@@ -394,5 +394,3 @@ who prefers not to publish their neighbor list sets
 Whether/how a private instance's history could ever be selectively
 re-issued onto the public network remains genuinely open — worth deciding
 explicitly if a studio actually asks for it, rather than speculating here.
-</content>
-</invoke>

@@ -132,5 +132,3 @@ is durable before any request that could produce a `profile.updated` is even
 possible): `profiles::apply`'s upsert is an `INSERT ... SELECT ... WHERE` that skips
 (with a logged warning) a partial update with no `display_name` and no existing row,
 rather than fabricating a broken placeholder row.
-</content>
-</invoke>

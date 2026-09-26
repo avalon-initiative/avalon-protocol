@@ -1204,8 +1204,6 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
 SDK-side node discovery and capability negotiation (the SDK still takes a
 bare `server_url`); TLS requirements before any non-local deployment; a
 formal export format for the log.
-</content>
-</invoke>
 
 **First-boot keys.** `crates/server/src/node_keys.rs` runs at the start of
 `main`: each of the settlement signing key, submit key, witness signing key

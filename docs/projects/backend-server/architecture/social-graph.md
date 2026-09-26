@@ -175,5 +175,3 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   [protocol-events.md](./protocol-events.md)), emitted atomically with the
   projection row via the outbox. A declined or withdrawn *request* is
   not itself durable history — only an established or ended friendship is.
-</content>
-</invoke>

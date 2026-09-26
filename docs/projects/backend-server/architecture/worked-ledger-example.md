@@ -271,5 +271,3 @@ Every payload above is copied verbatim (field names, nesting, and the
 the complete, currently-implemented emitter list this walkthrough draws
 from. UUIDs and signature bytes above are illustrative placeholders, not
 real; every field name and object shape they sit inside is real.
-</content>
-</invoke>

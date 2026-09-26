@@ -477,5 +477,3 @@ and re-run without any risk to the network being migrated from.
   Hub labels it clearly as unverified rather than hiding the distinction.
 - Changing what's published in `trusted-networks.json` goes through normal
   repo review — no path exists to alter it outside version control.
-</content>
-</invoke>

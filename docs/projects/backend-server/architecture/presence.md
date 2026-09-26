@@ -176,5 +176,3 @@ scaling history or queries ([scalability](./scalability.md)).
 The full per-resource visibility-scope model (friends/guild/private, per
 resource, identity- and guild-configurable) remains an open decision beyond
 what's built for presence and guild rosters — see [`privacy.md`](./privacy.md).
-</content>
-</invoke>
