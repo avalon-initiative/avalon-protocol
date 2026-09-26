@@ -1203,7 +1203,9 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
 
 `AVALON_REPLICA_ONLY=true` runs a node that mirrors the network and serves it
 without authoring anything. It needs no settlement signing key, no shard
-registration and no integrator: it authors no shard, never signs a tree head, and
+registration and no integrator, and first-boot key generation skips the settlement
+signing and submit keys and the default shard for it (the libp2p identity is still
+generated): it authors no shard, never signs a tree head, and
 the reserved-`core` startup guard does not apply to it. It still mirrors
 `AVALON_MIRROR_PEERS`, verifies core and sibling shards exactly as any node does,
 serves reads (a shard's head and proofs come from its mirror), relays, answers

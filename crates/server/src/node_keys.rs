@@ -27,6 +27,12 @@ const KEYS: &[(&str, &str, bool)] = &[
     ("AVALON_LIBP2P_IDENTITY_KEY", "libp2p_identity.key", true),
 ];
 
+/// Keys a replica-only node never holds: it authors no shard and signs no tree head.
+const AUTHORING_KEYS: &[&str] = &[
+    "AVALON_SETTLEMENT_SIGNING_KEY",
+    "AVALON_SETTLEMENT_SUBMIT_KEY",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum NodeKeyError {
     #[error("node key file {path}: {source}")]
@@ -122,12 +128,18 @@ pub fn resolve(
     get_env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ResolvedNodeKeys, NodeKeyError> {
     let set = |name: &str| get_env(name).is_some_and(|v| !v.trim().is_empty());
+    let replica = get_env("AVALON_REPLICA_ONLY").is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
     let mut out = ResolvedNodeKeys::default();
     let mut values: HashMap<&'static str, String> = HashMap::new();
     let mut dir: Option<PathBuf> = None;
 
     for &(var, file, _) in KEYS {
-        if set(var) {
+        if set(var) || (replica && AUTHORING_KEYS.contains(&var)) {
             continue;
         }
         let keys_dir = match &dir {
@@ -156,7 +168,7 @@ pub fn resolve(
 
     let remote_authority =
         set("AVALON_SETTLEMENT_REMOTE_URL") || set("AVALON_SETTLEMENT_REMOTE_URLS");
-    if !set("AVALON_OWN_SHARD_ID") && !remote_authority {
+    if !replica && !set("AVALON_OWN_SHARD_ID") && !remote_authority {
         if let Some(seed_hex) = values.get("AVALON_SETTLEMENT_SIGNING_KEY") {
             let seed: [u8; 32] = hex::decode(seed_hex)
                 .ok()
@@ -200,6 +212,18 @@ mod tests {
         assert!(r.loaded.is_empty());
         let id = r.own_shard_id.unwrap();
         assert!(avalon_protocol::shard_identity::is_self_certifying(&id));
+    }
+
+    #[test]
+    fn replica_only_generates_no_authoring_key_and_no_shard() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = |n: &str| (n == "AVALON_REPLICA_ONLY").then(|| "true".to_string());
+        let r = resolve(dir.path(), &env).unwrap();
+        assert!(r.own_shard_id.is_none());
+        assert!(!r.generated.contains(&"AVALON_SETTLEMENT_SIGNING_KEY"));
+        assert!(!r.generated.contains(&"AVALON_SETTLEMENT_SUBMIT_KEY"));
+        assert!(r.generated.contains(&"AVALON_LIBP2P_IDENTITY_KEY"));
+        assert!(!dir.path().join("keys/settlement_signing.key").exists());
     }
 
     #[test]
