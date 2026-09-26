@@ -1206,3 +1206,12 @@ bare `server_url`); TLS requirements before any non-local deployment; a
 formal export format for the log.
 </content>
 </invoke>
+
+**First-boot keys.** `crates/server/src/node_keys.rs` runs at the start of
+`main`: each of the settlement signing key, submit key, witness signing key
+and libp2p identity that the environment leaves unset is loaded from
+`<AVALON_DATA_DIR>/keys/` or generated there once (directory `0700`, files
+`0600`, atomic no-clobber write, loose modes tightened on load, malformed files
+abort startup). With `AVALON_OWN_SHARD_ID` and the remote-authority variables
+unset, the node authors `node:<sha256 of its public key>`. Because that id is
+self-certifying there is no registration step against any authority.
