@@ -1456,8 +1456,9 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
         min_confirmations_required: state.replication_gate.min_confirmations,
         first_seen_at,
         within_grace_period,
-        eligible_for_new_registrations: within_grace_period
-            || confirmed_mirror_count >= state.replication_gate.min_confirmations,
+        eligible_for_new_registrations: !crate::replica::is_replica_only()
+            && (within_grace_period
+                || confirmed_mirror_count >= state.replication_gate.min_confirmations),
     };
 
     NodeStatusResponse {

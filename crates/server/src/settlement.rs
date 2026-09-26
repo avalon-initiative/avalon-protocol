@@ -986,6 +986,7 @@ pub async fn submit_ledger_batch(
     headers: HeaderMap,
     Json(batch): Json<EventBatch>,
 ) -> Result<Json<Commitment>, AppError> {
+    crate::replica::require_authoring()?;
     require_settlement_submit_key(&state, &headers)?;
     crate::op_trace::participate();
     let commitment = state.chain.commit(&batch).await?;
@@ -1014,6 +1015,7 @@ pub async fn prepare_batch(
     headers: HeaderMap,
     Json(batch): Json<EventBatch>,
 ) -> Result<Json<avalon_protocol::sth::PreparedTreeHead>, AppError> {
+    crate::replica::require_authoring()?;
     require_settlement_submit_key(&state, &headers)?;
     if state.managed_hosting_verify_key.is_none() {
         return Err(AppError::Unauthorized);
@@ -1061,6 +1063,7 @@ pub async fn finalize_batch(
     headers: HeaderMap,
     Json(body): Json<FinalizeBatchRequest>,
 ) -> Result<Json<Commitment>, AppError> {
+    crate::replica::require_authoring()?;
     require_settlement_submit_key(&state, &headers)?;
     let verify_key = state
         .managed_hosting_verify_key

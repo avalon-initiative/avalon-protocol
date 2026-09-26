@@ -347,8 +347,30 @@ async fn main() {
     // pre-#573 deployment's implicit single shard. Resolved here (rather
     // than inline in `state` below, its previous location) so #599's
     // shard-gossip worker can be told the same value.
-    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
-    if let Err(e) = avalon_protocol::shard::parse_shard_id(&own_shard_id) {
+    let replica_only = avalon_server::replica::replica_only_from_env();
+    if replica_only && std::env::var("AVALON_OWN_SHARD_ID").is_ok_and(|v| !v.trim().is_empty()) {
+        tracing::error!(
+            "refusing to start: AVALON_REPLICA_ONLY=true conflicts with AVALON_OWN_SHARD_ID; a \
+             replica authors no shard. Unset AVALON_OWN_SHARD_ID, or unset AVALON_REPLICA_ONLY \
+             to author that shard"
+        );
+        std::process::exit(1);
+    }
+    avalon_server::replica::set_replica_only(replica_only);
+    let own_shard_id = if replica_only {
+        tracing::info!(
+            "avalon-server: replica-only mode, authoring no shard and signing no tree heads"
+        );
+        avalon_server::replica::NO_AUTHORED_SHARD.to_string()
+    } else {
+        std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string())
+    };
+    let shard_check = if replica_only {
+        Ok(())
+    } else {
+        avalon_protocol::shard::parse_shard_id(&own_shard_id).map(|_| ())
+    };
+    if let Err(e) = shard_check {
         tracing::error!(
             "refusing to start: AVALON_OWN_SHARD_ID={own_shard_id:?} is invalid: {e}. Use `core` \
              (only for the network's pinned core authority), a registered shard id of the form \
@@ -360,9 +382,10 @@ async fn main() {
     }
 
     // A node committing `own_shard_id` through a remote authority does not sign it locally.
-    let signs_own_shard_locally = remote_submit
-        .as_ref()
-        .is_none_or(|r| !r.targets().contains_key(own_shard_id.as_str()));
+    let signs_own_shard_locally = !replica_only
+        && remote_submit
+            .as_ref()
+            .is_none_or(|r| !r.targets().contains_key(own_shard_id.as_str()));
     if signs_own_shard_locally {
         if let Ok((signing_key, signing_key_id)) = avalon_protocol::sth::load_signing_key_from_env()
         {
@@ -585,7 +608,7 @@ async fn main() {
     // two-phase flow (`POST /ledger/prepare-batch`/`finalize-batch`)
     // and `POST /ledger/submit` commit directly, bypassing the
     // outbox entirely — neither depends on this worker running.
-    if gateway_enabled {
+    if gateway_enabled && !replica_only {
         tokio::spawn(outbox::run_worker(
             pool.clone(),
             chain.clone(),

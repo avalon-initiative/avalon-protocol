@@ -156,6 +156,7 @@ pub async fn register_start(
     State(state): State<AppState>,
     Json(body): Json<RegisterStartRequest>,
 ) -> Result<Json<RegisterStartResponse>, AppError> {
+    crate::replica::require_authoring()?;
     // Issue #629, implementing #622's decision: a shard past its
     // bootstrap grace period with too few independently-confirmed
     // mirrors doesn't get to accept a brand-new identity — checked first,

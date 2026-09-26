@@ -79,6 +79,7 @@ pub mod recognitions;
 pub mod recovery;
 pub mod redis_limits;
 pub mod registry;
+pub mod replica;
 pub mod replication;
 pub mod resources;
 pub mod retention;
