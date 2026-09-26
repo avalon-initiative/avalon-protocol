@@ -32,15 +32,16 @@ settings (including a raised `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`, so a small lis
 
 | Scenario | What it does | In CI |
 |---|---|---|
-| `lifecycle` | A alone, then A,B,C, then A removed (B,C), then B,C,D,E. Checks admission with no restart of A, that B and C keep answering and re-shape their lists after A is gone, and that D and E are admitted without A. | yes |
+| `lifecycle` | A alone, then A,B,C, then A removed (B,C), then B,C,D,E. Checks admission with no restart of A, that B and C keep answering, that exactly A's witness key (and no other slot) leaves B's list once A is gone, and that D and E are admitted without A. | yes |
 | `eclipse` | A victim is announced to by a flood of nodes that all share one /24 (every loopback node does). Asserts the list fills up to the per-prefix cap and never past it. | yes (4-node flood) |
 | `witness-loss` | A known-list member is frozen (`SIGSTOP`) without leaving anyone's peer list. Asserts it is dropped once past the freshness window and a newly joined node takes the slot. | no |
 | `long-offline` | A mirroring node is stopped, a write lands elsewhere, ten seconds pass (well past the sped-up windows), and it restarts on the same schema. Asserts it rejoins the peer table. | no |
 | `fork` | Two nodes author the same shard with the same key and accept different writes, producing a genuine fork. A third node mirrors both and must log and record `equivocation_detected`. A fourth node mirrors nothing and only hears both heads over announce gossip; both authors are bare (no cosignatures), so it must confirm the fork from the two author signatures and store `author` evidence with no witness named (read back with the `witness_evidence` example). | no |
 | `rollout` | A single-key author writes history; two mirrors start with witness keys and cosign it. Asserts history is unchanged, the default head body is the same shape, an old single-key client verifies before, during and after, a witness-aware client accepts the head with both cosignatures and rejects it with one, the log keeps growing, and turning cosigning off on one node changes nothing else. See [`witness-policy-rollout.md`](./witness-policy-rollout.md). | no |
+| `cosigned` | One author, three cosigning witnesses and one non-cosigning mirror. The mirror's known list holds exactly the three witness keys, all confirmed; a head written afterwards reaches the mirror only through cosignatures; a witness-aware client accepts it by majority whether it reads the mirror or the witnesses; one witness is killed, verification continues on the other two, its slot is dropped and a newly started witness takes it. |
 
 The CI subset is the `witness-drill-smoke` job in `.github/workflows/ci.yml`
-(`lifecycle` and a 4-node `eclipse`, about half a minute of scenario time).
+(`lifecycle` and a 4-node `eclipse`, about half a minute of scenario time). `fork` and `cosigned` start four to six nodes each and take a minute or more apiece, so they stay local.
 
 ## Not yet covered
 

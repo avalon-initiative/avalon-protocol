@@ -6,7 +6,7 @@
 # processes and a real Postgres, never in-process function calls.
 #
 # usage: scripts/witness-drill.sh [scenario ...]     (default: all scenarios)
-#   scenarios: lifecycle witness-loss eclipse long-offline fork rollout
+#   scenarios: lifecycle witness-loss eclipse long-offline fork rollout cosigned
 #
 # See docs/projects/backend-server/for-maintainers/witness-drill.md for what
 # each scenario proves, which ones run in CI, and how to repeat this as a
@@ -38,14 +38,11 @@ next_port() { PORT_OFFSET=$((PORT_OFFSET + 1)); NEXT_PORT=$((BASE_PORT + PORT_OF
 # Fast-forwarded known-list tuning: real defaults (10 min freshness, 30 min
 # probation, 2 min refill) would make every scenario here take the better
 # part of an hour. These env values only change *how fast* the same
-# admission/refill/probation rules run, never the rules themselves. The
-# freshness floor is raised so a small confirmed list's scaled window
-# (floor * 6s) stays above the 2s refill interval that refreshes live slots.
+# admission/refill/probation rules run, never the rules themselves.
 FAST_KNOWN_LIST=(
   AVALON_KNOWN_LIST_REFILL_INTERVAL_SECS=2
   AVALON_KNOWN_LIST_FRESHNESS_SECS=6
   AVALON_KNOWN_LIST_PROBATION_SECS=3
-  AVALON_KNOWN_LIST_FRESHNESS_FLOOR=0.7
   AVALON_ANNOUNCE_INTERVAL_SECS=2
   AVALON_MIRROR_POLL_INTERVAL_SECS=3
 )
@@ -115,6 +112,12 @@ peer_table_has_at_least() { [ "$(peer_count "$1")" -ge "$2" ]; }
 proc_gone() { ! kill -0 "$1" 2>/dev/null; }
 known_list_contains() { known_list_ids_sorted "$1" | grep -qx "$2"; }
 known_list_lacks() { ! known_list_contains "$1" "$2"; }
+# ids_only_removed <data-dir> <ids-before> <removed-id>: the list now holds
+# exactly the ids it held before, minus <removed-id> (plus nothing that was
+# not there), i.e. the pruned slot is the one named and no other.
+ids_only_removed() {
+  [ "$(known_list_ids_sorted "$1")" = "$(printf '%s\n' "$2" | grep -vx "$3")" ]
+}
 known_list_ids_differ_from() { [ "$(known_list_ids_sorted "$1")" != "$2" ]; }
 log_contains() { grep -q "$2" "$1" 2>/dev/null; }
 log_lacks() { ! grep -q "$2" "$1" 2>/dev/null; }
@@ -160,7 +163,7 @@ check() {
 # ---------------------------------------------------------------------------
 scenario_lifecycle() {
   node a "" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
-  local port_a="$LAST_PORT" data_a="$LAST_DATA_DIR" pid_a="$LAST_PID"
+  local port_a="$LAST_PORT" data_a="$LAST_DATA_DIR" pid_a="$LAST_PID" key_a="$LAST_KEY_ID"
 
   # A alone: single-signer-equivalent, known list empty or self only.
   check "A alone answers /nodes/status" alive "$port_a"
@@ -168,7 +171,7 @@ scenario_lifecycle() {
   node b "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
   local port_b="$LAST_PORT" data_b="$LAST_DATA_DIR"
   node c "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
-  local port_c="$LAST_PORT"
+  local port_c="$LAST_PORT" key_c="$LAST_KEY_ID"
 
   # B and C join and get admitted to A's known list, with no restart of A.
   wait_until "A's known list admits B and C without a restart" 30 \
@@ -179,13 +182,20 @@ scenario_lifecycle() {
 
   # Remove A, including its own process, and confirm B and C still verify
   # and author with no special-casing for "node A was first."
+  wait_until "B's known list holds A's witness key before A leaves" 30 \
+    known_list_contains "$data_b" "$key_a"
+  wait_until "B's known list holds C's witness key before A leaves" 30 \
+    known_list_contains "$data_b" "$key_c"
   local before_b; before_b="$(known_list_ids_sorted "$data_b")"
   kill "$pid_a" 2>/dev/null
   wait_until "A's process actually exited" 15 proc_gone "$pid_a"
   check "B still answers after A is gone" alive "$port_b"
   check "C still answers after A is gone" alive "$port_c"
-  wait_until "B's known list changes membership after A's departure (stale slot pruned/refilled)" 30 \
-    known_list_ids_differ_from "$data_b" "$before_b"
+  wait_until "A's slot (its witness key) is pruned from B's known list past the freshness window" 40 \
+    known_list_lacks "$data_b" "$key_a"
+  check "only A's slot left B's list: every other slot it held before is still there" \
+    ids_only_removed "$data_b" "$before_b" "$key_a"
+  check "C's slot in B's list is untouched by A's departure" known_list_contains "$data_b" "$key_c"
 
   # Growth continues from B and C without A — D and E join and get
   # admitted, proving nothing distinguishes "the original node" from any
@@ -199,6 +209,7 @@ scenario_lifecycle() {
   check "E answers" alive "$port_e"
   wait_until "B's known list admits D and E post-A, same as it admitted B/C pre-A" 30 \
     known_list_has_at_least "$data_b" 3
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -280,9 +291,16 @@ scenario_long_offline() {
   local port_b="$LAST_PORT" schema_b="live_drill_b" pid_b="$LAST_PID" seed_b="$LAST_SEED"
 
   check "wrote something through A before B goes offline" is_2xx "$(register_integrator "$port_a" drill-long-offline)"
+  wait_until "A has a signed tree head" 40 sth_available "$port_a" || return 1
+  local size_before; size_before="$(sth_json "$port_a" | jq .tree_size)"
+  wait_until "B mirrors A's head at size $size_before before going offline" 40 \
+    head_at_least "$port_b" "$size_before"
 
   kill "$pid_b" 2>/dev/null
   wait_until "B's process actually exited" 15 proc_gone "$pid_b"
+  check "A takes a further write while B is offline" is_2xx "$(register_integrator "$port_a" drill-long-offline-2)"
+  wait_until "A's head moves past what B last mirrored" 40 head_at_least "$port_a" $((size_before + 1))
+  local size_after; size_after="$(sth_json "$port_a" | jq .tree_size)"
   sleep 10 # well past the fast freshness/probation windows above
 
   # Reconnect: start the same node identity again on the same port/schema,
@@ -294,6 +312,10 @@ scenario_long_offline() {
   check "B answers again after a long offline stretch" alive "$port_b"
   wait_until "B rejoins A's peer table with no special-casing for the gap" 30 \
     peer_table_has_at_least "$port_a" 1
+  wait_until "B's mirrored head catches up to A's current size ($size_after), past the $size_before it had when it left" 60 \
+    head_at_least "$port_b" "$size_after"
+  check "B's caught-up head is A's head (same root), not merely the same size" \
+    same_root_at "$port_a" "$port_b" "$size_after"
 }
 
 # ---------------------------------------------------------------------------
@@ -383,7 +405,41 @@ consistency_proof_served() {
 }
 majority_accepts() { printf '[%s,%s]' "$1" "$2" | "$VERIFY_STH" cosigned "$3" "$4"; }
 majority_rejects() { ! printf '[%s]' "$1" | "$VERIFY_STH" cosigned "$2" "$3"; }
-
+same_root_at() {
+  [ "$(curl -sf "http://127.0.0.1:$1/ledger/sth/$3?shard_id=core" | jq -r .root_hash)" = \
+    "$(curl -sf "http://127.0.0.1:$2/ledger/sth/$3?shard_id=core" | jq -r .root_hash)" ]
+}
+same_size_different_root() {
+  local a b
+  a="$(sth_json "$1" "?shard_id=core")"; b="$(sth_json "$2" "?shard_id=core")"
+  [ "$(printf '%s' "$a" | jq .tree_size)" = "$(printf '%s' "$b" | jq .tree_size)" ] &&
+    [ "$(printf '%s' "$a" | jq -r .root_hash)" != "$(printf '%s' "$b" | jq -r .root_hash)" ]
+}
+# cosigner_ids <port>: the witness key ids on the head a node serves, one per line.
+cosigner_ids() { sth_json "$1" "?shard_id=core&witnesses=1" | jq -r '(.cosignatures // [])[].witness_key_id' | sort; }
+# head_cosigned_only_by <port> <size> <key>...: the served head is at <size> and
+# every cosignature on it is by one of the given keys, at least two of them.
+head_cosigned_only_by() {
+  local port="$1" size="$2" ids
+  shift 2
+  ids="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
+  sth_json "$port" "?shard_id=core&witnesses=1" | jq -e --argjson s "$size" --argjson ids "$ids" \
+    '.tree_size == $s and ((.cosignatures // []) | map(.witness_key_id)) as $c
+     | ($c | length) >= 2 and all($c[]; IN($ids[]))' >/dev/null 2>&1
+}
+# witness_client_accepts <ports-csv> <key>...: a witness-aware client that
+# collects the head from each listed node and accepts by a majority of <key>...
+witness_client_accepts() {
+  local ports="$1" p heads=""
+  shift
+  for p in ${ports//,/ }; do heads+="${heads:+,}$(sth_json "$p" "?shard_id=core&witnesses=1")"; done
+  printf '[%s]' "$heads" | "$VERIFY_STH" cosigned "$@"
+}
+known_list_confirmed_at_least() {
+  local f; f="$(known_list_file "$1")"
+  [ -f "$f" ] && [ "$(jq '[.slots[] | select(.status == "confirmed")] | length' "$f" 2>/dev/null || echo 0)" -ge "$2" ]
+}
+known_list_ids_equal() { [ "$(known_list_ids_sorted "$1")" = "$(printf '%s\n' "${@:2}" | sort)" ]; }
 scenario_rollout() {
   cargo build -q -p avalon-server --example verify_sth || return 1
 
@@ -461,7 +517,94 @@ scenario_rollout() {
     history_unchanged "$port_a" "$pre_size" "$pre_root" "$pre_sig"
 }
 
-ALL=(lifecycle witness-loss eclipse long-offline fork rollout)
+# ---------------------------------------------------------------------------
+# Scenario: cosigned heads accepted by a majority of a real known list, then
+# loss of one witness. cs-a authors with cosigning off (so it never becomes a
+# witness slot). cs-w1..3 are cosigning mirrors of the author. cs-m is a
+# non-cosigning mirror of the author that keeps all three witnesses in its
+# known list, so it accepts a head only when two of its three confirmed
+# slots cosigned it. Every node keeps its default-sized known list, so once
+# slots confirm (seconds, with the fast probation) each witness also
+# requires a majority of its own list. Then one witness is killed and another
+# write lands: verification continues on the remaining two, the dead
+# witness's slot is dropped and a newly started witness takes its place.
+# ---------------------------------------------------------------------------
+scenario_cosigned() {
+  cargo build -q -p avalon-server --example verify_sth || return 1
+  local u="http://127.0.0.1" base="$PORT_OFFSET"
+  local pa=$((BASE_PORT + base + 1)) p1=$((BASE_PORT + base + 2)) p2=$((BASE_PORT + base + 3))
+  local p3=$((BASE_PORT + base + 4)) pm=$((BASE_PORT + base + 5))
+  local cap=AVALON_KNOWN_LIST_MAX_PER_PREFIX=10
+
+  node cs-a "" $cap AVALON_WITNESS_COSIGNING_ENABLED=false || return 1
+  local slug
+  for slug in drill-cosigned-1 drill-cosigned-2; do
+    check "the author accepts a write ($slug)" is_2xx "$(register_integrator "$pa" "$slug")"
+  done
+  wait_until "the author has a signed tree head" 40 sth_available "$pa" || return 1
+
+  node cs-w1 "$u:$pa" $cap AVALON_MIRROR_PEERS="$u:$pa" || return 1
+  local k1="$LAST_KEY_ID"
+  node cs-w2 "$u:$pa" $cap AVALON_MIRROR_PEERS="$u:$pa" || return 1
+  local pid2="$LAST_PID" k2="$LAST_KEY_ID"
+  node cs-w3 "$u:$pa" $cap AVALON_MIRROR_PEERS="$u:$pa" || return 1
+  local k3="$LAST_KEY_ID"
+  node cs-m "$u:$p1,$u:$p2,$u:$p3" $cap AVALON_WITNESS_COSIGNING_ENABLED=false \
+    AVALON_MIRROR_PEERS="$u:$pa" || return 1
+  local data_m="$LAST_DATA_DIR"
+
+  wait_until "the mirror's known list holds exactly the three witnesses' own keys" 40 \
+    known_list_ids_equal "$data_m" "$k1" "$k2" "$k3"
+  check "the mirror's known list has more than one slot" known_list_has_at_least "$data_m" 2
+  wait_until "all three of the mirror's slots are confirmed (past probation)" 40 \
+    known_list_confirmed_at_least "$data_m" 3
+
+  # A head written now can only reach the mirror through cosignatures.
+  check "the author accepts a write with the mirror's list at three confirmed witnesses" \
+    is_2xx "$(register_integrator "$pa" drill-cosigned-3)"
+  local size; size=0
+  wait_until "the author's head moves to include the new write" 40 head_at_least "$pa" 3
+  size="$(sth_json "$pa" | jq .tree_size)"
+  wait_until "the mirror serves the new head cosigned by at least two of the witnesses' keys" 60 \
+    head_cosigned_only_by "$pm" "$size" "$k1" "$k2" "$k3"
+  check "a witness-aware client accepts the mirror's head by a majority of the three witness keys" \
+    witness_client_accepts "$pm" "$k1" "$k2" "$k3"
+  local wp
+  for wp in "$p1" "$p2" "$p3"; do
+    wait_until "witness on port $wp serves the new head" 60 head_at_least "$wp" "$size"
+  done
+  check "the same client accepts it when it collects the head from the witnesses instead" \
+    witness_client_accepts "$p1,$p2,$p3" "$k1" "$k2" "$k3"
+
+  # Drop one witness: the two others keep the head verifiable.
+  kill "$pid2" 2>/dev/null
+  wait_until "witness two's process actually exited" 15 proc_gone "$pid2"
+  check "the author accepts a write after a witness is gone" is_2xx "$(register_integrator "$pa" drill-cosigned-4)"
+  wait_until "the author's head grows past the loss" 40 head_at_least "$pa" $((size + 1))
+  local grown; grown="$(sth_json "$pa" | jq .tree_size)"
+  wait_until "the mirror still verifies and serves the new head with the two live witnesses' cosignatures" 90 \
+    head_cosigned_only_by "$pm" "$grown" "$k1" "$k3"
+  check "the dead witness did not cosign the new head" not_cosigned_by "$pm" "$k2"
+  check "a client with all three keys still accepts the new head by a majority" \
+    witness_client_accepts "$pm" "$k1" "$k2" "$k3"
+
+  wait_until "the dead witness's slot is dropped from the mirror's known list" 40 known_list_lacks "$data_m" "$k2"
+  check "the surviving witnesses' slots are still in the mirror's list" \
+    known_list_ids_equal "$data_m" "$k1" "$k3"
+
+  node cs-w4 "$u:$pa,$u:$pm" $cap AVALON_MIRROR_PEERS="$u:$pa" || return 1
+  local k4="$LAST_KEY_ID"
+  wait_until "a newly started witness takes the freed slot in the mirror's list" 60 \
+    known_list_ids_equal "$data_m" "$k1" "$k3" "$k4"
+  check "the author accepts a write once the slot is refilled" is_2xx "$(register_integrator "$pa" drill-cosigned-5)"
+  wait_until "the author's head grows again" 40 head_at_least "$pa" $((grown + 1))
+  local final; final="$(sth_json "$pa" | jq .tree_size)"
+  wait_until "the mirror serves the newest head cosigned by the refilled witness set" 90 \
+    head_cosigned_only_by "$pm" "$final" "$k1" "$k3" "$k4"
+  return 0
+}
+
+ALL=(lifecycle witness-loss eclipse long-offline fork rollout cosigned)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${ALL[@]}")
 
@@ -474,8 +617,12 @@ for s in "${SELECTED[@]}"; do
     long-offline) scenario_long_offline ;;
     fork) scenario_fork ;;
     rollout) scenario_rollout ;;
-    *) echo "unknown scenario: $s" >&2; FAILED=1 ;;
-  esac
+    cosigned) scenario_cosigned ;;
+    *) echo "unknown scenario: $s" >&2; false ;;
+  esac || { RESULTS+=("FAIL  scenario $s aborted before finishing its checks"); FAILED=1; }
+  # Free every node's connections, ports and schema before the next scenario
+  # so a full run never holds all scenarios' nodes at once.
+  stop_all
 done
 
 echo ""
