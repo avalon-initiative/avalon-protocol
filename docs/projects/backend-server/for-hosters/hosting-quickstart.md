@@ -49,8 +49,8 @@ That's it for a first-time, single-node bring-up. What it does:
    container, and `avalon-server` runs with its original, purely
    per-process limits.
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
-   container that applies everything under `crates/server/db/migrations/`
-   and exits.
+   container that applies the migration set embedded in the binary
+   (sourced from `crates/server/db/migrations/`) and exits.
 4. **Starts `avalon-server`**, built from the repo's `Dockerfile`, listening
    on `127.0.0.1:8080` on the host.
 

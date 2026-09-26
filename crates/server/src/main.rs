@@ -8,7 +8,6 @@
 //! Milestone 1, Epic: Identity & Player Profile — identity/auth endpoints
 //! only. Social/guilds/achievements/integrations come with their own epics.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
@@ -19,10 +18,6 @@ use avalon_server::{
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-
-fn migrations_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
-}
 
 /// Issue #265: structured logging via `tracing`, replacing the bare
 /// `println!`/`eprintln!` call sites this crate used to have. Level is
@@ -133,7 +128,12 @@ async fn main() {
         .await
         .expect("failed to connect to Postgres");
 
-    migrate::migrate_up(&pool, &migrations_dir())
+    let dir = migrate::dir_override_from_env();
+    let source = match &dir {
+        Some(d) => migrate::MigrationSource::Dir(d),
+        None => migrate::MigrationSource::Embedded,
+    };
+    migrate::migrate_up(&pool, source)
         .await
         .expect("failed to run migrations");
 
