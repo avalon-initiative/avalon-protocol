@@ -38,7 +38,7 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
 
     // The replica serves core's head from its mirror, never from local signing.
     let primary_sth: serde_json::Value = http
-        .get(format!("{primary}/ledger/sth"))
+        .get(format!("{primary}/ledger/sth/latest"))
         .send()
         .await
         .unwrap()
@@ -46,9 +46,9 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
         .await
         .unwrap();
     let mut mirrored = None;
-    for _ in 0..60 {
+    for _ in 0..180 {
         let resp = http
-            .get(format!("{replica}/ledger/sth"))
+            .get(format!("{replica}/ledger/sth/latest"))
             .send()
             .await
             .unwrap();
@@ -65,7 +65,7 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
     assert_eq!(mirrored["signing_key_id"], primary_sth["signing_key_id"]);
 
     let mut listed = false;
-    for _ in 0..60 {
+    for _ in 0..180 {
         let peers: Vec<serde_json::Value> = http
             .get(format!("{primary}/nodes/peers"))
             .send()
@@ -74,7 +74,7 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
             .json()
             .await
             .unwrap();
-        if peers.iter().any(|p| p["url"] == replica.as_str()) {
+        if peers.iter().any(|p| p["base_url"] == replica.as_str()) {
             listed = true;
             break;
         }

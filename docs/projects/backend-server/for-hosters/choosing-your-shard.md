@@ -13,6 +13,7 @@ the startup guard checks, and how one operator runs a shard with redundancy.
 | Running a lone throwaway `local-dev` node (a fresh `make stack-up`) | `core` (the default) | The generated key; the server warns that it is not pinned |
 | Running anything else on a real network: a game, app or service, or a community node | `game:<slug>`, `app:<slug>` or `service:<slug>` | A `shard_settlement` key registered for the integrator `<slug>` |
 | Running a second or third node for the same integrator | `game:<slug>/<instance>` | Any unrevoked `shard_settlement` key registered for `<slug>` |
+| Only adding capacity: mirroring and serving, authoring nothing | Leave unset and set `AVALON_REPLICA_ONLY=true` | None: no key, no registration |
 | Joining with no integrator registration at all | `node:<key-hash>`, derived from the node's own key | The node's own freshly generated key — nothing to register |
 
 `core` is the reserved label of the network's pinned core authority. A node that
@@ -23,6 +24,17 @@ same as an impostor's. The startup guard below exists to stop that.
 `instance` is 1-64 characters of `[a-z0-9-]`, starting with `[a-z0-9]`. The owner
 part (`<slug>`) alone decides which keys are accepted, so `game:wow/1` and
 `game:wow/2` are both verified against the keys registered for `wow`.
+
+## Replica-only nodes
+
+A node that only mirrors and serves is not a shard author. Set
+`AVALON_REPLICA_ONLY=true`, point `AVALON_MIRROR_PEERS` at the network, and leave
+`AVALON_OWN_SHARD_ID` and the settlement signing key unset. The node never signs
+a tree head, needs no registration, and the `core` guard below does not apply.
+It verifies core and sibling shards as usual, serves reads from its mirror and
+appears in discovery. Writes that would author an event (registration, guild and
+social actions, ledger submission) are refused with `403` and code `REPLICA_ONLY`.
+Setting `AVALON_OWN_SHARD_ID` together with `AVALON_REPLICA_ONLY` refuses to start.
 
 ## Authoring with no registration: self-certifying shard ids
 
@@ -105,13 +117,15 @@ here applies to a named shard.
 The refusal reads:
 
 ```
-refusing to start: this node authors the reserved `core` shard on network `<network>` but its settlement key does not match the key pinned for that network. Pinned key: id `<id>`, verify key <hex>. This node's key: id `<id>`, verify key <hex>. Clients pinned to `<network>` will report this node's tree heads as a key mismatch. Fix by either (1) setting AVALON_SETTLEMENT_SIGNING_KEY to the pinned key, if this node IS the network's core authority, or (2) authoring a named shard: set AVALON_OWN_SHARD_ID to a registered shard (for example `game:<integrator-slug>`) and use that shard's registered shard_settlement key
+refusing to start: this node authors the reserved `core` shard on network `<network>` but its settlement key does not match the key pinned for that network. Pinned key: id `<id>`, verify key <hex>. This node's key: id `<id>`, verify key <hex>. Clients pinned to `<network>` will report this node's tree heads as a key mismatch. Fix by either (1) setting AVALON_SETTLEMENT_SIGNING_KEY to the pinned key, if this node IS the network's core authority, or (2) authoring a named shard: set AVALON_OWN_SHARD_ID to a registered shard (for example `game:<integrator-slug>`) and use that shard's registered shard_settlement key, or (3) if this node only adds capacity and authors nothing, set AVALON_REPLICA_ONLY=true and remove the settlement signing key
 ```
 
 Fixes:
 
 - The node is the core authority: restore the pinned key in
   `AVALON_SETTLEMENT_SIGNING_KEY` (and its `AVALON_SETTLEMENT_SIGNING_KEY_ID`).
+- The node only adds capacity: set `AVALON_REPLICA_ONLY=true` and remove the
+  settlement signing key (see "Replica-only nodes").
 - The node is anything else: follow "Getting a registered shard key" above and set
   `AVALON_OWN_SHARD_ID`.
 - The node is a newcomer's local experiment that started failing because it
