@@ -195,11 +195,8 @@ pub fn refill_interval_from_env() -> Duration {
 }
 
 /// `AVALON_DATA_DIR` — this node's local, non-secret persistent-state
-/// directory. No such convention existed in this crate before this ticket;
-/// `sth.rs`'s signing keys stay environment-loaded and are never written
-/// here (see that module's own doc comment) — this directory is for
-/// node-local state that isn't secret material, starting with the known
-/// list. Defaults to `./data`, relative to the process's working
+/// directory: the known list, plus generated node keys under `keys/`
+/// (see `crate::node_keys`). Defaults to `./data`, relative to the process's working
 /// directory, matching how `AVALON_BOOTSTRAP_PEERS`/friends default to
 /// relative, deployment-chosen paths elsewhere in this crate.
 pub fn data_dir_from_env() -> PathBuf {
