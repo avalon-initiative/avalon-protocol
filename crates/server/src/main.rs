@@ -67,6 +67,24 @@ fn init_tracing() -> avalon_server::admin::LogReloadHandle {
 async fn main() {
     avalon_devenv::load();
     let log_reload_handle = init_tracing();
+    match avalon_server::node_keys::apply_from_env(&avalon_server::known_list::data_dir_from_env())
+    {
+        Ok(keys) => {
+            if !keys.generated.is_empty() {
+                tracing::info!(keys = ?keys.generated, "generated node keys on first boot");
+            }
+            if !keys.loaded.is_empty() {
+                tracing::info!(keys = ?keys.loaded, "loaded node keys from the data directory");
+            }
+            if let Some(id) = &keys.own_shard_id {
+                tracing::info!(shard = %id, "authoring this node's self-certifying shard");
+            }
+        }
+        Err(e) => {
+            tracing::error!("refusing to start: {e}");
+            std::process::exit(1);
+        }
+    }
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
