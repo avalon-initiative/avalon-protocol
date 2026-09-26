@@ -94,5 +94,3 @@ later phase, not a foundational one — see [`./future-layers.md`](./future-laye
 There is currently no key reference on `AchievementAttestation`, so "which key signed
 this specific claim" cannot yet be answered from the attestation alone; issuer key
 history is tracked separately (see [`./issuers.md`](./issuers.md)).
-</content>
-</invoke>

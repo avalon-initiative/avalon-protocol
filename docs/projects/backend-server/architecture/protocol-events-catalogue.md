@@ -78,5 +78,3 @@ never collide ([`./provenance.md`](./provenance.md)). Each kind has exactly one
 payload schema per version. `achievement.*`/`milestone.*` share one payload
 struct per row (`crate::event_payloads::Claim*Payload`) — the claim-vocabulary
 split is which *kind string* gets used, never a payload difference.
-</content>
-</invoke>

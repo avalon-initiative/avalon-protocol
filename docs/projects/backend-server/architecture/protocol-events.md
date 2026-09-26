@@ -315,5 +315,3 @@ covers `event_id`, `kind`, `issuer`, `subject`, `payload`, `timestamp`,
 `protocol_outbox` and is committed as part of whatever `EventBatch` the
 settlement worker's current drain tick assembles — batches close on a worker
 tick, not on size or a timer, so a single-event batch is legal.
-</content>
-</invoke>

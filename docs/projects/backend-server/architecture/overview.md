@@ -234,5 +234,3 @@ settles are correct.
   integrator discovery), not just scaffolding. `avalon-hub/apps/hub-app` and the UI library (`avalon-common-ui`) are
   developed in their own repositories — see each project's own docs for
   current status.
-</content>
-</invoke>

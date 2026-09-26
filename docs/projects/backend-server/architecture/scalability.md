@@ -303,5 +303,3 @@ claim. The whole rebuild runs in one transaction
 total ledger size, not just the new-entries-since-last-rebuild count — see
 [`disaster-recovery.md`](./disaster-recovery.md) for why a cheaper
 incremental/checkpointed rebuild isn't built yet.
-</content>
-</invoke>

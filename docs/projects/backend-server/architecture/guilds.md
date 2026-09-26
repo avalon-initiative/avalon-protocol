@@ -641,5 +641,3 @@ Guild roster/event visibility scopes remain an area of ongoing design beyond the
 `public`/`view`/`view_details` model above. Guild ownership and leadership transfer
 mechanics beyond the current owner-transfer flow are tracked as open questions in
 [Proposal §32](../../../stakeholders/Proposal.md#32-open-questions).
-</content>
-</invoke>

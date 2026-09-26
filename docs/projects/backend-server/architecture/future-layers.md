@@ -103,5 +103,3 @@ No `assets` module, type, event, or ticket exists yet. When one does, it is
 `crates/protocol/src/assets.rs`, a module of the existing `protocol` crate, not a new
 crate. `GlobalId` and `AchievementAttestation` in `crates/protocol/src/` are the
 patterns an asset issuance would follow. No economic primitive of any kind exists.
-</content>
-</invoke>

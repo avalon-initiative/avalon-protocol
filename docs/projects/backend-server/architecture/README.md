@@ -165,5 +165,3 @@ throughput is not optimized before the semantics it settles are right.
 One file per topic. Each states its invariants up front and describes the
 current model and implementation. Update the relevant file in the same
 change as the code it describes; a doc that lags the code is a bug.
-</content>
-</invoke>
