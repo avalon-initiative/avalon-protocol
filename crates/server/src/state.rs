@@ -193,7 +193,7 @@ pub struct AppState {
     /// all — it isn't forwarding to any remote authority, so there is
     /// nothing to ever report as failing.
     pub remote_submit_status: Option<crate::outbox::RemoteSubmitStatus>,
-    /// `AVALON_OWN_SHARD_ID`, defaulting to `"core"`. Which
+    /// `AVALON_OWN_SHARD_ID`, defaulting to `"core"`; empty on a replica-only node. Which
     /// shard this node's own `chain`/`ledger_entries` represents, when it
     /// has any local history — see `crate::settlement`'s module doc
     /// comment for why this matters now that a node can hold local

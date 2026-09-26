@@ -68,7 +68,9 @@ fn mismatch_message(inputs: &CoreAuthorInputs<'_>, anchor: &TrustAnchorEntry) ->
          Fix by either (1) setting AVALON_SETTLEMENT_SIGNING_KEY to the pinned key, if this node \
          IS the network's core authority, or (2) authoring a named shard: set \
          AVALON_OWN_SHARD_ID to a registered shard (for example `game:<integrator-slug>`) and \
-         use that shard's registered shard_settlement key",
+         use that shard's registered shard_settlement key, or (3) if this node only adds \
+         capacity and authors nothing, set AVALON_REPLICA_ONLY=true and remove the settlement \
+         signing key",
         network = inputs.network_id,
         pinned_id = anchor.signing_key_id,
         pinned_key = anchor.verify_key,
@@ -107,6 +109,13 @@ pub fn missing_core_mirror_advisory(
 ) -> Option<String> {
     if own_shard_id == CORE_SHARD_ID || mirror_peers_configured {
         return None;
+    }
+    if own_shard_id == crate::replica::NO_AUTHORED_SHARD {
+        return Some(
+            "this node is replica-only but AVALON_MIRROR_PEERS is empty, so it mirrors nothing \
+             and serves no history. Set AVALON_MIRROR_PEERS to the core authority"
+                .to_string(),
+        );
     }
     Some(format!(
         "this node authors the named shard `{own_shard_id}` but AVALON_MIRROR_PEERS is empty, so \
@@ -269,5 +278,23 @@ mod tests {
             assert_eq!(d, CoreAuthorDecision::NotApplicable);
             assert_eq!(d.pinned(), None);
         }
+    }
+
+    #[test]
+    fn refusal_message_points_at_replica_mode() {
+        let anchors = [anchor(NetworkEnvironment::Prod)];
+        let d = evaluate(&inputs("core", &"bb".repeat(32), false), &anchors);
+        let CoreAuthorDecision::Refuse(msg) = d else {
+            panic!("expected refusal");
+        };
+        assert!(msg.contains("AVALON_REPLICA_ONLY=true"));
+    }
+
+    #[test]
+    fn replica_without_mirror_peers_gets_advisory() {
+        let msg = missing_core_mirror_advisory(crate::replica::NO_AUTHORED_SHARD, false)
+            .expect("advisory");
+        assert!(msg.contains("replica-only"));
+        assert!(missing_core_mirror_advisory(crate::replica::NO_AUTHORED_SHARD, true).is_none());
     }
 }

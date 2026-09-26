@@ -1199,6 +1199,28 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
   (local test clusters only). The announcing node must therefore be reachable
   from the node it announces to.
 
+### Replica-only mode
+
+`AVALON_REPLICA_ONLY=true` runs a node that mirrors the network and serves it
+without authoring anything. It needs no settlement signing key, no shard
+registration and no integrator, and first-boot key generation skips the settlement
+signing and submit keys and the default shard for it (the libp2p identity is still
+generated): it authors no shard, never signs a tree head, and
+the reserved-`core` startup guard does not apply to it. It still mirrors
+`AVALON_MIRROR_PEERS`, verifies core and sibling shards exactly as any node does,
+serves reads (a shard's head and proofs come from its mirror), relays, answers
+probes and announces itself, so it appears in other nodes' peer tables and in
+discovery. Witness cosigning is a separate setting: a replica cosigns only if it
+has its own `AVALON_WITNESS_SIGNING_KEY`.
+
+Anything that would append a protocol event is refused with `403` and code
+`REPLICA_ONLY`: registration, every write that enqueues a ledger event, and the
+`/ledger/submit`, `/ledger/prepare-batch` and `/ledger/finalize-batch` endpoints.
+The outbox worker is not started. Setting `AVALON_OWN_SHARD_ID` together with
+`AVALON_REPLICA_ONLY` refuses to start. `AVALON_MIRROR_PEERS` empty on a replica
+logs a warning, since it then has no history to serve. `/nodes/status` reports
+`eligible_for_new_registrations: false` for a replica.
+
 ## Open questions
 
 SDK-side node discovery and capability negotiation (the SDK still takes a

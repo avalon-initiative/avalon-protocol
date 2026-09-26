@@ -99,6 +99,11 @@ pub async fn enqueue(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
 ) -> Result<(), sqlx::Error> {
+    if crate::replica::is_replica_only() {
+        return Err(sqlx::Error::Protocol(
+            crate::replica::REFUSAL_MARKER.to_string(),
+        ));
+    }
     let event_json = serde_json::to_value(event).expect("ProtocolEvent should serialize");
     if let Some(trace) = crate::op_trace::pending_for_current() {
         let row_id: Uuid =

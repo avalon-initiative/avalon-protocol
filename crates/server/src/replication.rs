@@ -295,7 +295,9 @@ pub async fn run_worker(
     let client = crate::outbound_policy::peer_client();
     loop {
         let mut shard_ids = shard_registry.known_shard_ids();
-        shard_ids.insert(own_shard_id.clone());
+        if own_shard_id != crate::replica::NO_AUTHORED_SHARD {
+            shard_ids.insert(own_shard_id.clone());
+        }
 
         let known_peers = peers.list_all();
         for shard_id in &shard_ids {

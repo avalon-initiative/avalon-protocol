@@ -437,8 +437,11 @@ pub enum AppError {
     /// already registered on the shard.
     #[error("this shard does not yet have enough independently-confirmed mirrors to accept new registrations")]
     ShardBelowMinimumReplication,
+    /// This node runs replica-only and authors nothing.
+    #[error("this node is a replica and does not author events; send writes to a node that authors a shard")]
+    ReplicaOnly,
     #[error("database error")]
-    Database(#[from] sqlx::Error),
+    Database(sqlx::Error),
     #[error("ledger error")]
     Ledger(#[from] avalon_chain::SettlementError),
     /// Deliberately hand-written rather than `#[from]`: an
@@ -447,6 +450,17 @@ pub enum AppError {
     /// 500) — see that variant's own doc comment.
     #[error("index error")]
     Index(avalon_indexer::IndexError),
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        match &err {
+            sqlx::Error::Protocol(msg) if msg == crate::replica::REFUSAL_MARKER => {
+                AppError::ReplicaOnly
+            }
+            _ => AppError::Database(err),
+        }
+    }
 }
 
 impl From<avalon_indexer::IndexError> for AppError {
@@ -660,6 +674,7 @@ impl AppError {
             AppError::LogReloadFailed => "LOG_RELOAD_FAILED",
             AppError::RemoteRoleUnreachable { .. } => "REMOTE_ROLE_UNREACHABLE",
             AppError::ShardBelowMinimumReplication => "SHARD_BELOW_MINIMUM_REPLICATION",
+            AppError::ReplicaOnly => "REPLICA_ONLY",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::Index(..) => "INDEX",
@@ -932,6 +947,7 @@ impl IntoResponse for AppError {
             // once enough peers confirm mirroring (or, if not, is a signal
             // for the operator, not the caller, to act on).
             AppError::ShardBelowMinimumReplication => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::ReplicaOnly => StatusCode::FORBIDDEN,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
