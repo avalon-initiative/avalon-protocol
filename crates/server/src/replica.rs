@@ -48,6 +48,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn refusal_marker_maps_to_replica_only_error() {
+        let err: crate::error::AppError = sqlx::Error::Protocol(REFUSAL_MARKER.to_string()).into();
+        assert!(matches!(err, crate::error::AppError::ReplicaOnly));
+        let other: crate::error::AppError = sqlx::Error::PoolClosed.into();
+        assert!(matches!(other, crate::error::AppError::Database(_)));
+    }
+
+    #[test]
+    fn authoring_is_refused_only_in_replica_mode() {
+        let _g = crate::test_env::guard();
+        set_replica_only(false);
+        assert!(require_authoring().is_ok());
+        set_replica_only(true);
+        assert!(matches!(
+            require_authoring(),
+            Err(crate::error::AppError::ReplicaOnly)
+        ));
+        set_replica_only(false);
+    }
+
+    #[test]
     fn env_values() {
         let _g = crate::test_env::guard();
         std::env::remove_var("AVALON_REPLICA_ONLY");

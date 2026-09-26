@@ -279,4 +279,22 @@ mod tests {
             assert_eq!(d.pinned(), None);
         }
     }
+
+    #[test]
+    fn refusal_message_points_at_replica_mode() {
+        let anchors = [anchor(NetworkEnvironment::Prod)];
+        let d = evaluate(&inputs("core", &"bb".repeat(32), false), &anchors);
+        let CoreAuthorDecision::Refuse(msg) = d else {
+            panic!("expected refusal");
+        };
+        assert!(msg.contains("AVALON_REPLICA_ONLY=true"));
+    }
+
+    #[test]
+    fn replica_without_mirror_peers_gets_advisory() {
+        let msg = missing_core_mirror_advisory(crate::replica::NO_AUTHORED_SHARD, false)
+            .expect("advisory");
+        assert!(msg.contains("replica-only"));
+        assert!(missing_core_mirror_advisory(crate::replica::NO_AUTHORED_SHARD, true).is_none());
+    }
 }
