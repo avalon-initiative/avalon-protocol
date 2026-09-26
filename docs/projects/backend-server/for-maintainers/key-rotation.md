@@ -88,5 +88,3 @@ If trust in the network's history up to that point cannot be
 re-established at all, a fresh `AVALON_NETWORK_ID` genesis is the fallback
 of last resort — see `docs/projects/backend-server/architecture/self-hosting.md` on why
 `network_id` is load-bearing, not just a label.
-</content>
-</invoke>

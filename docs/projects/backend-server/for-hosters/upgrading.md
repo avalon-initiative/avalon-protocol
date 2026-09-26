@@ -96,6 +96,14 @@ a "small" patch can still ship a bad migration.
    what's about to change in the schema, especially anything destructive
    (dropped columns, `NOT NULL` backfills).
 
+   The full migration set is compiled into both `avalon-server` and the
+   `migrate` binary, so a built binary needs no source tree to migrate a
+   database: `avalon-server` applies pending migrations on start, and
+   `migrate up|down|reset` works from any host that can reach the
+   database. Applied migrations are checksummed exactly as before. Set
+   `AVALON_MIGRATIONS_DIR` to a directory of `<version>_<name>/{up,down}.sql`
+   folders to use that set instead of the embedded one (development only).
+
 3. **Rebuild and restart.** `make stack-up` is safe to re-run against an
    already-running stack — with new code checked out, it rebuilds the
    `avalon-server` and `migrate` images (`--build`), applies whatever

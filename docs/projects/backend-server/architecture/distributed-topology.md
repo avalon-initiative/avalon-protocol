@@ -192,5 +192,3 @@ This is the same key-space metric the DHT uses for interest lookups; the DHT res
   straight through to the DHT exactly as if no fast path were configured at
   all, so it's never load-bearing for correctness. Section 2's
   interest-scoped mesh is real for the guild-channel/conversation case.
-</content>
-</invoke>

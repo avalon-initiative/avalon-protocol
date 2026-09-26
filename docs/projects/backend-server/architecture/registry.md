@@ -332,5 +332,3 @@ participation, key lifecycle/status/registration history) and a realtime
 only via `avalon_indexer::projections::integrator_schemas::list_for_integrator`,
 not yet folded into the registry endpoint. Neither issuer key history nor
 recognition relationships are rendered anywhere in the Hub yet.
-</content>
-</invoke>

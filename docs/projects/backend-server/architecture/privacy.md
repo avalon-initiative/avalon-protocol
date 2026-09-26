@@ -202,5 +202,3 @@ was simply never part of the durable-history promise to begin with.
 How much social information should be portable across integrators; whether
 cross-integrator blocking (a block set on one identity applying anywhere the
 blocked party might otherwise reach them) should exist.
-</content>
-</invoke>

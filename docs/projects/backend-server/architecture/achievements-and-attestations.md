@@ -307,5 +307,3 @@ the other.
 
 The issuer trust-signal directory described above is decided in shape but currently
 on hold, not implemented.
-</content>
-</invoke>

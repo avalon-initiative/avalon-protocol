@@ -310,6 +310,13 @@ feature.
 
 ## Current implementation
 
+- The migration set is embedded in `avalon-server` and the `migrate` binary
+  at build time (a `build.rs` table over `crates/server/db/migrations/`), so
+  a built binary migrates a database without a source tree. `avalon-server`
+  applies pending migrations on start; `AVALON_MIGRATIONS_DIR` overrides the
+  embedded set with a directory, for development. Up, down, reset and the
+  checksum check behave identically for both sources.
+
 - `AVALON_NETWORK_ID` is a required env var
   (`crates/server/src/main.rs`); there is no default, and no way to boot
   without one.
@@ -394,5 +401,3 @@ who prefers not to publish their neighbor list sets
 Whether/how a private instance's history could ever be selectively
 re-issued onto the public network remains genuinely open — worth deciding
 explicitly if a studio actually asks for it, rather than speculating here.
-</content>
-</invoke>

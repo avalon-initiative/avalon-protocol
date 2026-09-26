@@ -8,7 +8,6 @@
 //! Milestone 1, Epic: Identity & Player Profile — identity/auth endpoints
 //! only. Social/guilds/achievements/integrations come with their own epics.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
@@ -19,10 +18,6 @@ use avalon_server::{
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-
-fn migrations_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
-}
 
 /// Issue #265: structured logging via `tracing`, replacing the bare
 /// `println!`/`eprintln!` call sites this crate used to have. Level is
@@ -67,6 +62,24 @@ fn init_tracing() -> avalon_server::admin::LogReloadHandle {
 async fn main() {
     avalon_devenv::load();
     let log_reload_handle = init_tracing();
+    match avalon_server::node_keys::apply_from_env(&avalon_server::known_list::data_dir_from_env())
+    {
+        Ok(keys) => {
+            if !keys.generated.is_empty() {
+                tracing::info!(keys = ?keys.generated, "generated node keys on first boot");
+            }
+            if !keys.loaded.is_empty() {
+                tracing::info!(keys = ?keys.loaded, "loaded node keys from the data directory");
+            }
+            if let Some(id) = &keys.own_shard_id {
+                tracing::info!(shard = %id, "authoring this node's self-certifying shard");
+            }
+        }
+        Err(e) => {
+            tracing::error!("refusing to start: {e}");
+            std::process::exit(1);
+        }
+    }
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
@@ -133,7 +146,12 @@ async fn main() {
         .await
         .expect("failed to connect to Postgres");
 
-    migrate::migrate_up(&pool, &migrations_dir())
+    let dir = migrate::dir_override_from_env();
+    let source = match &dir {
+        Some(d) => migrate::MigrationSource::Dir(d),
+        None => migrate::MigrationSource::Embedded,
+    };
+    migrate::migrate_up(&pool, source)
         .await
         .expect("failed to run migrations");
 

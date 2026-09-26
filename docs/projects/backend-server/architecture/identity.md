@@ -788,5 +788,7 @@ migrating an existing username/password identity (not currently applicable, sinc
 exist outside development); whether identities can be transferred; the minimum
 replication guarantee for identity-bearing shards, so a single operator's node
 disappearing can't strand the identities that live there.
-</content>
-</invoke>
+
+**Node key provisioning.** A fresh node generates its own settlement, submit,
+witness and libp2p keys on first start and authors its self-certifying shard
+without registering anywhere; see `nodes.md` (first-boot keys).

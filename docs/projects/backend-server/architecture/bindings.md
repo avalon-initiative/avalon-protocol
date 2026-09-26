@@ -117,5 +117,3 @@ about Integrator B's unless X's permissions expose it.
 - The Rust SDK's `authenticate()` calls `GET /me/grants` (identified by
   `AvalonConfig::integrator_credential_key_id`) and populates `Session.granted` from
   the caller's real active grants for that integrator.
-</content>
-</invoke>

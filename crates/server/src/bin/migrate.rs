@@ -2,14 +2,8 @@
 //! Makefile's `make migrate`/`make migrate-down`/`make db-reset` targets,
 //! which are the intended entry points.
 
-use std::path::{Path, PathBuf};
-
 use avalon_server::migrate;
 use sqlx::postgres::PgPoolOptions;
-
-fn migrations_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
-}
 
 #[tokio::main]
 async fn main() {
@@ -22,23 +16,27 @@ async fn main() {
         .connect(&database_url)
         .await
         .expect("failed to connect to Postgres");
-    let dir = migrations_dir();
+    let dir = migrate::dir_override_from_env();
+    let source = match &dir {
+        Some(d) => migrate::MigrationSource::Dir(d),
+        None => migrate::MigrationSource::Embedded,
+    };
 
     match direction.as_str() {
         "up" => {
-            migrate::migrate_up(&pool, &dir)
+            migrate::migrate_up(&pool, source)
                 .await
                 .expect("migration failed");
             println!("migrations applied");
         }
         "down" => {
-            migrate::migrate_down_one(&pool, &dir)
+            migrate::migrate_down_one(&pool, source)
                 .await
                 .expect("revert failed");
             println!("last migration reverted");
         }
         "reset" => {
-            migrate::reset(&pool, &dir).await.expect("reset failed");
+            migrate::reset(&pool, source).await.expect("reset failed");
             println!("database reset and migrations reapplied");
         }
         other => {

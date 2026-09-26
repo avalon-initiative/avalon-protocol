@@ -163,5 +163,3 @@ proof, and it does not decide what any consumer recognizes. See
   `recognize()` exists and is fully usable by any consumer (SDK, an
   integrator's own code) today, just not yet exposed as a server-stored,
   publicly-readable declaration.
-</content>
-</invoke>

@@ -382,5 +382,3 @@ Both tests are `--ignored` and run under `make test-live` (needs
 `AVALON_SERVER_URL`, `AVALON_WEBAUTHN_ORIGIN`, `DATABASE_URL`, and
 `AVALON_SETTLEMENT_SIGNING_KEY` in the environment — `.env`'s values work
 when exported, same as every other live integration test in this repo).
-</content>
-</invoke>

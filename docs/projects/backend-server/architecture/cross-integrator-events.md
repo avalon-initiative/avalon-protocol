@@ -128,5 +128,3 @@ which carries the schema.
 
 This is filed as on-hold: not currently prioritized work, tracked now so the
 attestation and event designs already in place don't preclude it.
-</content>
-</invoke>

@@ -49,8 +49,8 @@ That's it for a first-time, single-node bring-up. What it does:
    container, and `avalon-server` runs with its original, purely
    per-process limits.
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
-   container that applies everything under `crates/server/db/migrations/`
-   and exits.
+   container that applies the migration set embedded in the binary
+   (sourced from `crates/server/db/migrations/`) and exits.
 4. **Starts `avalon-server`**, built from the repo's `Dockerfile`, listening
    on `127.0.0.1:8080` on the host.
 
@@ -92,6 +92,24 @@ change them by adding the corresponding line to `.env`.
 | Capability | Combined (everything in one process) | `AVALON_NODE_ROLES` | e.g. `settlement,indexer` for a specialized deployment |
 | Shard role | Authority for `core` (this node authors what it's configured to) | `AVALON_SETTLEMENT_SIGNING_KEY` (authority) / `AVALON_MIRROR_PEERS` (mirror) | A node can be an authority for one shard and a mirror of another at once |
 | Retention tier | Full/archive (keeps everything, never prunes) | `AVALON_RETENTION_TIER` | `hot` + `AVALON_RETENTION_HOT_WINDOW_DAYS` for a bounded local window |
+
+## Keys generated on first start
+
+A node started with none of its keys configured generates them itself: the
+settlement signing key, the settlement submit key, the witness signing key
+and the libp2p identity. They are written to `keys/` inside `AVALON_DATA_DIR`
+(default `./data`; the directory is mode `0700`, each file `0600`) and reused
+on every later start. A key file that exists is never replaced; a malformed
+one stops the node from starting. A variable set in the environment
+(`AVALON_SETTLEMENT_SIGNING_KEY`, `AVALON_SETTLEMENT_SUBMIT_KEY`,
+`AVALON_WITNESS_SIGNING_KEY`, `AVALON_LIBP2P_IDENTITY_KEY`) always wins and
+nothing is written for it.
+
+When `AVALON_OWN_SHARD_ID` is unset and no remote authority is configured
+(`AVALON_SETTLEMENT_REMOTE_URL(S)`), a node with a generated signing key authors
+its own self-certifying shard, `node:<sha256 of its public key>`. That id
+needs no registration and no other node online. Back up `keys/` together with
+the database: the signing key is what lets the node extend its ledger.
 
 ## Generated `.env` values are yours to keep
 

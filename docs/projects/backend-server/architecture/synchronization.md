@@ -321,5 +321,3 @@ SDK-side pieces below are described by module path within that repository.
   reading as a reference for the shape, not reusable code: the outbox
   lives in Postgres on a machine that's always online; the SDK's journal
   lives on a client that, by definition, sometimes isn't.
-</content>
-</invoke>

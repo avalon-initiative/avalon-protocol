@@ -91,5 +91,3 @@ own "Current implementation" section for the full, current detail.
   talks to this backend over the same API surface a client would.
 - [`../hub/`](https://github.com/avalon-initiative/avalon-hub/blob/main/docs/hub/README.md) is a *client* of this backend, same as any
   integrator — it has no backend of its own.
-</content>
-</invoke>

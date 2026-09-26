@@ -206,5 +206,3 @@ in front of it — a deployment requirement, not an optional hardening step.
   `update_integrator_presence`, gating `presence.publish`, and
   `integrator_schemas.rs` — every other integrator-calling-the-API endpoint
   should reuse this rather than hand-rolling a check.
-</content>
-</invoke>
