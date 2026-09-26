@@ -768,6 +768,37 @@ impl PostgresSettlementProvider {
         Ok(())
     }
 
+    /// Replaces this witness's stored cosignature for a head with a newer one over the same
+    /// root and author timestamp. Returns whether a row was updated; a different root, author
+    /// timestamp or an older `observed_at` never overwrites, so a refresh cannot become a
+    /// second, conflicting cosignature.
+    pub async fn refresh_witness_cosignature(
+        &self,
+        shard_id: &str,
+        cosig: &WitnessCosignature,
+    ) -> Result<bool, SettlementError> {
+        let outcome = sqlx::query(
+            r#"
+            UPDATE witness_cosignatures
+            SET observed_at = $6, signature = $7
+            WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
+              AND root_hash = $5 AND author_created_at = $8 AND observed_at < $6
+            "#,
+        )
+        .bind(&cosig.network_id)
+        .bind(shard_id)
+        .bind(cosig.tree_size)
+        .bind(&cosig.witness_key_id)
+        .bind(&cosig.root_hash)
+        .bind(cosig.observed_at)
+        .bind(&cosig.signature)
+        .bind(cosig.author_created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        Ok(outcome.rows_affected() == 1)
+    }
+
     /// Every stored cosignature for one shard's tree head at `tree_size`,
     /// in no particular order — the read half of [`Self::store_witness_cosignature`].
     pub async fn list_witness_cosignatures(

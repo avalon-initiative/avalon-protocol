@@ -112,9 +112,16 @@ sign a head that does not extend it.
   this runbook: 25 of 25 checks pass, twice in a row, including the rollback half (the
   disabled node still mirrors, produces no cosignature, and every earlier head still
   verifies).
-- Dev fleet: not yet run, so this procedure is not yet rehearsed on the fleet. It is part
-  of the live drill tracked in #966, to be run once with cosigning on across the fleet
-  including removal of the original node. Update this section with that result.
+- Dev fleet: the five-node live drill (main at d3adb60) passes 55 of 56 checks. It covers a
+  baseline with all five nodes, growth from two nodes, loss of the original node (including a
+  brand-new node authoring under a self-certifying shard id while the original is down),
+  witness loss with a real write while one witness is frozen, a long-offline rejoin and prefix
+  diversity. The one failing line measured a retired shard name after a node was reconfigured,
+  not a product fault. The drill also found and fixed two real problems: an unbounded HTTP
+  client let a hung peer stall a node's mirror loop, and cosignatures on an unchanged head aged
+  out after the freshness window so a quiet network's head stopped verifying. Witnesses now
+  re-attest their current head on an interval, and a head with no writes for over ten minutes
+  stayed verifiable on the fleet.
 
 ## Limits worth knowing
 

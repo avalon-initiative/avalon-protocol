@@ -160,8 +160,9 @@ to the network verify heads.
 | `AVALON_WITNESS_SIGNING_KEY` | Hex 32-byte Ed25519 seed for this node's witness key. If unset, a node that already has `AVALON_SETTLEMENT_SIGNING_KEY` cosigns with that key; a pure mirror with neither only verifies. |
 | `AVALON_WITNESS_SIGNING_KEY_ID` | Override for the key id. Leave it unset: the default is the hex verifying key, which is what other nodes match against. A non-hex id makes the node advertise no witness key. |
 | `AVALON_WITNESS_COSIGNING_ENABLED` | `false` or `0` turns cosigning off (verify only). On by default. This is also the rollback switch, see [`witness-policy-rollout.md`](../for-maintainers/witness-policy-rollout.md). |
+| `AVALON_WITNESS_REATTEST_SECS` | How often this witness re-signs its cosignature over its current head so an unchanged head stays fresh. Default is a third of the 10-minute cosignature freshness window (200 s). |
 | `AVALON_DATA_DIR` | Directory for node-local, non-secret state, currently the known list (`known_list.json`). Back it up with the node's data; losing it only means the list refills. |
-| `AVALON_KNOWN_LIST_*` | Capacity (10), reserved anchor slots (2), per-prefix cap (2), freshness (10 min), probation (30 min) and refill interval. The defaults are the design's; change them only for tests. |
+| `AVALON_KNOWN_LIST_*` | Capacity (5), reserved anchor slots (2, clamped to the capacity), per-prefix cap (2), freshness (10 min, scaled down for small confirmed lists but never below `AVALON_KNOWN_LIST_FRESHNESS_FLOOR` of it, default 0.2), probation (30 min) and refill interval. The required cosignature count is always a strict majority of the list and is not configurable. The defaults are the design's; change them only for tests. |
 
 A node advertises its witness key in `POST /nodes/announce` with a signature proving it
 holds the key. Other nodes only count a key toward their known list when it comes back

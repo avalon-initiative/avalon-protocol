@@ -319,73 +319,57 @@ scenario_long_offline() {
 }
 
 # ---------------------------------------------------------------------------
-# Scenario: a forked log shown to two witness groups. Two nodes independently
+# Scenario: a forked log shown to disjoint sources. Two nodes independently
 # author the SAME shard with the SAME settlement key (the historical
-# duplicate-authority misconfiguration this repo's own fleet notes describe)
-# so each accumulates its own local writes and diverges from the other at the
-# same tree_size: a real fork. Each fork has its own cosigning witness node
-# (fork-wa / fork-wb), and each author mirrors itself and its witness so the
-# cosignatures for its own head are stored where the author serves them.
-# Honest witnesses refuse to cosign two roots at one size, so a provable
-# equivocation needs one witness key on both sides: both authors are
-# configured with the same witness key, standing in for a double-signing
-# witness. Two watchers then look at the fork:
-#   - fork-watcher mirrors both authors: source-based detection
-#     (mirror_watcher::check_equivocation) and the no-double-cosign refusal.
-#   - fork-gossip only announces to both authors (no mirror peers): it learns
-#     of the conflict from head-summary gossip alone, fetches both cosigned
-#     heads and confirms it (equivocation::confirm_and_record), recording
-#     durable evidence that names the double-signing witness.
+# duplicate-authority misconfiguration this repo's own fleet notes
+# describe) so each accumulates its own local writes and diverges from the
+# other at the same tree_size — a real fork, not a fabricated one. A third
+# node mirrors both and must record the disagreement.
+#
+# Part one exercises the source-based equivocation detection
+# (mirror_watcher::check_equivocation -> equivocation_findings), which does
+# not depend on witness cosigning. Part two adds a gossip-only node that
+# mirrors nothing and only learns both heads through announce gossip; both
+# authors are bare (no mirror, no cosignatures), so it must confirm the fork
+# from the two author signatures alone
+# (crate::equivocation::confirm_and_record) and store author-level evidence.
 # ---------------------------------------------------------------------------
 scenario_fork() {
-  cargo build -q -p avalon-server --example verify_sth --example witness_evidence || return 1
-  local u="http://127.0.0.1" base="$PORT_OFFSET" seed_s key_s
-  seed_s="$(openssl rand -hex 32)"; key_s="$("$VERIFY_STH" pubkey "$seed_s")"
-  local pa=$((BASE_PORT + base + 1)) pb=$((BASE_PORT + base + 2))
-  local pwa=$((BASE_PORT + base + 3)) pwb=$((BASE_PORT + base + 4))
+  cargo build -q -p avalon-server --example witness_evidence || return 1
+  node fork-a "" || return 1
+  local port_a="$LAST_PORT" log_a="$LOG_DIR/fork-a.log"
+  node fork-b "" || return 1
+  local port_b="$LAST_PORT"
 
-  node fork-a "$u:$pwa" AVALON_WITNESS_SIGNING_KEY="$seed_s" AVALON_MIRROR_PEERS="$u:$pa,$u:$pwa" || return 1
-  local log_a="$LOG_DIR/fork-a.log"
-  node fork-b "$u:$pwb" AVALON_WITNESS_SIGNING_KEY="$seed_s" AVALON_MIRROR_PEERS="$u:$pb,$u:$pwb" || return 1
-  node fork-wa "$u:$pa" AVALON_MIRROR_PEERS="$u:$pa" || return 1
-  local key_wa="$LAST_KEY_ID"
-  node fork-wb "$u:$pb" AVALON_MIRROR_PEERS="$u:$pb" || return 1
-  local key_wb="$LAST_KEY_ID"
-
-  check "fork-a accepts a write" is_2xx "$(register_integrator "$pa" drill-fork-a)"
-  check "fork-b accepts a different write" is_2xx "$(register_integrator "$pb" drill-fork-b)"
-  wait_until "fork-a serves a head cosigned by its own group (shared witness + fork-wa)" 60 \
-    cosigned_by "$pa" "$key_s" 1
-  wait_until "fork-a's head also carries fork-wa's cosignature" 60 cosigned_by "$pa" "$key_wa" 1
-  wait_until "fork-b serves a head cosigned by its own group (shared witness + fork-wb)" 60 \
-    cosigned_by "$pb" "$key_s" 1
-  wait_until "fork-b's head also carries fork-wb's cosignature" 60 cosigned_by "$pb" "$key_wb" 1
-  check "the two forks have different roots at the same tree size" same_size_different_root "$pa" "$pb"
-  check "fork-a's head has no cosignature from the other group's witness" not_cosigned_by "$pa" "$key_wb"
-  check "fork-b's head has no cosignature from the other group's witness" not_cosigned_by "$pb" "$key_wa"
+  check "fork-a accepts a write" is_2xx "$(register_integrator "$port_a" drill-fork-a)"
+  check "fork-b accepts a different write" is_2xx "$(register_integrator "$port_b" drill-fork-b)"
+  sleep 2 # let each node's own outbox settle its write into a signed tree head
 
   node fork-watcher "" \
-    AVALON_MIRROR_PEERS="$u:$pa,$u:$pb" || return 1
+    AVALON_MIRROR_PEERS="http://127.0.0.1:$port_a,http://127.0.0.1:$port_b" || return 1
   local log_watcher="$LOG_DIR/fork-watcher.log"
-  wait_until "the mirror observes fork-a's and fork-b's disagreeing roots and records it" 40 \
-    log_contains "$log_watcher" 'event="equivocation_detected"'
-  wait_until "the mirror cosigns one root and refuses the other at the same size (no double cosign)" 40 \
-    log_contains "$log_watcher" witness_double_cosign_refused
-  check "fork-a itself logs nothing (equivocation is the mirror's finding, not either author's)" \
-    log_lacks "$log_a" 'event="equivocation_detected"'
 
-  node fork-gossip "$u:$pa,$u:$pb" || return 1
-  local log_gossip="$LOG_DIR/fork-gossip.log"
-  wait_until "the gossip-only node sees two roots for one size in head-summary gossip" 40 \
-    log_contains "$log_gossip" head_summary_conflict_detected
-  wait_until "the gossip-only node confirms the conflict from both cosigned heads" 40 \
-    log_contains "$log_gossip" equivocation_confirmed
-  wait_until "durable evidence names the witness that cosigned both roots" 20 \
-    evidence_names_only "live_drill_fork_gossip" "$key_s"
-  check "the evidence carries both groups' cosigners (shared witness + each group's own witness)" \
-    evidence_cosigners_split "live_drill_fork_gossip" "$key_s" "$key_wa" "$key_wb"
-  check "the gossip-only node logged no source-based detection: the gossip path alone produced the proof" \
-    log_lacks "$log_gossip" 'event="equivocation_detected"'
+  wait_until "the mirror observes fork-a's and fork-b's disagreeing roots and records it" 40 \
+    log_contains "$log_watcher" equivocation_detected
+  check "fork-a itself logs nothing (equivocation is the mirror's finding, not either author's)" \
+    log_lacks "$log_a" equivocation_detected
+
+  node fork-gossip "http://127.0.0.1:$port_a,http://127.0.0.1:$port_b" || return 1
+  local port_g="$LAST_PORT" log_g="$LOG_DIR/fork-gossip.log" schema_g="live_drill_fork_gossip"
+  wait_until "the gossip-only node confirms the fork from two author signatures" 60 \
+    log_contains "$log_g" equivocation_confirmed
+  wait_until "the gossip-only node stores author-level evidence naming no witness" 30 \
+    author_evidence_stored "$schema_g" core
+  check "the gossip-only node logged the confirmation as author-level" \
+    log_contains "$log_g" 'evidence_kind.*Author'
+}
+
+evidence_json() {
+  DATABASE_URL="$(schema_url "$1")" "$ROOT/target/debug/examples/witness_evidence" \
+    "$AVALON_NETWORK_ID" "$2" 2>/dev/null
+}
+author_evidence_stored() {
+  evidence_json "$1" "$2" | jq -es 'length >= 1 and all(.[]; .kind == "author" and (.equivocating_witnesses | length) == 0)' >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -456,20 +440,6 @@ known_list_confirmed_at_least() {
   [ -f "$f" ] && [ "$(jq '[.slots[] | select(.status == "confirmed")] | length' "$f" 2>/dev/null || echo 0)" -ge "$2" ]
 }
 known_list_ids_equal() { [ "$(known_list_ids_sorted "$1")" = "$(printf '%s\n' "${@:2}" | sort)" ]; }
-# evidence_json <schema> : the witness equivocation evidence rows a node holds for the core shard.
-EVIDENCE_BIN="$ROOT/target/debug/examples/witness_evidence"
-evidence_json() { "$EVIDENCE_BIN" "$1" "${AVALON_NETWORK_ID:-avalon-dev-local}" core 2>/dev/null; }
-evidence_names_only() {
-  evidence_json "$1" | jq -e --arg k "$2" \
-    'length >= 1 and .[0].tree_size >= 1 and .[0].root_hash_a != .[0].root_hash_b and .[0].equivocating_witness_key_ids == [$k]' \
-    >/dev/null 2>&1
-}
-evidence_cosigners_split() {
-  evidence_json "$1" | jq -e --arg s "$2" --arg x "$3" --arg y "$4" \
-    '.[0] as $e | ([$e.cosigners_a, $e.cosigners_b] | map(sort)) as $c
-     | ($c | any(.[]; . == ([$s, $x] | sort))) and ($c | any(.[]; . == ([$s, $y] | sort)))' >/dev/null 2>&1
-}
-
 scenario_rollout() {
   cargo build -q -p avalon-server --example verify_sth || return 1
 

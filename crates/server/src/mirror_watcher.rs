@@ -367,7 +367,7 @@ pub async fn run_worker(
     } = handles;
     let mut held_logged = HeldHeads::new();
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
-    let client = reqwest::Client::new();
+    let client = crate::outbound_policy::peer_client();
 
     if config.peers.is_empty() {
         tracing::info!(
@@ -979,6 +979,7 @@ async fn record_verified_head(
                 );
                 if !equivocators.is_empty() {
                     let evidence = mirror::WitnessEquivocationEvidence {
+                        kind: mirror::EquivocationEvidenceKind::Witness,
                         network_id: head.sth.network_id.clone(),
                         shard_id: shard_id.to_string(),
                         tree_size: head.sth.tree_size,

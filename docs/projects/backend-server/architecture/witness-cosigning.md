@@ -41,10 +41,11 @@ Fields, and why each is there: `tree_size`/`root_hash`/`network_id`/
 identifies which witness signed (the known list is keyed by this, never by
 network address — an address can be spoofed or change; a key can't).
 `observed_at` is the witness's own timestamp, separate from the author's —
-what freshness checks use (below). An old cosignature for a since-superseded
-head stays valid forever (the head it attests to was real); a witness that
-hasn't produced a *fresh* one lately is a stale slot, which is a different
-concern from "is this cosignature real."
+what freshness checks use (below). A cosignature attests to the head it names and
+never becomes false, but a verifier only counts cosignatures observed within the
+freshness window when it accepts a head. A witness therefore re-attests its current
+head on an interval (see "Re-attestation"), so an unchanged head stays acceptable
+on a quiet network.
 
 **What a witness checks before cosigning** (this is the actual security
 work; the signature is just how the result gets published):
@@ -68,10 +69,10 @@ done it, same as any other signed statement in this protocol.
 
 | Parameter | Default | |
 |---|---|---|
-| Known-list size (Y) | 10, hard cap | Bounded verification cost per node/client regardless of network size; large enough for real diversity, small enough to gossip and check cheaply. |
-| Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 6 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=10 cap, X=6. |
-| Freshness window | 10 minutes, configurable | Slot-health/refill trigger only (see below) — never head validity. |
-| Anchor slots | 2 of the 10 | Reserved for bundled anchors (see below); never filled by ordinary refill. |
+| Known-list size (Y) | 5, hard cap (`AVALON_KNOWN_LIST_CAPACITY`) | Bounded verification cost per node/client regardless of network size; small enough to gossip and check cheaply. At Y=5 the required count is 3 and the list tolerates 2 failures. The capacity is configurable; the required count is always a strict majority of the actual list size and is not separately configurable. |
+| Cosigning threshold (X) | `majority_threshold(Y_actual) = Y_actual / 2 + 1` | Not a fixed 3 — recomputed against whatever the list's *actual* current size is. At Y_actual=1 (a lone node with no peers yet) X=1: self-attestation, the same rule degenerating correctly to today's single-signer case rather than a special-cased bootstrap mode. At the Y=5 cap, X=3 (tolerance 2). |
+| Freshness window | 10 minutes, configurable; scaled down for small confirmed lists (floor 0.4, `AVALON_KNOWN_LIST_FRESHNESS_FLOOR`) | Slot-health/refill trigger, and the age limit a verifier applies to cosignatures when accepting a head. Witnesses re-attest their current head every third of this window so an unchanged head stays acceptable. |
+| Anchor slots | 2 of the 5 (clamped to the capacity when it is set lower) | Reserved for bundled anchors (see below); never filled by ordinary refill. |
 | Diversity cap | 2 slots per prefix | Applies to every slot, anchors included. |
 | Head-gossip cap | ≤5 head summaries per exchange | Matches the existing per-exchange gossip discipline (#882/#948) — small, bounded payload, not full cosignature bytes on every exchange. |
 
@@ -97,6 +98,15 @@ author signature earns no credit). Without this, a known list that contains the
 shard's own author, which happens whenever the author also announces a witness key
 and holds a slot, could never reach a majority for that shard, since an author never
 cosigns its own log. The rule is part of the cosigned-head conformance vectors.
+
+**This holds for one known list only.** The intersection guarantee is about
+majorities of a single list. Two nodes with different lists (or two heads each
+cosigned by a majority of a different list) can produce two majority-cosigned
+heads with no shared witness, and then the pair proves nothing about any
+witness. What still proves misbehavior is the author's own signature: two
+heads at one `tree_size` with different roots, both signed by the same
+resolvable author key, show the author signed two roots, with no cosignature
+needed. See "Author-level evidence" below.
 
 ## The known list: anchors, diversity, refill
 
@@ -140,13 +150,33 @@ else's).
 
 ## Freshness window
 
-10 minutes by default. A witness whose most recent `observed_at` for a
+10 minutes by default, scaled for confirmed slots by how many failures the
+list can still absorb. With n confirmed slots, `tolerance(n) = n -
+majority_threshold(n)` and the effective window is `freshness_window *
+max(floor, tolerance(n) / tolerance(capacity))`, floor defaulting to 0.4
+(`AVALON_KNOWN_LIST_FRESHNESS_FLOOR`, in (0, 1], invalid values fall back to
+the default). At capacity 5 that is the full 10 minutes with 5 confirmed, 5
+minutes with 3 or 4, and 4 minutes with 2 (twice the 2-minute refill interval). With zero or one confirmed slot the
+window is unchanged. Probationary slots always use the base window. The
+window is computed once per prune pass from the pre-eviction confirmed count,
+so a pass never tightens as it evicts. The tradeoff: a small list drops a
+silent member sooner, and a fast drop can leave it at one confirmed witness,
+the plain author-signature case, until a probationary slot clears probation.
+A witness whose most recent `observed_at` for a
 network's current head is older than the window is a **stale slot** — eligible
-for replacement by ordinary refill — not a signal that anything it signed in
-the past becomes invalid. Old cosigned heads remain valid forever (consistency
-proofs only ever extend forward); freshness is entirely about "is this slot's
-occupant still alive and worth a seat," the input to refill, never an input
-to verifying a past head.
+for replacement by ordinary refill. The same window is the age limit a verifier
+applies to cosignatures when it accepts a head, so there is one rule: freshness
+applies to head acceptance, and witnesses keep their attestations fresh.
+
+### Re-attestation
+
+Every witness re-signs, on an interval (a third of the cosignature freshness window,
+`AVALON_WITNESS_REATTEST_SECS` to override), its cosignature over the last head it
+cosigned for each log, with a new `observed_at`. It never signs a different root at that
+size and skips any shard with a recorded equivocation. The refreshed signature replaces
+the stored one, so `GET /ledger/sth/{n}?witnesses=1` serves it. Without this, a head with
+no writes for longer than the window would stop verifying for clients that require a
+majority.
 
 ## Head gossip
 
@@ -161,8 +191,9 @@ set for a summary it's seen fetches it directly (e.g.
 **Fork detection is a side effect of this gossip, not a separate mechanism.**
 Any node or client that ever observes two different cosigned heads at the
 same `tree_size` for the same network/shard has direct proof of an
-equivocation (by the majority-intersection guarantee above, this can only
-happen if a real witness double-signed). That's treated as a loud,
+equivocation of the author, and of a witness too when the two cosignature sets
+share one (the majority-intersection guarantee, valid within one known list).
+That's treated as a loud,
 logged, "stop and don't trust either head" event — never silently
 auto-resolved.
 
@@ -172,7 +203,7 @@ There is exactly one rule — `X = majority_threshold(current known-list size)`
 — and it is evaluated identically regardless of how many nodes exist. At
 Y_actual=1 a node is its own sole witness (X=1, self-attestation, matching
 today's behavior exactly). As peers are discovered the list grows toward the
-Y=10 cap and X is recomputed each time membership changes. Nothing in this
+Y=5 cap and X is recomputed each time membership changes. Nothing in this
 design distinguishes "the original node" from any other — the original
 node's departure just looks like any other witness leaving a list, handled by
 ordinary refill.
@@ -251,6 +282,28 @@ table and function #938 (landed the same day) uses for equivocations it
 finds directly during mirror sync, reconciled into one write path rather
 than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
+
+**Author-level evidence.** Confirmation does not require cosignatures. When a
+gossiped conflict is confirmed, each side is also topped up with cosignatures
+fetched from the confirmed known-list witnesses
+(`crate::cosign_gather::gather_witness_cosignatures`), so a bare author that serves
+none can still be shown to carry a majority. Then: if the two heads share a
+verifying witness, the row is stored as `witness` evidence naming it; otherwise,
+if both author signatures verify under an author key this node resolves (the
+pinned core key or the shard's registered `shard_settlement` keys) and the
+roots differ at the same network and `tree_size`, the row is stored as
+`author` evidence with an empty witness list. `equivocation_evidence` gained an
+`evidence_kind` column (migration `0079_equivocation_evidence_kind`; existing
+rows read as `witness`; a `witness` row must still name at least one witness).
+Either kind marks the shard equivocating, so `witness_cosign` refuses to cosign
+it. `crates/server/examples/witness_evidence.rs` reads the rows back.
+
+What remains unprovable: two majority-cosigned heads with different lists and no
+shared witness say nothing about any witness (only the author's double-signing
+is proven, and only when this node can resolve the author key); a node that
+cannot resolve the author key records nothing; a fork shown to one observer
+and never gossiped is not detected by anyone else; and evidence proves the
+author signed two roots, not which one is the honest history.
 
 #963 added the cosigning decision itself (`crates/server/src/witness_cosign.rs`),
 called from `mirror_watcher::record_verified_head` right after a head passes
