@@ -151,7 +151,7 @@ Pushing a `v*` tag is what triggers the release build — an ordinary push to
 
 The release workflow runs only on a pushed `v*` tag: builds `avalon-server`,
 its `migrate` companion binary, and the `avalon` CLI binary; packages them
-(a `.tar.gz` per target plus the Docker image this repo's `Dockerfile`
+(a `.tar.gz` per Linux/macOS target, a `.zip` for Windows, plus the Docker image this repo's `Dockerfile`
 already produces for `make stack-up`); and opens a **draft** GitHub Release
 on the tag with those binaries attached and an auto-generated changelog
 from the commits since the last tag.
