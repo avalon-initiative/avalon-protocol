@@ -155,6 +155,11 @@ jobs:
           }
           if ($serverOut -notmatch 'DATABASE_URL must be set') { throw "avalon-server.exe did not fail with the expected DATABASE_URL panic: $serverOut" }
 
+          # Both binaries above deliberately exit non-zero; without this, the
+          # Actions pwsh runner fails the step on whichever $LASTEXITCODE the
+          # last native command left behind, regardless of the assertions above.
+          exit 0
+
       - uses: actions/upload-artifact@v4
         with:
           name: avalon-${{ matrix.target }}
