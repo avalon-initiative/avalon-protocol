@@ -1,12 +1,11 @@
 {
   "$schema": "./SCHEMA.md#known-list-selection",
   "description": "Client known-list rules (avalon_protocol::client_known_list). prefixVectors: the diversity prefix derived from a node base url with no DNS lookup, or null when the url is not acceptable. selectionVectors: the witness key ids admitted, in order, from an ordered candidate sequence: anchors are considered first in the given order, then the rest in the given order; a candidate whose url has no prefix is skipped; each admission is refused when the key id is already present, the anchor cap is reached, the capacity is reached, or the candidate's prefix already holds maxPerPrefix slots (anchors included); anchorCapacity is clamped to capacity. Ordering of non-anchor candidates is the caller's to randomize and is not part of the rule. Defaults: capacity 5, anchorCapacity 2, maxPerPrefix 2.",
-  "supportedIn": [],
-  "notSupported": {
-    "rust": "the client known-list rules are not implemented in the Rust SDK yet",
-    "csharp": "the client known-list rules are not implemented in the C# SDK yet",
-    "typescript": "the client known-list rules are not implemented in the TypeScript SDK yet"
-  },
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
   "defaults": {
     "capacity": 5,
     "anchorCapacity": 2,

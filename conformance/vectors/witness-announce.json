@@ -1,12 +1,11 @@
 {
   "$schema": "./SCHEMA.md#witness-announce",
   "description": "Witness announce proof verification (avalon_protocol::witness::verify_witness_announce). A witness advertises a base url together with a proof: an Ed25519 signature by the advertised key over avalon-witness-announce-v1, a u32-BE length and the base url bytes, a u32-BE length and the key id string bytes, and announced_at as unix seconds big-endian i64. A proof is accepted only when the key id is a 32-byte hex Ed25519 key, the proof is a 64-byte hex signature that verifies under that key, and announced_at is within one hour (inclusive, either direction) of the verifier's clock. messageHex is the exact signed message where the key id is hex; signatures come from the same fixed seeds as witness-cosigned-tree-head.json (witness-1 = 22..22, witness-2 = 33..33).",
-  "notSupported": {
-    "csharp": "advert verification is not implemented in the C# SDK yet",
-    "rust": "advert verification is not implemented in the Rust SDK yet",
-    "typescript": "advert verification is not implemented in the TypeScript SDK yet"
-  },
-  "supportedIn": [],
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
   "vectors": [
     {
       "expected": {
