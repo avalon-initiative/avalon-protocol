@@ -6,6 +6,11 @@
 
 # Avalon Protocol
 
+The internet was built to connect people, and has since split into walled
+gardens: a separate login, friends list, and history for every app and game.
+Avalon is a step toward bringing that connection back together, an open layer
+where who you are and who you know belong to you and travel with you.
+
 Avalon Protocol is an open, self-hostable identity and social layer: one
 persistent identity, one friends list, one history of guilds and
 achievements, that a person carries between every game, app, and service
