@@ -44,8 +44,10 @@ jobs:
             runner: macos-13
           - target: aarch64-apple-darwin
             runner: macos-14
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
+          # Windows support is deferred, not abandoned — the server is
+          # Linux-first for now. Re-enable once it's prioritized again.
+          # - target: x86_64-pc-windows-msvc
+          #   runner: windows-2022
     steps:
       - uses: actions/checkout@v7
         with:
@@ -186,7 +188,11 @@ jobs:
 
       - name: Write SHA256SUMS
         working-directory: dist
+        # *.zip is currently always empty (no Windows target in the matrix)
+        # — nullglob keeps that from being passed to sha256sum as a literal,
+        # unmatched pattern and failing the whole step.
         run: |
+          shopt -s nullglob
           sha256sum *.tar.gz *.zip > SHA256SUMS
           cat SHA256SUMS
 
