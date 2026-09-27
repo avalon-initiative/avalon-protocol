@@ -68,6 +68,32 @@ Each file has this shape:
   set of author/witness key seeds. Asserted by all three SDKs against
   an explicit, caller-supplied known list; building that list from
   discovery is not covered by this file.
+- `witness-announce.json` — witness advert proofs
+  (`avalon_protocol::witness::verify_witness_announce`). A witness advertises a
+  base url with a proof: an Ed25519 signature by the advertised key over
+  `avalon-witness-announce-v1`, a u32-BE length and the base url bytes, a
+  u32-BE length and the key id string bytes, and `announced_at` as unix seconds
+  big-endian i64. Accepted only when the key id is a 32-byte hex key, the proof
+  is a 64-byte hex signature that verifies under it, and `announced_at` is within
+  one hour of the verifier's clock (inclusive, either direction). Each vector's
+  `input.messageHex` is the exact signed message where the key id is hex.
+  Signatures come from the same fixed seeds as the cosigned head vectors.
+- `known-list-selection.json` — the client's known-list rules
+  (`avalon_protocol::client_known_list`). It has two arrays instead of
+  `vectors`. `prefixVectors`: the diversity prefix derived from a node base url
+  with no DNS lookup (`v4:a.b.c.0/24`, `v6:g1:g2:g3::/48`, or `host:` plus the
+  last two hostname labels; `null` for a url that is not `http(s)://host[:port]`
+  with an optional trailing slash, or whose host is not a canonical IPv4
+  address, a bracketed IPv6 address or a lowercase ASCII hostname).
+  `selectionVectors`: the witness key ids admitted, in order, from an ordered
+  candidate sequence with `capacity`, `anchorCapacity` (clamped to capacity) and
+  `maxPerPrefix`: anchors are considered first in the given order, then the rest
+  in the given order; each admission is refused when the key id is already
+  present, the anchor cap or capacity is reached, or the prefix already holds
+  `maxPerPrefix` slots (anchors included). Randomizing the order of non-anchor
+  candidates is the caller's job and is not part of the rule. Defaults: capacity
+  5, anchorCapacity 2, maxPerPrefix 2. Many domains pointing at one machine look
+  diverse because no DNS is used; the anchors are the floor.
 - `identity-chain.json` — per-identity event chains
   (`avalon_protocol::identity_chain`). Unlike the files above it has two
   arrays instead of `vectors`: `hashVectors` (`compute_event_hash` inputs —
@@ -83,7 +109,8 @@ Each file has this shape:
 ## Both sides of the wire
 
 Unlike the four client-behavior vectors above, `attestation-signing.json`,
-`signed-tree-head.json`, `witness-cosigned-tree-head.json`, `identity-chain.json`,
+`signed-tree-head.json`, `witness-cosigned-tree-head.json`, `witness-announce.json`,
+`known-list-selection.json`, `identity-chain.json`,
 `cross-node-login.json`, `session-continuation.json`, and
 `websocket-interest-claim.json` also describe something the *server*
 verifies. `crates/protocol/tests/conformance.rs`
