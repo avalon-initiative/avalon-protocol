@@ -740,13 +740,11 @@ impl PostgresSettlementProvider {
             return Ok(());
         }
 
-        // `ON CONFLICT DO NOTHING` skipped the insert — a row for this
-        // witness/shard/tree_size already exists. Check whether it's the
-        // same cosignature being replayed (fine) or a genuinely different
-        // one (a real equivocation this node must not silently discard).
-        let existing_signature: String = sqlx::query_scalar(
+        // A row already exists: a replay, a relayed re-attestation refresh,
+        // or a genuine equivocation — tell those apart below.
+        let row = sqlx::query(
             r#"
-            SELECT signature FROM witness_cosignatures
+            SELECT root_hash, signature, observed_at FROM witness_cosignatures
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
             "#,
         )
@@ -757,15 +755,30 @@ impl PostgresSettlementProvider {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_root_hash: String = row
+            .try_get("root_hash")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_signature: String = row
+            .try_get("signature")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_observed_at: time::OffsetDateTime = row
+            .try_get("observed_at")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-        if existing_signature != cosig.signature {
-            return Err(SettlementError::Storage(format!(
-                "witness {} already cosigned tree_size {} for network {} shard {} with a \
-                 different signature — refusing to overwrite a possible equivocation",
-                cosig.witness_key_id, cosig.tree_size, cosig.network_id, shard_id
-            )));
+        if existing_signature == cosig.signature {
+            return Ok(());
         }
-        Ok(())
+        if existing_root_hash == cosig.root_hash && existing_observed_at < cosig.observed_at {
+            // Same witness, same head, a fresher observation — a relayed
+            // re-attestation, not an equivocation. Update in place.
+            self.refresh_witness_cosignature(shard_id, cosig).await?;
+            return Ok(());
+        }
+        Err(SettlementError::Storage(format!(
+            "witness {} already cosigned tree_size {} for network {} shard {} with a \
+             different signature — refusing to overwrite a possible equivocation",
+            cosig.witness_key_id, cosig.tree_size, cosig.network_id, shard_id
+        )))
     }
 
     /// Replaces this witness's stored cosignature for a head with a newer one over the same
