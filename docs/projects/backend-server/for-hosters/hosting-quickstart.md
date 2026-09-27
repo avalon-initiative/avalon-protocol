@@ -105,6 +105,10 @@ one stops the node from starting. A variable set in the environment
 `AVALON_WITNESS_SIGNING_KEY`, `AVALON_LIBP2P_IDENTITY_KEY`) always wins and
 nothing is written for it.
 
+Two nodes must never share a data directory: they would load the same keys, and
+two nodes with one libp2p identity cannot see each other. Give every node on a
+machine its own `AVALON_DATA_DIR`.
+
 When `AVALON_OWN_SHARD_ID` is unset and no remote authority is configured
 (`AVALON_SETTLEMENT_REMOTE_URL(S)`), a node with a generated signing key authors
 its own self-certifying shard, `node:<sha256 of its public key>`. That id
