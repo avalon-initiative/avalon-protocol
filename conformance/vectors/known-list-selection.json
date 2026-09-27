@@ -1,0 +1,644 @@
+{
+  "$schema": "./SCHEMA.md#known-list-selection",
+  "description": "Client known-list rules (avalon_protocol::client_known_list). prefixVectors: the diversity prefix derived from a node base url with no DNS lookup, or null when the url is not acceptable. selectionVectors: the witness key ids admitted, in order, from an ordered candidate sequence: anchors are considered first in the given order, then the rest in the given order; a candidate whose url has no prefix is skipped; each admission is refused when the key id is already present, the anchor cap is reached, the capacity is reached, or the candidate's prefix already holds maxPerPrefix slots (anchors included); anchorCapacity is clamped to capacity. Ordering of non-anchor candidates is the caller's to randomize and is not part of the rule. Defaults: capacity 5, anchorCapacity 2, maxPerPrefix 2.",
+  "supportedIn": [],
+  "notSupported": {
+    "rust": "the client known-list rules are not implemented in the Rust SDK yet",
+    "csharp": "the client known-list rules are not implemented in the C# SDK yet",
+    "typescript": "the client known-list rules are not implemented in the TypeScript SDK yet"
+  },
+  "defaults": {
+    "capacity": 5,
+    "anchorCapacity": 2,
+    "maxPerPrefix": 2
+  },
+  "prefixVectors": [
+    {
+      "name": "IPv4 literal with port maps to its /24",
+      "input": {
+        "baseUrl": "http://192.168.7.174:8080"
+      },
+      "expected": {
+        "prefix": "v4:192.168.7.0/24"
+      }
+    },
+    {
+      "name": "IPv4 in the same /24 shares the prefix",
+      "input": {
+        "baseUrl": "https://192.168.7.5"
+      },
+      "expected": {
+        "prefix": "v4:192.168.7.0/24"
+      }
+    },
+    {
+      "name": "IPv4 with a trailing slash",
+      "input": {
+        "baseUrl": "http://10.1.2.3:1/"
+      },
+      "expected": {
+        "prefix": "v4:10.1.2.0/24"
+      }
+    },
+    {
+      "name": "hostname maps to its last two labels",
+      "input": {
+        "baseUrl": "http://node.example.com:8080"
+      },
+      "expected": {
+        "prefix": "host:example.com"
+      }
+    },
+    {
+      "name": "deep subdomains share the registrable-looking domain",
+      "input": {
+        "baseUrl": "http://a.b.c.example.com"
+      },
+      "expected": {
+        "prefix": "host:example.com"
+      }
+    },
+    {
+      "name": "scheme and host are case-insensitive",
+      "input": {
+        "baseUrl": "HTTPS://Node.EXAMPLE.com/"
+      },
+      "expected": {
+        "prefix": "host:example.com"
+      }
+    },
+    {
+      "name": "a trailing dot on the host is removed",
+      "input": {
+        "baseUrl": "http://example.com."
+      },
+      "expected": {
+        "prefix": "host:example.com"
+      }
+    },
+    {
+      "name": "single-label host is used as is",
+      "input": {
+        "baseUrl": "http://localhost"
+      },
+      "expected": {
+        "prefix": "host:localhost"
+      }
+    },
+    {
+      "name": "public suffix with two labels over-restricts on purpose",
+      "input": {
+        "baseUrl": "http://a.example.co.uk"
+      },
+      "expected": {
+        "prefix": "host:co.uk"
+      }
+    },
+    {
+      "name": "two-label host is its own prefix",
+      "input": {
+        "baseUrl": "http://co.uk"
+      },
+      "expected": {
+        "prefix": "host:co.uk"
+      }
+    },
+    {
+      "name": "bracketed IPv6 maps to its first three groups",
+      "input": {
+        "baseUrl": "http://[2001:db8:1:2::1]:8080"
+      },
+      "expected": {
+        "prefix": "v6:2001:db8:1::/48"
+      }
+    },
+    {
+      "name": "IPv6 hex digits are lowercased and leading zeros dropped",
+      "input": {
+        "baseUrl": "http://[2001:0DB8:0001::1]"
+      },
+      "expected": {
+        "prefix": "v6:2001:db8:1::/48"
+      }
+    },
+    {
+      "name": "IPv6 loopback",
+      "input": {
+        "baseUrl": "http://[::1]:8080"
+      },
+      "expected": {
+        "prefix": "v6:0:0:0::/48"
+      }
+    },
+    {
+      "name": "IPv6 link-local prefix",
+      "input": {
+        "baseUrl": "http://[fe80::1]/"
+      },
+      "expected": {
+        "prefix": "v6:fe80:0:0::/48"
+      }
+    },
+    {
+      "name": "userinfo is refused",
+      "input": {
+        "baseUrl": "http://user@example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a path is refused",
+      "input": {
+        "baseUrl": "http://example.com/path"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a query is refused",
+      "input": {
+        "baseUrl": "http://example.com?x=1"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a non-http scheme is refused",
+      "input": {
+        "baseUrl": "ftp://example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a missing scheme is refused",
+      "input": {
+        "baseUrl": "example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an empty authority is refused",
+      "input": {
+        "baseUrl": "http://"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an IPv4 octet with a leading zero is refused",
+      "input": {
+        "baseUrl": "http://010.0.0.1"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an IPv4 octet above 255 is refused",
+      "input": {
+        "baseUrl": "http://256.0.0.1"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a three-part dotted number is refused",
+      "input": {
+        "baseUrl": "http://1.2.3"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an underscore in a hostname is refused",
+      "input": {
+        "baseUrl": "http://exa_mple.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a hostname label starting with a hyphen is refused",
+      "input": {
+        "baseUrl": "http://-bad.example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "port zero is refused",
+      "input": {
+        "baseUrl": "http://example.com:0"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "a port above 65535 is refused",
+      "input": {
+        "baseUrl": "http://example.com:65536"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "two ports are refused",
+      "input": {
+        "baseUrl": "http://example.com:80:81"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an IPv6 address with an embedded dotted quad is refused",
+      "input": {
+        "baseUrl": "http://[::ffff:1.2.3.4]"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an unclosed IPv6 bracket is refused",
+      "input": {
+        "baseUrl": "http://[2001:db8::1"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "non-ASCII text is refused",
+      "input": {
+        "baseUrl": "http://münchen.example"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "an empty hostname label is refused",
+      "input": {
+        "baseUrl": "http://a..example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    },
+    {
+      "name": "leading whitespace is refused",
+      "input": {
+        "baseUrl": " http://example.com"
+      },
+      "expected": {
+        "prefix": null
+      }
+    }
+  ],
+  "selectionVectors": [
+    {
+      "name": "no candidates gives an empty list",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": []
+      },
+      "expected": []
+    },
+    {
+      "name": "anchors are admitted first, then the rest in the given order",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://a.example.com",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://10.0.0.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://b.example.org",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "a1",
+        "n1",
+        "n2"
+      ]
+    },
+    {
+      "name": "at most two slots share one prefix",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://a.example.com",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://b.example.com",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n3",
+            "baseUrl": "http://c.example.com",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "n1",
+        "n2"
+      ]
+    },
+    {
+      "name": "capacity bounds the list",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://host.d1.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://host.d2.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n3",
+            "baseUrl": "http://host.d3.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n4",
+            "baseUrl": "http://host.d4.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n5",
+            "baseUrl": "http://host.d5.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n6",
+            "baseUrl": "http://host.d6.example",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5"
+      ]
+    },
+    {
+      "name": "anchor capacity limits how many anchors are admitted",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://10.0.1.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a2",
+            "baseUrl": "http://10.0.2.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a3",
+            "baseUrl": "http://10.0.3.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://x.example",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "a1",
+        "a2",
+        "n1"
+      ]
+    },
+    {
+      "name": "anchors are subject to the prefix cap too",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 1,
+        "candidates": [
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://10.0.0.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a2",
+            "baseUrl": "http://10.0.0.2:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://10.0.0.3:1",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "a1"
+      ]
+    },
+    {
+      "name": "a repeated key id is admitted once",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://a.example.com",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://b.example.org",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "n1"
+      ]
+    },
+    {
+      "name": "a candidate with an unusable url is skipped",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "ftp://a.example",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://b.example.org",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "n2"
+      ]
+    },
+    {
+      "name": "a whole private /24 is capped at two slots",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://192.168.7.113:8080",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a2",
+            "baseUrl": "http://192.168.7.174:8080",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a3",
+            "baseUrl": "http://192.168.7.204:8080",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://192.168.7.183:8080",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://192.168.7.194:8080",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "a1",
+        "a2"
+      ]
+    },
+    {
+      "name": "anchor capacity above capacity is clamped",
+      "input": {
+        "capacity": 2,
+        "anchorCapacity": 5,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://10.0.1.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a2",
+            "baseUrl": "http://10.0.2.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "a3",
+            "baseUrl": "http://10.0.3.1:1",
+            "isAnchor": true
+          }
+        ]
+      },
+      "expected": [
+        "a1",
+        "a2"
+      ]
+    },
+    {
+      "name": "non-anchors fill around admitted anchors",
+      "input": {
+        "capacity": 5,
+        "anchorCapacity": 2,
+        "maxPerPrefix": 2,
+        "candidates": [
+          {
+            "witnessKeyId": "n1",
+            "baseUrl": "http://10.0.1.9:1",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "a1",
+            "baseUrl": "http://10.0.1.1:1",
+            "isAnchor": true
+          },
+          {
+            "witnessKeyId": "n2",
+            "baseUrl": "http://10.0.1.7:1",
+            "isAnchor": false
+          },
+          {
+            "witnessKeyId": "n3",
+            "baseUrl": "http://z.example.net",
+            "isAnchor": false
+          }
+        ]
+      },
+      "expected": [
+        "a1",
+        "n1",
+        "n3"
+      ]
+    }
+  ]
+}

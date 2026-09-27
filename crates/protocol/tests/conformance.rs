@@ -468,3 +468,81 @@ fn identity_chain_matches_shared_vectors() {
         }
     }
 }
+
+#[test]
+fn witness_announce_matches_shared_vectors() {
+    use avalon_protocol::witness::{verify_witness_announce, witness_announce_message};
+    use time::format_description::well_known::Rfc3339;
+
+    let doc = load("witness-announce.json");
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let base_url = input["baseUrl"].as_str().unwrap();
+        let key_id = input["witnessKeyId"].as_str().unwrap();
+        let announced_at =
+            OffsetDateTime::parse(input["announcedAt"].as_str().unwrap(), &Rfc3339).unwrap();
+        let now = OffsetDateTime::parse(input["now"].as_str().unwrap(), &Rfc3339).unwrap();
+        let proof = input["proofHex"].as_str().unwrap();
+        let accepted = verify_witness_announce(base_url, key_id, announced_at, proof, now);
+        assert_eq!(
+            accepted,
+            v["expected"]["accepted"].as_bool().unwrap(),
+            "{name}"
+        );
+        if let Some(message_hex) = input.get("messageHex").and_then(|m| m.as_str()) {
+            assert_eq!(
+                hex::encode(witness_announce_message(base_url, key_id, announced_at)),
+                message_hex,
+                "{name}: signed message bytes"
+            );
+        }
+    }
+}
+
+#[test]
+fn known_list_selection_matches_shared_vectors() {
+    use avalon_protocol::client_known_list::{
+        diversity_prefix_for_url, select_known_list, Candidate,
+    };
+
+    let doc = load("known-list-selection.json");
+    for v in doc["prefixVectors"].as_array().expect("prefixVectors") {
+        let name = v["name"].as_str().unwrap();
+        let got = diversity_prefix_for_url(v["input"]["baseUrl"].as_str().unwrap());
+        let want = v["expected"]["prefix"].as_str().map(str::to_string);
+        assert_eq!(got, want, "{name}");
+    }
+    for v in doc["selectionVectors"]
+        .as_array()
+        .expect("selectionVectors")
+    {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let candidates: Vec<Candidate> = input["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| Candidate {
+                witness_key_id: c["witnessKeyId"].as_str().unwrap().to_string(),
+                base_url: c["baseUrl"].as_str().unwrap().to_string(),
+                is_anchor: c["isAnchor"].as_bool().unwrap(),
+            })
+            .collect();
+        let got = select_known_list(
+            &candidates,
+            input["capacity"].as_u64().unwrap() as usize,
+            input["anchorCapacity"].as_u64().unwrap() as usize,
+            input["maxPerPrefix"].as_u64().unwrap() as usize,
+        );
+        let want: Vec<String> = v["expected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(got, want, "{name}");
+    }
+}

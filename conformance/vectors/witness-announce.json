@@ -1,0 +1,201 @@
+{
+  "$schema": "./SCHEMA.md#witness-announce",
+  "description": "Witness announce proof verification (avalon_protocol::witness::verify_witness_announce). A witness advertises a base url together with a proof: an Ed25519 signature by the advertised key over avalon-witness-announce-v1, a u32-BE length and the base url bytes, a u32-BE length and the key id string bytes, and announced_at as unix seconds big-endian i64. A proof is accepted only when the key id is a 32-byte hex Ed25519 key, the proof is a 64-byte hex signature that verifies under that key, and announced_at is within one hour (inclusive, either direction) of the verifier's clock. messageHex is the exact signed message where the key id is hex; signatures come from the same fixed seeds as witness-cosigned-tree-head.json (witness-1 = 22..22, witness-2 = 33..33).",
+  "notSupported": {
+    "csharp": "advert verification is not implemented in the C# SDK yet",
+    "rust": "advert verification is not implemented in the Rust SDK yet",
+    "typescript": "advert verification is not implemented in the TypeScript SDK yet"
+  },
+  "supportedIn": [],
+  "vectors": [
+    {
+      "expected": {
+        "accepted": true
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:50:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab65fe8",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "7d1a84bf15a7b0ef2b10fa2293367161a98c3a30da97525a477841eae0e48e7eeac8dd79181984f42f99996bdc6e5fc99fb8e45e02fd39c7c86bc2cb2bc9ac0e",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "accepted: fresh proof signed by the advertised key"
+    },
+    {
+      "expected": {
+        "accepted": true
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:00:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab65430",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "c06cf59c7c2efcbabd978c27493895775bdc0c7cc5d741e60dfc266fd01acf4e9b1fa1071a2fc1cb00b42b4e3a99d236f3d3d195eab0f1e923bab80e8fc3900c",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "accepted: announced exactly one hour ago is inside the skew window"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T10:59:59Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab6542f",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "550ab2eeca9badd25fcd04ba342c8555ca2006d85b923eefa1627bc52da642ffb5040af4dafa0a7ff3b603a7e6551d6224e1273440bb060ca6665c81dd79d108",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: announced one hour and one second ago"
+    },
+    {
+      "expected": {
+        "accepted": true
+      },
+      "input": {
+        "announcedAt": "2026-09-25T13:00:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab67050",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "04817f3d313948dc9681f6b9f04963a0a4441a11b5f419b6ba4674c4135309998982d19af16c62ec928f8369a31bb9e7079c691ee6d467e3aee0343b95060e0c",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "accepted: announced exactly one hour in the future is inside the skew window"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T13:00:01Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab67051",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "ac7a1d4b6dd8f8b337b468a1c69ecb1e98102d692043e80fd787f4f1a94b98d43882a7c428713ce13bfb51fd0ba03a57dab19c61686f31e657afba9bbf77db00",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: announced one hour and one second in the future"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "eb40394373f8acd076f8c1df67b21c5017d1430ffada6e09ee551e8b65865cb5f34556c4b36a163f9916cfd857ea4c3e007b03a0fbbafe382a22ace5053a7809",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: proof was made for a different base url"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004031376362373966623262343132306632623165633635653431393864366530386232386538313366656230316534613430303833396238356531383038306365000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "deae4b94c236640d7079fd120494a1369b7a5c3a8c0cd789c6600ad5e0f53dbdf41ea31d1de95eaf602477eeba9f56b6553ab409352df016b152c4ab1fe5c808",
+        "witnessKeyId": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"
+      },
+      "name": "rejected: proof made by one key while advertising another key id"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "005df3aee1602be8b16f529a1e2d211008193bb9da7b7a17c71e02820bb4de2030ccf07a2693c050b7b9a65b9be6c2b8b1fad11a133bec6c6b122df6b045fe0b",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: signature bytes altered"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "be5df3aee1602be8b16f529a1e2d211008193bb9da7b7a17c71e02820bb4de2030ccf07a2693c050b7b9a65b9be6c2b8b1fad11a133bec6c6b122df6b045fe0b",
+        "witnessKeyId": "not-a-hex-key"
+      },
+      "name": "rejected: key id is not hex"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000003e6130396161356634376136373539383032666639353566386463326432613134613563393964323362653937663836343132376666393338333435356134000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "be5df3aee1602be8b16f529a1e2d211008193bb9da7b7a17c71e02820bb4de2030ccf07a2693c050b7b9a65b9be6c2b8b1fad11a133bec6c6b122df6b045fe0b",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4"
+      },
+      "name": "rejected: key id is 31 bytes"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "be5df3aee1602be8b16f529a1e2d211008193bb9da7b7a17c71e02820bb4de2030ccf07a2693c050b7b9a65b9be6c2b8b1fad11a133bec6c6b122df6b045fe",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: proof is 63 bytes"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:00Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab66204",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: proof is not hex"
+    },
+    {
+      "expected": {
+        "accepted": false
+      },
+      "input": {
+        "announcedAt": "2026-09-25T11:59:01Z",
+        "baseUrl": "http://192.168.7.174:8080",
+        "messageHex": "6176616c6f6e2d7769746e6573732d616e6e6f756e63652d763100000019687474703a2f2f3139322e3136382e372e3137343a383038300000004061303961613566343761363735393830326666393535663864633264326131346135633939643233626539376638363431323766663933383334353561346630000000006ab66205",
+        "now": "2026-09-25T12:00:00Z",
+        "proofHex": "be5df3aee1602be8b16f529a1e2d211008193bb9da7b7a17c71e02820bb4de2030ccf07a2693c050b7b9a65b9be6c2b8b1fad11a133bec6c6b122df6b045fe0b",
+        "witnessKeyId": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "name": "rejected: announced_at differs by one second from the signed value"
+    }
+  ],
+  "witnessSigningKeySeedsHex": {
+    "witness-1": "2222222222222222222222222222222222222222222222222222222222222222",
+    "witness-2": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "witnessVerifyingKeysHex": {
+    "witness-1": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "witness-2": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"
+  }
+}
