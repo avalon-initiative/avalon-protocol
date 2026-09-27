@@ -6,10 +6,15 @@ people contributing code to this repository itself (see
 [maintainers docs](../../../maintainers/)) or integrating Avalon into their own
 game/app/service as a developer (see [developer docs](../../sdks/rust/for-developers/)).
 
-No Rust or Node toolchain is required for anything on this page — only
-[Docker](https://docs.docker.com/get-docker/).
+The Docker route needs only [Docker](https://docs.docker.com/get-docker/); the
+standalone-binary route needs only a Postgres database.
 
 ## Start here
+
+0. [`standalone-binary.md`](standalone-binary.md) — run the `avalon-server`
+   binary directly against your own Postgres: configuration for a replica or a
+   shard-authoring node, first start, a systemd unit, upgrading, backup and
+   troubleshooting.
 
 1. [`hosting-quickstart.md`](hosting-quickstart.md) — the fastest path from
    a fresh checkout to a running node: `make stack-up`, one command, safe

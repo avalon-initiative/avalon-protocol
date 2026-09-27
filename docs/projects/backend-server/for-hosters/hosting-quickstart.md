@@ -5,6 +5,9 @@ no Rust or Node toolchain needed, only [Docker](https://docs.docker.com/get-dock
 (with Compose, bundled with Docker Desktop and modern Docker Engine
 installs).
 
+To run the binary directly against your own Postgres instead of Docker, see
+[`standalone-binary.md`](standalone-binary.md).
+
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see
 [`../../../maintainers/local-development.md`](../../../maintainers/local-development.md)
