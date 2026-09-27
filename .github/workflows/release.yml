@@ -102,7 +102,7 @@ jobs:
           $name = "avalon-$version-${{ matrix.target }}"
           New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
           Copy-Item target/release/avalon-server.exe, target/release/avalon.exe, LICENSE, README.md -Destination "dist/$name/"
-          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
           Remove-Item -Recurse -Force "dist/$name"
           Get-ChildItem dist
 
