@@ -14,7 +14,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	stack-up stack-up-no-redis stack-down stack-logs \
 	inspect-ledger inspect-ledger-full create-identity login outbox-status \
 	register-integrator issue-achievement \
-	check-all clean-all
+	check-all clean-all release-bump release-tag release-tag-skip-tests
 
 help:
 	@echo "avalon-protocol — local dev commands"
@@ -60,6 +60,8 @@ help:
 	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
 	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
+	@echo "  make release-bump VER=x.y.z   set the workspace version, staged for a PR"
+	@echo "  make release-tag VER=x.y.z [TITLE=...]   on up-to-date main: checks, then tag vx.y.z (push the tag to release)"
 	@echo "  make check-all     check (Rust)"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
 
@@ -303,3 +305,17 @@ issue-achievement:
 check-all: check
 
 clean-all: clean
+
+# --- Release -----------------------------------------------------------------
+# One release covers every binary at one shared version.
+#   make release-bump VER=0.2.0   set the workspace version (commit it and open a PR)
+#   make release-tag  VER=0.2.0 [TITLE="Optional title"]   on up-to-date main after that PR merges
+# Pushing the tag (git push origin v0.2.0) starts the release workflow.
+release-bump:
+	bash scripts/release.sh bump "$(VER)"
+
+release-tag:
+	bash scripts/release.sh tag "$(VER)" "$(TITLE)"
+
+release-tag-skip-tests:
+	SKIP_CHECKS=1 bash scripts/release.sh tag "$(VER)" "$(TITLE)"

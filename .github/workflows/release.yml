@@ -1,0 +1,128 @@
+name: Release
+
+# Pushing a v<X.Y.Z>[-title] tag (created by `make release-tag`) builds the
+# avalon-server and avalon binaries for each platform, attests their build
+# provenance, and creates one GitHub Release. A manual run only builds and
+# uploads workflow artifacts; it never attests or publishes, whatever dry_run says.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and upload workflow artifacts only; publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Require a tag on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "Tag ${GITHUB_REF_NAME} is not on main; refusing to release."; exit 1; }
+          bash scripts/verify-release-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        env:
+          OPENSSL_STATIC: "1"
+        run: |
+          cargo build --release --locked -p avalon-server
+          cargo build --release --locked -p avalon-cli --no-default-features
+
+      - name: Package
+        run: |
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
+          name="avalon-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp target/release/avalon-server target/release/avalon LICENSE README.md "dist/${name}/"
+          strip "dist/${name}/avalon-server" "dist/${name}/avalon"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          rm -rf "dist/${name}"
+          ls -l dist
+
+      - name: Smoke test the packaged binaries
+        run: |
+          tar -C dist -xzf dist/avalon-*.tar.gz
+          dir="$(ls -d dist/avalon-*/)"
+          "${dir}avalon" --help >/dev/null
+          ldd "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avalon-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Checksums, attestation and release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: avalon-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload the release files as a workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Create the GitHub Release
+        if: github.event_name == 'push'
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
