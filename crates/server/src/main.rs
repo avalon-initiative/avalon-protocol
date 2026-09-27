@@ -100,29 +100,26 @@ async fn main() {
         "avalon-server: resolved node roles"
     );
 
-    // Issue #664: WebAuthn is a Gateway-only concept (login/registration) —
-    // a Settlement-only node never mounts a single auth route, so it
-    // neither needs `AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`
-    // configured nor gets a real `Webauthn` instance built from them. The
-    // placeholder built here is never reachable from any handler
-    // (`router_settlement_only` mounts none of `crate::auth`/`passkeys`/
-    // `recovery`/`device_pairing`'s routes) — it only exists because
-    // `AppState::webauthn` is a plain `Arc<Webauthn>`, not `Option`, to
-    // keep every Gateway handler's own signature unchanged.
-    let webauthn = if gateway_enabled {
-        let webauthn_rp_id =
-            std::env::var("AVALON_WEBAUTHN_RP_ID").expect("AVALON_WEBAUTHN_RP_ID must be set");
-        let webauthn_origin =
-            std::env::var("AVALON_WEBAUTHN_ORIGIN").expect("AVALON_WEBAUTHN_ORIGIN must be set");
-        Arc::new(
-            auth::build_webauthn(&webauthn_rp_id, &webauthn_origin)
+    // WebAuthn settings are required only when this node serves logins; replica-only and
+    // settlement-only nodes fall back to an unreachable placeholder.
+    let rp_id = std::env::var("AVALON_WEBAUTHN_RP_ID").ok();
+    let rp_origin = std::env::var("AVALON_WEBAUTHN_ORIGIN").ok();
+    let webauthn_required = gateway_enabled && !avalon_server::replica::replica_only_from_env();
+    let webauthn = match (rp_id, rp_origin) {
+        (Some(id), Some(origin)) if gateway_enabled => Arc::new(
+            auth::build_webauthn(&id, &origin)
                 .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
-        )
-    } else {
-        Arc::new(
-            auth::build_webauthn("localhost", "http://localhost")
-                .expect("placeholder Settlement-only Webauthn config must itself be valid"),
-        )
+        ),
+        (id, origin) => {
+            if webauthn_required {
+                id.expect("AVALON_WEBAUTHN_RP_ID must be set");
+                origin.expect("AVALON_WEBAUTHN_ORIGIN must be set");
+            }
+            Arc::new(
+                auth::build_webauthn("localhost", "http://localhost")
+                    .expect("placeholder Webauthn config must itself be valid"),
+            )
+        }
     };
     // Issue #173: which network this process believes it's part of — e.g.
     // `avalon-mainnet-1` or `avalon-dev-<name>`. Never defaulted; a missing
@@ -439,9 +436,17 @@ async fn main() {
         }
     }
 
-    let mirror_peers_configured = std::env::var("AVALON_MIRROR_PEERS")
-        .map(|v| v.split(',').any(|s| !s.trim().is_empty()))
-        .unwrap_or(false);
+    mirror_watcher::set_default_core_mirror_peers(
+        mirror_watcher::resolve_default_core_mirror_peers(
+            &own_shard_id,
+            std::env::var("AVALON_MIRROR_PEERS").ok().as_deref(),
+            &network_id,
+            avalon_protocol::network_trust::bundled_trust_anchors(),
+        ),
+    );
+    let mirror_peers_configured = mirror_watcher::effective_mirror_peers()
+        .split(',')
+        .any(|s| !s.trim().is_empty());
     if let Some(msg) = avalon_server::core_author_guard::missing_core_mirror_advisory(
         &own_shard_id,
         mirror_peers_configured,

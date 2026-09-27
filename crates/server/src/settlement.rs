@@ -85,36 +85,38 @@ use crate::state::AppState;
 /// startup (`main.rs`), held in [`AppState`].
 #[derive(Clone, Default)]
 pub struct ShardMirrorSources {
-    sources: std::collections::HashMap<String, String>,
+    sources: Vec<(String, String)>,
 }
 
 impl ShardMirrorSources {
     pub fn from_env() -> Self {
-        let raw = std::env::var("AVALON_MIRROR_PEERS").unwrap_or_default();
-        let sources = crate::mirror_watcher::parse_mirror_peers(&raw)
-            .into_iter()
-            .collect();
+        Self::from_raw(&crate::mirror_watcher::effective_mirror_peers())
+    }
+
+    fn from_raw(raw: &str) -> Self {
+        let mut sources = crate::mirror_watcher::parse_mirror_peers(raw);
+        sources.sort();
+        sources.dedup();
         Self { sources }
     }
 
     /// Every configured `(shard_id, source_url)` pair, ordered by shard.
     pub fn entries(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .sources
-            .iter()
-            .map(|(shard, url)| (shard.clone(), url.clone()))
-            .collect();
-        out.sort();
-        out
+        self.sources.clone()
     }
 
-    /// The configured mirror peer's base URL for `shard_id`, if any —
-    /// `None` means either no mirroring is configured at all, or this
-    /// specific `shard_id` isn't one of the configured peers (an unscoped
-    /// mirror query is the correct fallback there, same as before #573:
-    /// nothing configured to scope by, so nothing lost by not scoping).
+    /// The configured mirror peer's base URL for `shard_id`, if exactly one
+    /// is configured. `None` means nothing is configured for this shard, or
+    /// several sources are (the watcher backfills from whichever answers, so
+    /// no single source's rows are authoritative): reads then query unscoped,
+    /// the same fallback as before per-shard mirroring existed.
     pub fn source_url_for(&self, shard_id: &str) -> Option<&str> {
-        self.sources.get(shard_id).map(String::as_str)
+        let mut matching = self.sources.iter().filter(|(shard, _)| shard == shard_id);
+        let first = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        Some(first.1.as_str())
     }
 }
 
@@ -1199,5 +1201,38 @@ mod not_found_error_tests {
             }
             other => panic!("expected SignedTreeHeadNotFoundMirror, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod mirror_sources_tests {
+    use super::ShardMirrorSources;
+
+    #[test]
+    fn one_source_scopes_reads_to_it() {
+        let s = ShardMirrorSources::from_raw("core=http://a:1");
+        assert_eq!(s.source_url_for("core"), Some("http://a:1"));
+    }
+
+    #[test]
+    fn several_sources_for_one_shard_leave_reads_unscoped() {
+        let s = ShardMirrorSources::from_raw("core=http://a:1,core=http://b:2,game:x=http://c:3");
+        assert_eq!(s.source_url_for("core"), None);
+        assert_eq!(s.source_url_for("game:x"), Some("http://c:3"));
+        assert_eq!(s.entries().len(), 3);
+    }
+
+    #[test]
+    fn a_repeated_identical_source_still_scopes() {
+        let s = ShardMirrorSources::from_raw("core=http://a:1,core=http://a:1");
+        assert_eq!(s.source_url_for("core"), Some("http://a:1"));
+    }
+
+    #[test]
+    fn no_sources_means_no_scope() {
+        assert_eq!(
+            ShardMirrorSources::from_raw("").source_url_for("core"),
+            None
+        );
     }
 }

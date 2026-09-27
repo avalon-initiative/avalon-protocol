@@ -112,8 +112,9 @@ pub fn missing_core_mirror_advisory(
     }
     if own_shard_id == crate::replica::NO_AUTHORED_SHARD {
         return Some(
-            "this node is replica-only but AVALON_MIRROR_PEERS is empty, so it mirrors nothing \
-             and serves no history. Set AVALON_MIRROR_PEERS to the core authority"
+            "this node is replica-only but has no core mirror source: AVALON_MIRROR_PEERS is empty \
+             and its network lists no seed nodes, so it mirrors nothing and serves no history. \
+             Set AVALON_MIRROR_PEERS to the core authority"
                 .to_string(),
         );
     }
