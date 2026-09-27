@@ -165,3 +165,61 @@ async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
         .expect("listing cosignatures should succeed");
     assert_eq!(stored, vec![first]);
 }
+
+/// A relayed re-attestation (same witness, same root_hash, a fresher
+/// `observed_at`) must update the stored cosignature in place rather than
+/// being rejected as an equivocation — this is exactly what happens when a
+/// mirror pulls a peer's periodically-refreshed cosignature via
+/// `store_valid_cosignatures`, as opposed to the peer's own
+/// `refresh_witness_cosignature` call against its own row.
+#[tokio::test]
+#[ignore]
+async fn a_relayed_reattestation_refreshes_in_place_instead_of_being_rejected() {
+    let pool = test_pool().await;
+    let network_id = format!("avalon-witness-cosign-live-test-{}", Uuid::new_v4());
+    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+
+    let tree_size = fresh_test_tree_size();
+    let root_hash = "ab".repeat(32);
+    insert_test_sth(&pool, &network_id, tree_size, &root_hash).await;
+
+    let author_created_at = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000);
+    let first_observed_at = author_created_at + time::Duration::seconds(5);
+    let witness_key = SigningKey::generate(&mut rand::rng());
+
+    let first = sign_witness_cosignature(
+        &witness_key,
+        "witness-live-3",
+        tree_size,
+        &root_hash,
+        &network_id,
+        author_created_at,
+        first_observed_at,
+    );
+    chain
+        .store_witness_cosignature("core", &first)
+        .await
+        .expect("storing the first cosignature should succeed");
+
+    // Same witness, same head, a later `observed_at` — a re-attestation
+    // refresh relayed from the witness's own node, not an equivocation.
+    let refreshed = sign_witness_cosignature(
+        &witness_key,
+        "witness-live-3",
+        tree_size,
+        &root_hash,
+        &network_id,
+        author_created_at,
+        first_observed_at + time::Duration::minutes(5),
+    );
+    chain
+        .store_witness_cosignature("core", &refreshed)
+        .await
+        .expect("a relayed re-attestation refresh must not be rejected as an equivocation");
+
+    let stored = chain
+        .list_witness_cosignatures(&network_id, "core", tree_size)
+        .await
+        .expect("listing cosignatures should succeed");
+    assert_eq!(stored, vec![refreshed]);
+}
