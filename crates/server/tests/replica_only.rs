@@ -95,37 +95,3 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["code"], "REPLICA_ONLY");
 }
-
-/// A replica started without `AVALON_MIRROR_PEERS` mirrors core from its default seed source.
-#[tokio::test]
-#[ignore]
-async fn replica_without_mirror_peers_mirrors_core_from_its_seed_default() {
-    let Some((primary, replica)) = urls() else {
-        eprintln!("skipping: AVALON_PRIMARY_URL/AVALON_REPLICA_URL not set");
-        return;
-    };
-    let http = reqwest::Client::new();
-    let primary_sth: serde_json::Value = http
-        .get(format!("{primary}/ledger/sth/latest"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    for _ in 0..180 {
-        let resp = http
-            .get(format!("{replica}/ledger/sth/latest"))
-            .send()
-            .await
-            .unwrap();
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await.unwrap();
-            if body["root_hash"] == primary_sth["root_hash"] {
-                return;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    panic!("replica never mirrored core from its default seed source");
-}

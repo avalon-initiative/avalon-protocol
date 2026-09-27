@@ -440,7 +440,6 @@ async fn main() {
         mirror_watcher::resolve_default_core_mirror_peers(
             &own_shard_id,
             std::env::var("AVALON_MIRROR_PEERS").ok().as_deref(),
-            std::env::var("AVALON_CORE_MIRROR_SEEDS").ok().as_deref(),
             &network_id,
             avalon_protocol::network_trust::bundled_trust_anchors(),
         ),

@@ -107,12 +107,10 @@ pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
 static DEFAULT_CORE_MIRROR_PEERS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Core mirror source for a node that authors no `core` and sets no
-/// `AVALON_MIRROR_PEERS`: the network's seed nodes, or the comma-separated
-/// `AVALON_CORE_MIRROR_SEEDS` when set. Empty when neither applies.
+/// `AVALON_MIRROR_PEERS`: the network's seed nodes. Empty when there are none.
 pub fn resolve_default_core_mirror_peers(
     own_shard_id: &str,
     mirror_peers_env: Option<&str>,
-    seeds_override_env: Option<&str>,
     network_id: &str,
     anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
 ) -> String {
@@ -121,14 +119,11 @@ pub fn resolve_default_core_mirror_peers(
     {
         return String::new();
     }
-    match seeds_override_env.filter(|v| !v.trim().is_empty()) {
-        Some(raw) => raw.to_string(),
-        None => anchors
-            .iter()
-            .find(|a| a.network_id == network_id)
-            .map(|a| a.seed_nodes.join(","))
-            .unwrap_or_default(),
-    }
+    anchors
+        .iter()
+        .find(|a| a.network_id == network_id)
+        .map(|a| a.seed_nodes.join(","))
+        .unwrap_or_default()
 }
 
 /// Records the default resolved at startup; call once, before any config is read.
@@ -1631,7 +1626,7 @@ mod tests {
     fn default_core_mirror_uses_seed_nodes_for_a_non_core_author() {
         let anchors = vec![seed_anchor("net", &["http://a:1", "http://b:2"])];
         for shard in ["", "game:x"] {
-            let got = resolve_default_core_mirror_peers(shard, None, None, "net", &anchors);
+            let got = resolve_default_core_mirror_peers(shard, None, "net", &anchors);
             assert_eq!(got, "http://a:1,http://b:2");
         }
     }
@@ -1643,33 +1638,29 @@ mod tests {
             seed_anchor("bare", &[]),
         ];
         assert_eq!(
-            resolve_default_core_mirror_peers("", Some("http://x"), None, "net", &anchors),
+            resolve_default_core_mirror_peers("", Some("http://x"), "net", &anchors),
             ""
         );
         assert_eq!(
-            resolve_default_core_mirror_peers("core", None, None, "net", &anchors),
+            resolve_default_core_mirror_peers("core", None, "net", &anchors),
             ""
         );
         assert_eq!(
-            resolve_default_core_mirror_peers("", None, None, "bare", &anchors),
+            resolve_default_core_mirror_peers("", None, "bare", &anchors),
             ""
         );
         assert_eq!(
-            resolve_default_core_mirror_peers("", None, None, "unknown", &anchors),
+            resolve_default_core_mirror_peers("", None, "unknown", &anchors),
             ""
         );
     }
 
     #[test]
-    fn blank_explicit_mirror_peers_still_defaults_and_override_seeds_win() {
+    fn blank_explicit_mirror_peers_still_defaults() {
         let anchors = vec![seed_anchor("net", &["http://a:1"])];
         assert_eq!(
-            resolve_default_core_mirror_peers("", Some("  "), None, "net", &anchors),
+            resolve_default_core_mirror_peers("", Some("  "), "net", &anchors),
             "http://a:1"
-        );
-        assert_eq!(
-            resolve_default_core_mirror_peers("", None, Some("http://o:9"), "net", &anchors),
-            "http://o:9"
         );
     }
 

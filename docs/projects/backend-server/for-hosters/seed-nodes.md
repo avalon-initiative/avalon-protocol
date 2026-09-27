@@ -10,9 +10,7 @@ receives, from a seed or anywhere else, is verified against it.
 - Announces itself to the entry's `seed_nodes` and learns the rest of the
   network through gossip. `AVALON_BOOTSTRAP_PEERS` replaces the list.
 - If it does not author `core` and `AVALON_MIRROR_PEERS` is unset, it mirrors
-  `core` from the same seed nodes. `AVALON_MIRROR_PEERS` always wins, and
-  `AVALON_CORE_MIRROR_SEEDS` (comma-separated URLs) overrides only this
-  default. A seed that serves a wrong or forged head is rejected by the pinned
+  `core` from the same seed nodes. `AVALON_MIRROR_PEERS` always wins. A seed that serves a wrong or forged head is rejected by the pinned
   key, so it can withhold history but cannot inject any.
 - An entry with an empty `seed_nodes` (`avalon-dev-local`, used by local and CI
   nodes) changes nothing: no default mirror source is applied.
