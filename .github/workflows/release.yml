@@ -63,13 +63,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
-      # Git for Windows' bundled perl.exe is earlier on PATH than the runner's
-      # Strawberry Perl and is missing modules the vendored OpenSSL build needs.
-      - name: Prefer Strawberry Perl on PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
@@ -78,6 +71,11 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          # Git Bash's own /usr/bin (with Git's bundled, module-incomplete perl)
+          # is baked into this shell and outranks Strawberry Perl on Windows.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="/c/Strawberry/perl/bin:$PATH"
+          fi
           cargo build --release --locked -p avalon-server --features vendored-openssl
           cargo build --release --locked -p avalon-cli --no-default-features
 
