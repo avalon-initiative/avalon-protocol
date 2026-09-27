@@ -33,7 +33,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -82,7 +82,7 @@ jobs:
         run: |
           tar -C dist -xzf dist/avalon-*.tar.gz
           dir="$(ls -d dist/avalon-*/)"
-          "${dir}avalon" --help >/dev/null
+          ("${dir}avalon" 2>&1 || true) | grep -q "^usage: avalon"
           ldd "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
 
       - uses: actions/upload-artifact@v4
