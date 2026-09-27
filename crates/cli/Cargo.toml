@@ -75,6 +75,9 @@ dev-tools = [
     "dep:passkey-authenticator",
     "dep:coset",
 ]
+# avalon-cli pulls in openssl-sys transitively via avalon-server's own
+# webauthn-rs dependency; forwards to the same statically-linked build.
+vendored-openssl = ["avalon-server/vendored-openssl"]
 
 [[bin]]
 name = "avalon"

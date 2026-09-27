@@ -77,7 +77,7 @@ jobs:
             export PATH="/c/Strawberry/perl/bin:$PATH"
           fi
           cargo build --release --locked -p avalon-server --features vendored-openssl
-          cargo build --release --locked -p avalon-cli --no-default-features
+          cargo build --release --locked -p avalon-cli --no-default-features --features vendored-openssl
 
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
