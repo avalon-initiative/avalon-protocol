@@ -123,12 +123,32 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Expand-Archive -Path dist/avalon-*.zip -DestinationPath dist
+          $ErrorActionPreference = 'Continue'
+          Expand-Archive -Path dist/avalon-*.zip -DestinationPath dist -Verbose
           $dir = (Get-ChildItem -Path dist -Directory -Filter 'avalon-*' | Select-Object -First 1).FullName
-          $out = & "$dir\avalon.exe" 2>&1 | Out-String
+          Write-Host "dir = $dir"
+          if (-not $dir) { throw "no extracted avalon-* directory found under dist/" }
+          Get-ChildItem $dir
+
+          try {
+            $out = & "$dir\avalon.exe" 2>&1 | Out-String
+            Write-Host "avalon.exe exit code: $LASTEXITCODE"
+            Write-Host "avalon.exe output: $out"
+          } catch {
+            Write-Host "avalon.exe invocation threw: $_"
+            throw
+          }
           if ($out -notmatch '^usage: avalon') { throw "unexpected avalon.exe output: $out" }
+
           # A dynamically-linked libssl would fail to load before this panic is ever reached.
-          $serverOut = & "$dir\avalon-server.exe" 2>&1 | Out-String
+          try {
+            $serverOut = & "$dir\avalon-server.exe" 2>&1 | Out-String
+            Write-Host "avalon-server.exe exit code: $LASTEXITCODE"
+            Write-Host "avalon-server.exe output: $serverOut"
+          } catch {
+            Write-Host "avalon-server.exe invocation threw: $_"
+            throw
+          }
           if ($serverOut -notmatch 'DATABASE_URL must be set') { throw "avalon-server.exe did not fail with the expected DATABASE_URL panic: $serverOut" }
 
       - uses: actions/upload-artifact@v4
