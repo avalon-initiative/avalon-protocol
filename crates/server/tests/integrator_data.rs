@@ -374,6 +374,99 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     assert_eq!(count, 0);
 }
 
+/// An instance whose serialized JSON exceeds
+/// `avalon_protocol::integrator_schemas::MAX_INSTANCE_SERIALIZED_BYTES` is
+/// rejected, and never stored — distinct from, and tighter than, the
+/// generic HTTP body cap.
+#[tokio::test]
+#[ignore]
+async fn an_oversized_instance_is_rejected_and_never_stored() {
+    use avalon_protocol::integrator_schemas::MAX_INSTANCE_SERIALIZED_BYTES;
+
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let integrator = register_integrator(&http, &base, "test-oversized").await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    connect(&http, &base, &pool, &integrator, identity_id, &token).await;
+
+    let published = publish_schema(
+        &http,
+        &base,
+        &integrator,
+        serde_json::json!({ "proto_source": CHARACTER_PROTO }),
+    )
+    .await
+    .json::<serde_json::Value>()
+    .await
+    .unwrap();
+    let version = published["version"].as_u64().unwrap();
+
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let response = http
+        .post(format!(
+            "{base}/integrations/{}/schemas/{version}/data",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "subject": identity_id,
+            "instance": { "level": 1, "title": "a".repeat(MAX_INSTANCE_SERIALIZED_BYTES) },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM integrator_data_instances WHERE subject = $1")
+            .bind(identity_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+}
+
+/// An instance comfortably under the size ceiling is accepted normally.
+#[tokio::test]
+#[ignore]
+async fn an_instance_under_the_size_ceiling_is_accepted() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let integrator = register_integrator(&http, &base, "test-under-cap").await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    connect(&http, &base, &pool, &integrator, identity_id, &token).await;
+
+    let published = publish_schema(
+        &http,
+        &base,
+        &integrator,
+        serde_json::json!({ "proto_source": CHARACTER_PROTO }),
+    )
+    .await
+    .json::<serde_json::Value>()
+    .await
+    .unwrap();
+    let version = published["version"].as_u64().unwrap();
+
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let response = http
+        .post(format!(
+            "{base}/integrations/{}/schemas/{version}/data",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "subject": identity_id,
+            "instance": { "level": 1, "title": "Adventurer" },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
 /// Scenario 7: an integrator cannot publish instance data for an identity it has
 /// no active binding to.
 #[tokio::test]

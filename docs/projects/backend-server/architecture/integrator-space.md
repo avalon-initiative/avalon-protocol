@@ -269,6 +269,20 @@ guarantee is actually needed, following the same discipline
   `AppError::InvalidProtoSchema`, never guessed at. The *validated* instance
   JSON is still stored/served as plain JSONB afterward — the protobuf
   machinery is a write-time validation gate, not a new storage/wire format.
+- **Shape governance, not semantic policing.** A schema's top-level message
+  is also rejected if it declares more than
+  `avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS` (100)
+  fields, or nests embedded messages deeper than
+  `MAX_SCHEMA_NESTING_DEPTH` (10, counting the top-level message itself as
+  depth 1) — a pathological shape is rejected at publish time
+  (`proto_schema::validate_message_shape`) rather than only incidentally
+  bounded by the generic HTTP body cap. These are fixed protocol-level
+  constants, not per-hoster config: unlike the HTTP body cap or rate
+  limits, they gate whether a schema is *valid* at all, so every node must
+  apply the identical bound or mirrors would diverge on what to replicate.
+  This is size/shape governance only — it says nothing about what an
+  integrator's fields mean, matching "What this explicitly does not do"
+  below.
 - **Schema-level and field-level visibility** (`default_visibility`:
   `"public"`/`"private"`, `field_visibility`: field name ->
   `"public"`/`"private"`, overriding the default for that field in either
@@ -301,7 +315,12 @@ guarantee is actually needed, following the same discipline
   `protobuf-json-mapping` (`proto_schema::validate_instance_json`) — unknown
   fields, wrong types, and (for a proto2-style schema) missing `required`
   fields are all rejected with `AppError::InstanceSchemaMismatch`, never
-  stored.
+  stored. The instance's total serialized JSON size is also capped at
+  `avalon_protocol::integrator_schemas::MAX_INSTANCE_SERIALIZED_BYTES`
+  (64 KiB) — tighter than, and independent of, the generic HTTP body cap;
+  same fixed-protocol-constant reasoning as the schema shape bounds above,
+  bounding what one write durably commits to storage rather than gating
+  legitimate schema flexibility.
 - **Read**: `GET /identities/{id}/integrator-data`
   (`integrator_data::get_identity_integrator_data`) — public, unauthenticated, same
   posture `GET /attestations/{id}` already has. Reads the indexer's own

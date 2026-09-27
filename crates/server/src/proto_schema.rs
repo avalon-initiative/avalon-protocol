@@ -8,7 +8,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
 
-use protobuf::reflect::{FileDescriptor, MessageDescriptor};
+use avalon_protocol::integrator_schemas::{
+    MAX_INSTANCE_SERIALIZED_BYTES, MAX_SCHEMA_NESTING_DEPTH, MAX_SCHEMA_TOP_LEVEL_FIELDS,
+};
+use protobuf::reflect::{FileDescriptor, MessageDescriptor, RuntimeFieldType, RuntimeType};
 
 use crate::error::AppError;
 
@@ -111,7 +114,7 @@ pub fn parse_root_message(proto_source: &str) -> Result<MessageDescriptor, AppEr
         })?;
 
     let mut top_level_messages: Vec<MessageDescriptor> = file_descriptor.messages().collect();
-    match top_level_messages.len() {
+    let root = match top_level_messages.len() {
         0 => Err(AppError::InvalidProtoSchema {
             detail: "schema must declare exactly one top-level message; found none".to_string(),
         }),
@@ -126,7 +129,54 @@ pub fn parse_root_message(proto_source: &str) -> Result<MessageDescriptor, AppEr
                     .join(", ")
             ),
         }),
+    }?;
+    validate_message_shape(&root)?;
+    Ok(root)
+}
+
+/// Rejects a root message whose declared field count or embedded-message
+/// nesting depth exceeds the fixed protocol bounds
+/// (`avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS`/
+/// `MAX_SCHEMA_NESTING_DEPTH`) — a pathological schema shape is rejected at
+/// publish time rather than only incidentally bounded by the generic HTTP
+/// body cap.
+fn validate_message_shape(root: &MessageDescriptor) -> Result<(), AppError> {
+    let field_count = root.fields().count();
+    if field_count > MAX_SCHEMA_TOP_LEVEL_FIELDS {
+        return Err(AppError::InvalidProtoSchema {
+            detail: format!(
+                "schema's top-level message `{}` declares {field_count} fields, exceeding the maximum of {MAX_SCHEMA_TOP_LEVEL_FIELDS}",
+                root.name()
+            ),
+        });
     }
+    check_nesting_depth(root, 1)
+}
+
+/// `depth` counts `message` itself (the top-level message is depth 1);
+/// recurses into every message-typed field (singular, repeated, or a map's
+/// value type) one level deeper.
+fn check_nesting_depth(message: &MessageDescriptor, depth: usize) -> Result<(), AppError> {
+    if depth > MAX_SCHEMA_NESTING_DEPTH {
+        return Err(AppError::InvalidProtoSchema {
+            detail: format!(
+                "schema message `{}` nests deeper than the maximum of {MAX_SCHEMA_NESTING_DEPTH}",
+                message.name()
+            ),
+        });
+    }
+    for field in message.fields() {
+        let nested = match field.runtime_field_type() {
+            RuntimeFieldType::Singular(RuntimeType::Message(m)) => Some(m),
+            RuntimeFieldType::Repeated(RuntimeType::Message(m)) => Some(m),
+            RuntimeFieldType::Map(_, RuntimeType::Message(m)) => Some(m),
+            _ => None,
+        };
+        if let Some(nested) = nested {
+            check_nesting_depth(&nested, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 /// Validates that every key in `field_visibility` names a real field of
@@ -170,6 +220,17 @@ pub fn validate_instance_json(
         });
     }
     let json_text = instance_json.to_string();
+    // Fixed protocol-level ceiling, tighter than the generic HTTP body cap
+    // — bounds what one write durably commits to storage, not schema
+    // flexibility (see `avalon_protocol::integrator_schemas::MAX_INSTANCE_SERIALIZED_BYTES`).
+    if json_text.len() > MAX_INSTANCE_SERIALIZED_BYTES {
+        return Err(AppError::InstanceSchemaMismatch {
+            detail: format!(
+                "instance is {} serialized bytes, exceeding the maximum of {MAX_INSTANCE_SERIALIZED_BYTES}",
+                json_text.len()
+            ),
+        });
+    }
     let message = protobuf_json_mapping::parse_dyn_from_str(root, &json_text).map_err(|e| {
         AppError::InstanceSchemaMismatch {
             detail: e.to_string(),
@@ -274,6 +335,75 @@ mod tests {
         let source = "syntax = \"proto2\"; message Character { required uint32 level = 1; optional string name = 2; }";
         let root = parse_root_message(source).unwrap();
         let instance = serde_json::json!({ "name": "Aria" });
+        let err = validate_instance_json(&root, &instance).unwrap_err();
+        assert!(matches!(err, AppError::InstanceSchemaMismatch { .. }));
+    }
+
+    fn many_fields_proto(count: usize) -> String {
+        let fields: String = (1..=count)
+            .map(|i| format!("uint32 f{i} = {i}; "))
+            .collect();
+        format!("syntax = \"proto3\"; message Many {{ {fields} }}")
+    }
+
+    #[test]
+    fn accepts_a_schema_at_the_max_field_count() {
+        let source = many_fields_proto(MAX_SCHEMA_TOP_LEVEL_FIELDS);
+        assert!(parse_root_message(&source).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_schema_over_the_max_field_count() {
+        let source = many_fields_proto(MAX_SCHEMA_TOP_LEVEL_FIELDS + 1);
+        let err = parse_root_message(&source).unwrap_err();
+        assert!(matches!(err, AppError::InvalidProtoSchema { .. }));
+    }
+
+    /// Builds a `.proto` source whose top-level message reaches exactly
+    /// `depth` levels of nested-message embedding (the top-level message
+    /// itself is depth 1), via proto's own nested-message-declaration
+    /// syntax — the only way to add message nesting without violating the
+    /// separate "exactly one top-level message" rule.
+    fn nested_proto(depth: usize) -> String {
+        fn build(level: usize, max: usize) -> String {
+            if level == max {
+                format!("message M{level} {{ uint32 v = 1; }}")
+            } else {
+                let child = level + 1;
+                format!(
+                    "message M{level} {{ {} M{child} child = 1; }}",
+                    build(child, max)
+                )
+            }
+        }
+        format!("syntax = \"proto3\"; {}", build(0, depth - 1))
+    }
+
+    #[test]
+    fn accepts_a_schema_at_the_max_nesting_depth() {
+        let source = nested_proto(MAX_SCHEMA_NESTING_DEPTH);
+        assert!(parse_root_message(&source).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_schema_over_the_max_nesting_depth() {
+        let source = nested_proto(MAX_SCHEMA_NESTING_DEPTH + 1);
+        let err = parse_root_message(&source).unwrap_err();
+        assert!(matches!(err, AppError::InvalidProtoSchema { .. }));
+    }
+
+    #[test]
+    fn accepts_an_instance_under_the_max_serialized_size() {
+        let root = parse_root_message(CHARACTER_PROTO).unwrap();
+        let instance = serde_json::json!({ "level": 5, "name": "a".repeat(100) });
+        assert!(validate_instance_json(&root, &instance).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_instance_over_the_max_serialized_size() {
+        let root = parse_root_message(CHARACTER_PROTO).unwrap();
+        let instance =
+            serde_json::json!({ "level": 5, "name": "a".repeat(MAX_INSTANCE_SERIALIZED_BYTES) });
         let err = validate_instance_json(&root, &instance).unwrap_err();
         assert!(matches!(err, AppError::InstanceSchemaMismatch { .. }));
     }
