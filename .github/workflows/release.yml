@@ -61,10 +61,8 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        env:
-          OPENSSL_STATIC: "1"
         run: |
-          cargo build --release --locked -p avalon-server
+          cargo build --release --locked -p avalon-server --features vendored-openssl
           cargo build --release --locked -p avalon-cli --no-default-features
 
       - name: Package
