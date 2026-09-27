@@ -90,7 +90,7 @@ pub struct ShardMirrorSources {
 
 impl ShardMirrorSources {
     pub fn from_env() -> Self {
-        let raw = std::env::var("AVALON_MIRROR_PEERS").unwrap_or_default();
+        let raw = crate::mirror_watcher::effective_mirror_peers();
         let sources = crate::mirror_watcher::parse_mirror_peers(&raw)
             .into_iter()
             .collect();
