@@ -2,11 +2,17 @@ name: Release
 
 # Pushing a v<X.Y.Z>[-title] tag (created by `make release-tag`) builds the
 # avalon-server and avalon binaries for each platform, attests their build
-# provenance, and creates one GitHub Release. A manual run only builds and
+# provenance, and creates one GitHub Release. A manual run or a PR only builds and
 # uploads workflow artifacts; it never attests or publishes, whatever dry_run says.
 on:
   push:
     tags: ["v*"]
+  # A PR touching the release pipeline exercises it as a dry run.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release.sh
+      - scripts/verify-release-version.sh
   workflow_dispatch:
     inputs:
       dry_run:
@@ -40,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Require a tag on main
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "Tag ${GITHUB_REF_NAME} is not on main; refusing to release."; exit 1; }
@@ -108,7 +114,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload the release files as a workflow artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: release-files
@@ -116,13 +122,13 @@ jobs:
           if-no-files-found: error
 
       - name: Attest build provenance
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: dist/*.tar.gz
 
       - name: Create the GitHub Release
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
