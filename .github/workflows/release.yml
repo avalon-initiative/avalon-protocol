@@ -124,6 +124,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          # Both binaries below are meant to exit non-zero; without this, pwsh
+          # 7.3+ auto-throws on any non-zero native exit code before the
+          # script can inspect it.
+          $PSNativeCommandUseErrorActionPreference = $false
           Expand-Archive -Path dist/avalon-*.zip -DestinationPath dist -Verbose
           $dir = (Get-ChildItem -Path dist -Directory -Filter 'avalon-*' | Select-Object -First 1).FullName
           Write-Host "dir = $dir"
