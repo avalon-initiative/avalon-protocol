@@ -4,10 +4,6 @@
   "supportedIn": [
     "rust"
   ],
-  "notSupported": {
-    "csharp": "no client-side witness-cosigning verification yet — only the Rust protocol crate implements verify_cosigned_tree_head so far (#932); production known-list management and gossip are #946/#947, still open.",
-    "typescript": "no client-side witness-cosigning verification yet — same gap as csharp."
-  },
   "authorSigningKeySeedHex": "1111111111111111111111111111111111111111111111111111111111111111",
   "authorVerifyingKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
   "witnessSigningKeySeedsHex": {
