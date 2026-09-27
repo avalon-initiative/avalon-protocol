@@ -297,6 +297,66 @@ async fn bulk_issue(
     .unwrap()
 }
 
+/// Same as [`bulk_issue`], but each claim carries its own `evidence` —
+/// evidence is never part of what's signed (`bulk_signing_bytes` above
+/// only folds in the achievement refs), so the signature math is unchanged.
+async fn bulk_issue_with_evidence(
+    http: &reqwest::Client,
+    base: &str,
+    call: &BulkCall,
+    claims: &[(&str, serde_json::Value)],
+) -> reqwest::Response {
+    let keys: Vec<&str> = claims.iter().map(|(key, _)| *key).collect();
+    let achievements: Vec<String> = keys
+        .iter()
+        .map(|key| format!("game:{}:achievement:{key}", call.integrator.slug))
+        .collect();
+    let issuer_ref = format!("game:{}", call.integrator.slug);
+    let signing_bytes = bulk_signing_bytes(&issuer_ref, call.subject, &achievements);
+    let signature = call.integrator.signing_key.sign(&signing_bytes);
+
+    let (challenge_id, nonce) = integrator_challenge(http, base, &call.integrator).await;
+    let challenge_signature = call.integrator.signing_key.sign(&nonce);
+
+    http.post(format!(
+        "{base}/integrations/{}/achievements/bulk-issue",
+        call.integrator.slug
+    ))
+    .header(
+        "x-avalon-integrator-key-id",
+        call.integrator.key_id.to_string(),
+    )
+    .header("x-avalon-integrator-challenge-id", challenge_id)
+    .header(
+        "x-avalon-integrator-signature",
+        BASE64.encode(challenge_signature.to_bytes()),
+    )
+    .header("x-avalon-identity-id", call.subject.to_string())
+    .json(&serde_json::json!({
+        "key_id": call.integrator.key_id,
+        "signature": BASE64.encode(signature.to_bytes()),
+        "claims": claims
+            .iter()
+            .map(|(key, evidence)| serde_json::json!({ "key": key, "evidence": evidence }))
+            .collect::<Vec<_>>(),
+    }))
+    .send()
+    .await
+    .unwrap()
+}
+
+/// A JSON `evidence` object whose serialized form is exactly `total_bytes`
+/// long — padded with an ASCII string value so no escaping shifts the count.
+fn evidence_of_size(total_bytes: usize) -> serde_json::Value {
+    let base_len = serde_json::to_vec(&serde_json::json!({ "note": "" }))
+        .unwrap()
+        .len();
+    let padding = total_bytes - base_len;
+    let evidence = serde_json::json!({ "note": "a".repeat(padding) });
+    assert_eq!(serde_json::to_vec(&evidence).unwrap().len(), total_bytes);
+    evidence
+}
+
 #[tokio::test]
 #[ignore]
 async fn bulk_issue_with_all_valid_claims_issues_every_one() {
@@ -464,6 +524,65 @@ async fn bulk_issue_rejects_an_empty_claims_list() {
 
     let response = bulk_issue(&http, &base, &call, &[]).await;
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore]
+async fn bulk_issue_rejects_the_whole_batch_on_one_oversized_evidence() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let call = setup(&http, &base, &pool).await;
+    define_achievement(&http, &base, &call.integrator, "dragon_slayer").await;
+    define_achievement(&http, &base, &call.integrator, "lost_city").await;
+
+    let claims = [
+        ("dragon_slayer", serde_json::json!(null)),
+        (
+            "lost_city",
+            evidence_of_size(avalon_protocol::event_payloads::MAX_EVIDENCE_BYTES + 1),
+        ),
+    ];
+    let response = bulk_issue_with_evidence(&http, &base, &call, &claims).await;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(
+        body["code"].as_str().unwrap(),
+        "ATTESTATION_EVIDENCE_TOO_LARGE"
+    );
+
+    let row =
+        sqlx::query("SELECT COUNT(*) AS count FROM achievement_attestations WHERE subject = $1")
+            .bind(call.subject)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let count: i64 = sqlx::Row::try_get(&row, "count").unwrap();
+    assert_eq!(
+        count, 0,
+        "one oversized claim must reject the whole batch, never partially applied"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn bulk_issue_accepts_evidence_at_the_byte_cap() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let call = setup(&http, &base, &pool).await;
+    define_achievement(&http, &base, &call.integrator, "dragon_slayer").await;
+
+    let claims = [(
+        "dragon_slayer",
+        evidence_of_size(avalon_protocol::event_payloads::MAX_EVIDENCE_BYTES),
+    )];
+    let response = bulk_issue_with_evidence(&http, &base, &call, &claims).await;
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let body: serde_json::Value = response.json().await.unwrap();
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "issued");
 }
 
 #[tokio::test]

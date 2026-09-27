@@ -10,8 +10,8 @@ use avalon_protocol::achievements::{
     bulk_attestation_signing_bytes, AchievementAttestation, Issuer, Signature,
 };
 use avalon_protocol::event_payloads::{
-    ClaimDefinedPayload, ClaimDefinitionRetiredPayload, ClaimDefinitionUpdatedPayload,
-    ClaimIssuedPayload, ClaimProofPayload,
+    evidence_byte_size, ClaimDefinedPayload, ClaimDefinitionRetiredPayload,
+    ClaimDefinitionUpdatedPayload, ClaimIssuedPayload, ClaimProofPayload, MAX_EVIDENCE_BYTES,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
@@ -100,6 +100,20 @@ fn write_quota_window_hours_from_env() -> i64 {
 pub(crate) fn guard_write_quota(recent_count: i64, additional: i64) -> Result<(), AppError> {
     if recent_count + additional > write_quota_from_env() {
         return Err(AppError::AttestationWriteQuotaExceeded);
+    }
+    Ok(())
+}
+
+/// Rejects `evidence` up front, before any signature verification or DB
+/// work, using the same size computation [`ClaimIssuedPayload::new`]
+/// enforces again at construction.
+fn guard_evidence_size(evidence: &Option<serde_json::Value>) -> Result<(), AppError> {
+    let actual_bytes = evidence_byte_size(evidence);
+    if actual_bytes > MAX_EVIDENCE_BYTES {
+        return Err(AppError::AttestationEvidenceTooLarge {
+            max_bytes: MAX_EVIDENCE_BYTES,
+            actual_bytes,
+        });
     }
     Ok(())
 }
@@ -881,6 +895,8 @@ async fn issue_attestation(
         return Err(AppError::AchievementDefinitionForbidden);
     }
 
+    guard_evidence_size(&body.evidence)?;
+
     // A caller that supplied an `Idempotency-Key` gets exactly
     // the same response replayed on a retry, never a second issuance — see
     // `crate::idempotency`'s own doc comment for why this endpoint is
@@ -1020,18 +1036,21 @@ async fn issue_attestation(
             &subject_id.to_string(),
             &format!("{claim_kind}_issued"),
         ),
-        payload: serde_json::to_value(ClaimIssuedPayload {
-            id: attestation_id,
-            issuer: issuer_str.clone(),
-            subject: subject_id,
-            achievement: definition.id.clone(),
-            evidence: body.evidence.clone(),
-            proof: ClaimProofPayload {
-                key_id: body.key_id,
-                algorithm: signing_key.algorithm.clone(),
-                bytes: body.signature.clone(),
-            },
-        })
+        payload: serde_json::to_value(
+            ClaimIssuedPayload::new(
+                attestation_id,
+                issuer_str.clone(),
+                subject_id,
+                definition.id.clone(),
+                body.evidence.clone(),
+                ClaimProofPayload {
+                    key_id: body.key_id,
+                    algorithm: signing_key.algorithm.clone(),
+                    bytes: body.signature.clone(),
+                },
+            )
+            .expect("evidence size already checked by guard_evidence_size"),
+        )
         .expect("ClaimIssuedPayload should serialize"),
         timestamp: now,
         version: 1,
@@ -1192,6 +1211,12 @@ async fn bulk_issue_attestation(
         return Err(AppError::InvalidBulkAttestationRequest);
     }
 
+    // Reject the whole batch up front on any oversized claim's evidence,
+    // before signature verification or DB work — never partially applied.
+    for claim in &body.claims {
+        guard_evidence_size(&claim.evidence)?;
+    }
+
     let idempotency_key = crate::idempotency::read_idempotency_key(headers);
     if let Some(key) = &idempotency_key {
         if let Some(cached) = crate::idempotency::find_cached::<BulkIssueAttestationResponse>(
@@ -1335,18 +1360,21 @@ async fn bulk_issue_attestation(
                 &subject_id.to_string(),
                 &format!("{claim_kind}_issued"),
             ),
-            payload: serde_json::to_value(ClaimIssuedPayload {
-                id: attestation_id,
-                issuer: issuer_str.clone(),
-                subject: subject_id,
-                achievement: definition.id.clone(),
-                evidence: claim.evidence.clone(),
-                proof: ClaimProofPayload {
-                    key_id: body.key_id,
-                    algorithm: signing_key.algorithm.clone(),
-                    bytes: body.signature.clone(),
-                },
-            })
+            payload: serde_json::to_value(
+                ClaimIssuedPayload::new(
+                    attestation_id,
+                    issuer_str.clone(),
+                    subject_id,
+                    definition.id.clone(),
+                    claim.evidence.clone(),
+                    ClaimProofPayload {
+                        key_id: body.key_id,
+                        algorithm: signing_key.algorithm.clone(),
+                        bytes: body.signature.clone(),
+                    },
+                )
+                .expect("evidence size already checked by guard_evidence_size"),
+            )
             .expect("ClaimIssuedPayload should serialize"),
             timestamp: now,
             version: 1,

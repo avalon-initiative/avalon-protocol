@@ -624,6 +624,40 @@ pub struct ClaimProofPayload {
     pub bytes: String,
 }
 
+/// Fixed cap on `evidence`'s serialized byte size — a network-wide
+/// validity rule, not a per-node policy knob, since it gates what every
+/// node accepts into the permanent hash-chained ledger.
+pub const MAX_EVIDENCE_BYTES: usize = 4096;
+
+/// `evidence` exceeded [`MAX_EVIDENCE_BYTES`] when serialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceTooLarge {
+    pub max_bytes: usize,
+    pub actual_bytes: usize,
+}
+
+impl std::fmt::Display for EvidenceTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "evidence is {} bytes, exceeding the {}-byte limit",
+            self.actual_bytes, self.max_bytes
+        )
+    }
+}
+
+impl std::error::Error for EvidenceTooLarge {}
+
+/// Serialized byte size of `evidence`, or 0 when absent — the one
+/// definition of "how big is evidence" every issuance path shares.
+pub fn evidence_byte_size(evidence: &Option<serde_json::Value>) -> usize {
+    evidence
+        .as_ref()
+        .and_then(|value| serde_json::to_vec(value).ok())
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimIssuedPayload {
     pub id: Uuid,
@@ -633,6 +667,36 @@ pub struct ClaimIssuedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<serde_json::Value>,
     pub proof: ClaimProofPayload,
+}
+
+impl ClaimIssuedPayload {
+    /// The one choke point for constructing this payload — every internal
+    /// call path goes through here, so `evidence` can never exceed
+    /// [`MAX_EVIDENCE_BYTES`] regardless of which route built it.
+    pub fn new(
+        id: Uuid,
+        issuer: String,
+        subject: Uuid,
+        achievement: String,
+        evidence: Option<serde_json::Value>,
+        proof: ClaimProofPayload,
+    ) -> Result<Self, EvidenceTooLarge> {
+        let actual_bytes = evidence_byte_size(&evidence);
+        if actual_bytes > MAX_EVIDENCE_BYTES {
+            return Err(EvidenceTooLarge {
+                max_bytes: MAX_EVIDENCE_BYTES,
+                actual_bytes,
+            });
+        }
+        Ok(Self {
+            id,
+            issuer,
+            subject,
+            achievement,
+            evidence,
+            proof,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1733,6 +1797,67 @@ mod tests {
             serde_json::from_value::<ClaimIssuedPayload>(json).unwrap(),
             payload
         );
+    }
+
+    fn sample_proof() -> ClaimProofPayload {
+        ClaimProofPayload {
+            key_id: Uuid::nil(),
+            algorithm: "ed25519".to_string(),
+            bytes: "base64sig".to_string(),
+        }
+    }
+
+    /// A JSON evidence object whose serialized size is exactly `total_bytes`.
+    fn evidence_of_size(total_bytes: usize) -> serde_json::Value {
+        let base_len = serde_json::to_vec(&serde_json::json!({ "note": "" }))
+            .unwrap()
+            .len();
+        let padding = total_bytes - base_len;
+        let evidence = serde_json::json!({ "note": "a".repeat(padding) });
+        assert_eq!(serde_json::to_vec(&evidence).unwrap().len(), total_bytes);
+        evidence
+    }
+
+    #[test]
+    fn evidence_over_the_byte_cap_is_rejected() {
+        let err = ClaimIssuedPayload::new(
+            Uuid::nil(),
+            "game:ashen-realms".to_string(),
+            Uuid::nil(),
+            "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            Some(evidence_of_size(MAX_EVIDENCE_BYTES + 1)),
+            sample_proof(),
+        )
+        .unwrap_err();
+        assert_eq!(err.max_bytes, MAX_EVIDENCE_BYTES);
+        assert_eq!(err.actual_bytes, MAX_EVIDENCE_BYTES + 1);
+    }
+
+    #[test]
+    fn evidence_at_the_byte_cap_is_accepted() {
+        let payload = ClaimIssuedPayload::new(
+            Uuid::nil(),
+            "game:ashen-realms".to_string(),
+            Uuid::nil(),
+            "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            Some(evidence_of_size(MAX_EVIDENCE_BYTES)),
+            sample_proof(),
+        )
+        .unwrap();
+        assert_eq!(evidence_byte_size(&payload.evidence), MAX_EVIDENCE_BYTES);
+    }
+
+    #[test]
+    fn missing_evidence_is_always_accepted() {
+        ClaimIssuedPayload::new(
+            Uuid::nil(),
+            "game:ashen-realms".to_string(),
+            Uuid::nil(),
+            "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            None,
+            sample_proof(),
+        )
+        .unwrap();
     }
 
     #[test]

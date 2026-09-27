@@ -302,6 +302,16 @@ the other.
   `AvalonAchievementCard` renders the built-in icon or an `<img>` for `icon_url` when
   present. Verified live, including the default-fallback and rejected-input paths
   (`crates/server/tests/achievements.rs`).
+- **`evidence` is byte-capped, not just body-size-limited.** Consistent with its
+  documented role as an opaque pointer/reference (a hash, URL, or short identifier),
+  not a place to store real content, `evidence`'s serialized byte size is capped at a
+  fixed `MAX_EVIDENCE_BYTES` (4096 bytes, `crates/protocol/src/event_payloads.rs`) —
+  a network-wide validity rule, not a per-node config knob, since it gates what every
+  node accepts into the permanent hash-chained ledger. Enforced both up front in
+  `issue_attestation`/`bulk_issue_attestation` (`AppError::AttestationEvidenceTooLarge`,
+  naming the actual and allowed byte counts) and again at `ClaimIssuedPayload::new`,
+  the one choke point every issuance path constructs the payload through, so no
+  internal call path can bypass the route-level check.
 
 ## Open questions
 
