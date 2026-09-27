@@ -65,9 +65,9 @@ Each file has this shape:
   accepted, below-threshold, unknown-witness, stale, conflicting-heads
   (equivocation) and author-as-known-witness cases (the author's own valid
   signature counts as the vote of a known witness holding its key), all against precomputed signatures under one fixed
-  set of author/witness key seeds. Rust only today — production
-  known-list management and cosignature gossip (#946/#947) haven't landed
-  in any SDK yet.
+  set of author/witness key seeds. Asserted by all three SDKs against
+  an explicit, caller-supplied known list; building that list from
+  discovery is not covered by this file.
 - `identity-chain.json` — per-identity event chains
   (`avalon_protocol::identity_chain`). Unlike the files above it has two
   arrays instead of `vectors`: `hashVectors` (`compute_event_hash` inputs —

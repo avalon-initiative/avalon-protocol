@@ -2,12 +2,10 @@
   "$schema": "./SCHEMA.md#witness-cosigned-tree-head",
   "description": "Witness-cosigned tree head acceptance (#932, wiring the #934 design-spike primitives — avalon_protocol::witness::WitnessCosignature/witness_signing_message and avalon_protocol::cosigned_sth::verify_cosigned_tree_head). A cosigned head is accepted only when the author's own SignedTreeHead verifies AND at least witness::majority_threshold(knownList.length) of its cosignatures are individually signature-valid against a key in the verifier's own known list and fresh (observedAt within [freshnessCutoff, now]). Each vector's sth/cosignatures carry precomputed signatures (same fixed seeds throughout the file) so a reimplementation is checked against real signature bytes, not just its own round trip.",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
-  "notSupported": {
-    "csharp": "no client-side witness-cosigning verification yet — only the Rust protocol crate implements verify_cosigned_tree_head so far (#932); production known-list management and gossip are #946/#947, still open.",
-    "typescript": "no client-side witness-cosigning verification yet — same gap as csharp."
-  },
   "authorSigningKeySeedHex": "1111111111111111111111111111111111111111111111111111111111111111",
   "authorVerifyingKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
   "witnessSigningKeySeedsHex": {
