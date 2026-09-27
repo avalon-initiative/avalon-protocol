@@ -274,6 +274,11 @@ pub enum AppError {
     InvalidBulkAttestationRequest,
     #[error("this issuer has written too many attestations about this subject recently")]
     AttestationWriteQuotaExceeded,
+    #[error("evidence is {actual_bytes} bytes, exceeding the {max_bytes}-byte limit")]
+    AttestationEvidenceTooLarge {
+        max_bytes: usize,
+        actual_bytes: usize,
+    },
     #[error("attestation not found")]
     AttestationNotFound,
     #[error("only the issuer that issued this attestation may revoke it")]
@@ -611,6 +616,7 @@ impl AppError {
             AppError::InvalidAttestationSignature => "INVALID_ATTESTATION_SIGNATURE",
             AppError::InvalidBulkAttestationRequest => "INVALID_BULK_ATTESTATION_REQUEST",
             AppError::AttestationWriteQuotaExceeded => "ATTESTATION_WRITE_QUOTA_EXCEEDED",
+            AppError::AttestationEvidenceTooLarge { .. } => "ATTESTATION_EVIDENCE_TOO_LARGE",
             AppError::AttestationNotFound => "ATTESTATION_NOT_FOUND",
             AppError::AttestationRevocationForbidden => "ATTESTATION_REVOCATION_FORBIDDEN",
             AppError::AttestationAlreadyRevoked => "ATTESTATION_ALREADY_REVOKED",
@@ -849,6 +855,7 @@ impl IntoResponse for AppError {
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
             AppError::InvalidBulkAttestationRequest => StatusCode::BAD_REQUEST,
             AppError::AttestationWriteQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
+            AppError::AttestationEvidenceTooLarge { .. } => StatusCode::BAD_REQUEST,
             AppError::AttestationNotFound => StatusCode::NOT_FOUND,
             AppError::AttestationRevocationForbidden => StatusCode::FORBIDDEN,
             AppError::AttestationAlreadyRevoked => StatusCode::CONFLICT,

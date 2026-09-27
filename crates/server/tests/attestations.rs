@@ -7,6 +7,7 @@
 //! care that the bearer token is valid, not that it came from a real
 //! WebAuthn ceremony.
 
+use avalon_protocol::event_payloads::MAX_EVIDENCE_BYTES;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -166,6 +167,18 @@ fn attestation_signing_bytes(
     achievement: &str,
 ) -> Vec<u8> {
     format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
+}
+
+/// A JSON `evidence` object whose serialized form is exactly `total_bytes`
+/// long — padded with an ASCII string value so no escaping shifts the count.
+fn evidence_of_size(total_bytes: usize) -> serde_json::Value {
+    let base_len = serde_json::to_vec(&serde_json::json!({ "note": "" }))
+        .unwrap()
+        .len();
+    let padding = total_bytes - base_len;
+    let evidence = serde_json::json!({ "note": "a".repeat(padding) });
+    assert_eq!(serde_json::to_vec(&evidence).unwrap().len(), total_bytes);
+    evidence
 }
 
 #[tokio::test]
@@ -518,6 +531,163 @@ async fn issuance_against_a_retired_definition_conflicts() {
         .await
         .unwrap();
     assert_eq!(issue.status(), reqwest::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+#[ignore]
+async fn evidence_over_the_byte_cap_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+
+    let headers = auth_headers(&http, &base, &integrator).await;
+    let define = http
+        .post(format!(
+            "{base}/integrations/{}/achievements",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "key": "dragon_slayer",
+            "name": "Dragon Slayer",
+            "description": "Slew the dragon",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(define.status().is_success(), "{:?}", define.status());
+    let achievement_id = define.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
+    let connect_capabilities = ["achievements.issue"];
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "capabilities": connect_capabilities,
+            "signing_key_id": signing_key_id,
+            "signature": sign_connect(&signing_key, &integrator.slug, &connect_capabilities),
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let issuer_ref = format!("game:{}", integrator.slug);
+    let signing_bytes =
+        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let signature = integrator.signing_key.sign(&signing_bytes);
+
+    let mut headers = auth_headers(&http, &base, &integrator).await;
+    headers.insert(
+        "x-avalon-identity-id",
+        identity_id.to_string().parse().unwrap(),
+    );
+    let issue = http
+        .post(format!(
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "key_id": integrator.key_id,
+            "signature": BASE64.encode(signature.to_bytes()),
+            "evidence": evidence_of_size(MAX_EVIDENCE_BYTES + 1),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(issue.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = issue.json().await.unwrap();
+    assert_eq!(
+        body["code"].as_str().unwrap(),
+        "ATTESTATION_EVIDENCE_TOO_LARGE"
+    );
+
+    let row =
+        sqlx::query("SELECT COUNT(*) AS count FROM achievement_attestations WHERE subject = $1")
+            .bind(identity_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let count: i64 = sqlx::Row::try_get(&row, "count").unwrap();
+    assert_eq!(
+        count, 0,
+        "an over-cap evidence must never settle an attestation"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn evidence_at_the_byte_cap_is_accepted() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+
+    let headers = auth_headers(&http, &base, &integrator).await;
+    let define = http
+        .post(format!(
+            "{base}/integrations/{}/achievements",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "key": "dragon_slayer",
+            "name": "Dragon Slayer",
+            "description": "Slew the dragon",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(define.status().is_success(), "{:?}", define.status());
+    let achievement_id = define.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
+    let connect_capabilities = ["achievements.issue"];
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "capabilities": connect_capabilities,
+            "signing_key_id": signing_key_id,
+            "signature": sign_connect(&signing_key, &integrator.slug, &connect_capabilities),
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let issuer_ref = format!("game:{}", integrator.slug);
+    let signing_bytes =
+        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let signature = integrator.signing_key.sign(&signing_bytes);
+
+    let mut headers = auth_headers(&http, &base, &integrator).await;
+    headers.insert(
+        "x-avalon-identity-id",
+        identity_id.to_string().parse().unwrap(),
+    );
+    let issue = http
+        .post(format!(
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
+            integrator.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({
+            "key_id": integrator.key_id,
+            "signature": BASE64.encode(signature.to_bytes()),
+            "evidence": evidence_of_size(MAX_EVIDENCE_BYTES),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(issue.status().is_success(), "{:?}", issue.status());
 }
 
 #[tokio::test]
