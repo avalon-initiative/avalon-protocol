@@ -28,6 +28,8 @@ No Rust or Node toolchain is required for anything on this page — only
    authors (`core` is reserved for the network's pinned core authority), how
    to get a registered shard key, the startup guard's errors, and running one
    shard with hot standby or sibling shards.
+5. [`verifying-a-release.md`](verifying-a-release.md) — checking the checksum and
+   build provenance of a prebuilt release download before running it.
 
 ## If something goes wrong
 

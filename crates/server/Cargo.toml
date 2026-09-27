@@ -35,6 +35,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 avalon-devenv.workspace = true
 webauthn-rs.workspace = true
+openssl = { version = "0.10", optional = true }
 ed25519-dalek.workspace = true
 url.workspace = true
 hex.workspace = true
@@ -82,3 +83,7 @@ path = "src/main.rs"
 [[bin]]
 name = "dump-openapi"
 path = "src/bin/dump_openapi.rs"
+
+[features]
+# Statically links OpenSSL (built from source) so release binaries need no system libssl.
+vendored-openssl = ["dep:openssl", "openssl/vendored"]
