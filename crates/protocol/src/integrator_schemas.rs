@@ -39,6 +39,23 @@ use time::OffsetDateTime;
 
 use crate::ids::{GlobalId, IntegratorId};
 
+/// Fixed protocol-level ceiling on how many fields a schema's top-level
+/// message may declare. Every node enforces the identical bound — this is
+/// consensus-relevant (whether a schema is valid at all), not a per-hoster
+/// throughput knob like the generic HTTP body cap, so it is a constant,
+/// never an env var.
+pub const MAX_SCHEMA_TOP_LEVEL_FIELDS: usize = 100;
+
+/// Fixed protocol-level ceiling on embedded-message nesting depth reachable
+/// from a schema's top-level message (the root message itself is depth 1).
+pub const MAX_SCHEMA_NESTING_DEPTH: usize = 10;
+
+/// Fixed protocol-level ceiling on one instance-data write's total
+/// serialized JSON byte size — tighter than the generic HTTP body cap,
+/// bounding what a single write durably commits to storage rather than
+/// gating schema flexibility.
+pub const MAX_INSTANCE_SERIALIZED_BYTES: usize = 64 * 1024;
+
 /// One immutable, published version of an integrator's declared schema
 /// description. See this module's doc comment for why there is no separate
 /// `IntegratorSchema` type: `integrator_id` plus a monotonic `version` is the whole

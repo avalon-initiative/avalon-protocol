@@ -308,3 +308,94 @@ async fn two_concurrent_publishes_for_the_same_integrator_produce_distinct_seque
         .unwrap();
     assert_eq!(listed.len(), 2);
 }
+
+#[tokio::test]
+#[ignore]
+async fn rejects_a_schema_declaring_more_than_the_max_field_count() {
+    use avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS;
+
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let integrator = register_integrator(&http, &base).await;
+
+    let fields: String = (1..=MAX_SCHEMA_TOP_LEVEL_FIELDS + 1)
+        .map(|i| format!("uint32 f{i} = {i}; "))
+        .collect();
+    let proto_source = format!("syntax = \"proto3\"; message TooWide {{ {fields} }}");
+
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let response = http
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
+        .headers(headers)
+        .json(&serde_json::json!({ "proto_source": proto_source }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore]
+async fn accepts_a_schema_at_exactly_the_max_field_count() {
+    use avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS;
+
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let integrator = register_integrator(&http, &base).await;
+
+    let fields: String = (1..=MAX_SCHEMA_TOP_LEVEL_FIELDS)
+        .map(|i| format!("uint32 f{i} = {i}; "))
+        .collect();
+    let proto_source = format!("syntax = \"proto3\"; message JustWideEnough {{ {fields} }}");
+
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let response = http
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
+        .headers(headers)
+        .json(&serde_json::json!({ "proto_source": proto_source }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::OK,
+        "{:?}",
+        response.text().await
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn rejects_a_schema_nested_deeper_than_the_max_depth() {
+    use avalon_protocol::integrator_schemas::MAX_SCHEMA_NESTING_DEPTH;
+
+    fn build(level: usize, max: usize) -> String {
+        if level == max {
+            format!("message M{level} {{ uint32 v = 1; }}")
+        } else {
+            let child = level + 1;
+            format!(
+                "message M{level} {{ {} M{child} child = 1; }}",
+                build(child, max)
+            )
+        }
+    }
+    let proto_source = format!(
+        "syntax = \"proto3\"; {}",
+        build(0, MAX_SCHEMA_NESTING_DEPTH)
+    );
+
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let integrator = register_integrator(&http, &base).await;
+
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let response = http
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
+        .headers(headers)
+        .json(&serde_json::json!({ "proto_source": proto_source }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
