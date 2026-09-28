@@ -1,0 +1,584 @@
+{
+  "$schema": "./SCHEMA.md#self-certifying-tree-head",
+  "description": "Verification of a tree head of a self-certifying node:<sha256-of-key> shard. The shard id is 'node:' plus the lowercase hex SHA-256 of the raw 32-byte Ed25519 public key that signs its heads, so a verifier handed a head and that key (the optional signing_public_key on GET /ledger/sth/latest and /ledger/sth/{tree_size}, outside the signed bytes) checks the key against the id and the head against the key, with no registry and no trust anchor. Checks run in this order and the first failure is reported: id is not a valid node: id (not_self_certifying), no key presented (missing_key), key is not exactly 64 lowercase hex characters decoding to a valid Ed25519 point (malformed_key), sha256 of the key bytes does not equal the id's hash (key_id_mismatch), signature does not verify over the standard Signed Tree Head signing bytes (bad_signature). expected.check names which verification applies to the shard id: self_certifying for a valid node: id, core_network for core (the existing network and witness verification, not exercised here), unsupported for every other id kind and every malformed id, which never verifies.",
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
+  "generation": "Deterministic. signingKeySeedHex and otherKeySeedHex are the Ed25519 seeds of the two keys (signingPublicKeyHex / otherPublicKeyHex, ids selfCertifyingId / otherSelfCertifyingId). Each head's signatureHex is Ed25519 over the Signed Tree Head signing message (see signed-tree-head.json) of that head's own fields, produced with avalon_protocol::sth::sign_tree_head; 'signed by a different key' vectors use the other seed, and tampered vectors reuse the original signature with one field changed. The non-curve key is 0x01 0x7f followed by zeros, which fails point decompression. Never real credentials.",
+  "signingKeySeedHex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+  "selfCertifyingId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+  "otherKeySeedHex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "otherPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+  "otherSelfCertifyingId": "node:1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+  "vectors": [
+    {
+      "name": "valid head, matching key and id",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": true,
+        "failure": null
+      }
+    },
+    {
+      "name": "valid head on another network and a larger tree",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 4096,
+          "rootHashHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "networkId": "avalon-mainnet-1",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1790000123,
+          "createdAtRfc3339": "2026-09-21T14:15:23Z",
+          "signatureHex": "f18305796d616f5783830ed21e078f505934b45351b11f80694f8a798ee8f80d5adeabf75dd80e69e3e59c1e29f024b828ef76514de277a23c401594db322b0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": true,
+        "failure": null
+      }
+    },
+    {
+      "name": "key does not hash to the id",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "23ecfb6dcad169ba9f39e65c13f0ecbe41acfd62d4b95f3d61e118ff4ded8dee1bde1266b3907e528e35e237635aeb346d3d867840e5fb78bb401079f7f73307"
+        },
+        "signingPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "key_id_mismatch"
+      }
+    },
+    {
+      "name": "key does not hash to the id, head signed by the id's key",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "key_id_mismatch"
+      }
+    },
+    {
+      "name": "right key hash but head signed by a different key",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "23ecfb6dcad169ba9f39e65c13f0ecbe41acfd62d4b95f3d61e118ff4ded8dee1bde1266b3907e528e35e237635aeb346d3d867840e5fb78bb401079f7f73307"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "tampered tree_size",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 13,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "tampered root_hash",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "tampered created_at",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000001,
+          "createdAtRfc3339": "2026-05-28T20:26:41Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "tampered network_id",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-mainnet-1",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "signature is not valid hex",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "not-hex"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "signature has the wrong length",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "abababababababababababababababababababababababababababababababab"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "uppercase-hex key",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "key one byte short",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c97787"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "key one byte long",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873700"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "empty key",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": ""
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "key is not hex",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "32 bytes that are not a curve point",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "017f000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "malformed_key"
+      }
+    },
+    {
+      "name": "missing key",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        }
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "missing_key"
+      }
+    },
+    {
+      "name": "core id",
+      "input": {
+        "shardId": "core",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "core_network",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "game shard id",
+      "input": {
+        "shardId": "game:wow-demo/1",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "app shard id",
+      "input": {
+        "shardId": "app:notes",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "node id with a short hash",
+      "input": {
+        "shardId": "node:10ba682c8a",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "node id with an uppercase hash",
+      "input": {
+        "shardId": "node:10BA682C8AD13513971E8B56881AAB8BD702BB807796ECA81932C735A94D6E6D",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "node id with an empty hash",
+      "input": {
+        "shardId": "node:",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "unknown namespace",
+      "input": {
+        "shardId": "nodes:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "empty id",
+      "input": {
+        "shardId": "",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    },
+    {
+      "name": "id without a namespace",
+      "input": {
+        "shardId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "unsupported",
+        "verified": false,
+        "failure": "not_self_certifying"
+      }
+    }
+  ]
+}

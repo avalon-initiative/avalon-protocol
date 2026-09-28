@@ -60,6 +60,10 @@ conversations/`sync_journal` without a full web framework:
   **`Achievements.cs`**, **`SyncJournal.cs`**, **`CrossNodeLogin.cs`** —
   the remaining domain surfaces, one file per area, mirroring the Rust
   SDK's own module split.
+- **Self-certifying shard heads** — `AvalonClient.GetShardTreeHeadAsync`
+  and `SelfCertifying.Verify` / `ShardCheckFor` verify a `node:<sha256-of-key>`
+  shard's head from the served `SigningPublicKey` and the id alone; see
+  [`../architecture/sdk.md`](../architecture/sdk.md#self-certifying-shard-heads).
 
 Every exception type mirrors a specific `SdkError` variant from the Rust
 SDK by design (see each exception's own doc comment in `Session.cs`) —

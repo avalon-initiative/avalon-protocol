@@ -49,6 +49,10 @@ are both implemented for real, not stubbed out.
   `DeviceLoginDeniedError`/`DeviceLoginExpiredError`/
   `NoLocalSigningKeyError`), mapped from HTTP status + the server's own
   `{ error, code }` body.
+- Self-certifying shard heads: `getShardTreeHead`,
+  `verifySelfCertifyingTreeHead` and `shardCheck` verify a `node:<sha256-of-key>`
+  shard's head from the served `signing_public_key` and the id alone; see
+  [`../architecture/sdk.md`](../architecture/sdk.md#self-certifying-shard-heads).
 
 ## No dedicated getting-started guide yet
 

@@ -419,6 +419,41 @@ checked-in artifact like the C# equivalent, not a compile-time output.
 WebSocket push-payload shapes and opaque WebAuthn-ceremony blob fields stay
 hand-written, the same carve-outs the Rust and C# codegen make.
 
+## Self-certifying shard heads
+
+A shard whose id is `node:<sha256-of-key>` is named by the lowercase hex SHA-256 of the raw
+32-byte Ed25519 public key that signs its tree heads. `GET /ledger/sth/latest?shard_id=...` and
+`GET /ledger/sth/{tree_size}?shard_id=...` return that key as the optional `signing_public_key`
+(outside the signed bytes; absent from older nodes and from shards that are not self-certifying).
+All three SDKs verify such a head from the key and the id alone, with no trust anchor, registry or
+witness list, and report the first failing check as a typed reason:
+
+1. `not_self_certifying`: the id is not `node:` followed by 64 lowercase hex characters.
+2. `missing_key`: no key was presented.
+3. `malformed_key`: not exactly 64 lowercase hex characters decoding to a valid Ed25519 point.
+4. `key_id_mismatch`: SHA-256 of the key bytes differs from the id's hash.
+5. `bad_signature`: the key's signature does not verify over the standard Signed Tree Head signing
+   bytes (the same construction every other tree-head check uses).
+
+A small dispatcher names which check a shard id gets: `node:` ids use the check above, `core` uses
+the existing network and witness verification (`verify_network`), and every other kind, or a
+malformed id, is unsupported and never verifies. Everything is additive: `verify_network`,
+`connect()` and the existing tree-head types are unchanged, and parsing tolerates the field being
+absent. A verified head proves the key holder signed it and that the key belongs to the id; it does
+not say the shard is honest or current.
+
+| | Fetch | Verify | Dispatcher |
+|---|---|---|---|
+| Rust | `AvalonClient::fetch_shard_tree_head` | `self_certifying::verify_self_certifying_head`, `SelfCertifyingTreeHead::verify` | `self_certifying::shard_check` |
+| C# | `AvalonClient.GetShardTreeHeadAsync` | `SelfCertifying.Verify` | `SelfCertifying.ShardCheckFor` |
+| TypeScript | `getShardTreeHead` | `verifySelfCertifyingTreeHead` | `shardCheck` |
+
+In C# and TypeScript the key is an optional field on the existing tree-head type
+(`SignedTreeHeadWire.SigningPublicKey`, `SignedTreeHeadResponse.signing_public_key`); in Rust the
+existing `SignedTreeHead` is unchanged and `SelfCertifyingTreeHead` carries the head plus the key.
+The shared vectors are `conformance/vectors/self-certifying-tree-head.json`, asserted against
+`avalon_protocol::shard_identity` on the server side and by each SDK.
+
 ## Cross-SDK conformance suite
 
 Wire-shape codegen alone can't catch parity gaps in client-side "smart"
@@ -437,7 +472,9 @@ What's covered today: `cross-node-login.json` (`CrossNodeLoginGrant`
 signing) and `attestation-signing.json` (attestation issuance, bulk
 issuance, and revocation signing bytes) are implemented and verified
 byte-for-byte identical across all three SDKs. `signed-tree-head.json` is
-Rust only. Session-continuation tokens, the WebSocket interest-claim
+Rust only. `self-certifying-tree-head.json` (verifying a `node:` shard's head
+from its presented key) is asserted by all three SDKs and by the server's own
+`shard_identity` code. Session-continuation tokens, the WebSocket interest-claim
 subscribe handshake, and BIP39 mnemonic-derived signing keys exist in
 TypeScript only — the Rust and C# runners assert this gap explicitly (a
 named, passing skip test citing the vector file's own `notSupported`
