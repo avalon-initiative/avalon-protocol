@@ -54,8 +54,9 @@ That's it for a first-time, single-node bring-up. What it does:
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
    container that applies the migration set embedded in the binary
    (sourced from `crates/server/db/migrations/`) and exits.
-4. **Starts `avalon-server`**, built from the repo's `Dockerfile`, listening
-   on `127.0.0.1:8080` on the host.
+4. **Starts `avalon-server`**, pulling the release image published by each
+   tagged release (`ghcr.io/avalon-initiative/avalon-protocol`), listening on
+   `127.0.0.1:8080` on the host.
 
 Re-running `make stack-up` against an already-running stack is safe — it
 skips `.env` generation once one exists, and `docker compose up -d` is
@@ -66,6 +67,40 @@ that are already running.
 make stack-logs   # follow avalon-server's logs
 make stack-down   # stop everything this started
 ```
+
+## Pulling and running the image directly
+
+`make stack-up` is the recommended path (it also brings up Postgres and
+runs migrations), but the image itself is a normal container and works with
+plain `docker run` against a Postgres you already have:
+
+```bash
+docker pull ghcr.io/avalon-initiative/avalon-protocol:v<version>
+docker run -d --name avalon-server -p 127.0.0.1:8080:8080 \
+  -e DATABASE_URL=postgres://avalon:...@db-host:5432/avalon \
+  -e AVALON_NETWORK_ID=avalon-dev-local \
+  -e AVALON_WEBAUTHN_RP_ID=localhost \
+  -e AVALON_WEBAUTHN_ORIGIN=http://localhost:8080 \
+  ghcr.io/avalon-initiative/avalon-protocol:v<version>
+```
+
+Replace `v<version>` with the release you're on — see the
+[Releases page](https://github.com/avalon-initiative/avalon-protocol/releases).
+`docker-compose.yml`'s `avalon-server` service reads the same tag from
+`AVALON_IMAGE_TAG` (default `latest`); set it in `.env` to pin a specific
+release instead of always tracking the newest one. Migrations are applied by
+`avalon-server` itself on every start (see
+[`standalone-binary.md`](standalone-binary.md#upgrading)), so there's nothing
+extra to run first.
+
+Before running it, verify the image the same way you'd verify a downloaded
+tarball — see [`verifying-a-release.md`](verifying-a-release.md#provenance)
+for the recipe, using the image reference in place of a tarball path.
+
+Building `avalon-server` from source instead of pulling this image is still
+supported: layer `docker-compose.source.yml` on top of `docker-compose.yml`
+(see that file's own comment), or use `docker build .` directly with the
+repository's root `Dockerfile`.
 
 ## What you get, and what you don't
 
@@ -145,9 +180,23 @@ applied.
 
 ## Current implementation
 
-- `Dockerfile` — multi-stage build producing `avalon-server` and its
-  `migrate` companion binary. Not yet layer-cached for fast incremental
-  rebuilds (no `cargo-chef`); a first correct build, not an optimized one.
+- `ghcr.io/avalon-initiative/avalon-protocol` — the published, multi-arch
+  (`linux/amd64`, `linux/arm64`) release image, assembled by
+  `.github/workflows/release.yml`'s `image`/`image-publish` jobs from the
+  same `avalon-server`/`avalon` binaries as that release's tarballs — no
+  compiler or source tree in the image, and no separate rebuild that could
+  drift from what the tarballs contain. Tagged with the release version and
+  `latest`; pushed only from a release tag on `main`. `docker-compose.yml`
+  defaults `avalon-server` to it, pinned by `AVALON_IMAGE_TAG`.
+- `Dockerfile` — from-source multi-stage build producing `avalon-server`,
+  `avalon`, and the `migrate` companion binary. Still used for
+  `docker-compose.source.yml`'s from-source override and for `migrate`/
+  `discover-mirror-peers`, which aren't part of the published release
+  artifact. Not yet layer-cached for fast incremental rebuilds (no
+  `cargo-chef`); a first correct build, not an optimized one.
+- `Dockerfile.release` — the minimal runtime image the `image` job builds
+  from a release tarball's already-built binaries: no Rust toolchain, just
+  the two binaries on a slim base.
 - `docker-compose.yml` — `postgres` (also usable standalone for the native
   dev flow — see `../../../maintainers/local-development.md`), plus `migrate` and `avalon-server`
   behind a `stack` Compose profile so a plain `docker compose up -d` (the
@@ -158,6 +207,10 @@ applied.
   reach it, e.g. for `AVALON_MIRROR_PEERS`/`AVALON_BOOTSTRAP_PEERS` on
   another deployment. Docker refuses to bind a port to an IP not actually
   assigned to a local interface.
+- `docker-compose.source.yml` — override that switches `avalon-server` back
+  to building from source (the root `Dockerfile`), for testing an
+  unreleased change; layer it on with `-f` or use `make stack-up-source`/
+  `make stack-up-no-redis-source`.
 - `docker-compose.redis.yml` — the Redis-backed rate limit/
   concurrency ceiling, applied as a Compose *override* file (not folded
   into `docker-compose.yml` directly — `avalon-server` hard-fails at

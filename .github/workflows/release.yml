@@ -2,8 +2,10 @@ name: Release
 
 # Pushing a v<X.Y.Z>[-title] tag (created by `make release-tag`) builds the
 # avalon-server and avalon binaries for each platform, attests their build
-# provenance, and creates one GitHub Release. A manual run or a PR only builds and
-# uploads workflow artifacts; it never attests or publishes, whatever dry_run says.
+# provenance, creates one GitHub Release, and publishes a multi-arch container
+# image assembled from those same binaries. A manual run or a PR only builds
+# and uploads workflow artifacts (and, for the image, builds and smoke-tests it
+# locally); it never attests, publishes, or pushes an image, whatever dry_run says.
 on:
   push:
     tags: ["v*"]
@@ -13,6 +15,9 @@ on:
       - .github/workflows/release.yml
       - scripts/release.sh
       - scripts/verify-release-version.sh
+      - Dockerfile.release
+      - docker-compose.yml
+      - docker-compose.source.yml
   workflow_dispatch:
     inputs:
       dry_run:
@@ -217,3 +222,169 @@ jobs:
         run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  compose-validate:
+    name: Validate compose files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: docker compose config (published image, default + redis)
+        run: docker compose -f docker-compose.yml -f docker-compose.redis.yml --profile stack config -q
+
+      - name: docker compose config (from-source override)
+        run: docker compose -f docker-compose.yml -f docker-compose.source.yml --profile stack config -q
+
+  image:
+    name: Container image (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            arch: arm64
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: avalon-${{ matrix.target }}
+          path: dist
+
+      - name: Assemble the image build context from the release tarball
+        run: |
+          tar -C dist -xzf dist/avalon-*.tar.gz
+          dir="$(ls -d dist/avalon-*/)"
+          mkdir -p image-ctx
+          cp "${dir}avalon-server" "${dir}avalon" image-ctx/
+          cp Dockerfile.release image-ctx/Dockerfile
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (local, for the smoke test below)
+        uses: docker/build-push-action@v6
+        with:
+          context: image-ctx
+          platforms: linux/${{ matrix.arch }}
+          tags: avalon-server-smoke:${{ matrix.arch }}
+          load: true
+          provenance: false
+          sbom: false
+
+      - name: Smoke-test the image
+        run: |
+          docker network create avalon-smoke
+          docker run -d --name avalon-smoke-postgres --network avalon-smoke \
+            -e POSTGRES_USER=avalon -e POSTGRES_PASSWORD=avalon -e POSTGRES_DB=avalon \
+            postgres:16
+          for i in $(seq 1 30); do
+            docker exec avalon-smoke-postgres pg_isready -U avalon -d avalon && break
+            sleep 2
+          done
+          docker run -d --name avalon-smoke-server --network avalon-smoke -p 18080:8080 \
+            -e DATABASE_URL=postgres://avalon:avalon@avalon-smoke-postgres:5432/avalon \
+            -e AVALON_NETWORK_ID=avalon-image-smoke \
+            -e AVALON_SERVER_ADDR=0.0.0.0:8080 \
+            -e AVALON_WEBAUTHN_RP_ID=localhost \
+            -e AVALON_WEBAUTHN_ORIGIN=http://localhost:8080 \
+            avalon-server-smoke:${{ matrix.arch }}
+          ok=
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18080/nodes/discover; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs avalon-smoke-server
+          [ -n "$ok" ] || { echo "avalon-server never answered /nodes/discover"; exit 1; }
+
+      - name: Log in to ghcr.io
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        if: github.ref_type == 'tag'
+        id: build_push
+        uses: docker/build-push-action@v6
+        with:
+          context: image-ctx
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+
+      - name: Save this architecture's pushed digest
+        if: github.ref_type == 'tag'
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build_push.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: /tmp/digests/*.txt
+          if-no-files-found: error
+
+  image-publish:
+    name: Publish the multi-arch image
+    needs: image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the multi-arch manifest
+        id: manifest
+        run: |
+          refs=()
+          for f in /tmp/digests/*.txt; do
+            refs+=("${IMAGE}@$(cat "$f")")
+          done
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${GITHUB_REF_NAME}" \
+            --tag "${IMAGE}:latest" \
+            "${refs[@]}"
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}" --format '{{ json .Manifest }}' | jq -r '.digest')"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest image build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true

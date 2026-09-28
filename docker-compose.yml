@@ -18,6 +18,16 @@
 #    by default (optional Redis-backed rate limiting/
 #    concurrency ceiling — see that file's own comment) — `make
 #    stack-up-no-redis` uses this file alone.
+#
+# `avalon-server` defaults to the release image published by
+# `.github/workflows/release.yml`'s `image`/`image-publish` jobs
+# (`ghcr.io/avalon-initiative/avalon-protocol`), pinned by `AVALON_IMAGE_TAG`
+# (default `latest`). `migrate` and `discover-mirror-peers` stay built from
+# the root `Dockerfile` — they're ops tooling, not part of the published
+# release artifact, and `avalon-server` itself applies pending migrations on
+# every start regardless. To run `avalon-server` built from source instead of
+# the published image (e.g. testing an unreleased change), layer
+# `docker-compose.source.yml` on top of this file — see that file's comment.
 
 services:
   postgres:
@@ -77,7 +87,7 @@ services:
     profiles: ["stack"]
 
   avalon-server:
-    build: .
+    image: ghcr.io/avalon-initiative/avalon-protocol:${AVALON_IMAGE_TAG:-latest}
     container_name: avalon-server
     restart: unless-stopped
     env_file: .env

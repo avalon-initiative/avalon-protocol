@@ -11,7 +11,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	build run start stop restart status test test-live test-live-raw load-test witness-drill fmt fmt-check lint check clean \
 	openapi openapi-check openapi-version-check check-trust-anchors \
 	migrate migrate-down db-reset \
-	stack-up stack-up-no-redis stack-down stack-logs \
+	stack-up stack-up-no-redis stack-up-source stack-up-no-redis-source stack-up-source-env stack-down stack-logs \
 	inspect-ledger inspect-ledger-full create-identity login outbox-status \
 	register-integrator issue-achievement \
 	check-all clean-all release-bump release-tag release-tag-skip-tests
@@ -43,9 +43,11 @@ help:
 	@echo "  make migrate       apply pending db/migrations/ (up)"
 	@echo "  make migrate-down  revert the most recently applied migration"
 	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
-	@echo "  make stack-up          Docker Compose bring-up: postgres + redis + avalon-server, migrated and started, no Rust/Node toolchain needed"
+	@echo "  make stack-up          Docker Compose bring-up: postgres + redis + avalon-server (published release image), migrated and started, no Rust/Node toolchain needed"
 	@echo "  make stack-up-no-redis same as stack-up, without the Redis-backed rate limit/concurrency ceiling"
-	@echo "  make stack-down        stop what 'make stack-up'/'make stack-up-no-redis' started"
+	@echo "  make stack-up-source   same as stack-up, but avalon-server is built from source instead of pulling the published image"
+	@echo "  make stack-up-no-redis-source  same as stack-up-source, without the Redis-backed rate limit/concurrency ceiling"
+	@echo "  make stack-down        stop what 'make stack-up'/'make stack-up-no-redis'/the -source variants started"
 	@echo "  make stack-logs        follow avalon-server's logs inside the compose stack"
 	@echo "  make check         fmt-check + lint + test — what CI runs"
 	@echo "  make clean         remove Rust build artifacts and PID/log files"
@@ -243,7 +245,7 @@ stack-up:
 	fi
 	docker compose $(STACK_COMPOSE_FILES) --profile stack up -d --build postgres redis
 	docker compose $(STACK_COMPOSE_FILES) --profile stack run --rm migrate
-	docker compose $(STACK_COMPOSE_FILES) --profile stack up -d --build avalon-server
+	docker compose $(STACK_COMPOSE_FILES) --profile stack up -d --pull always avalon-server
 	@echo "avalon-server should now be reachable at http://127.0.0.1:8080 (Redis-backed rate limiting/concurrency ceiling enabled — 'make stack-up-no-redis' to skip it) — 'make stack-logs' to follow it, 'make stack-down' to stop."
 
 stack-up-no-redis:
@@ -263,8 +265,42 @@ stack-up-no-redis:
 	fi
 	docker compose -f docker-compose.yml --profile stack up -d --build postgres
 	docker compose -f docker-compose.yml --profile stack run --rm migrate
-	docker compose -f docker-compose.yml --profile stack up -d --build avalon-server
+	docker compose -f docker-compose.yml --profile stack up -d --pull always avalon-server
 	@echo "avalon-server should now be reachable at http://127.0.0.1:8080 (no Redis — rate limiting/concurrency ceiling are per-process) — 'make stack-logs' to follow it, 'make stack-down' to stop."
+
+# Same as stack-up/stack-up-no-redis, but avalon-server is built from source
+# (docker-compose.source.yml) instead of pulling the published release
+# image — for testing an unreleased change, not normal hosting. First-run
+# .env generation here skips stack-up's interactive discover-mirror-peers
+# prompt (still available via `make stack-up` itself beforehand).
+stack-up-source:
+	@if [ ! -f .env ]; then \
+		$(MAKE) stack-up-source-env; \
+	fi
+	docker compose $(STACK_COMPOSE_FILES) -f docker-compose.source.yml --profile stack up -d --build postgres redis
+	docker compose $(STACK_COMPOSE_FILES) -f docker-compose.source.yml --profile stack run --rm migrate
+	docker compose $(STACK_COMPOSE_FILES) -f docker-compose.source.yml --profile stack up -d --build avalon-server
+	@echo "avalon-server (built from source) should now be reachable at http://127.0.0.1:8080 — 'make stack-logs' to follow it, 'make stack-down' to stop."
+
+stack-up-no-redis-source:
+	@if [ ! -f .env ]; then \
+		$(MAKE) stack-up-source-env; \
+	fi
+	docker compose -f docker-compose.yml -f docker-compose.source.yml --profile stack up -d --build postgres
+	docker compose -f docker-compose.yml -f docker-compose.source.yml --profile stack run --rm migrate
+	docker compose -f docker-compose.yml -f docker-compose.source.yml --profile stack up -d --build avalon-server
+	@echo "avalon-server (built from source) should now be reachable at http://127.0.0.1:8080 (no Redis) — 'make stack-logs' to follow it, 'make stack-down' to stop."
+
+# Shared first-run .env generation for the two stack-up-*-source targets
+# above (identical to what stack-up/stack-up-no-redis generate inline).
+stack-up-source-env:
+	@echo "no .env found — generating one from .env.compose.example"
+	@cp .env.compose.example .env
+	@sed -i.bak "s/^AVALON_NETWORK_ID=.*/AVALON_NETWORK_ID=avalon-stack-$$(python3 -c 'import secrets; print(secrets.token_hex(4))')/" .env && rm -f .env.bak
+	@echo "" >> .env
+	@echo "# Generated by 'make stack-up-source' — unique to this deployment, do not share or commit." >> .env
+	@echo "AVALON_SETTLEMENT_SIGNING_KEY=$$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env
+	@chmod 600 .env
 
 # Always references both compose files regardless of which stack-up
 # variant brought the stack up — `docker compose down`/`logs` no-ops

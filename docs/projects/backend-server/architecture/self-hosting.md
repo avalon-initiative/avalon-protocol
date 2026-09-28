@@ -340,7 +340,8 @@ feature.
   reachable beyond localhost must run behind TLS termination — see
   [`../for-hosters/deployment.md`](../for-hosters/deployment.md).
 - Standing up a single instance no longer requires a Rust toolchain —
-  `make stack-up` (root `Dockerfile` + `docker-compose.yml`) builds and
+  `make stack-up` (`docker-compose.yml`, defaulting to the published
+  `ghcr.io/avalon-initiative/avalon-protocol` release image) pulls and
   runs `avalon-server` + Postgres from a fresh checkout, generating a fresh
   `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID` into `.env` on first
   run rather than requiring either to be hand-set first. See
