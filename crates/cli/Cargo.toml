@@ -56,6 +56,10 @@ passkey-authenticator = { workspace = true, optional = true }
 # import to use rather than reaching into a transitive dependency.
 coset = { version = "0.4", optional = true }
 
+# Effective uid, O_NOFOLLOW and terminal echo control for `avalon setup`; a plain binding, no system library.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 rand.workspace = true
 time.workspace = true

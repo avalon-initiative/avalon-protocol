@@ -282,6 +282,7 @@ dependencies = [
  "coset",
  "ed25519-dalek",
  "hex",
+ "libc",
  "passkey-authenticator",
  "passkey-client",
  "passkey-types",

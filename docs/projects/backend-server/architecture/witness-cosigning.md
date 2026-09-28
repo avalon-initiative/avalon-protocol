@@ -456,8 +456,10 @@ info when it changes and at debug otherwise, with the stored and fetched ages.
 - **No witness policy in the trust-anchor entry.** `docs/trusted-networks.json` is
   unchanged: same pinned key, same seed nodes. Whether an entry should carry witness
   keys or a client policy is decided together with the SDK work.
-- **The live drill has not been run on the dev fleet with cosigning on**, and the
-  `fork` scenario does not yet exercise two disjoint witness groups. Tracked in #966.
+- **Live drill gaps.** The removal-of-the-original and fresh-node steps were run on the
+  dev fleet on 2026-09-28 (see the drill runbook's record). Open findings from it: mirrors
+  do not keep other witnesses' cosignatures fresh on an unchanged head (#1025), and
+  self-certifying `node:` shards cannot be mirrored or verified by other nodes (#1026).
 - **Layer-1 per-identity chains are not wired into the server.** The pure conflict
   rule and types exist (`identity_chain.rs`); chain state, emission sites, the indexer
   and the freeze on a forked identity are #961, with conformance vectors.

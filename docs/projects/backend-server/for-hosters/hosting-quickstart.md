@@ -5,8 +5,9 @@ no Rust or Node toolchain needed, only [Docker](https://docs.docker.com/get-dock
 (with Compose, bundled with Docker Desktop and modern Docker Engine
 installs).
 
-To run the binary directly against your own Postgres instead of Docker, see
-[`standalone-binary.md`](standalone-binary.md).
+To run the binary directly instead of Docker, start with `avalon setup`, the
+guided first-run flow described in [`standalone-binary.md`](standalone-binary.md)
+(this guide is also embedded in the CLI: `avalon guide quickstart`).
 
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see
@@ -17,6 +18,11 @@ edit/rebuild cycles.
 Running this node makes you part of the Avalon Initiative's actual
 infrastructure, not a downstream consumer of someone else's — the network is
 only as real and as decentralized as the operators actually running it.
+
+No release has been published yet, so the image `make stack-up` pulls does not
+exist (`docker pull` answers `denied`). Until the first release, use
+`make stack-up-source`, which builds `avalon-server` from the checkout; this page's
+image steps have not been run against a published image.
 
 ## One command
 

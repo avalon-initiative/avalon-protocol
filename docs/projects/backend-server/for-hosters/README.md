@@ -12,9 +12,12 @@ standalone-binary route needs only a Postgres database.
 ## Start here
 
 0. [`standalone-binary.md`](standalone-binary.md) — run the `avalon-server`
-   binary directly against your own Postgres: configuration for a replica or a
-   shard-authoring node, first start, a systemd unit, upgrading, backup and
-   troubleshooting.
+   binary directly: start with `avalon setup`, a guided, idempotent first-run
+   flow (also non-interactive with `--yes`), then configuration for a replica or
+   a shard-authoring node, first start, a systemd unit, upgrading, backup and
+   troubleshooting, for both the plain and the bundled-database
+   (`avalon-server-bundled`) variant. These guides are embedded in the `avalon` binary:
+   `avalon guide [topic]`.
 
 1. [`hosting-quickstart.md`](hosting-quickstart.md) — the fastest path from
    a fresh checkout to a running node: `make stack-up`, one command, safe
