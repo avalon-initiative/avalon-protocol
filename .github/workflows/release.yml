@@ -1,23 +1,17 @@
 name: Release
 
 # Pushing a v<X.Y.Z>[-title] tag (created by `make release-tag`) builds the
-# avalon-server and avalon binaries for each platform, attests their build
+# avalon-server and avalon binaries for every platform, attests their build
 # provenance, creates one GitHub Release, and publishes a multi-arch container
-# image assembled from those same binaries. A manual run or a PR only builds
-# and uploads workflow artifacts (and, for the image, builds and smoke-tests it
-# locally); it never attests, publishes, or pushes an image, whatever dry_run says.
+# image assembled from those same binaries. This is release-time cost, not
+# PR-time cost: it does not run automatically on a PR. A manual dispatch runs
+# the same full pipeline but only builds and uploads workflow artifacts (and,
+# for the image, builds and smoke-tests it locally); it never attests,
+# publishes, or pushes an image, whatever dry_run says — use it to exercise
+# the pipeline deliberately before actually tagging.
 on:
   push:
     tags: ["v*"]
-  # A PR touching the release pipeline exercises it as a dry run.
-  pull_request:
-    paths:
-      - .github/workflows/release.yml
-      - scripts/release.sh
-      - scripts/verify-release-version.sh
-      - Dockerfile.release
-      - docker-compose.yml
-      - docker-compose.source.yml
   workflow_dispatch:
     inputs:
       dry_run:
