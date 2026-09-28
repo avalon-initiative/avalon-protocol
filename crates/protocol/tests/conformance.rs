@@ -546,3 +546,87 @@ fn known_list_selection_matches_shared_vectors() {
         assert_eq!(got, want, "{name}");
     }
 }
+
+/// Verifies a self-certifying head with the crate's real shard-identity and
+/// tree-head code; the key is parsed as exactly 64 lowercase hex characters.
+fn self_certifying_outcome(
+    shard_id: &str,
+    key_hex: Option<&str>,
+    sth: &SignedTreeHead,
+) -> Result<(), &'static str> {
+    use avalon_protocol::shard_identity::{
+        is_self_certifying, resolve_self_certifying_key, verify_self_certifying_tree_head,
+    };
+    if !is_self_certifying(shard_id) {
+        return Err("not_self_certifying");
+    }
+    let key_hex = key_hex.ok_or("missing_key")?;
+    let lowercase_hex = key_hex.len() == 64
+        && key_hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+    let key = lowercase_hex
+        .then(|| hex::decode(key_hex).ok())
+        .flatten()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
+        .ok_or("malformed_key")?;
+    resolve_self_certifying_key(shard_id, &key).ok_or("key_id_mismatch")?;
+    if !avalon_protocol::sth::verify_tree_head(&key, sth) {
+        return Err("bad_signature");
+    }
+    assert!(verify_self_certifying_tree_head(shard_id, &key, sth));
+    Ok(())
+}
+
+#[test]
+fn self_certifying_tree_head_matches_shared_vectors() {
+    use avalon_protocol::shard::{parse_shard_id, ParsedShardId};
+    use avalon_protocol::shard_identity::derive_self_certifying_id;
+
+    let doc = load("self-certifying-tree-head.json");
+    let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    let other_key = signing_key_from_seed_hex(doc["otherKeySeedHex"].as_str().unwrap());
+    for (key, key_field, id_field) in [
+        (&signing_key, "signingPublicKeyHex", "selfCertifyingId"),
+        (&other_key, "otherPublicKeyHex", "otherSelfCertifyingId"),
+    ] {
+        assert_eq!(
+            hex::encode(key.verifying_key().as_bytes()),
+            doc[key_field].as_str().unwrap()
+        );
+        assert_eq!(
+            derive_self_certifying_id(&key.verifying_key()),
+            doc[id_field].as_str().unwrap()
+        );
+    }
+
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let shard_id = input["shardId"].as_str().unwrap();
+        let key_hex = input.get("signingPublicKeyHex").and_then(|k| k.as_str());
+        let sth = sth_from_json(&input["head"], input["head"]["networkId"].as_str().unwrap());
+
+        let check = match parse_shard_id(shard_id) {
+            Ok(ParsedShardId::SelfCertifying { .. }) => "self_certifying",
+            Ok(ParsedShardId::Core) => "core_network",
+            _ => "unsupported",
+        };
+        assert_eq!(check, v["expected"]["check"].as_str().unwrap(), "{name}");
+
+        let outcome = self_certifying_outcome(shard_id, key_hex, &sth);
+        assert_eq!(
+            outcome.is_ok(),
+            v["expected"]["verified"].as_bool().unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            outcome.err(),
+            v["expected"]["failure"].as_str(),
+            "{name}: failure reason"
+        );
+    }
+}
