@@ -40,6 +40,14 @@ jobs:
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          # Windows support is deferred, not abandoned — the server is
+          # Linux-first for now. Re-enable once it's prioritized again.
+          # - target: x86_64-pc-windows-msvc
+          #   runner: windows-2022
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,12 +55,14 @@ jobs:
 
       - name: Require a tag on main
         if: github.ref_type == 'tag'
+        shell: bash
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "Tag ${GITHUB_REF_NAME} is not on main; refusing to release."; exit 1; }
           bash scripts/verify-release-version.sh "${GITHUB_REF_NAME}"
 
       - name: Install build dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       - uses: dtolnay/rust-toolchain@stable
@@ -61,11 +71,19 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
+        shell: bash
         run: |
+          # Git Bash's own /usr/bin (with Git's bundled, module-incomplete perl)
+          # is baked into this shell and outranks Strawberry Perl on Windows.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="/c/Strawberry/perl/bin:$PATH"
+          fi
           cargo build --release --locked -p avalon-server --features vendored-openssl
-          cargo build --release --locked -p avalon-cli --no-default-features
+          cargo build --release --locked -p avalon-cli --no-default-features --features vendored-openssl
 
-      - name: Package
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           version="$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
           name="avalon-${version}-${{ matrix.target }}"
@@ -76,17 +94,80 @@ jobs:
           rm -rf "dist/${name}"
           ls -l dist
 
-      - name: Smoke test the packaged binaries
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $content = Get-Content Cargo.toml -Raw
+          if ($content -notmatch '\[workspace\.package\][^\[]*?version\s*=\s*"([^"]+)"') { throw "workspace version not found in Cargo.toml" }
+          $version = $Matches[1]
+          $name = "avalon-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
+          Copy-Item target/release/avalon-server.exe, target/release/avalon.exe, LICENSE, README.md -Destination "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          Remove-Item -Recurse -Force "dist/$name"
+          Get-ChildItem dist
+
+      - name: Smoke test the packaged binaries (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           tar -C dist -xzf dist/avalon-*.tar.gz
           dir="$(ls -d dist/avalon-*/)"
           ("${dir}avalon" 2>&1 || true) | grep -q "^usage: avalon"
-          ldd "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            otool -L "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
+          else
+            ldd "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
+          fi
+
+      - name: Smoke test the packaged binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          # Both binaries below are meant to exit non-zero; without this, pwsh
+          # 7.3+ auto-throws on any non-zero native exit code before the
+          # script can inspect it.
+          $PSNativeCommandUseErrorActionPreference = $false
+          Expand-Archive -Path dist/avalon-*.zip -DestinationPath dist -Verbose
+          $dir = (Get-ChildItem -Path dist -Directory -Filter 'avalon-*' | Select-Object -First 1).FullName
+          Write-Host "dir = $dir"
+          if (-not $dir) { throw "no extracted avalon-* directory found under dist/" }
+          Get-ChildItem $dir
+
+          try {
+            $out = & "$dir\avalon.exe" 2>&1 | Out-String
+            Write-Host "avalon.exe exit code: $LASTEXITCODE"
+            Write-Host "avalon.exe output: $out"
+          } catch {
+            Write-Host "avalon.exe invocation threw: $_"
+            throw
+          }
+          if ($out -notmatch '^usage: avalon') { throw "unexpected avalon.exe output: $out" }
+
+          # A dynamically-linked libssl would fail to load before this panic is ever reached.
+          try {
+            $serverOut = & "$dir\avalon-server.exe" 2>&1 | Out-String
+            Write-Host "avalon-server.exe exit code: $LASTEXITCODE"
+            Write-Host "avalon-server.exe output: $serverOut"
+          } catch {
+            Write-Host "avalon-server.exe invocation threw: $_"
+            throw
+          }
+          if ($serverOut -notmatch 'DATABASE_URL must be set') { throw "avalon-server.exe did not fail with the expected DATABASE_URL panic: $serverOut" }
+
+          # Both binaries above deliberately exit non-zero; without this, the
+          # Actions pwsh runner fails the step on whichever $LASTEXITCODE the
+          # last native command left behind, regardless of the assertions above.
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
           name: avalon-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
 
   publish:
@@ -107,8 +188,12 @@ jobs:
 
       - name: Write SHA256SUMS
         working-directory: dist
+        # *.zip is currently always empty (no Windows target in the matrix)
+        # — nullglob keeps that from being passed to sha256sum as a literal,
+        # unmatched pattern and failing the whole step.
         run: |
-          sha256sum *.tar.gz > SHA256SUMS
+          shopt -s nullglob
+          sha256sum *.tar.gz *.zip > SHA256SUMS
           cat SHA256SUMS
 
       - name: Upload the release files as a workflow artifact
@@ -123,7 +208,9 @@ jobs:
         if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
 
       - name: Create the GitHub Release
         if: github.ref_type == 'tag'

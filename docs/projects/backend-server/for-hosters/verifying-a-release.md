@@ -6,8 +6,9 @@ carries one tarball per platform (`avalon-<version>-<target>.tar.gz`, holding
 provenance attestation for every tarball. Artifacts are built by the release
 workflow from a tagged commit on `main`; there are no long-lived signing keys.
 
-Targets: `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`. macOS and
-Windows builds are not published yet.
+Targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin`, and `aarch64-apple-darwin` (Apple Silicon). Windows
+builds are not available yet — the server is Linux-first for now.
 
 ## Checksum
 
