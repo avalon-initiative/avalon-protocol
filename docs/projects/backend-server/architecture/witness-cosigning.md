@@ -482,17 +482,30 @@ them.
   apply (8 at a time, 5 s, 64 KiB, outbound policy). Cosignatures held from outside the known list
   for one head are capped at twice that setting, so the served response stays well under the
   fetch size limit. Witnesses that already have a stored cosignature for the head are asked first,
-  stalest first, so a limit below the set size still rotates through all of them; others follow,
-  most recently announced first, only while the cap has room. The setting changes only how much
-  a node fetches and stores, never what a client accepts. The peer table is itself bounded
-  (`AVALON_NODE_MAX_KNOWN_PEERS`), and an announcing attacker needs one live endpoint that proves
-  possession of each key, so thousands of fake witnesses fill at most the per-tick limit and the
-  row cap, and cannot displace a witness that already holds a row. They can occupy the cap for
-  the life of a head; the next head starts empty.
-- *Unreachable witnesses.* A failed attempt (unreachable, status, malformed, head mismatch,
-  no own cosignature, invalid signature) puts that witness in an in-memory backoff of 30 s
-  doubling to 30 min, cleared by a success or when the witness leaves the directory. Backed-off
-  witnesses are skipped without using a per-tick slot.
+  stalest first, so a limit below the set size still rotates through all of them. Others are
+  admitted only while the cap has room: witnesses that delivered a cosignature for that shard
+  earlier come first, then those asked longest ago (never-asked first), ties broken by a per-node
+  random salt. Announcement recency is deliberately not used, so a participant that re-announces
+  often under many proven keys cannot take every new slot on each new head. The setting changes
+  only how much a node fetches and stores, never what a client accepts. The peer table is itself
+  bounded (`AVALON_NODE_MAX_KNOWN_PEERS`), and an announcing attacker needs one live endpoint that
+  proves possession of each key, so thousands of fake witnesses fill at most the per-tick limit
+  and the row cap, and cannot displace a witness that already holds a row. They can occupy the
+  cap for the life of a head; the next head starts empty and delivering witnesses are preferred.
+- *Unreachable and unavailable witnesses.* Only transport-level failures (unreachable, bad
+  status, blocked, malformed or oversized body) put a witness in an in-memory backoff, which
+  applies to every shard: 30 s doubling to 30 min, cleared by a success or when the witness
+  leaves the directory. A witness that answers but has nothing usable for one shard's head
+  (lagging head, does not cosign that shard, invalid signature, out-of-range `observed_at`) is
+  only retried for that shard after a flat 30 s; the backoff is keyed per (witness, shard), so a
+  witness that cosigns shard B is still refreshed there when it does not cosign shard A.
+  Backed-off witnesses are skipped without using a per-tick slot.
+- *Timestamp bound.* A cosignature is stored only when its `observed_at` is within the
+  freshness window before now and at most 60 s after it (clock skew between nodes), for the
+  directory path and the known-list path alike. A verifier rejects any `observed_at` after its
+  own clock, so a later one is never useful, and one far in the future would otherwise pin the
+  stored row, since only strictly newer observations replace it. The rejection is logged once per
+  change.
 - *Store rules.* A fetched cosignature no newer than the stored one is not stored (no
   rollback); same root and author timestamp with a later `observed_at` refreshes in place; a
   cosignature over a different root cannot verify for this head, and a stored one for a different
