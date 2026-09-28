@@ -105,6 +105,7 @@ pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
 pub mod witness_cosign;
+pub mod witness_refresh;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, StatusCode};
