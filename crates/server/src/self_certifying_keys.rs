@@ -106,11 +106,19 @@ pub enum Rejection {
     Storage(String),
 }
 
-/// Decodes a hex-encoded 32-byte Ed25519 public key.
+/// Decodes a presented key: exactly 64 lowercase hex characters forming a
+/// canonical, non-weak Ed25519 public key.
 pub fn parse_public_key(hex_key: &str) -> Option<VerifyingKey> {
+    let lowercase_hex = hex_key.len() == 64
+        && hex_key
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !lowercase_hex {
+        return None;
+    }
     let bytes = hex::decode(hex_key).ok()?;
     let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    VerifyingKey::from_bytes(&array).ok()
+    avalon_protocol::shard_identity::parse_shard_public_key(&array)
 }
 
 /// The key a head of `shard_id` must verify against: the pinned key when there
@@ -160,7 +168,7 @@ pub async fn pinned_key(pool: &PgPool, shard_id: &str) -> Option<VerifyingKey> {
         .ok()??;
     let bytes: Vec<u8> = row.try_get("public_key").ok()?;
     let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    VerifyingKey::from_bytes(&array).ok()
+    avalon_protocol::shard_identity::parse_shard_public_key(&array)
 }
 
 fn storage(e: sqlx::Error) -> Rejection {
@@ -299,6 +307,7 @@ mod tests {
     use avalon_protocol::shard_identity::derive_self_certifying_id;
     use avalon_protocol::sth::sign_tree_head;
     use ed25519_dalek::SigningKey;
+    use sha2::Digest;
     use time::OffsetDateTime;
 
     fn key(seed: u8) -> SigningKey {
@@ -356,6 +365,31 @@ mod tests {
         );
         assert!(select_key(&id, Some(pinned.verifying_key()), None).is_ok());
         assert!(select_key(&id, Some(pinned.verifying_key()), Some(&hex_of(&pinned))).is_ok());
+    }
+
+    #[test]
+    fn weak_and_non_canonical_presented_keys_are_rejected_even_when_they_hash_to_the_id() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut order_two_signed = [0xffu8; 32];
+        order_two_signed[0] = 0xec;
+        let mut wrapped_y3 = [0xffu8; 32];
+        wrapped_y3[0] = 0xed + 3;
+        wrapped_y3[31] = 0x7f;
+        for bytes in [identity, [0u8; 32], order_two_signed, wrapped_y3] {
+            let id = format!("node:{}", hex::encode(sha2::Sha256::digest(bytes)));
+            assert_eq!(
+                select_key(&id, None, Some(&hex::encode(bytes))),
+                Err(Rejection::KeyDoesNotMatchId),
+                "{bytes:02x?}"
+            );
+        }
+        let honest = key(1);
+        let id = derive_self_certifying_id(&honest.verifying_key());
+        assert_eq!(
+            select_key(&id, None, Some(&hex_of(&honest).to_uppercase())),
+            Err(Rejection::KeyDoesNotMatchId)
+        );
     }
 
     #[test]
