@@ -13,7 +13,16 @@
 //! `avalon-server-bundled` binary), which starts a managed Postgres before
 //! calling the same sequence.
 
+fn main() {
+    avalon_server::cli_args::handle_or_exit(
+        "avalon-server",
+        env!("CARGO_PKG_VERSION"),
+        "the Avalon Protocol node",
+    );
+    run();
+}
+
 #[tokio::main]
-async fn main() {
+async fn run() {
     avalon_server::run::run().await;
 }

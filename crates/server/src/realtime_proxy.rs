@@ -213,7 +213,20 @@ pub async fn proxy_websocket(
         let _ = client_write.send(AxumMessage::Close(None)).await;
     };
 
-    tokio::join!(client_to_remote, remote_to_client);
+    let mut session = crate::shutdown::socket_session();
+    let server_closing = tokio::select! {
+        _ = async { tokio::join!(client_to_remote, remote_to_client) } => false,
+        _ = session.closing() => true,
+    };
+    if server_closing {
+        let _ = client_write
+            .send(AxumMessage::Close(Some(CloseFrame {
+                code: axum::extract::ws::close_code::AWAY,
+                reason: "server shutting down".into(),
+            })))
+            .await;
+        let _ = remote_write.close().await;
+    }
 }
 
 #[cfg(test)]

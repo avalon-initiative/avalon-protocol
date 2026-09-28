@@ -626,9 +626,14 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
     let mut hidden_playing: HashSet<Uuid> = HashSet::new();
     let mut visibility_by_id: HashMap<Uuid, Visibility> = HashMap::new();
     let mut updates = state.presence.subscribe();
+    let mut session = crate::shutdown::socket_session();
 
     loop {
         tokio::select! {
+            _ = session.closing() => {
+                crate::shutdown::send_going_away(&mut socket).await;
+                return;
+            }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {

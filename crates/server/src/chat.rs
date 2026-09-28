@@ -203,8 +203,13 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
         return;
     }
 
+    let mut session = crate::shutdown::socket_session();
     loop {
         tokio::select! {
+            _ = session.closing() => {
+                crate::shutdown::send_going_away(&mut socket).await;
+                return;
+            }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {

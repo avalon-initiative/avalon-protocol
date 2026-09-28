@@ -151,9 +151,13 @@ separate download, `avalon-server-bundled-<version>-<target>.tar.gz` (Linux
 only), which holds only that binary; install it the same way and keep `avalon`
 from the first tarball for `avalon setup`.
 
-The binaries take no flags: `avalon-server --version` or `--help` starts the
-node (and creates `./data/keys`). The version is in the tarball's name and in
+The version is in the tarball's name, in `--version`, and in
 `protocol_version` of `GET /nodes/discover`.
+
+`avalon-server`, `avalon-server-bundled` and `avalon` all answer `--version` and
+`--help` without reading configuration or touching the data directory. The two
+server binaries take no other arguments (an unknown argument prints a usage
+line and exits with status 2); configuration is environment-driven.
 
 ### Build from source
 
@@ -370,14 +374,33 @@ journalctl -u avalon -f
 
 `ExecStart` must be an absolute path. `StateDirectory=avalon` creates
 `/var/lib/avalon` owned by the service user and keeps it writable under
-`ProtectSystem=strict`. `systemctl stop avalon` sends `SIGTERM`; the plain
-server is ended by the signal rather than exiting on its own, which systemd
-records as a normal stop (`Result=success`). Remove the `postgresql.service`
-ordering if the database is on another host.
+`ProtectSystem=strict`. `systemctl stop avalon` sends `SIGTERM`; the node stops
+accepting connections, finishes in-flight requests and its current outbox batch,
+and exits with status 0. Remove the `postgresql.service` ordering if the
+database is on another host.
 
 `avalon setup --service` generates a similar unit instead: its
 `EnvironmentFile` is `avalon.env` in the data directory, it adds
 `ReadWritePaths=` for that directory and it has no `StateDirectory=`.
+
+### Shutdown
+
+On the first `SIGTERM` or `SIGINT` once the node is serving, it stops accepting
+connections, sends websocket clients a close frame (1001, going away), waits
+for in-flight requests to finish, and lets the ledger outbox complete its
+current batch, then exits with status 0. The request drain and the outbox
+wait are each bounded by `AVALON_SHUTDOWN_TIMEOUT_SECS` (default `30`, read
+after `.env` is loaded); requests still running at the bound are cut, and
+multi-step writes rely on their database transactions, which roll back. If both
+phases together exceed twice the bound plus a second, or a second signal
+arrives, the node exits immediately with status 1. A signal during start-up
+(before it is serving, including migrations, each of which runs in a
+transaction) exits at once with status 128 plus the signal number (143 for
+`SIGTERM`), and the bundled variant terminates any PostgreSQL it had started. In
+the bundled variant the managed PostgreSQL is stopped after the drain, outside
+that deadline, with its own bound of `AVALON_SHUTDOWN_TIMEOUT_SECS` for a fast
+shutdown followed by up to ten seconds of forced termination, so no `postgres`
+process is left behind.
 
 ## Upgrading
 
@@ -454,8 +477,9 @@ With no `DATABASE_URL`, on first start it:
 
 On every later start with the same `AVALON_DATA_DIR` and still no
 `DATABASE_URL`, it reuses the existing data directory and password rather
-than reinitializing. Stopping the process (`SIGTERM` or `SIGINT`) stops the
-managed PostgreSQL cleanly before the process exits; killing it
+than reinitializing. Stopping the process (`SIGTERM` or `SIGINT`) drains the
+server as described under [systemd](#running-under-systemd), then stops the
+managed PostgreSQL cleanly before the process exits with status 0; killing it
 (`SIGKILL`) does not, and can leave PostgreSQL running under
 `AVALON_DATA_DIR/postgres/data` — check for a stray `postgres` process
 under that data directory and stop it manually if this happens
@@ -468,8 +492,29 @@ deep inside PostgreSQL's own start sequence. Run it as an ordinary user,
 same as [systemd](#running-under-systemd) already does for the plain
 binary.
 
-The downloaded PostgreSQL needs the host's `libxml2` and time zone data
-(`apt-get install libxml2 tzdata`); see [Troubleshooting](#troubleshooting).
+The embedded PostgreSQL also needs host packages that a minimal image may lack.
+Before it starts, the server checks the host:
+
+- Blocking: running as root; a timezone database (`tzdata`); after the download,
+  every shared library `ldd` reports as unresolved for the PostgreSQL binary
+  (typically `libxml2`); and, only while PostgreSQL still has to be downloaded,
+  outbound HTTPS to `github.com` (the probe has an 8 second overall limit and is
+  reported as skipped, not passed, when `HTTPS_PROXY`/`ALL_PROXY` is set).
+- Warning only: before the download, whether `libxml2.so.2` is present (checked
+  with `ldconfig -p` and the standard library directories, which cannot see every
+  layout such as NixOS), and that `ldd` itself is missing so the downloaded
+  binary could not be checked.
+
+A blocking finding stops the start with the package and the install command, for
+example `sudo apt-get install -y libxml2 tzdata` on Debian and Ubuntu or
+`sudo dnf install -y libxml2 tzdata` on Fedora and RHEL. `avalon setup --variant
+bundled` runs the same check for the user the node will run as and prints the
+result. If PostgreSQL still fails to start, the error includes the tail of its
+log and, for a missing library or timezone data, the same hint. Set
+`AVALON_BUNDLED_SKIP_PREFLIGHT=1` to skip every check.
+`AVALON_BUNDLED_PREFLIGHT_SIMULATE_MISSING` (a comma-separated list of `root`,
+`libxml2`, `tzdata`, `network`, `ldd`) reports those as missing, for testing the
+messages.
 
 ### Run and service
 
