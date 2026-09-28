@@ -93,6 +93,18 @@ at real addresses and real timings:
    (`avalon list-equivocations`). See
    [`equivocation-response.md`](equivocation-response.md) for handling.
 
+8. Unchanged head: leave the `core` head unchanged for well over the freshness
+   window and sample `curl "<ip>:8080/ledger/sth/latest?shard_id=core&witnesses=1"`
+   on each mirror every minute or so. The `observed_at` of every confirmed
+   known-list witness's cosignature should stay within one re-attest interval
+   plus one mirror-watcher tick (about 320 seconds by default), and feeding the
+   response to `verify_sth cosigned <known-list keys>` (with the pinned
+   `AVALON_SETTLEMENT_VERIFY_KEY`) should keep returning success. Repeat with
+   one mirror's `AVALON_MIRROR_PEERS` pointed at a dead port to show refresh
+   does not depend on the author being reachable. A witness that is not in a
+   mirror's confirmed known list is not refreshed there and its copy ages out.
+   A restarted node's list may need its probation window before it gathers.
+
 A live drill should be repeated once cosigning-decision logic has landed and
 before the witness-cosigning epic closes, with `known_list.json` sizes above
 one on every node so majority verification, not the single-signer case, is
