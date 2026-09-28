@@ -47,6 +47,13 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!(
+            "{}",
+            avalon_server::cli_args::version_line("avalon", env!("CARGO_PKG_VERSION"))
+        );
+        return;
+    }
     avalon_devenv::load();
 
     let mut args = std::env::args();
@@ -184,7 +191,7 @@ async fn main() {
             }
         }
         _ => {
-            eprintln!(
+            let text = format!(
                 "usage: avalon <setup [--yes] [flags]|guide [topic]|inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|promote-mirror <network_id> [--shard-id <id>] [--source <url>] --target-database-url <url> [--dry-run]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|add-shard-key --integrator <slug> [--verify-key <hex>] [--key <path>] [--server <url>]|pair-device"
@@ -192,6 +199,11 @@ async fn main() {
                     ""
                 }
             );
+            if matches!(command.as_deref(), Some("--help" | "-h")) {
+                println!("{text}");
+                return;
+            }
+            eprintln!("{text}");
             std::process::exit(1);
         }
     }

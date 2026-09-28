@@ -29,9 +29,8 @@ impl BundledPostgres {
         if std::env::var("DATABASE_URL").is_ok() {
             return Ok(None);
         }
-        refuse_if_root()?;
-
         let pg_root = data_dir.join("postgres");
+        preflight(&pg_root)?;
         std::fs::create_dir_all(&pg_root)
             .map_err(|e| format!("failed to create {}: {e}", pg_root.display()))?;
 
@@ -61,11 +60,13 @@ impl BundledPostgres {
         instance
             .setup()
             .await
-            .map_err(|e| format!("failed to set up embedded Postgres: {e}"))?;
+            .map_err(|e| describe_failure("set up", &e.to_string(), &pg_root))?;
+        // The download has happened by now, so the installed binary's own dependencies can be checked.
+        preflight(&pg_root)?;
         instance
             .start()
             .await
-            .map_err(|e| format!("failed to start embedded Postgres: {e}"))?;
+            .map_err(|e| describe_failure("start", &e.to_string(), &pg_root))?;
 
         let exists = instance
             .database_exists(BUNDLED_DATABASE_NAME)
@@ -99,25 +100,43 @@ impl BundledPostgres {
     }
 }
 
-/// Postgres refuses to run its own server process as root; failing here
-/// gives a clear error instead of a confusing one from deep inside `initdb`
-/// or `postgres` itself.
-#[cfg(unix)]
-fn refuse_if_root() -> Result<(), String> {
-    // SAFETY: geteuid takes no arguments and always succeeds.
-    if unsafe { libc::geteuid() } == 0 {
-        return Err(
-            "bundled-postgres cannot run as root — PostgreSQL refuses to start as root; run \
-             avalon-server-bundled as a non-root user"
-                .to_string(),
-        );
+/// Fails fast, naming the missing package, when the host cannot run the embedded Postgres.
+fn preflight(pg_root: &Path) -> Result<(), String> {
+    let problems = crate::bundled_prereq::check_host(is_root(), &pg_root.join("install"));
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::bundled_prereq::format_problems(&problems))
     }
-    Ok(())
+}
+
+/// Builds the startup-failure message: the underlying error, the tail of Postgres's own log,
+/// and an install hint when the output matches a known host problem.
+fn describe_failure(stage: &str, error: &str, pg_root: &Path) -> String {
+    let log = std::fs::read_to_string(pg_root.join("data").join("start.log")).unwrap_or_default();
+    let mut msg = format!("failed to {stage} embedded Postgres: {error}");
+    let log_tail = crate::bundled_prereq::tail(&log, 15);
+    if !log_tail.is_empty() {
+        msg.push_str(&format!(
+            "\nlast lines of {}:\n{log_tail}",
+            pg_root.join("data").join("start.log").display()
+        ));
+    }
+    if let Some(problem) = crate::bundled_prereq::explain_failure(&format!("{error}\n{log}")) {
+        msg.push_str(&format!("\nhint: {}", problem.message));
+    }
+    msg
+}
+
+#[cfg(unix)]
+fn is_root() -> bool {
+    // SAFETY: geteuid takes no arguments and always succeeds.
+    unsafe { libc::geteuid() == 0 }
 }
 
 #[cfg(not(unix))]
-fn refuse_if_root() -> Result<(), String> {
-    Ok(())
+fn is_root() -> bool {
+    false
 }
 
 /// The bootstrap superuser's password must be the same across restarts —

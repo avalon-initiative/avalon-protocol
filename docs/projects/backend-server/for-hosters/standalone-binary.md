@@ -129,6 +129,11 @@ The tarball has no `migrate` binary; the server applies migrations itself (see
 [Upgrading](#upgrading)). The [bundled variant](#bundled-variant) is a
 separate download, `avalon-server-bundled-<version>-<target>.tar.gz`.
 
+`avalon-server`, `avalon-server-bundled` and `avalon` all answer `--version` and
+`--help` without reading configuration or touching the data directory. The two
+server binaries take no other arguments (an unknown argument prints a usage
+line and exits with status 2); configuration is environment-driven.
+
 ### Build from source
 
 ```bash
@@ -337,8 +342,11 @@ journalctl -u avalon -f
 
 `ExecStart` must be an absolute path. `StateDirectory=avalon` creates
 `/var/lib/avalon` owned by the service user and keeps it writable under
-`ProtectSystem=strict`. `systemctl stop avalon` sends `SIGTERM`; the node exits
-cleanly with status 0. Remove the `postgresql.service` ordering if the database
+`ProtectSystem=strict`. `systemctl stop avalon` sends `SIGTERM`; the node stops
+accepting connections, finishes in-flight requests and its current outbox batch,
+and exits with status 0. Each phase is bounded by `AVALON_SHUTDOWN_TIMEOUT_SECS`
+(default `30`); a second signal, or twice that bound, exits immediately with
+status 1. Remove the `postgresql.service` ordering if the database
 is on another host.
 
 ## Upgrading
@@ -408,8 +416,9 @@ With no `DATABASE_URL`, on first start it:
 
 On every later start with the same `AVALON_DATA_DIR` and still no
 `DATABASE_URL`, it reuses the existing data directory and password rather
-than reinitializing. Stopping the process (`SIGTERM` or `SIGINT`) stops the
-managed PostgreSQL cleanly before the process exits; killing it
+than reinitializing. Stopping the process (`SIGTERM` or `SIGINT`) drains the
+server as described under [systemd](#running-under-systemd), then stops the
+managed PostgreSQL cleanly before the process exits with status 0; killing it
 (`SIGKILL`) does not, and can leave PostgreSQL running under
 `AVALON_DATA_DIR/postgres/data` — check for a stray `postgres` process
 under that data directory and stop it manually if this happens
@@ -421,6 +430,20 @@ this fails with a clear error at startup instead of a confusing one from
 deep inside PostgreSQL's own start sequence. Run it as an ordinary user,
 same as [systemd](#running-under-systemd) already does for the plain
 binary.
+
+The embedded PostgreSQL also needs host packages that a minimal image may lack.
+Before it starts, the server checks for `libxml2` (plus any other shared
+library the downloaded PostgreSQL cannot resolve), a timezone database
+(`tzdata`), and, only when PostgreSQL still has to be downloaded, outbound HTTPS
+to `github.com` (skipped when `HTTPS_PROXY` is set). A missing prerequisite
+stops the start with the package and the install command, for example
+`sudo apt-get install -y libxml2 tzdata` on Debian and Ubuntu or
+`sudo dnf install -y libxml2 tzdata` on Fedora and RHEL. `avalon setup --variant
+bundled` runs the same check and prints the result. If PostgreSQL still fails to
+start, the error includes the tail of its log and, for these known causes, the
+same hint. `AVALON_BUNDLED_PREFLIGHT_SIMULATE_MISSING` (a comma-separated list
+of `root`, `libxml2`, `tzdata`, `network`) makes the check report those as
+missing, for testing the messages.
 
 ### Backup
 

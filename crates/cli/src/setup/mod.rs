@@ -205,7 +205,25 @@ fn write_config(
             cfg.data_dir.display()
         );
     }
+    if cfg.variant == Variant::Bundled {
+        report_bundled_prerequisites(cfg);
+    }
     Ok((merged, changed))
+}
+
+/// Prints the host prerequisites of the managed PostgreSQL that are not met, so a hoster
+/// learns before the first start rather than from a failed one.
+fn report_bundled_prerequisites(cfg: &NodeConfig) {
+    let install_dir = cfg.data_dir.join("postgres").join("install");
+    let problems = avalon_server::bundled_prereq::check_host(sys::is_root(), &install_dir);
+    if problems.is_empty() {
+        println!("Prerequisites: the host can run the bundled PostgreSQL");
+    } else {
+        println!(
+            "WARNING: {}Fix these before starting the node.",
+            avalon_server::bundled_prereq::format_problems(&problems)
+        );
+    }
 }
 
 /// Returns whether the service is now running.

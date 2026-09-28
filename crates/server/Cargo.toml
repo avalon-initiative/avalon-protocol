@@ -12,7 +12,7 @@ avalon-protocol = { path = "../protocol" }
 avalon-chain = { path = "../chain" }
 avalon-indexer = { path = "../indexer" }
 async-trait.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 axum = { workspace = true, features = ["ws"] }
 # Direct deps (otherwise only pulled in transitively through axum) so
 # `crate::serve` can configure hyper's HTTP/1 connection builder directly —
@@ -105,4 +105,4 @@ required-features = ["bundled-postgres"]
 vendored-openssl = ["dep:openssl", "openssl/vendored"]
 # Bundled, managed-Postgres variant (`avalon-server-bundled`) — see
 # `avalon_server::bundled_postgres`'s module doc comment.
-bundled-postgres = ["dep:postgresql_embedded", "dep:libc", "tokio/signal"]
+bundled-postgres = ["dep:postgresql_embedded", "dep:libc"]

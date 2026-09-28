@@ -66,6 +66,8 @@ pub async fn run() {
 /// Postgres (and have that show up in the logs) between initializing
 /// tracing and everything else that follows.
 pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) {
+    let shutdown = crate::shutdown::install();
+    let shutdown_timeout = crate::shutdown::timeout_from_env();
     avalon_devenv::load();
     match crate::node_keys::apply_from_env(&crate::known_list::data_dir_from_env()) {
         Ok(keys) => {
@@ -629,14 +631,17 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // two-phase flow (`POST /ledger/prepare-batch`/`finalize-batch`)
     // and `POST /ledger/submit` commit directly, bypassing the
     // outbox entirely — neither depends on this worker running.
-    if gateway_enabled && !replica_only {
-        tokio::spawn(outbox::run_worker(
+    let outbox_worker = if gateway_enabled && !replica_only {
+        Some(tokio::spawn(outbox::run_worker(
             pool.clone(),
             chain.clone(),
             remote_submit,
             mirror_push_config,
-        ));
-    }
+            shutdown.clone(),
+        )))
+    } else {
+        None
+    };
 
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs. Gateway-only:
@@ -772,5 +777,25 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // itself (the rate limiter's IP-fallback key extractor needs it) and
     // also configures hyper's HTTP/1 header-read timeout, which
     // `axum::serve` has no hook for.
-    crate::serve::serve(listener, app, crate::header_read_timeout_from_env()).await;
+    crate::serve::serve(
+        listener,
+        app,
+        crate::header_read_timeout_from_env(),
+        shutdown,
+        shutdown_timeout,
+    )
+    .await;
+
+    // The outbox commits each batch in one transaction, so waiting for its current tick keeps
+    // a request's write and its ledger entry together; other workers are cancelled at their
+    // next await point when the runtime drops.
+    if let Some(worker) = outbox_worker {
+        if tokio::time::timeout(shutdown_timeout, worker)
+            .await
+            .is_err()
+        {
+            tracing::warn!("outbox worker did not stop within the shutdown timeout");
+        }
+    }
+    tracing::info!("avalon-server stopped");
 }

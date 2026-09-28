@@ -413,14 +413,20 @@ pub async fn run_worker(
     chain: PostgresSettlementProvider,
     remote: Option<RemoteSubmitConfig>,
     mirror_push: Option<crate::mirror_push::MirrorPushConfig>,
+    mut shutdown: crate::shutdown::Shutdown,
 ) {
     let poll_interval = poll_interval_from_env();
-    loop {
+    // A tick in progress always runs to completion; shutdown is only observed between ticks.
+    while !shutdown.is_requested() {
         if let Err(err) = drain_once(&pool, &chain, remote.as_ref(), mirror_push.as_ref()).await {
             tracing::error!("outbox worker: {err}");
         }
-        tokio::time::sleep(poll_interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(poll_interval) => {}
+            _ = shutdown.requested() => {}
+        }
     }
+    tracing::info!("outbox worker stopped");
 }
 
 /// Postgres advisory lock key guarding a drain tick, issue #536: without
