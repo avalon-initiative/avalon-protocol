@@ -59,6 +59,10 @@ impl WitnessCosignConfig {
         }
     }
 
+    pub fn key_id(&self) -> &str {
+        &self.witness_key_id
+    }
+
     /// The signer that proves possession of this witness key in announces;
     /// `None` when the key id is not the hex verifying key.
     pub fn announce_signer(&self) -> Option<crate::nodes::WitnessSigner> {

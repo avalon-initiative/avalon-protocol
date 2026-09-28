@@ -105,6 +105,7 @@ pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
 pub mod witness_cosign;
+pub mod witness_refresh;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, StatusCode};
@@ -150,7 +151,9 @@ fn cors_layer_from_env() -> CorsLayer {
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static(op_trace::TRACE_HEADER),
         ])
+        .expose_headers([axum::http::HeaderName::from_static(op_trace::HOPS_HEADER)])
 }
 
 /// Issue #363, implementing #287's decision: hoster-configurable resource

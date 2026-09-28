@@ -13,6 +13,11 @@ friends/presence, guilds (roster/channels/chat), conversations, and
 achievement issuance all work end to end; `sync_journal`/`submission`
 implement offline durability and deferred submission.
 
+Self-certifying `node:<sha256-of-key>` shard heads are verified from the served
+signing key and the id alone by `self_certifying::verify_self_certifying_head`
+(fetch with `AvalonClient::fetch_shard_tree_head`); see
+[`../architecture/sdk.md`](../architecture/sdk.md#self-certifying-shard-heads).
+
 ## Guides
 
 1. [`for-developers/getting-started.md`](for-developers/getting-started.md) —

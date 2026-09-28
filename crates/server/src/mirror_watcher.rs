@@ -525,6 +525,9 @@ pub async fn run_worker(
     let mut held_logged = HeldHeads::new();
     let self_certifying_bounds = crate::self_certifying_keys::MirrorBounds::from_env();
     let mut gather_log = GatherLog::new();
+    let mut directory_state = crate::witness_refresh::RefreshState::default();
+    let directory_max = crate::witness_refresh::max_per_tick_from_env();
+    let own_witness_key = witness.as_ref().map(|w| w.key_id().to_string());
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
     let client = crate::outbound_policy::peer_client();
 
@@ -656,8 +659,28 @@ pub async fn run_worker(
             &config.peers,
             crate::self_certifying_keys::pinned_shard_ids(&pool).await,
         );
+        let directory = crate::witness_refresh::directory_witnesses(
+            &peers.list_all(),
+            &known_list_pairs,
+            own_witness_key.as_deref(),
+            OffsetDateTime::now_utc(),
+        );
+        directory_state.retain_live(&directory.iter().map(|w| w.key_id.as_str()).collect());
         for shard_id in &refresh_shards {
-            refresh_witness_cosignatures(&pool, &chain, &majority, shard_id, &mut gather_log).await;
+            let mut extra = DirectoryRefresh {
+                witnesses: &directory,
+                max_per_tick: directory_max,
+                state: &mut directory_state,
+            };
+            refresh_witness_cosignatures(
+                &pool,
+                &chain,
+                &majority,
+                &mut extra,
+                shard_id,
+                &mut gather_log,
+            )
+            .await;
         }
 
         let backfill_deadline = std::time::Instant::now() + SELF_CERTIFYING_TICK_BUDGET;
@@ -1083,14 +1106,24 @@ fn shards_to_refresh(configured: &[(String, String)], pinned: Vec<String>) -> Ve
 /// its outcome changes.
 type GatherLog = HashMap<(String, String, String), String>;
 
-/// Asks every known-list witness for its own current cosignature over the latest head observed for
-/// `shard_id` and stores those that verify. Runs every tick independent of whether the head's
-/// source answered or the head changed, so stored copies of other witnesses' cosignatures stay
-/// fresh while the author is unreachable.
+/// Witnesses known from the peer directory but outside the known list, refreshed within
+/// per-tick and stored-row bounds.
+struct DirectoryRefresh<'a> {
+    witnesses: &'a [crate::witness_refresh::DirectoryWitness],
+    max_per_tick: usize,
+    state: &'a mut crate::witness_refresh::RefreshState,
+}
+
+/// Asks every known-list witness, then a bounded selection of directory witnesses outside the
+/// list, for its own current cosignature over the latest head observed for `shard_id` and stores
+/// those that verify. Runs every tick independent of whether the head's source answered or the
+/// head changed, so stored copies of other witnesses' cosignatures stay fresh while the author is
+/// unreachable. A fetched cosignature that is not newer than the stored one is not stored.
 async fn refresh_witness_cosignatures(
     pool: &PgPool,
     chain: &PostgresSettlementProvider,
     majority: &MajorityContext<'_>,
+    extra: &mut DirectoryRefresh<'_>,
     shard_id: &str,
     gather_log: &mut GatherLog,
 ) {
@@ -1108,7 +1141,7 @@ async fn refresh_witness_cosignatures(
             .list_witness_cosignatures(&network_id, shard_id, sth.tree_size)
             .await
             .unwrap_or_default();
-        let results = cosign_gather::gather_own_cosignatures(
+        let mut results = cosign_gather::gather_own_cosignatures(
             majority.policy,
             majority.known_list,
             majority.sources,
@@ -1117,6 +1150,53 @@ async fn refresh_witness_cosignatures(
         )
         .await;
         let now = OffsetDateTime::now_utc();
+        let held: HashMap<String, OffsetDateTime> = stored
+            .iter()
+            .filter(|c| c.root_hash == sth.root_hash)
+            .map(|c| (c.witness_key_id.clone(), c.observed_at))
+            .collect();
+        let outside_known_list = stored
+            .iter()
+            .filter(|c| {
+                !majority
+                    .known_list
+                    .iter()
+                    .any(|(id, _)| *id == c.witness_key_id)
+            })
+            .count();
+        let selected = crate::witness_refresh::select(
+            extra.witnesses,
+            shard_id,
+            &held,
+            outside_known_list,
+            extra.state,
+            extra.max_per_tick,
+            now,
+        );
+        if !selected.is_empty() {
+            let pairs: Vec<(String, VerifyingKey)> =
+                selected.iter().map(|w| (w.key_id.clone(), w.key)).collect();
+            let sources: Vec<cosign_gather::WitnessSource> =
+                selected.iter().map(|w| w.source()).collect();
+            let extra_results = cosign_gather::gather_own_cosignatures(
+                majority.policy,
+                &pairs,
+                &sources,
+                &sth,
+                shard_id,
+            )
+            .await;
+            let deliver_cap = extra.max_per_tick * crate::witness_refresh::ROW_CAP_FACTOR;
+            for (key_id, outcome) in &extra_results {
+                let attempt = crate::witness_refresh::attempt_for(outcome, now);
+                extra.state.asked(key_id, shard_id, now);
+                extra.state.backoff.record(key_id, shard_id, attempt, now);
+                if attempt == crate::witness_refresh::Attempt::Ok {
+                    extra.state.delivered(key_id, shard_id, deliver_cap);
+                }
+            }
+            results.extend(extra_results);
+        }
         for (witness_key_id, outcome) in results {
             let stored_age = stored
                 .iter()
@@ -1125,9 +1205,18 @@ async fn refresh_witness_cosignatures(
             let (label, fetched_age) = match &outcome {
                 cosign_gather::GatherOutcome::Fetched(cosig) => {
                     let age = (now - cosig.observed_at).whole_seconds();
-                    match chain.store_witness_cosignature(shard_id, cosig).await {
-                        Ok(()) => ("stored".to_string(), Some(age)),
-                        Err(err) => (format!("store refused: {err}"), Some(age)),
+                    if !crate::witness_refresh::observed_at_in_range(cosig.observed_at, now) {
+                        ("observed_at out of range".to_string(), Some(age))
+                    } else if held
+                        .get(&witness_key_id)
+                        .is_some_and(|at| *at >= cosig.observed_at)
+                    {
+                        ("stored".to_string(), Some(age))
+                    } else {
+                        match chain.store_witness_cosignature(shard_id, cosig).await {
+                            Ok(()) => ("stored".to_string(), Some(age)),
+                            Err(err) => (format!("store refused: {err}"), Some(age)),
+                        }
                     }
                 }
                 other => (other.label(), None),
@@ -2547,7 +2636,7 @@ mod tests {
             self_certifying: &crate::self_certifying_keys::MirrorBounds::default(),
         };
         let mut log = GatherLog::new();
-        let base = OffsetDateTime::now_utc();
+        let base = OffsetDateTime::now_utc() - time::Duration::seconds(300);
         for tick in 0..3i64 {
             for (server, (k, id)) in servers.iter().zip(&keys) {
                 server.reset().await;
@@ -2572,7 +2661,14 @@ mod tests {
                     .mount(server)
                     .await;
             }
-            refresh_witness_cosignatures(&pool, &chain, &majority, "core", &mut log).await;
+            let mut state = crate::witness_refresh::RefreshState::default();
+            let mut extra = DirectoryRefresh {
+                witnesses: &[],
+                max_per_tick: 0,
+                state: &mut state,
+            };
+            refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, "core", &mut log)
+                .await;
             let stored = chain
                 .list_witness_cosignatures(&network_id, "core", 5)
                 .await
@@ -2586,6 +2682,249 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Directory witnesses outside the known list, end to end against a database and mock
+    /// witness nodes: selection, gather, store, per-shard backoff, the held-skip and rollback
+    /// guard, the observed_at bound, and the row cap counted against real rows.
+    #[tokio::test]
+    #[ignore]
+    async fn refresh_covers_directory_witnesses_within_bounds() {
+        use crate::witness_refresh::{DirectoryWitness, RefreshState};
+        use avalon_protocol::sth::sign_tree_head;
+        use avalon_protocol::witness::sign_witness_cosignature;
+        use ed25519_dalek::SigningKey;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        struct Wit {
+            sk: SigningKey,
+            id: String,
+            server: MockServer,
+        }
+        async fn wit(seed: u8) -> Wit {
+            let sk = SigningKey::from_bytes(&[seed; 32]);
+            let id = hex::encode(sk.verifying_key().to_bytes());
+            Wit {
+                sk,
+                id,
+                server: MockServer::start().await,
+            }
+        }
+        // Serves `observed_at` cosignatures (or none) for one shard's head.
+        async fn serve(
+            w: &Wit,
+            sth: &SignedTreeHead,
+            shard: &str,
+            observed_at: Option<OffsetDateTime>,
+        ) {
+            let cosigs: Vec<_> = observed_at
+                .map(|at| {
+                    let c = sign_witness_cosignature(
+                        &w.sk,
+                        &w.id,
+                        sth.tree_size,
+                        &sth.root_hash,
+                        &sth.network_id,
+                        sth.created_at,
+                        at,
+                    );
+                    WitnessCosignatureDto::from_witness_cosignature(&c)
+                })
+                .into_iter()
+                .collect();
+            let fmt = |t: OffsetDateTime| {
+                t.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            };
+            Mock::given(method("GET"))
+                .and(path(format!("/ledger/sth/{}", sth.tree_size)))
+                .and(query_param("shard_id", shard))
+                .and(query_param("witnesses", "1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "tree_size": sth.tree_size, "root_hash": sth.root_hash,
+                    "network_id": sth.network_id, "signing_key_id": sth.signing_key_id,
+                    "signature": sth.signature, "created_at": fmt(sth.created_at),
+                    "cosignatures": cosigs,
+                })))
+                .mount(&w.server)
+                .await;
+        }
+        fn dir(w: &Wit) -> DirectoryWitness {
+            DirectoryWitness {
+                key_id: w.id.clone(),
+                key: w.sk.verifying_key(),
+                base_url: w.server.uri(),
+                announced_at: OffsetDateTime::now_utc(),
+            }
+        }
+
+        let pool = live_test_pool().await;
+        let network_id = format!("avalon-test-directory-{}", Uuid::new_v4());
+        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let author = SigningKey::from_bytes(&[9u8; 32]);
+        let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        let suffix = Uuid::new_v4();
+        let (shard_a, shard_b, shard_c) = (
+            format!("game:dir-a-{suffix}"),
+            format!("game:dir-b-{suffix}"),
+            format!("game:dir-c-{suffix}"),
+        );
+        let mut heads = std::collections::HashMap::new();
+        for (i, shard) in [&shard_a, &shard_b, &shard_c].into_iter().enumerate() {
+            let root = hex::encode([(i + 1) as u8; 32]);
+            let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+            mirror::insert_observation(
+                &pool,
+                &ObservedSth::from_sth("http://127.0.0.1:1", shard, &sth, created_at),
+            )
+            .await
+            .unwrap();
+            heads.insert(shard.clone(), sth);
+        }
+
+        // d1 cosigns shards a and b, d2 only b, d3 puts a far-future timestamp on b.
+        let (d1, d2, d3) = (wit(1).await, wit(2).await, wit(3).await);
+        let now = OffsetDateTime::now_utc();
+        let cur = now - time::Duration::seconds(30);
+        serve(&d1, &heads[&shard_a], &shard_a, Some(cur)).await;
+        serve(&d1, &heads[&shard_b], &shard_b, Some(cur)).await;
+        serve(&d2, &heads[&shard_a], &shard_a, None).await;
+        serve(&d2, &heads[&shard_b], &shard_b, Some(cur)).await;
+        serve(
+            &d3,
+            &heads[&shard_b],
+            &shard_b,
+            Some(now + time::Duration::days(1)),
+        )
+        .await;
+        serve(&d3, &heads[&shard_a], &shard_a, None).await;
+
+        let directory = vec![dir(&d1), dir(&d2), dir(&d3)];
+        let majority = MajorityContext {
+            known_list: &[],
+            sources: &[],
+            policy: crate::outbound_policy::OutboundPolicy::new(true),
+            self_certifying: &crate::self_certifying_keys::MirrorBounds::default(),
+        };
+        let mut state = RefreshState::default();
+        let mut log = GatherLog::new();
+        let stored_ids = |shard: String| {
+            let chain = &chain;
+            let network_id = network_id.clone();
+            async move {
+                let mut ids: Vec<String> = chain
+                    .list_witness_cosignatures(&network_id, &shard, 5)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|c| c.witness_key_id)
+                    .collect();
+                ids.sort();
+                ids
+            }
+        };
+        for shard in [&shard_a, &shard_b] {
+            let mut extra = DirectoryRefresh {
+                witnesses: &directory,
+                max_per_tick: 3,
+                state: &mut state,
+            };
+            refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, shard, &mut log)
+                .await;
+        }
+        assert_eq!(stored_ids(shard_a.clone()).await, vec![d1.id.clone()]);
+        let mut both = vec![d1.id.clone(), d2.id.clone()];
+        both.sort();
+        assert_eq!(
+            stored_ids(shard_b.clone()).await,
+            both,
+            "d2 lacking shard a must not be skipped on shard b; d3's future timestamp is not stored"
+        );
+
+        // Held witness: an older observation never replaces the stored one, a newer one does.
+        let observed = |id: &str, shard: &str| {
+            let (chain, network_id, id, shard) = (
+                chain.clone(),
+                network_id.clone(),
+                id.to_string(),
+                shard.to_string(),
+            );
+            async move {
+                chain
+                    .list_witness_cosignatures(&network_id, &shard, 5)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|c| c.witness_key_id == id)
+                    .unwrap()
+                    .observed_at
+            }
+        };
+        let first = observed(&d1.id, &shard_a).await;
+        d1.server.reset().await;
+        serve(
+            &d1,
+            &heads[&shard_a],
+            &shard_a,
+            Some(cur - time::Duration::seconds(20)),
+        )
+        .await;
+        let mut extra = DirectoryRefresh {
+            witnesses: &directory,
+            max_per_tick: 3,
+            state: &mut state,
+        };
+        refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, &shard_a, &mut log)
+            .await;
+        assert_eq!(observed(&d1.id, &shard_a).await, first, "no rollback");
+        d1.server.reset().await;
+        serve(
+            &d1,
+            &heads[&shard_a],
+            &shard_a,
+            Some(cur + time::Duration::seconds(20)),
+        )
+        .await;
+        let mut extra = DirectoryRefresh {
+            witnesses: &directory,
+            max_per_tick: 3,
+            state: &mut state,
+        };
+        refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, &shard_a, &mut log)
+            .await;
+        assert!(
+            observed(&d1.id, &shard_a).await > first,
+            "a newer observation refreshes"
+        );
+
+        // Row cap: with max_per_tick 2 the cap is 4 rows from outside the list; fill it with
+        // real rows and a new directory witness is not even asked.
+        let fillers: Vec<Wit> = vec![wit(10).await, wit(11).await, wit(12).await, wit(13).await];
+        for f in &fillers {
+            let c = sign_witness_cosignature(
+                &f.sk,
+                &f.id,
+                5,
+                &heads[&shard_c].root_hash,
+                &network_id,
+                created_at,
+                cur,
+            );
+            chain.store_witness_cosignature(&shard_c, &c).await.unwrap();
+        }
+        let d4 = wit(4).await;
+        serve(&d4, &heads[&shard_c], &shard_c, Some(cur)).await;
+        let directory = vec![dir(&d4)];
+        let mut extra = DirectoryRefresh {
+            witnesses: &directory,
+            max_per_tick: 2,
+            state: &mut state,
+        };
+        refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, &shard_c, &mut log)
+            .await;
+        assert_eq!(d4.server.received_requests().await.unwrap().len(), 0);
+        assert_eq!(stored_ids(shard_c.clone()).await.len(), 4);
     }
 
     /// The equivocation gate ([`backfill_network`]'s first check)

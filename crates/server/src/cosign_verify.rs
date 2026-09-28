@@ -43,7 +43,7 @@ pub fn known_list_verifying_keys(handle: &KnownListHandle) -> Vec<(String, Verif
         .collect()
 }
 
-fn parse_hex_verifying_key(hex_value: &str) -> Option<VerifyingKey> {
+pub(crate) fn parse_hex_verifying_key(hex_value: &str) -> Option<VerifyingKey> {
     let bytes = hex::decode(hex_value).ok()?;
     let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
     VerifyingKey::from_bytes(&array).ok()

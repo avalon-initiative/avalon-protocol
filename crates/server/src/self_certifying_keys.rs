@@ -106,11 +106,10 @@ pub enum Rejection {
     Storage(String),
 }
 
-/// Decodes a hex-encoded 32-byte Ed25519 public key.
+/// Decodes a presented key: exactly 64 lowercase hex characters forming a
+/// canonical, non-small-order Ed25519 public key.
 pub fn parse_public_key(hex_key: &str) -> Option<VerifyingKey> {
-    let bytes = hex::decode(hex_key).ok()?;
-    let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    VerifyingKey::from_bytes(&array).ok()
+    avalon_protocol::shard_identity::parse_shard_public_key_hex(hex_key)
 }
 
 /// The key a head of `shard_id` must verify against: the pinned key when there
@@ -148,7 +147,14 @@ pub fn check_head(
     Ok(())
 }
 
-/// The pinned key of `shard_id`, if this node has verified one.
+/// The key stored for a pin, if it still passes the key policy.
+fn stored_key(bytes: &[u8]) -> Option<VerifyingKey> {
+    let array: [u8; 32] = bytes.try_into().ok()?;
+    avalon_protocol::shard_identity::parse_shard_public_key(&array)
+}
+
+/// The pinned key of `shard_id`, if this node has verified one and it still
+/// passes the key policy.
 pub async fn pinned_key(pool: &PgPool, shard_id: &str) -> Option<VerifyingKey> {
     if !is_self_certifying(shard_id) {
         return None;
@@ -159,20 +165,51 @@ pub async fn pinned_key(pool: &PgPool, shard_id: &str) -> Option<VerifyingKey> {
         .await
         .ok()??;
     let bytes: Vec<u8> = row.try_get("public_key").ok()?;
-    let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    VerifyingKey::from_bytes(&array).ok()
+    stored_key(&bytes)
 }
 
 fn storage(e: sqlx::Error) -> Rejection {
     Rejection::Storage(e.to_string())
 }
 
-/// Ids of every self-certifying shard this node currently has pinned.
+/// Ids of every self-certifying shard this node has pinned with a key that still
+/// passes the key policy. A stored pin the policy rejects is skipped, and logged
+/// once per shard per process.
 pub async fn pinned_shard_ids(pool: &PgPool) -> Vec<String> {
-    sqlx::query_scalar("SELECT shard_id FROM self_certifying_shard_keys")
+    let rows = sqlx::query("SELECT shard_id, public_key FROM self_certifying_shard_keys")
         .fetch_all(pool)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let pins = rows
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.try_get("shard_id").ok()?,
+                row.try_get("public_key").ok()?,
+            ))
+        })
+        .collect();
+    usable_pin_ids(pins)
+}
+
+fn usable_pin_ids(pins: Vec<(String, Vec<u8>)>) -> Vec<String> {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let mut usable = Vec::new();
+    for (shard_id, key) in pins {
+        if stored_key(&key).is_some() {
+            usable.push(shard_id);
+            continue;
+        }
+        let mut warned = WARNED.get_or_init(Default::default).lock().unwrap();
+        if warned.insert(shard_id.clone()) {
+            tracing::warn!(
+                shard_id,
+                "pinned shard key fails the key policy; shard ignored"
+            );
+        }
+    }
+    usable
 }
 
 /// Whether a shard that is not pinned yet could be pinned now, without pinning
@@ -299,6 +336,7 @@ mod tests {
     use avalon_protocol::shard_identity::derive_self_certifying_id;
     use avalon_protocol::sth::sign_tree_head;
     use ed25519_dalek::SigningKey;
+    use sha2::Digest;
     use time::OffsetDateTime;
 
     fn key(seed: u8) -> SigningKey {
@@ -356,6 +394,54 @@ mod tests {
         );
         assert!(select_key(&id, Some(pinned.verifying_key()), None).is_ok());
         assert!(select_key(&id, Some(pinned.verifying_key()), Some(&hex_of(&pinned))).is_ok());
+    }
+
+    #[test]
+    fn weak_and_non_canonical_presented_keys_are_rejected_even_when_they_hash_to_the_id() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut order_two_signed = [0xffu8; 32];
+        order_two_signed[0] = 0xec;
+        let mut wrapped_y3 = [0xffu8; 32];
+        wrapped_y3[0] = 0xed + 3;
+        wrapped_y3[31] = 0x7f;
+        for bytes in [identity, [0u8; 32], order_two_signed, wrapped_y3] {
+            let id = format!("node:{}", hex::encode(sha2::Sha256::digest(bytes)));
+            assert_eq!(
+                select_key(&id, None, Some(&hex::encode(bytes))),
+                Err(Rejection::KeyDoesNotMatchId),
+                "{bytes:02x?}"
+            );
+        }
+        let honest = key(1);
+        let id = derive_self_certifying_id(&honest.verifying_key());
+        assert_eq!(
+            select_key(&id, None, Some(&hex_of(&honest).to_uppercase())),
+            Err(Rejection::KeyDoesNotMatchId)
+        );
+    }
+
+    #[test]
+    fn stored_pins_the_key_policy_rejects_are_not_listed_as_pinned() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let honest = key(1);
+        let weak_id = format!("node:{}", hex::encode(sha2::Sha256::digest(identity)));
+        let honest_id = derive_self_certifying_id(&honest.verifying_key());
+        let usable = usable_pin_ids(vec![
+            (weak_id.clone(), identity.to_vec()),
+            (
+                honest_id.clone(),
+                honest.verifying_key().to_bytes().to_vec(),
+            ),
+            ("node:short".to_string(), vec![7u8; 5]),
+        ]);
+        assert_eq!(usable, vec![honest_id]);
+        assert_eq!(stored_key(&identity), None);
+        assert_eq!(
+            usable_pin_ids(vec![(weak_id, identity.to_vec())]),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -471,6 +557,34 @@ mod tests {
             pinned_key(&pool, &keys[0].1).await,
             Some(keys[0].0.verifying_key())
         );
+        cleanup(&pool, &source).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_stored_pin_the_key_policy_rejects_is_neither_used_nor_listed() {
+        let _guard = DB_LOCK.lock().await;
+        let pool = live_pool().await;
+        let source = format!("http://weak-{}", uuid::Uuid::new_v4());
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let id = format!("node:{}", hex::encode(sha2::Sha256::digest(identity)));
+        sqlx::query("DELETE FROM self_certifying_shard_keys WHERE shard_id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO self_certifying_shard_keys (shard_id, public_key, source_url) VALUES ($1, $2, $3)",
+        )
+        .bind(&id)
+        .bind(identity.to_vec())
+        .bind(&source)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pinned_key(&pool, &id).await, None);
+        assert!(!pinned_shard_ids(&pool).await.contains(&id));
         cleanup(&pool, &source).await;
     }
 
