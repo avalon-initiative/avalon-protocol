@@ -618,9 +618,11 @@ impl PostgresSettlementProvider {
             r#"
             SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
             FROM signed_tree_heads
+            WHERE network_id = $1
             ORDER BY tree_size ASC
             "#,
         )
+        .bind(&self.network_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -659,10 +661,12 @@ impl PostgresSettlementProvider {
             r#"
             SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
             FROM signed_tree_heads
+            WHERE network_id = $1
             ORDER BY tree_size DESC
             LIMIT 1
             "#,
         )
+        .bind(&self.network_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -684,10 +688,11 @@ impl PostgresSettlementProvider {
             r#"
             SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
             FROM signed_tree_heads
-            WHERE tree_size = $1
+            WHERE tree_size = $1 AND network_id = $2
             "#,
         )
         .bind(tree_size)
+        .bind(&self.network_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
