@@ -1,0 +1,15 @@
+# Runtime-only image assembled from an already-built release binary — no
+# compiler, no source tree. Built by the release workflow's `image` job from
+# the same `avalon-server`/`avalon` binaries published in that release's
+# tarball; never built by compiling from source (see the root `Dockerfile`
+# for that path).
+#
+# Build context must contain `avalon-server` and `avalon` for one
+# architecture (the release workflow extracts them from the matching
+# per-target tarball before calling `docker build`).
+FROM gcr.io/distroless/cc-debian12
+WORKDIR /var/lib/avalon
+COPY avalon-server /usr/local/bin/avalon-server
+COPY avalon /usr/local/bin/avalon
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/avalon-server"]

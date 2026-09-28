@@ -1,0 +1,13 @@
+# Optional override: build `avalon-server` from source (the root
+# `Dockerfile`) instead of pulling the published release image that
+# `docker-compose.yml` defaults to. For local development against an
+# unreleased change, not for normal hosting.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.redis.yml -f docker-compose.source.yml --profile stack up -d --build avalon-server
+#
+# (or without docker-compose.redis.yml, matching `make stack-up-no-redis`).
+
+services:
+  avalon-server:
+    build: .
+    image: avalon-server:source

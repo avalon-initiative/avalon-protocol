@@ -12,10 +12,14 @@ No Docker, no repository checkout at runtime. For the Docker route see
   as `avalon-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu` and
   `aarch64-unknown-linux-gnu`, each holding `avalon-server` and the `avalon`
   CLI. Until then, [build the same binary from source](#build-from-source).
-- Not available yet: a variant that bundles its own database (#990), a
-  prebuilt container image (#998), macOS and Windows binaries (#991), and a
-  public network entry to join (#994). NAT traversal is planned; a node still
-  needs an inbound port, see [Ports](#ports).
+- A prebuilt, multi-arch container image is published alongside the tarballs
+  at `ghcr.io/avalon-initiative/avalon-protocol` — see
+  [`hosting-quickstart.md`](hosting-quickstart.md#pulling-and-running-the-image-directly)
+  for the Docker route.
+- Not available yet: a variant that bundles its own database (#990), macOS
+  and Windows binaries, and a public network entry to join (#994). NAT
+  traversal is planned; a node still needs an inbound port, see
+  [Ports](#ports).
 - Everything below was run against the binary built from `main`.
 
 ## What you need
