@@ -427,6 +427,26 @@ cosignature from `GET /ledger/sth/{tree_size}` (only when the head's root
 matches a stored cosignature), so witnesses can serve each other before any
 of them has backfilled.
 
+**A witness speaks only for itself, and copies are refreshed every tick
+(#1025).** A gathered response counts only for the cosignature made by the
+witness that was asked; relayed copies of other witnesses' cosignatures in it
+are ignored, since they may be stale and would otherwise displace the fresh
+one. Merging keeps the later `observed_at` per witness, and a cosignature
+attached to the source's head that is older than the freshness window no
+longer suppresses fetching that witness. Separately from the per-head
+majority check, every mirror-watcher tick asks every known-list witness for
+its own current cosignature over the latest observed head of each watched
+shard and stores those that verify (`refresh_witness_cosignatures`). This runs
+whether or not the head changed and whether or not the head's source answered,
+so with the author down each mirror's stored copies of the other witnesses'
+cosignatures keep the age of the gather interval plus the witness's re-attest
+interval, well inside the freshness window. The store rule is unchanged: same
+root and author timestamp with a later `observed_at` refreshes in place, an
+older one never replaces a newer one, and a different root is refused as a
+possible equivocation. Each witness's gather outcome (stored, no source,
+unreachable, status, no own cosignature, head mismatch, invalid) is logged at
+info when it changes and at debug otherwise, with the stored and fetched ages.
+
 ## Not done yet
 
 - **Clients do not verify cosignatures.** The SDKs and the Hub check the author
@@ -436,8 +456,10 @@ of them has backfilled.
 - **No witness policy in the trust-anchor entry.** `docs/trusted-networks.json` is
   unchanged: same pinned key, same seed nodes. Whether an entry should carry witness
   keys or a client policy is decided together with the SDK work.
-- **The live drill has not been run on the dev fleet with cosigning on**, and the
-  `fork` scenario does not yet exercise two disjoint witness groups. Tracked in #966.
+- **Live drill gaps.** The removal-of-the-original and fresh-node steps were run on the
+  dev fleet on 2026-09-28 (see the drill runbook's record). Open findings from it: mirrors
+  do not keep other witnesses' cosignatures fresh on an unchanged head (#1025), and
+  self-certifying `node:` shards cannot be mirrored or verified by other nodes (#1026).
 - **Layer-1 per-identity chains are not wired into the server.** The pure conflict
   rule and types exist (`identity_chain.rs`); chain state, emission sites, the indexer
   and the freeze on a forked identity are #961, with conformance vectors.
