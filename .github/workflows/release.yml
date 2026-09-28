@@ -230,6 +230,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Provide a .env for compose to read
+        run: cp .env.compose.example .env
+
       - name: docker compose config (published image, default + redis)
         run: docker compose -f docker-compose.yml -f docker-compose.redis.yml --profile stack config -q
 
