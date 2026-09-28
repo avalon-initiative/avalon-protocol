@@ -20,6 +20,8 @@ pub mod auth;
 pub mod authz;
 pub mod backing_services;
 pub mod blocks;
+#[cfg(feature = "bundled-postgres")]
+pub mod bundled_postgres;
 pub mod channels;
 pub mod chat;
 pub mod chat_replication;
@@ -85,6 +87,7 @@ pub mod replication;
 pub mod resources;
 pub mod retention;
 pub mod rollback;
+pub mod run;
 pub mod serve;
 pub mod settlement;
 pub mod signature_gate;
