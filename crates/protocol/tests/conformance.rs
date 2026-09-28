@@ -254,7 +254,10 @@ fn verifying_key_from_hex(hex_value: &str) -> VerifyingKey {
 
 fn sth_from_json(v: &Value, network_id: &str) -> SignedTreeHead {
     SignedTreeHead {
-        tree_size: v["treeSize"].as_i64().unwrap(),
+        tree_size: match &v["treeSize"] {
+            Value::String(decimal) => decimal.parse().unwrap(),
+            number => number.as_i64().unwrap(),
+        },
         root_hash: v["rootHashHex"].as_str().unwrap().to_string(),
         network_id: network_id.to_string(),
         signing_key_id: "settlement-operator-1".to_string(),
@@ -561,15 +564,7 @@ fn self_certifying_outcome(
         return Err("not_self_certifying");
     }
     let key_hex = key_hex.ok_or("missing_key")?;
-    let lowercase_hex = key_hex.len() == 64
-        && key_hex
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-    let key = lowercase_hex
-        .then(|| hex::decode(key_hex).ok())
-        .flatten()
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
+    let key = avalon_protocol::shard_identity::parse_shard_public_key_hex(key_hex)
         .ok_or("malformed_key")?;
     resolve_self_certifying_key(shard_id, &key).ok_or("key_id_mismatch")?;
     if !avalon_protocol::sth::verify_tree_head(&key, sth) {
@@ -609,6 +604,16 @@ fn self_certifying_tree_head_matches_shared_vectors() {
         let shard_id = input["shardId"].as_str().unwrap();
         let key_hex = input.get("signingPublicKeyHex").and_then(|k| k.as_str());
         let sth = sth_from_json(&input["head"], input["head"]["networkId"].as_str().unwrap());
+        let rfc3339 = time::OffsetDateTime::parse(
+            input["head"]["createdAtRfc3339"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert_eq!(
+            rfc3339.unix_timestamp(),
+            sth.created_at.unix_timestamp(),
+            "{name}: createdAtRfc3339 floors to createdAtUnixSeconds"
+        );
 
         let check = match parse_shard_id(shard_id) {
             Ok(ParsedShardId::SelfCertifying { .. }) => "self_certifying",

@@ -42,6 +42,42 @@ pub fn derive_self_certifying_id(key: &VerifyingKey) -> String {
     format!("{SELF_CERTIFYING_NAMESPACE}:{}", hex::encode(digest))
 }
 
+/// Whether `key`'s encoding is acceptable as the key of a `node:` shard:
+/// canonical (y below 2^255-19; a sign bit on x = 0 only occurs at the identity
+/// and the order-2 point, which the small-order rule rejects) and not of small
+/// order. Keys with a torsion component that are neither small-order nor
+/// non-canonical are deliberately accepted: the id binds the exact key bytes and
+/// verification is cofactorless, so a prime-order-subgroup-only rule would make
+/// implementations disagree.
+pub fn is_acceptable_shard_key(key: &VerifyingKey) -> bool {
+    let bytes = key.as_bytes();
+    // p = 2^255 - 19, so y >= p iff the low 255 bits are ff..ff with a first byte >= 0xed.
+    let non_canonical_y =
+        bytes[0] >= 0xed && bytes[1..31].iter().all(|b| *b == 0xff) && bytes[31] & 0x7f == 0x7f;
+    !non_canonical_y && !key.is_weak()
+}
+
+/// Parses the raw key bytes presented for a `node:` shard, enforcing
+/// [`is_acceptable_shard_key`]. The single entry point for such keys.
+pub fn parse_shard_public_key(bytes: &[u8; 32]) -> Option<VerifyingKey> {
+    let key = VerifyingKey::from_bytes(bytes).ok()?;
+    is_acceptable_shard_key(&key).then_some(key)
+}
+
+/// Parses a presented key: exactly 64 lowercase hex characters forming a key
+/// that passes [`is_acceptable_shard_key`].
+pub fn parse_shard_public_key_hex(key_hex: &str) -> Option<VerifyingKey> {
+    let lowercase_hex = key_hex.len() == 64
+        && key_hex
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !lowercase_hex {
+        return None;
+    }
+    let bytes: [u8; 32] = hex::decode(key_hex).ok()?.try_into().ok()?;
+    parse_shard_public_key(&bytes)
+}
+
 /// Whether `id` parses as a self-certifying (`node:<hash>`) shard id —
 /// purely syntactic, no key involved.
 pub fn is_self_certifying(id: &str) -> bool {
@@ -57,6 +93,9 @@ pub fn resolve_self_certifying_key(id: &str, candidate_key: &VerifyingKey) -> Op
     let ParsedShardId::SelfCertifying { .. } = parse_shard_id(id).ok()? else {
         return None;
     };
+    if !is_acceptable_shard_key(candidate_key) {
+        return None;
+    }
     (derive_self_certifying_id(candidate_key) == id).then_some(*candidate_key)
 }
 
@@ -150,7 +189,7 @@ pub fn verify_name_binding_claim(claim: &NameBindingClaim) -> bool {
     let Ok(key_array) = <[u8; 32]>::try_from(key_bytes.as_slice()) else {
         return false;
     };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
+    let Some(verifying_key) = parse_shard_public_key(&key_array) else {
         return false;
     };
     if derive_self_certifying_id(&verifying_key) != claim.self_certifying_id {
@@ -280,6 +319,58 @@ mod tests {
             &signing_key.verifying_key(),
             &sth
         ));
+    }
+
+    fn identity_bytes() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        bytes
+    }
+
+    #[test]
+    fn shard_key_policy_rejects_weak_and_non_canonical_encodings() {
+        let honest = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        assert_eq!(parse_shard_public_key(honest.as_bytes()), Some(honest));
+
+        // Identity, identity with the sign bit, identity as y = p + 1.
+        let mut identity_signed = identity_bytes();
+        identity_signed[31] |= 0x80;
+        let mut identity_wrapped = [0xffu8; 32];
+        identity_wrapped[0] = 0xee;
+        identity_wrapped[31] = 0x7f;
+        // Order-2 point (y = p - 1), with and without the sign bit; order-4 (y = 0).
+        let mut order_two = [0xffu8; 32];
+        order_two[0] = 0xec;
+        order_two[31] = 0x7f;
+        let mut order_two_signed = order_two;
+        order_two_signed[31] |= 0x80;
+        for weak in [
+            identity_bytes(),
+            identity_signed,
+            identity_wrapped,
+            order_two,
+            order_two_signed,
+            [0u8; 32],
+        ] {
+            assert_eq!(parse_shard_public_key(&weak), None, "{weak:02x?}");
+        }
+
+        // y = 3 is a valid non-weak point; y = 3 + p is its non-canonical encoding.
+        let mut canonical_y3 = [0u8; 32];
+        canonical_y3[0] = 3;
+        assert!(parse_shard_public_key(&canonical_y3).is_some());
+        let mut wrapped_y3 = [0xffu8; 32];
+        wrapped_y3[0] = 0xed + 3;
+        wrapped_y3[31] = 0x7f;
+        assert!(VerifyingKey::from_bytes(&wrapped_y3).is_ok());
+        assert_eq!(parse_shard_public_key(&wrapped_y3), None);
+    }
+
+    #[test]
+    fn resolution_refuses_a_weak_key_even_when_the_id_matches() {
+        let weak = VerifyingKey::from_bytes(&identity_bytes()).unwrap();
+        let id = derive_self_certifying_id(&weak);
+        assert_eq!(resolve_self_certifying_key(&id, &weak), None);
     }
 
     #[test]
