@@ -78,6 +78,21 @@ Each file has this shape:
   one hour of the verifier's clock (inclusive, either direction). Each vector's
   `input.messageHex` is the exact signed message where the key id is hex.
   Signatures come from the same fixed seeds as the cosigned head vectors.
+- `self-certifying-tree-head.json` — verification of a tree head of a
+  self-certifying `node:<sha256-of-key>` shard
+  (`avalon_protocol::shard_identity`). Each vector's `input` has `shardId`, an
+  optional `signingPublicKeyHex` (absent means the server presented none) and a
+  `head` (`treeSize`, `rootHashHex`, `networkId`, `signingKeyId`,
+  `createdAtUnixSeconds`, `createdAtRfc3339`, `signatureHex`). `expected.check`
+  is which verification applies to the id (`self_certifying`, `core_network` or
+  `unsupported`), `expected.verified` the outcome and `expected.failure` the first
+  failing check, in this order: `not_self_certifying` (the id is not a valid
+  `node:` id), `missing_key`, `malformed_key` (not exactly 64 lowercase hex
+  characters decoding to a valid Ed25519 point), `key_id_mismatch` (sha256 of the
+  key bytes differs from the id's hash), `bad_signature` (the key's signature does
+  not verify over the standard Signed Tree Head signing bytes). The file's
+  `generation` field says how the two fixed keys and every signature were
+  produced. Supported in all three SDKs.
 - `known-list-selection.json` — the client's known-list rules
   (`avalon_protocol::client_known_list`). It has two arrays instead of
   `vectors`. `prefixVectors`: the diversity prefix derived from a node base url
@@ -110,7 +125,7 @@ Each file has this shape:
 
 Unlike the four client-behavior vectors above, `attestation-signing.json`,
 `signed-tree-head.json`, `witness-cosigned-tree-head.json`, `witness-announce.json`,
-`known-list-selection.json`, `identity-chain.json`,
+`self-certifying-tree-head.json`, `known-list-selection.json`, `identity-chain.json`,
 `cross-node-login.json`, `session-continuation.json`, and
 `websocket-interest-claim.json` also describe something the *server*
 verifies. `crates/protocol/tests/conformance.rs`
