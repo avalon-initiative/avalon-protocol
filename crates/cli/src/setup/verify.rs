@@ -120,8 +120,14 @@ pub fn judge_join(
     }
 }
 
-/// Polls `GET /nodes/discover` until the node answers or `timeout` passes.
-pub async fn wait_for_node(base: &str, timeout: Duration, progress: bool) -> Result<Value, String> {
+/// Polls `GET /nodes/discover` until the node answers or `timeout` passes. `exited` reports why
+/// the process being waited on is gone, which ends the wait early.
+pub async fn wait_for_node(
+    base: &str,
+    timeout: Duration,
+    progress: bool,
+    mut exited: impl FnMut() -> Option<String>,
+) -> Result<Value, String> {
     let client = client();
     let deadline = Instant::now() + timeout;
     let mut last = String::from("no answer");
@@ -144,6 +150,9 @@ pub async fn wait_for_node(base: &str, timeout: Duration, progress: bool) -> Res
             }
             Ok(r) => last = format!("HTTP {}", r.status()),
             Err(e) => last = e.to_string(),
+        }
+        if let Some(why) = exited() {
+            return Err(why);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -216,6 +225,18 @@ mod tests {
     use avalon_protocol::sth::sign_tree_head;
     use ed25519_dalek::SigningKey;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn wait_for_node_stops_when_the_process_has_exited() {
+        let started = Instant::now();
+        let err = wait_for_node("http://127.0.0.1:1", Duration::from_secs(60), false, || {
+            Some("the node exited (exit status: 1)".to_string())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err, "the node exited (exit status: 1)");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn discover_summary_counts_peers_and_flags_a_network_mismatch() {

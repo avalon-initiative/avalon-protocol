@@ -102,6 +102,7 @@ pub async fn run(args: SetupArgs) -> Result<(), String> {
 
     let base = cfg.local_base_url();
     let running = service_running || node_answers(&base).await;
+    let mut child = None;
     let started = if running {
         if !service_running {
             println!("Node already answers at {base}; leaving it running.");
@@ -116,12 +117,13 @@ pub async fn run(args: SetupArgs) -> Result<(), String> {
         print_foreground_command(&cfg, &args);
         false
     } else {
-        start_node(&cfg, &args)?
+        child = start_node(&cfg, &args)?;
+        child.is_some()
     };
 
     let mut failed = None;
     if started && !args.no_verify {
-        failed = verify_node(&cfg, &base).await.err();
+        failed = verify_node(&cfg, &base, child).await.err();
     }
 
     println!("\nNext steps:");
@@ -334,16 +336,16 @@ fn print_foreground_command(cfg: &NodeConfig, args: &SetupArgs) {
 }
 
 async fn node_answers(base: &str) -> bool {
-    verify::wait_for_node(base, Duration::from_secs(1), false)
+    verify::wait_for_node(base, Duration::from_secs(1), false, || None)
         .await
         .is_ok()
 }
 
-fn start_node(cfg: &NodeConfig, args: &SetupArgs) -> Result<bool, String> {
+fn start_node(cfg: &NodeConfig, args: &SetupArgs) -> Result<Option<std::process::Child>, String> {
     let name = cfg.variant.binary_name();
     let Some(bin) = sys::find_binary(name, args.server_bin.as_deref()) else {
         println!("\n{name} was not found next to avalon or on PATH, so the node was not started. Install it (see `avalon guide standalone`) or pass --server-bin, then rerun setup.");
-        return Ok(false);
+        return Ok(None);
     };
     let text = std::fs::read_to_string(cfg.config_path()).map_err(|e| e.to_string())?;
     let env = EnvFile::parse(&text).to_map();
@@ -370,10 +372,14 @@ fn start_node(cfg: &NodeConfig, args: &SetupArgs) -> Result<bool, String> {
         bin.display(),
         log.display()
     );
-    Ok(true)
+    Ok(Some(child))
 }
 
-async fn verify_node(cfg: &NodeConfig, base: &str) -> Result<(), String> {
+async fn verify_node(
+    cfg: &NodeConfig,
+    base: &str,
+    mut child: Option<std::process::Child>,
+) -> Result<(), String> {
     println!("\nVerifying the node at {base}");
     let wait = if cfg.variant == Variant::Bundled {
         300
@@ -383,14 +389,17 @@ async fn verify_node(cfg: &NodeConfig, base: &str) -> Result<(), String> {
     if cfg.variant == Variant::Bundled {
         println!("  the bundled variant downloads and initializes PostgreSQL on its first start; this can take a few minutes");
     }
-    let body = verify::wait_for_node(base, Duration::from_secs(wait), true)
-        .await
-        .map_err(|e| {
-            format!(
-                "{e}; see {}/avalon.log or `avalon guide troubleshooting`",
-                cfg.data_dir.display()
-            )
-        })?;
+    let body = verify::wait_for_node(base, Duration::from_secs(wait), true, || {
+        let status = child.as_mut()?.try_wait().ok()??;
+        Some(format!("the node process exited ({status})"))
+    })
+    .await
+    .map_err(|e| {
+        format!(
+            "{e}; see {}/avalon.log or `avalon guide troubleshooting`",
+            cfg.data_dir.display()
+        )
+    })?;
     let summary = verify::summarize_discover(&body, &cfg.network_id)?;
     println!("  answers: yes (roles: {})", summary.roles.join(","));
     if !summary.network_matches {
