@@ -462,6 +462,62 @@ possible equivocation. Each witness's gather outcome (stored, no source,
 unreachable, status, no own cosignature, head mismatch, invalid) is logged at
 info when it changes and at debug otherwise, with the stored and fetched ages.
 
+**Witnesses outside the known list are refreshed too (#1040).** A client builds its own
+known list, so it can include a witness that a given mirror does not hold in its list, and
+that witness's copy on the mirror would otherwise age past the freshness window. After the
+known-list pass, each tick also asks a bounded selection of the witnesses in the node's peer
+directory (`crates/server/src/witness_refresh.rs`) for their own cosignature over the same
+observed head, and stores those that verify, so the mirror serves a current cosignature for
+them.
+
+- *Where the key and URL come from.* Only a peer-table entry whose witness advert is
+  *direct* counts: the advert verified as a proof of possession for that exact base URL, from
+  that URL's own announce response, and its `announced_at` is within the announce skew. Gossiped
+  adverts never qualify, exactly as for the known list. One key at several URLs is one candidate
+  at its newest advert; the node's own key and known-list keys are excluded. The cosignature is
+  verified against the advert key for the exact head, and it is fetched from that witness's own
+  node only.
+- *Bounds.* At most `AVALON_WITNESS_REFRESH_MAX_PER_TICK` witnesses per shard head per tick
+  (default 16, clamped to 64, `0` turns this off); the same fetch limits as the known-list path
+  apply (8 at a time, 5 s, 64 KiB, outbound policy). Cosignatures held from outside the known list
+  for one head are capped at twice that setting, so the served response stays well under the
+  fetch size limit. Witnesses that already have a stored cosignature for the head are asked first,
+  stalest first, so a limit below the set size still rotates through all of them. Others are
+  admitted only while the cap has room: witnesses that delivered a cosignature for that shard
+  earlier come first, then those asked longest ago (never-asked first), ties broken by a per-node
+  random salt. Announcement recency is deliberately not used, so a participant that re-announces
+  often under many proven keys cannot take every new slot on each new head. The setting changes
+  only how much a node fetches and stores, never what a client accepts. The peer table is itself
+  bounded (`AVALON_NODE_MAX_KNOWN_PEERS`), and an announcing attacker needs one live endpoint that
+  proves possession of each key, so thousands of fake witnesses fill at most the per-tick limit
+  and the row cap, and cannot displace a witness that already holds a row. They can occupy the
+  cap for the life of a head; the next head starts empty and delivering witnesses are preferred.
+- *Unreachable and unavailable witnesses.* Only transport-level failures (unreachable, bad
+  status, blocked, malformed or oversized body) put a witness in an in-memory backoff, which
+  applies to every shard: 30 s doubling to 30 min, cleared by a success or when the witness
+  leaves the directory. A witness that answers but has nothing usable for one shard's head
+  (lagging head, does not cosign that shard, invalid signature, out-of-range `observed_at`) is
+  only retried for that shard after a flat 30 s; the backoff is keyed per (witness, shard), so a
+  witness that cosigns shard B is still refreshed there when it does not cosign shard A.
+  Backed-off witnesses are skipped without using a per-tick slot.
+- *Timestamp bound.* A cosignature is stored only when its `observed_at` is within the
+  freshness window before now and at most 60 s after it (clock skew between nodes), for the
+  directory path and the known-list path alike. A verifier rejects any `observed_at` after its
+  own clock, so a later one is never useful, and one far in the future would otherwise pin the
+  stored row, since only strictly newer observations replace it. The rejection is logged once per
+  change.
+- *Store rules.* A fetched cosignature no newer than the stored one is not stored (no
+  rollback); same root and author timestamp with a later `observed_at` refreshes in place; a
+  cosignature over a different root cannot verify for this head, and a stored one for a different
+  root stays refused as a possible equivocation by the unchanged store rule.
+- *What is served.* Every stored cosignature for the head is still served, with its own
+  `observed_at`. Stale copies are kept rather than dropped: a client applies the freshness
+  window itself, so a stale copy already counts for nothing, dropping it would not make "absent"
+  and "stale" more distinguishable to a client that only sees the response, and older heads keep
+  the cosignatures that back consistency and equivocation evidence. A client that needs a fresh
+  cosignature for a witness gets one whenever the mirror can reach that witness; a witness the
+  mirror cannot reach stays stale here, exactly as a fetch by the client would find it.
+
 ## Not done yet
 
 - **Clients do not verify cosignatures.** The SDKs and the Hub check the author

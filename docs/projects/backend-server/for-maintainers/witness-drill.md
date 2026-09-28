@@ -102,7 +102,9 @@ at real addresses and real timings:
    an outbound firewall drop from a mirror to its source (not a changed
    `AVALON_MIRROR_PEERS`, which changes the source identity the mirror serves
    under) to show refresh does not depend on the author being reachable. A witness that is not in a
-   mirror's confirmed known list is not refreshed there and its copy ages out.
+   mirror's confirmed known list is refreshed there too, when it is in the mirror's peer
+   directory with a direct advert and within `AVALON_WITNESS_REFRESH_MAX_PER_TICK`; one the
+   mirror cannot reach (or beyond that limit) ages out.
    A restarted node's list may need its probation window before it gathers.
 
 After a drill, restore the fleet to its previous state and record what was
