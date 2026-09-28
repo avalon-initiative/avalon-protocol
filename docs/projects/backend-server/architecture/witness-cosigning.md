@@ -283,6 +283,17 @@ finds directly during mirror sync, reconciled into one write path rather
 than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
 
+**Self-certifying shards are cosigned like any other.** `GET /ledger/sth/latest`
+and `/ledger/sth/{tree_size}` for a `node:<hash>` shard carry an optional
+`signing_public_key` (hex Ed25519, outside the signed bytes). A node with
+`AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` that discovers such a shard checks the
+key hashes to the id and signed the head, pins it
+(`crates/server/src/self_certifying_keys.rs`, table
+`self_certifying_shard_keys`, migration `0080_self_certifying_shard_keys`),
+mirrors the log, and runs the same cosigning decision as for any shard. A
+mirror re-serves the pinned key with the heads it serves, so a further mirror
+needs nothing from the author.
+
 **Author-level evidence.** Confirmation does not require cosignatures. When a
 gossiped conflict is confirmed, each side is also topped up with cosignatures
 fetched from the confirmed known-list witnesses

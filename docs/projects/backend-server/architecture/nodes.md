@@ -1234,4 +1234,7 @@ and libp2p identity that the environment leaves unset is loaded from
 `0600`, atomic no-clobber write, loose modes tightened on load, malformed files
 abort startup). With `AVALON_OWN_SHARD_ID` and the remote-authority variables
 unset, the node authors `node:<sha256 of its public key>`. Because that id is
-self-certifying there is no registration step against any authority.
+self-certifying there is no registration step against any authority. Other nodes
+mirror and verify that shard with only the public key its tree-head response carries
+(set `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` on the mirroring node); see
+`settlement.md`.

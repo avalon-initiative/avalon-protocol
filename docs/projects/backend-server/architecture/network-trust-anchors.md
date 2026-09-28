@@ -465,9 +465,21 @@ and re-run without any risk to the network being migrated from.
   unchanged.
 - Not yet built: wiring the DNS TXT proof form to a real resolver (only the
   well-known-file form is fetched today; the format is defined either way),
-  and wiring a self-certifying shard's raw key into the cross-shard STH
-  fetch path (today's `resolve_shard_verify_keys_from_db` only resolves
-  named/registered shards) — both separate, later work.
+  and a self-certifying shard's own verification path in the mirror, below.
+- Self-certifying shards in the server: the tree-head responses carry an
+  optional `signing_public_key` for a `node:` shard (its own key for the
+  shard the node authors, the pinned key for one it mirrors).
+  `crates/server/src/self_certifying_keys.rs` selects the key (it must hash to the id;
+  a different key than the pinned one is rejected), checks the head signature and
+  the mirroring bounds, and pins the key on first sight in
+  `self_certifying_shard_keys`. `resolve_shard_verify_keys_from_db` returns
+  that pinned key for a `node:` id, so cross-shard aggregation and equivocation
+  checks resolve it too. The mirror-watcher's discovered-shard pass uses this
+  path for `node:` ids instead of the `game:` registry lookup, with no authority
+  online. Bounds on how much a node mirrors, never on validity:
+  `AVALON_MIRROR_MAX_SELF_CERTIFYING_SHARDS` (default 32 pinned shards) and
+  `AVALON_MIRROR_MAX_SELF_CERTIFYING_ENTRIES` (default 100000 entries per shard);
+  pins are first come, first kept.
 
 ## Invariants
 

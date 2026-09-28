@@ -244,6 +244,7 @@ async fn discover_and_verify_shard_peers(
     shard_registry: &crate::nodes::ShardRegistry,
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
+    bounds: &crate::self_certifying_keys::MirrorBounds,
 ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
     for shard_id in shard_registry.known_shard_ids() {
@@ -257,14 +258,17 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
-        let db_keys =
-            crate::cross_shard::resolve_shard_verify_keys_from_db(pool, network_id, &shard_id)
-                .await;
-        if db_keys.is_empty() {
+        let self_certifying = avalon_protocol::shard_identity::is_self_certifying(&shard_id);
+        let db_keys = if self_certifying {
+            Vec::new()
+        } else {
+            crate::cross_shard::resolve_shard_verify_keys_from_db(pool, network_id, &shard_id).await
+        };
+        if db_keys.is_empty() && !self_certifying {
             tracing::info!(
                 shard_id,
                 url = %url,
-                "mirror-watcher: discovered shard has no #543-registered shard_settlement key \
+                "mirror-watcher: discovered shard has no registered shard_settlement key \
                  resolved yet — not auto-mirroring until one is",
             );
             continue;
@@ -272,6 +276,30 @@ async fn discover_and_verify_shard_peers(
 
         match fetch_latest_sth(client, &url, Some(&shard_id)).await {
             Ok((dto, _peer_protocol_version)) => {
+                let db_keys = if self_certifying {
+                    match verify_self_certifying_shard(
+                        pool,
+                        &shard_id,
+                        dto.signing_public_key.as_deref(),
+                        &dto,
+                        bounds,
+                    )
+                    .await
+                    {
+                        Ok(key) => vec![key],
+                        Err(rejection) => {
+                            tracing::warn!(
+                                shard_id,
+                                url = %url,
+                                ?rejection,
+                                "mirror-watcher: not auto-mirroring a self-certifying shard",
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    db_keys
+                };
                 let head: CosignedTreeHead = dto.into();
                 let now = OffsetDateTime::now_utc();
                 match cosign_verify::verify_cosigned_against_any_key(
@@ -286,7 +314,7 @@ async fn discover_and_verify_shard_peers(
                             shard_id,
                             url = %url,
                             "auto-mirroring a newly discovered shard whose STH verified against \
-                             a #543-registered shard_settlement key",
+                             a resolved shard key",
                         );
                         verified.push((shard_id, url, head, matched_key));
                     }
@@ -295,7 +323,7 @@ async fn discover_and_verify_shard_peers(
                             shard_id,
                             url = %url,
                             "mirror-watcher: discovered shard's STH failed verification against \
-                             every #543-registered key (or lacked majority cosignature) — not \
+                             every resolved key (or lacked majority cosignature) — not \
                              auto-mirroring",
                         );
                     }
@@ -310,6 +338,39 @@ async fn discover_and_verify_shard_peers(
         }
     }
     verified
+}
+
+/// Verifies a self-certifying shard's head with only the key it presents (or the
+/// key already pinned): the key must hash to the shard id and sign the head, and
+/// the shard must fit `bounds`. Pins the key on success.
+async fn verify_self_certifying_shard(
+    pool: &PgPool,
+    shard_id: &str,
+    presented_key: Option<&str>,
+    dto: &SignedTreeHeadDto,
+    bounds: &crate::self_certifying_keys::MirrorBounds,
+) -> Result<VerifyingKey, crate::self_certifying_keys::Rejection> {
+    use crate::self_certifying_keys as keys;
+    let pinned = keys::pinned_key(pool, shard_id).await;
+    let key = keys::select_key(shard_id, pinned, presented_key)?;
+    let sth = SignedTreeHead {
+        tree_size: dto.tree_size,
+        root_hash: dto.root_hash.clone(),
+        network_id: dto.network_id.clone(),
+        signing_key_id: dto.signing_key_id.clone(),
+        signature: dto.signature.clone(),
+        created_at: dto.created_at,
+    };
+    keys::check_head(
+        &key,
+        &CosignedTreeHead {
+            sth,
+            cosignatures: Vec::new(),
+        },
+        bounds,
+    )?;
+    keys::pin_key(pool, shard_id, &key, bounds).await?;
+    Ok(key)
 }
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
@@ -398,6 +459,7 @@ pub async fn run_worker(
         trust_anchors,
     } = handles;
     let mut held_logged = HeldHeads::new();
+    let self_certifying_bounds = crate::self_certifying_keys::MirrorBounds::from_env();
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
     let client = crate::outbound_policy::peer_client();
 
@@ -491,6 +553,7 @@ pub async fn run_worker(
                 &shard_registry,
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
+                &self_certifying_bounds,
             )
             .await;
             for (shard_id, peer, head, author_key) in discovered {
@@ -615,6 +678,9 @@ struct SignedTreeHeadDto {
     /// a head this node simply hasn't collected any cosignatures for yet.
     #[serde(default)]
     cosignatures: Vec<WitnessCosignatureDto>,
+    /// Hex public key of a self-certifying shard's signer; absent otherwise.
+    #[serde(default)]
+    signing_public_key: Option<String>,
 }
 
 impl From<SignedTreeHeadDto> for SignedTreeHead {

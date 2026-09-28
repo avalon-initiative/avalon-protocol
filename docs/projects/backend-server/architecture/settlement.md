@@ -690,6 +690,15 @@ peer already uses. `AVALON_KNOWN_SHARDS`/`AVALON_MIRROR_PEERS` remain valid,
 unchanged, narrower configuration — this is additive, and a node can auto-mirror
 discovered shards with zero explicit peer configuration at all.
 
+A discovered self-certifying (`node:<hash>`) shard is verified differently: the head
+response hands over the shard's public key, which must hash to the id and must have
+signed the head, so no registry and no authority is consulted. The key is pinned on
+first sight and the shard is then mirrored and cosigned like any other. Because anyone
+can mint self-certifying shards for free, auto-mirroring them is bounded by
+`AVALON_MIRROR_MAX_SELF_CERTIFYING_SHARDS` (default 32) and
+`AVALON_MIRROR_MAX_SELF_CERTIFYING_ENTRIES` (default 100000 per shard); a shard past
+either bound is not mirrored. See `network-trust-anchors.md`.
+
 Verified live across a multi-machine test topology: a node bootstrapped only from a
 second node, which was itself bootstrapped only from a third, discovers and begins
 actively exchanging with the third node it was never directly configured to talk to; a

@@ -88,6 +88,7 @@ pub mod resources;
 pub mod retention;
 pub mod rollback;
 pub mod run;
+pub mod self_certifying_keys;
 pub mod serve;
 pub mod settlement;
 pub mod signature_gate;
