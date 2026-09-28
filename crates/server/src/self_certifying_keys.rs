@@ -167,6 +167,14 @@ fn storage(e: sqlx::Error) -> Rejection {
     Rejection::Storage(e.to_string())
 }
 
+/// Ids of every self-certifying shard this node currently has pinned.
+pub async fn pinned_shard_ids(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar("SELECT shard_id FROM self_certifying_shard_keys")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}
+
 /// Whether a shard that is not pinned yet could be pinned now, without pinning
 /// it: within the per-source cap, and either under the shard cap or with an idle
 /// pin to evict. An already pinned shard is always admitted.

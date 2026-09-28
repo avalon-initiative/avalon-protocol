@@ -524,6 +524,7 @@ pub async fn run_worker(
     } = handles;
     let mut held_logged = HeldHeads::new();
     let self_certifying_bounds = crate::self_certifying_keys::MirrorBounds::from_env();
+    let mut gather_log = GatherLog::new();
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
     let client = crate::outbound_policy::peer_client();
 
@@ -646,6 +647,17 @@ pub async fn run_worker(
                 )
                 .await;
             }
+        }
+
+        // Refresh every known witness's own cosignature for each watched shard's latest head,
+        // whether or not any source answered this tick. Pinned self-certifying shards are
+        // mirrored shards too.
+        let refresh_shards = shards_to_refresh(
+            &config.peers,
+            crate::self_certifying_keys::pinned_shard_ids(&pool).await,
+        );
+        for shard_id in &refresh_shards {
+            refresh_witness_cosignatures(&pool, &chain, &majority, shard_id, &mut gather_log).await;
         }
 
         let backfill_deadline = std::time::Instant::now() + SELF_CERTIFYING_TICK_BUDGET;
@@ -1053,6 +1065,102 @@ async fn pin_accepted_shard(
                 "mirror-watcher: not mirroring a self-certifying shard"
             );
             false
+        }
+    }
+}
+
+/// Shards whose cosignatures are refreshed each tick: the configured mirror shards plus every
+/// pinned self-certifying shard, sorted and deduplicated.
+fn shards_to_refresh(configured: &[(String, String)], pinned: Vec<String>) -> Vec<String> {
+    let mut shards: Vec<String> = configured.iter().map(|(s, _)| s.clone()).collect();
+    shards.extend(pinned);
+    shards.sort_unstable();
+    shards.dedup();
+    shards
+}
+
+/// Last gather outcome label per (network, shard, witness), so a witness is logged only when
+/// its outcome changes.
+type GatherLog = HashMap<(String, String, String), String>;
+
+/// Asks every known-list witness for its own current cosignature over the latest head observed for
+/// `shard_id` and stores those that verify. Runs every tick independent of whether the head's
+/// source answered or the head changed, so stored copies of other witnesses' cosignatures stay
+/// fresh while the author is unreachable.
+async fn refresh_witness_cosignatures(
+    pool: &PgPool,
+    chain: &PostgresSettlementProvider,
+    majority: &MajorityContext<'_>,
+    shard_id: &str,
+    gather_log: &mut GatherLog,
+) {
+    let observed = match mirror::latest_observed_sths_for_shard(pool, shard_id).await {
+        Ok(observed) => observed,
+        Err(err) => {
+            tracing::error!(shard_id, error = %err, "mirror-watcher: cosignature refresh could not read the latest observed head");
+            return;
+        }
+    };
+    for obs in observed {
+        let network_id = obs.network_id.clone();
+        let sth: SignedTreeHead = obs.into();
+        let stored = chain
+            .list_witness_cosignatures(&network_id, shard_id, sth.tree_size)
+            .await
+            .unwrap_or_default();
+        let results = cosign_gather::gather_own_cosignatures(
+            majority.policy,
+            majority.known_list,
+            majority.sources,
+            &sth,
+            shard_id,
+        )
+        .await;
+        let now = OffsetDateTime::now_utc();
+        for (witness_key_id, outcome) in results {
+            let stored_age = stored
+                .iter()
+                .find(|c| c.root_hash == sth.root_hash && c.witness_key_id == witness_key_id)
+                .map(|c| (now - c.observed_at).whole_seconds());
+            let (label, fetched_age) = match &outcome {
+                cosign_gather::GatherOutcome::Fetched(cosig) => {
+                    let age = (now - cosig.observed_at).whole_seconds();
+                    match chain.store_witness_cosignature(shard_id, cosig).await {
+                        Ok(()) => ("stored".to_string(), Some(age)),
+                        Err(err) => (format!("store refused: {err}"), Some(age)),
+                    }
+                }
+                other => (other.label(), None),
+            };
+            let key = (
+                network_id.clone(),
+                shard_id.to_string(),
+                witness_key_id.clone(),
+            );
+            let changed = gather_log.get(&key) != Some(&label);
+            let short = &witness_key_id[..witness_key_id.len().min(8)];
+            if changed {
+                tracing::info!(
+                    shard_id,
+                    tree_size = sth.tree_size,
+                    witness = short,
+                    outcome = %label,
+                    stored_age_secs = ?stored_age,
+                    fetched_age_secs = ?fetched_age,
+                    "mirror-watcher: witness cosignature gather outcome changed",
+                );
+                gather_log.insert(key, label);
+            } else {
+                tracing::debug!(
+                    shard_id,
+                    tree_size = sth.tree_size,
+                    witness = short,
+                    outcome = %label,
+                    stored_age_secs = ?stored_age,
+                    fetched_age_secs = ?fetched_age,
+                    "mirror-watcher: witness cosignature gather",
+                );
+            }
         }
     }
 }
@@ -2325,6 +2433,16 @@ mod tests {
     }
 
     #[test]
+    fn refresh_covers_configured_and_pinned_shards_once_each() {
+        let configured = vec![
+            ("core".to_string(), "http://a".to_string()),
+            ("core".to_string(), "http://b".to_string()),
+        ];
+        let got = shards_to_refresh(&configured, vec!["node:x".into(), "core".into()]);
+        assert_eq!(got, vec!["core".to_string(), "node:x".to_string()]);
+    }
+
+    #[test]
     fn self_certifying_entries_are_not_projected_but_named_shards_are() {
         assert!(!projects_mirrored_entries(&format!(
             "node:{}",
@@ -2369,6 +2487,105 @@ mod tests {
         assert!(!entry_within_size_limit(&entry(
             serde_json::json!({ "a": big })
         )));
+    }
+
+    /// Repeated refresh ticks keep every witness's stored cosignature current for an unchanged
+    /// observed head with no source involved, never move one backwards, and never replace it
+    /// with a cosignature over a different root.
+    #[tokio::test]
+    #[ignore]
+    async fn refresh_keeps_other_witnesses_cosignatures_current_without_a_source() {
+        use avalon_protocol::sth::sign_tree_head;
+        use avalon_protocol::witness::sign_witness_cosignature;
+        use ed25519_dalek::SigningKey;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let pool = live_test_pool().await;
+        let network_id = format!("avalon-test-refresh-{}", Uuid::new_v4());
+        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let author = SigningKey::from_bytes(&[9u8; 32]);
+        let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        let root = hex::encode([1u8; 32]);
+        let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+        mirror::insert_observation(
+            &pool,
+            &ObservedSth::from_sth("http://127.0.0.1:1", "core", &sth, created_at),
+        )
+        .await
+        .unwrap();
+
+        let keys: Vec<(SigningKey, String)> = [1u8, 2]
+            .iter()
+            .map(|s| {
+                let k = SigningKey::from_bytes(&[*s; 32]);
+                let id = hex::encode(k.verifying_key().to_bytes());
+                (k, id)
+            })
+            .collect();
+        let known_list: Vec<(String, VerifyingKey)> = keys
+            .iter()
+            .map(|(k, id)| (id.clone(), k.verifying_key()))
+            .collect();
+        let cosign_at = |k: &SigningKey, id: &str, at: OffsetDateTime| {
+            sign_witness_cosignature(k, id, 5, &root, &network_id, created_at, at)
+        };
+        let mut servers = Vec::new();
+        let mut sources = Vec::new();
+        for (_, id) in &keys {
+            let server = MockServer::start().await;
+            sources.push(cosign_gather::WitnessSource {
+                key_id: id.clone(),
+                base_url: server.uri(),
+            });
+            servers.push(server);
+        }
+        let majority = MajorityContext {
+            known_list: &known_list,
+            sources: &sources,
+            policy: crate::outbound_policy::OutboundPolicy::new(true),
+            self_certifying: &crate::self_certifying_keys::MirrorBounds::default(),
+        };
+        let mut log = GatherLog::new();
+        let base = OffsetDateTime::now_utc();
+        for tick in 0..3i64 {
+            for (server, (k, id)) in servers.iter().zip(&keys) {
+                server.reset().await;
+                // Each witness also relays an hour-old copy of the other's cosignature.
+                let mut cosigs = vec![cosign_at(k, id, base + time::Duration::seconds(tick * 120))];
+                for (ok, oid) in keys.iter().filter(|(_, o)| o != id) {
+                    cosigs.push(cosign_at(ok, oid, base - time::Duration::hours(1)));
+                }
+                let dtos: Vec<_> = cosigs
+                    .iter()
+                    .map(WitnessCosignatureDto::from_witness_cosignature)
+                    .collect();
+                Mock::given(method("GET"))
+                    .and(path("/ledger/sth/5"))
+                    .and(query_param("witnesses", "1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "tree_size": 5, "root_hash": root, "network_id": network_id,
+                        "signing_key_id": sth.signing_key_id, "signature": sth.signature,
+                        "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+                        "cosignatures": dtos,
+                    })))
+                    .mount(server)
+                    .await;
+            }
+            refresh_witness_cosignatures(&pool, &chain, &majority, "core", &mut log).await;
+            let stored = chain
+                .list_witness_cosignatures(&network_id, "core", 5)
+                .await
+                .unwrap();
+            assert_eq!(stored.len(), 2);
+            for c in &stored {
+                assert_eq!(
+                    c.observed_at.unix_timestamp(),
+                    (base + time::Duration::seconds(tick * 120)).unix_timestamp(),
+                    "tick {tick}: stored copy must be the witness's own current one"
+                );
+            }
+        }
     }
 
     /// The equivocation gate ([`backfill_network`]'s first check)

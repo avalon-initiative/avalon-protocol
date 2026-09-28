@@ -19,6 +19,11 @@ Running this node makes you part of the Avalon Initiative's actual
 infrastructure, not a downstream consumer of someone else's — the network is
 only as real and as decentralized as the operators actually running it.
 
+No release has been published yet, so the image `make stack-up` pulls does not
+exist (`docker pull` answers `denied`). Until the first release, use
+`make stack-up-source`, which builds `avalon-server` from the checkout; this page's
+image steps have not been run against a published image.
+
 ## One command
 
 ```bash

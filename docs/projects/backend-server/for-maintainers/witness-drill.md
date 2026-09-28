@@ -92,6 +92,18 @@ at real addresses and real timings:
    `equivocation_detected` in its log and a row in `equivocation_findings`
    (`avalon list-equivocations`). See
    [`equivocation-response.md`](equivocation-response.md) for handling.
+8. Unchanged head: leave the `core` head unchanged for well over the freshness
+   window and sample `curl "<ip>:8080/ledger/sth/latest?shard_id=core&witnesses=1"`
+   on each mirror every minute or so. The `observed_at` of every confirmed
+   known-list witness's cosignature should stay within one re-attest interval
+   plus one mirror-watcher tick (about 320 seconds by default), and feeding the
+   response to `verify_sth cosigned <known-list keys>` (with the pinned
+   `AVALON_SETTLEMENT_VERIFY_KEY`) should keep returning success. Repeat with
+   an outbound firewall drop from a mirror to its source (not a changed
+   `AVALON_MIRROR_PEERS`, which changes the source identity the mirror serves
+   under) to show refresh does not depend on the author being reachable. A witness that is not in a
+   mirror's confirmed known list is not refreshed there and its copy ages out.
+   A restarted node's list may need its probation window before it gathers.
 
 After a drill, restore the fleet to its previous state and record what was
 run and the results in the epic.
@@ -164,9 +176,11 @@ about 12:57Z. Timings below are UTC.
   the source head, and merging keeps a stale relayed copy over a witness's own fresh one.
   Tracked in #1025 (a candidate change and its live result are recorded there; it did not fully
   repair the symptom).
-- Self-certifying `node:` shards are authored and served but nobody else can mirror or verify
-  them (mirroring resolves only registered or pinned keys), so they have no mirrors and no
-  witnesses, and only `core` had cosigned heads. Tracked in #1026.
+- Self-certifying `node:` shards were authored and served but nobody else could mirror or verify
+  them (mirroring resolved only registered or pinned keys), so they had no mirrors and no
+  witnesses, and only `core` had cosigned heads. Fixed in #1026: a node with
+  `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` verifies the key the head carries, pins it, mirrors the
+  shard and cosigns it, and the per-tick cosignature refresh covers pinned shards.
 - `core` itself has a single writer: with the original down, core could not grow and new
   integrators or registered shards could not be created. Only self-certifying shards kept
   authoring. #824 covers the cross-shard root with an unreachable core authority.
