@@ -5,8 +5,9 @@ no Rust or Node toolchain needed, only [Docker](https://docs.docker.com/get-dock
 (with Compose, bundled with Docker Desktop and modern Docker Engine
 installs).
 
-To run the binary directly against your own Postgres instead of Docker, see
-[`standalone-binary.md`](standalone-binary.md).
+To run the binary directly instead of Docker, start with `avalon setup`, the
+guided first-run flow described in [`standalone-binary.md`](standalone-binary.md)
+(this guide is also embedded in the CLI: `avalon guide quickstart`).
 
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see

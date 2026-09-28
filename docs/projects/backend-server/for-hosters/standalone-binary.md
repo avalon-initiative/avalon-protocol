@@ -4,6 +4,52 @@ Run `avalon-server` as a single binary against a Postgres database you provide.
 No Docker, no repository checkout at runtime. For the Docker route see
 [`hosting-quickstart.md`](hosting-quickstart.md).
 
+## Quick start: `avalon setup`
+
+The `avalon` CLI walks through this guide for you. With `avalon-server` (or
+`avalon-server-bundled`) and `avalon` from the same release tarball in one
+directory:
+
+```bash
+avalon setup
+```
+
+It asks, in the order of this page: the database path (your own Postgres, whose
+`DATABASE_URL` it checks by connecting, or the bundled variant), the data
+directory, the listen address and public URL, which network to join from the
+built-in trust list, optional witness and mirror settings, and whether to
+install a systemd service. It writes the answers to `avalon.env` in the data
+directory (mode `0600`, the same `KEY=value` format the systemd unit reads),
+starts the node, waits for it to answer, checks discovery and that the served
+core head verifies against the network's pinned key, and prints the backup and
+upgrade notes for your variant. Keys and registration need no step: the node
+creates its keys on first start.
+
+For scripts, containers and provisioning, the same flow runs without prompts:
+
+```bash
+avalon setup --yes --variant bundled --data-dir /var/lib/avalon \
+  --network avalon-dev-local --public-url https://node.example.org
+```
+
+`--yes` takes each answer from a flag, then from the environment (the server's
+own `DATABASE_URL`, `AVALON_NETWORK_ID`, `AVALON_SERVER_ADDR` and so on), then
+from an existing `avalon.env`, then from a default; run `avalon setup --help` for
+the flags. Without a terminal and without `--yes`, setup stops instead of
+waiting for input.
+
+Rerunning is safe. Existing keys are never touched, and a value in `avalon.env`
+that differs from what you now ask for is kept and reported; pass `--force` to
+change it. A systemd unit is generated next to the config (`avalon.service`) and
+installed and started only when you confirm and run as root; otherwise setup
+prints the commands to run. `--no-start`, `--no-verify` and `--skip-db-check`
+skip those steps.
+
+The whole guide is embedded in the binary from these files at build time:
+`avalon guide` lists topics and `avalon guide <topic>` prints one (for example
+`avalon guide backups`). The rest of this page is the manual route and the
+reference for what setup writes.
+
 ## Availability today
 
 - No release has been tagged yet, so there is no prebuilt download. Releases
