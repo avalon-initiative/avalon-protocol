@@ -38,6 +38,30 @@ from an existing `avalon.env`, then from a default; run `avalon setup --help` fo
 the flags. Without a terminal and without `--yes`, setup stops instead of
 waiting for input.
 
+Things `--yes` does that a prompt would have asked about:
+
+- With no `--network`, the node uses `avalon-dev-local`, which has no seed nodes:
+  it is a standalone node, not joined to any network, and setup prints a notice
+  saying so. Pass `--network <id>` (see `avalon guide networks`) to join one.
+  Interactively there is no default; the network prompt lists which choices have
+  seed nodes. When the chosen network has seed nodes, setup exits non-zero unless
+  the node knows peers and serves a core head that verifies against the pinned
+  key.
+- `--service` installs and starts the systemd unit with no confirmation when run
+  as root.
+- `--public-url` also opens the peer-discovery listener on `0.0.0.0:4001` (the
+  HTTP listener stays on `127.0.0.1:8080` unless `--listen-addr` says otherwise).
+- `--database-url` puts the password in the process arguments and shell history;
+  set the `DATABASE_URL` environment variable instead. The interactive prompt does
+  not echo the URL and never prints an existing one.
+
+Setup refuses shared directories (`/`, `/etc`, `/var/lib`, your home, ...) and
+non-empty directories that are not an earlier Avalon data directory as
+`--data-dir`, since it may change ownership of the directory when installing the
+service. Passkey settings (`AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN`) are
+never replaced on a rerun, even with `--force`, because that invalidates
+registered passkeys; only `--force-webauthn` changes them.
+
 Rerunning is safe. Existing keys are never touched, and a value in `avalon.env`
 that differs from what you now ask for is kept and reported; pass `--force` to
 change it. A systemd unit is generated next to the config (`avalon.service`) and

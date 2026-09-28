@@ -87,12 +87,54 @@ pub fn check_head(body: &Value, verify_key_hex: &str) -> HeadCheck {
     }
 }
 
+/// Decides whether a node on a network with seed nodes has actually joined it: it must know at
+/// least one peer and serve a core head that verifies against the pinned key.
+pub fn judge_join(
+    network_id: &str,
+    peers: usize,
+    head: Option<&HeadCheck>,
+) -> Result<String, String> {
+    match head {
+        Some(HeadCheck::BadSignature) => {
+            return Err(
+                "the node's core head does not verify against the network's pinned key".to_string(),
+            )
+        }
+        Some(HeadCheck::Malformed(e)) => {
+            return Err(format!("the node's core head could not be read: {e}"))
+        }
+        _ => {}
+    }
+    if peers == 0 {
+        return Err(format!(
+            "the node did not join {network_id}: it knows no peers. Check the seed nodes are reachable from this host and that AVALON_NODE_URL and the discovery port are open (`avalon guide networks`, `avalon guide ports`)"
+        ));
+    }
+    match head {
+        Some(HeadCheck::Verified { tree_size }) => Ok(format!(
+            "joined {network_id}: {peers} peer(s) known, core head (tree size {tree_size}) verifies against the pinned key"
+        )),
+        _ => Err(format!(
+            "the node knows {peers} peer(s) but serves no core head yet, so it has not verified {network_id}. Mirroring can take a while: check `curl <node>/ledger/sth/latest?shard_id=core` and rerun `avalon setup --yes` to verify again"
+        )),
+    }
+}
+
 /// Polls `GET /nodes/discover` until the node answers or `timeout` passes.
-pub async fn wait_for_node(base: &str, timeout: Duration) -> Result<Value, String> {
+pub async fn wait_for_node(base: &str, timeout: Duration, progress: bool) -> Result<Value, String> {
     let client = client();
     let deadline = Instant::now() + timeout;
     let mut last = String::from("no answer");
+    let started = Instant::now();
+    let mut next_report = 10;
     while Instant::now() < deadline {
+        if progress && started.elapsed().as_secs() >= next_report {
+            println!(
+                "  still waiting for the node ({}s, last: {last})",
+                next_report
+            );
+            next_report += 10;
+        }
         match client.get(format!("{base}/nodes/discover")).send().await {
             Ok(r) if r.status().is_success() => {
                 if let Ok(v) = r.json::<Value>().await {
@@ -208,6 +250,20 @@ mod tests {
             check_head(&body, &hex::encode(other.verifying_key().to_bytes())),
             HeadCheck::BadSignature
         );
+    }
+
+    #[test]
+    fn a_seeded_network_that_is_not_joined_or_verified_is_a_failure() {
+        let ok = HeadCheck::Verified { tree_size: 3 };
+        assert!(judge_join("n", 2, Some(&ok)).unwrap().contains("joined n"));
+        assert!(judge_join("n", 0, Some(&ok))
+            .unwrap_err()
+            .contains("knows no peers"));
+        assert!(judge_join("n", 2, None)
+            .unwrap_err()
+            .contains("no core head"));
+        assert!(judge_join("n", 2, Some(&HeadCheck::BadSignature)).is_err());
+        assert!(judge_join("n", 0, None).is_err());
     }
 
     #[test]

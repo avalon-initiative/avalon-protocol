@@ -12,7 +12,7 @@ pub const USAGE: &str =
                     [--libp2p-addr <multiaddr>] [--network <network_id>] [--mirror-peers <urls>]
                     [--witness on|off] [--allow-private-peers] [--service | --no-service]
                     [--service-user <user>] [--server-bin <path>] [--no-start] [--no-verify]
-                    [--skip-db-check] [--force]
+                    [--skip-db-check] [--force] [--force-webauthn]
 
 Without --yes, setup asks each question. With --yes every answer comes from a flag, the matching
 AVALON_* / DATABASE_URL environment variable, an existing config in the data directory, or the
@@ -75,6 +75,8 @@ pub struct SetupArgs {
     pub no_verify: bool,
     pub skip_db_check: bool,
     pub force: bool,
+    /// Allows replacing existing passkey relying-party settings.
+    pub force_webauthn: bool,
 }
 
 impl SetupArgs {
@@ -99,6 +101,7 @@ impl SetupArgs {
             no_verify: false,
             skip_db_check: false,
             force: false,
+            force_webauthn: false,
         };
         let mut it = raw.iter();
         while let Some(flag) = it.next() {
@@ -144,6 +147,7 @@ impl SetupArgs {
                 "--no-verify" => a.no_verify = true,
                 "--skip-db-check" => a.skip_db_check = true,
                 "--force" => a.force = true,
+                "--force-webauthn" => a.force_webauthn = true,
                 other => return Err(format!("unknown option {other}")),
             }
         }
@@ -171,6 +175,8 @@ pub struct NodeConfig {
     pub public_url: Option<String>,
     pub libp2p_addr: Option<String>,
     pub network_id: String,
+    /// The network was not chosen: `--yes` fell back to the standalone default.
+    pub network_defaulted: bool,
     pub mirror_peers: Option<String>,
     /// `Some(false)` disables cosigning; `None` leaves the server default (on).
     pub witness: Option<bool>,
@@ -414,7 +420,7 @@ pub fn resolve(
                     "Bring your own PostgreSQL (avalon-server)",
                     "Bundled, managed PostgreSQL (avalon-server-bundled)",
                 ],
-                usize::from(variant_default == Variant::Bundled),
+                Some(usize::from(variant_default == Variant::Bundled)),
             )?;
             [Variant::Byo, Variant::Bundled][idx]
         }
@@ -462,7 +468,7 @@ pub fn resolve(
             let idx = p.choose(
                 "Node role?",
                 &["Replica (recommended)", "Authoring node"],
-                usize::from(role_default == Role::Author),
+                Some(usize::from(role_default == Role::Author)),
             )?;
             [Role::Replica, Role::Author][idx]
         }
@@ -525,38 +531,49 @@ pub fn resolve(
 
     // Network.
     let choices = network_choices();
-    let network_default = pick(args.network.clone(), "AVALON_NETWORK_ID")
-        .unwrap_or_else(|| DEFAULT_NETWORK.to_string());
+    let network_given = pick(args.network.clone(), "AVALON_NETWORK_ID");
+    let network_given_present = network_given.is_some();
+    let network_defaulted = network_given.is_none() && !p.interactive();
+    let network_default = network_given.unwrap_or_else(|| DEFAULT_NETWORK.to_string());
     let network_id = if args.network.is_none() && p.interactive() {
-        p.say("Network: the built-in trust list carries each network's pinned key and seed nodes, which a node uses to announce itself and mirror core. Pick one, or enter a network id of your own. See `avalon guide networks`.");
+        p.say("Network: the built-in trust list carries each network's pinned key and seed nodes, which a node uses to announce itself and mirror core. A network with no seed nodes is a standalone node: it does not join anyone. Pick one, or enter a network id of your own. See `avalon guide networks`.");
         let mut labels: Vec<String> = choices
             .iter()
             .map(|c| {
-                format!(
-                    "{} ({} seed node(s){})",
-                    c.network_id,
-                    c.seed_count,
-                    if c.private_seeds {
-                        ", private addresses"
-                    } else {
-                        ""
-                    }
-                )
+                if c.seed_count == 0 {
+                    format!(
+                        "{} (no seed nodes: standalone, joins nothing)",
+                        c.network_id
+                    )
+                } else {
+                    format!(
+                        "{} ({} seed node(s){})",
+                        c.network_id,
+                        c.seed_count,
+                        if c.private_seeds {
+                            ", on private addresses, reachable only from that LAN"
+                        } else {
+                            ""
+                        }
+                    )
+                }
             })
             .collect();
         labels.push("Another network id".to_string());
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let def = choices
-            .iter()
-            .position(|c| c.network_id == network_default)
-            .unwrap_or(choices.len());
+        let def = (network_given_present).then(|| {
+            choices
+                .iter()
+                .position(|c| c.network_id == network_default)
+                .unwrap_or(choices.len())
+        });
         let idx = p.choose("Which network?", &refs, def)?;
         if idx < choices.len() {
             choices[idx].network_id.clone()
         } else {
             p.ask(
                 "Network id",
-                (def == choices.len()).then_some(network_default.as_str()),
+                (def == Some(choices.len())).then_some(network_default.as_str()),
             )?
         }
     } else {
@@ -615,6 +632,7 @@ pub fn resolve(
         public_url,
         libp2p_addr,
         network_id,
+        network_defaulted,
         mirror_peers,
         witness,
         allow_private_peers,
@@ -644,9 +662,17 @@ fn resolve_database_url(
         return Ok(url);
     }
     p.say("Database URL, e.g. postgres://avalon:password@db-host:5432/avalon (percent-encode special characters in the password). Setup connects to check it. See `avalon guide standalone`.");
-    let mut default = current;
+    let mut current = current;
     loop {
-        let url = p.ask("DATABASE_URL", default.as_deref())?;
+        let typed = p.ask_secret("DATABASE_URL", current.is_some())?;
+        let url = if typed.is_empty() {
+            match current.clone() {
+                Some(c) => c,
+                None => continue,
+            }
+        } else {
+            typed
+        };
         match validate(&url) {
             Ok(()) => return Ok(url),
             Err(e) => {
@@ -654,32 +680,93 @@ fn resolve_database_url(
                 if p.confirm("Use it anyway?", false)? {
                     return Ok(url);
                 }
-                default = Some(url);
+                current = Some(url);
             }
         }
     }
 }
 
+/// Directories that are shared by the system or the user, never a node's own data directory.
+const SHARED_DIRS: &[&str] = &[
+    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/mnt", "/opt", "/proc", "/root",
+    "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var", "/var/lib", "/var/log", "/var/tmp",
+];
+
+/// Refuses a data directory that is obviously shared, or that holds something other than an
+/// earlier node's data. A directory that does not exist yet, or is empty, is fine.
+pub fn check_data_dir(path: &Path, home: Option<&str>) -> Result<(), String> {
+    let text = path.to_string_lossy();
+    let trimmed = text.trim_end_matches('/');
+    let norm = if trimmed.is_empty() { "/" } else { trimmed };
+    if SHARED_DIRS.contains(&norm) || home.is_some_and(|h| h.trim_end_matches('/') == norm) {
+        return Err(format!(
+            "{norm} is a shared directory, not a place for a node's data; choose a dedicated directory such as {norm}/avalon"
+        ));
+    }
+    let Ok(mut entries) = std::fs::read_dir(path) else {
+        return Ok(());
+    };
+    if entries.next().is_none() || path.join(CONFIG_FILE).exists() || path.join("keys").is_dir() {
+        return Ok(());
+    }
+    Err(format!(
+        "{norm} is not empty and does not look like an Avalon data directory; use a new or empty directory"
+    ))
+}
+
+/// Whether `user` is a plain account name.
+pub fn valid_service_user(user: &str) -> bool {
+    let mut chars = user.chars();
+    user.len() <= 32
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// A path as a systemd unit value: `%` doubled; whitespace, quotes and backslashes refused so
+/// the value needs no quoting.
+fn unit_path(p: &Path, exec: bool) -> Result<String, String> {
+    let s = p.to_string_lossy();
+    if s.chars()
+        .any(|c| c.is_whitespace() || c.is_control() || "\"'\\".contains(c))
+    {
+        return Err(format!(
+            "{s} contains whitespace or quote characters, which the generated service unit does not support; use a plainer path"
+        ));
+    }
+    let s = s.replace('%', "%%");
+    Ok(if exec { s.replace('$', "$$") } else { s })
+}
+
 /// The systemd unit for the chosen variant and configuration.
-pub fn systemd_unit(cfg: &NodeConfig, exec: &Path, user: &str) -> String {
-    let data = cfg.data_dir.display();
+pub fn systemd_unit(cfg: &NodeConfig, exec: &Path, user: &str) -> Result<String, String> {
+    if !valid_service_user(user) {
+        return Err(format!("{user:?} is not a valid service user name"));
+    }
+    let data = unit_path(&cfg.data_dir, false)?;
+    let env = unit_path(&cfg.config_path(), false)?;
+    let exec = unit_path(exec, true)?;
+    let network: String = cfg
+        .network_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c))
+        .collect();
     let mut unit = format!(
         "[Unit]\nDescription=Avalon node ({network})\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={user}\nGroup={user}\nEnvironmentFile={env}\nExecStart={exec}\nRestart=on-failure\nRestartSec=5\nLimitNOFILE=65536\nNoNewPrivileges=true\nProtectSystem=strict\nReadWritePaths={data}\nPrivateTmp=true\n",
-        network = cfg.network_id,
-        env = cfg.config_path().display(),
-        exec = exec.display(),
     );
     if cfg.variant == Variant::Bundled {
         unit.push_str(&format!("Environment=HOME={data}\n"));
     }
     unit.push_str("\n[Install]\nWantedBy=multi-user.target\n");
-    unit
+    Ok(unit)
 }
 
 pub const UNIT_NAME: &str = "avalon.service";
 pub const SYSTEM_UNIT_PATH: &str = "/etc/systemd/system/avalon.service";
 
-/// The commands that install `unit_file` and start the service.
+/// The commands that install `unit_file` and start the service. The data directory has been
+/// vetted by [`check_data_dir`], so it is the only tree that changes owner.
 pub fn install_commands(
     unit_file: &Path,
     cfg: &NodeConfig,
@@ -687,28 +774,26 @@ pub fn install_commands(
     create_user: bool,
 ) -> Vec<Vec<String>> {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let data = cfg.data_dir.display().to_string();
     let mut cmds = Vec::new();
     if create_user {
         cmds.push(s(&[
             "useradd",
             "--system",
             "--home-dir",
-            &cfg.data_dir.display().to_string(),
+            &data,
             "--shell",
             "/usr/sbin/nologin",
+            "--",
             user,
         ]));
     }
-    cmds.push(s(&[
-        "chown",
-        "-R",
-        &format!("{user}:{user}"),
-        &cfg.data_dir.display().to_string(),
-    ]));
+    cmds.push(s(&["chown", "-R", "--", &format!("{user}:{user}"), &data]));
     cmds.push(s(&[
         "install",
         "-m",
         "0644",
+        "--",
         &unit_file.display().to_string(),
         SYSTEM_UNIT_PATH,
     ]));
@@ -996,7 +1081,8 @@ mod tests {
             &cfg,
             Path::new("/usr/local/bin/avalon-server-bundled"),
             "avalon",
-        );
+        )
+        .unwrap();
         assert!(unit.contains("EnvironmentFile=/home/op/.avalon/avalon.env"));
         assert!(unit.contains("ExecStart=/usr/local/bin/avalon-server-bundled\n"));
         assert!(unit.contains("ReadWritePaths=/home/op/.avalon"));
@@ -1008,8 +1094,180 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !systemd_unit(&byo, Path::new("/usr/local/bin/avalon-server"), "op").contains("HOME=")
+            !systemd_unit(&byo, Path::new("/usr/local/bin/avalon-server"), "op")
+                .unwrap()
+                .contains("HOME=")
         );
+    }
+
+    #[test]
+    fn unit_values_are_escaped_or_refused() {
+        let cfg = resolve_auto(
+            &args(&["--yes", "--variant", "bundled", "--data-dir", "/srv/av%x"]),
+            &EnvFile::default(),
+        )
+        .unwrap();
+        let unit =
+            systemd_unit(&cfg, Path::new("/opt/a$b/avalon-server-bundled"), "avalon").unwrap();
+        assert!(unit.contains("ReadWritePaths=/srv/av%%x"));
+        assert!(unit.contains("ExecStart=/opt/a$$b/avalon-server-bundled"));
+        assert!(systemd_unit(&cfg, Path::new("/opt/a b/x"), "avalon").is_err());
+        assert!(systemd_unit(&cfg, Path::new("/opt/x"), "bad user").is_err());
+    }
+
+    #[test]
+    fn service_user_names_are_validated() {
+        for ok in ["avalon", "_svc", "a-b_1"] {
+            assert!(valid_service_user(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "Root",
+            "1abc",
+            "a b",
+            "-x",
+            "a;b",
+            "root:root",
+            &"a".repeat(33),
+        ] {
+            assert!(!valid_service_user(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn shared_and_foreign_data_directories_are_refused() {
+        for d in [
+            "/",
+            "/etc",
+            "/var/lib",
+            "/var/lib/",
+            "/usr",
+            "/home",
+            "/root",
+            "/home/op",
+        ] {
+            assert!(
+                check_data_dir(Path::new(d), Some("/home/op")).is_err(),
+                "{d}"
+            );
+        }
+        assert!(check_data_dir(Path::new("/var/lib/avalon"), Some("/home/op")).is_ok());
+        let dir = std::env::temp_dir().join(format!("avalon-dd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(check_data_dir(&dir, None).is_ok(), "empty is fine");
+        std::fs::write(dir.join("stranger.txt"), "x").unwrap();
+        assert!(check_data_dir(&dir, None).is_err(), "foreign contents");
+        std::fs::write(dir.join(CONFIG_FILE), "").unwrap();
+        assert!(check_data_dir(&dir, None).is_ok(), "previous avalon dir");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn install_commands_end_options_before_names() {
+        let cfg = resolve_auto(
+            &args(&["--yes", "--variant", "bundled"]),
+            &EnvFile::default(),
+        )
+        .unwrap();
+        for c in install_commands(Path::new("/d/avalon.service"), &cfg, "avalon", true) {
+            if ["useradd", "chown", "install"].contains(&c[0].as_str()) {
+                assert!(c.contains(&"--".to_string()), "{c:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_secret_default_is_never_shown_at_the_database_prompt() {
+        let get = no_env;
+        let env = Env { get: &get };
+        let existing = EnvFile::parse(
+            "DATABASE_URL=postgres://u:s3cretpw@h/db?password=zzz
+",
+        );
+        let a = args(&[
+            "--skip-db-check",
+            "--role",
+            "replica",
+            "--listen-addr",
+            "127.0.0.1:8080",
+            "--public-url",
+            "https://n.example.org",
+            "--libp2p-addr",
+            "/ip4/0.0.0.0/tcp/4001",
+            "--network",
+            "x",
+            "--witness",
+            "on",
+            "--variant",
+            "byo",
+        ]);
+        let mut p = Scripted::new(&[""]);
+        let cfg = resolve(&a, &env, &host(), &existing, "/d".into(), &mut p, &ok_db).unwrap();
+        assert_eq!(
+            cfg.database_url.as_deref(),
+            Some("postgres://u:s3cretpw@h/db?password=zzz")
+        );
+        let shown = p.prompts.join("\n") + &p.said().join("\n");
+        assert!(
+            !shown.contains("s3cretpw") && !shown.contains("zzz"),
+            "{shown}"
+        );
+        assert!(shown.contains("secret, current: true"));
+    }
+
+    #[test]
+    fn yes_without_a_network_is_flagged_standalone_and_interactive_has_no_silent_default() {
+        let cfg = resolve_auto(
+            &args(&["--yes", "--variant", "bundled"]),
+            &EnvFile::default(),
+        )
+        .unwrap();
+        assert!(cfg.network_defaulted);
+        let cfg = resolve_auto(
+            &args(&[
+                "--yes",
+                "--variant",
+                "bundled",
+                "--network",
+                "avalon-dev-local",
+            ]),
+            &EnvFile::default(),
+        )
+        .unwrap();
+        assert!(!cfg.network_defaulted);
+
+        let get = no_env;
+        let env = Env { get: &get };
+        let a = args(&[
+            "--variant",
+            "bundled",
+            "--role",
+            "replica",
+            "--listen-addr",
+            "127.0.0.1:8080",
+            "--public-url",
+            "https://n.example.org",
+            "--libp2p-addr",
+            "/ip4/0.0.0.0/tcp/4001",
+            "--witness",
+            "on",
+        ]);
+        let mut p = Scripted::new(&[""]);
+        let e = resolve(
+            &a,
+            &env,
+            &host(),
+            &EnvFile::default(),
+            "/d".into(),
+            &mut p,
+            &ok_db,
+        )
+        .unwrap_err();
+        assert!(e.contains("answer"), "{e}");
+        assert!(p
+            .prompts
+            .iter()
+            .any(|q| q.contains("no seed nodes: standalone")));
     }
 
     #[test]
