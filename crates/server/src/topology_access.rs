@@ -7,7 +7,8 @@
 //!   `/nodes/peers` and `/nodes/discover` are not part of that group and are
 //!   unaffected by the switch.
 //! - [`apply_cors`]: routes in [`PUBLIC_PATHS`] answer any origin
-//!   (`Access-Control-Allow-Origin: *`, no credentials, `Content-Type` only).
+//!   (`Access-Control-Allow-Origin: *`, no credentials, `Content-Type` and
+//!   `X-Avalon-Trace` request headers, `X-Avalon-Trace-Hops` exposed).
 //!   Every other route keeps the `AVALON_HUB_ORIGIN` allowlist. Scoping is by
 //!   the explicit path list, never a wildcard.
 //!
@@ -83,7 +84,13 @@ fn public_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderName::from_static(crate::op_trace::TRACE_HEADER),
+        ])
+        .expose_headers([axum::http::HeaderName::from_static(
+            crate::op_trace::HOPS_HEADER,
+        )])
 }
 
 /// Wraps `app` so that [`PUBLIC_PATHS`] get the permissive CORS layer and
@@ -167,7 +174,60 @@ mod tests {
             .headers()
             .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
             .unwrap();
-        assert_eq!(h.to_str().unwrap().to_ascii_lowercase(), "content-type");
+        assert_eq!(
+            h.to_str().unwrap().to_ascii_lowercase(),
+            "content-type,x-avalon-trace"
+        );
+    }
+
+    fn exposed(r: &axum::response::Response) -> Option<String> {
+        r.headers()
+            .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .map(|v| v.to_str().unwrap().to_ascii_lowercase())
+    }
+
+    #[tokio::test]
+    async fn public_routes_expose_only_the_trace_hops_header() {
+        let r = send(
+            Method::GET,
+            "/nodes/status",
+            "http://anywhere.example",
+            false,
+        )
+        .await;
+        assert_eq!(exposed(&r).as_deref(), Some("x-avalon-trace-hops"));
+    }
+
+    #[tokio::test]
+    async fn configured_origin_routes_expose_only_the_trace_hops_header() {
+        let origin = std::env::var("AVALON_HUB_ORIGIN")
+            .unwrap_or_else(|_| "http://localhost:5173".to_string());
+        let origin = origin.split(',').next().unwrap().trim().to_string();
+        let base: Router = Router::new().route("/secret", get(|| async { "ok" }));
+        let app = apply_cors(base, crate::cors_layer_from_env());
+        let req = |method: Method, preflight: bool| {
+            let mut b = Request::builder()
+                .method(method)
+                .uri("/secret")
+                .header(header::ORIGIN, origin.as_str());
+            if preflight {
+                b = b
+                    .header("access-control-request-method", "GET")
+                    .header("access-control-request-headers", "x-avalon-trace");
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        let r = app.clone().oneshot(req(Method::GET, false)).await.unwrap();
+        assert_eq!(exposed(&r).as_deref(), Some("x-avalon-trace-hops"));
+        let r = app.oneshot(req(Method::OPTIONS, true)).await.unwrap();
+        assert!(r
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("x-avalon-trace"));
     }
 
     #[tokio::test]
