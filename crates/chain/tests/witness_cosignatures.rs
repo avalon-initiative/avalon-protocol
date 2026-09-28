@@ -223,3 +223,33 @@ async fn a_relayed_reattestation_refreshes_in_place_instead_of_being_rejected() 
         .expect("listing cosignatures should succeed");
     assert_eq!(stored, vec![refreshed]);
 }
+
+#[tokio::test]
+#[ignore]
+async fn head_lookups_ignore_rows_under_other_network_ids() {
+    let pool = test_pool().await;
+    let own = format!("avalon-sth-scope-live-test-{}", Uuid::new_v4());
+    let foreign = format!("avalon-sth-scope-live-test-{}", Uuid::new_v4());
+    let chain = PostgresSettlementProvider::new(pool.clone(), own.clone());
+
+    let own_size = fresh_test_tree_size();
+    let foreign_size = own_size + 1;
+    insert_test_sth(&pool, &own, own_size, &"ab".repeat(32)).await;
+    insert_test_sth(&pool, &foreign, foreign_size, &"cd".repeat(32)).await;
+
+    let latest = chain.latest_signed_tree_head().await;
+    let at_foreign = chain.signed_tree_head_at(foreign_size).await;
+    let listed = chain.list_signed_tree_heads().await;
+
+    sqlx::query("DELETE FROM signed_tree_heads WHERE network_id = ANY($1)")
+        .bind(vec![own.clone(), foreign.clone()])
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+
+    let latest = latest.unwrap().expect("own head exists");
+    assert_eq!(latest.network_id, own);
+    assert_eq!(latest.tree_size, own_size);
+    assert!(at_foreign.unwrap().is_none());
+    assert!(listed.unwrap().iter().all(|h| h.network_id == own));
+}

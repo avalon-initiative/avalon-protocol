@@ -79,8 +79,9 @@ pub async fn read_source_checkpoint(pool: &PgPool) -> Result<SourceCheckpoint, M
 
     let latest = sqlx::query(
         "SELECT tree_size, root_hash, signing_key_id, signature, created_at \
-         FROM signed_tree_heads ORDER BY tree_size DESC LIMIT 1",
+         FROM signed_tree_heads WHERE network_id = $1 ORDER BY tree_size DESC LIMIT 1",
     )
+    .bind(&network_id)
     .fetch_optional(pool)
     .await?;
 
