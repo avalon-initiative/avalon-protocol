@@ -1,0 +1,1 @@
+DROP TABLE self_certifying_shard_keys;
