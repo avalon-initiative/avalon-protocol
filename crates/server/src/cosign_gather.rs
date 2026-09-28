@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use avalon_protocol::cosigned_sth::{self, CosignedTreeHead};
+use avalon_protocol::sth::SignedTreeHead;
 use avalon_protocol::witness::WitnessCosignature;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -75,70 +76,170 @@ struct WitnessSthResponse {
     cosignatures: Vec<WitnessCosignatureDto>,
 }
 
-async fn fetch_from_witness(
+/// What asking one witness for its own cosignature produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatherOutcome {
+    /// The witness's own cosignature, verified against its known-list key for the exact head.
+    Fetched(WitnessCosignature),
+    /// No peer-table entry with a directly verified advert for this witness.
+    NoSource,
+    /// The outbound policy refused the witness's base URL.
+    Blocked,
+    /// The request failed before a complete response arrived.
+    Unreachable(String),
+    /// The witness answered with a non-success status.
+    BadStatus(u16),
+    /// The response was oversized or not a well-formed tree head document.
+    Malformed,
+    /// The witness holds a different head at this tree size.
+    HeadMismatch,
+    /// The response carried no cosignature by the asked witness itself.
+    NoOwnCosignature,
+    /// The witness's own cosignature did not verify for this head.
+    InvalidSignature,
+}
+
+impl GatherOutcome {
+    /// Short label used to log only when a witness's outcome changes.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Fetched(_) => "fetched".into(),
+            Self::NoSource => "no_source".into(),
+            Self::Blocked => "blocked".into(),
+            Self::Unreachable(e) => format!("unreachable: {e}"),
+            Self::BadStatus(s) => format!("status {s}"),
+            Self::Malformed => "malformed".into(),
+            Self::HeadMismatch => "head_mismatch".into(),
+            Self::NoOwnCosignature => "no_own_cosignature".into(),
+            Self::InvalidSignature => "invalid_signature".into(),
+        }
+    }
+}
+
+/// Asks one witness for its own cosignature over `sth`. Only a cosignature by the asked witness
+/// counts: relayed copies of other witnesses' cosignatures it holds may be stale and would
+/// otherwise displace their fresh ones when merged.
+async fn fetch_own_cosignature(
     policy: OutboundPolicy,
     source: &WitnessSource,
-    head: &CosignedTreeHead,
+    sth: &SignedTreeHead,
     shard_id: &str,
-) -> Vec<WitnessCosignature> {
+) -> GatherOutcome {
     let Ok(target) = policy.check_base_url(&source.base_url).await else {
-        return Vec::new();
+        return GatherOutcome::Blocked;
     };
     let client = target.client(WITNESS_FETCH_TIMEOUT);
-    let url = format!("{}/ledger/sth/{}", target.base_url, head.sth.tree_size);
-    let Ok(mut response) = client
+    let url = format!("{}/ledger/sth/{}", target.base_url, sth.tree_size);
+    let mut response = match client
         .get(url)
         .query(&[("shard_id", shard_id), ("witnesses", "1")])
         .send()
         .await
-    else {
-        return Vec::new();
+    {
+        Ok(r) => r,
+        Err(e) => return GatherOutcome::Unreachable(e.without_url().to_string()),
     };
     if !response.status().is_success() {
-        return Vec::new();
+        return GatherOutcome::BadStatus(response.status().as_u16());
     }
     let mut body = Vec::new();
-    while let Ok(Some(chunk)) = response.chunk().await {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_RESPONSE_BYTES {
-            return Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                body.extend_from_slice(&chunk);
+                if body.len() > MAX_RESPONSE_BYTES {
+                    return GatherOutcome::Malformed;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return GatherOutcome::Unreachable(e.without_url().to_string()),
         }
     }
     let Ok(parsed) = serde_json::from_slice::<WitnessSthResponse>(&body) else {
-        return Vec::new();
+        return GatherOutcome::Malformed;
     };
-    if parsed.tree_size != head.sth.tree_size
-        || parsed.root_hash != head.sth.root_hash
-        || parsed.network_id != head.sth.network_id
-        || parsed.created_at != head.sth.created_at
+    if parsed.tree_size != sth.tree_size
+        || parsed.root_hash != sth.root_hash
+        || parsed.network_id != sth.network_id
+        || parsed.created_at != sth.created_at
     {
-        return Vec::new();
+        return GatherOutcome::HeadMismatch;
     }
-    // A witness speaks only for itself: relayed copies of other witnesses' cosignatures it holds
-    // may be stale and would otherwise displace their fresh ones when merged.
-    parsed
+    match parsed
         .cosignatures
         .iter()
-        .filter(|c| c.witness_key_id == source.key_id)
-        .map(|c| c.to_witness_cosignature(&head.sth))
-        .collect()
+        .find(|c| c.witness_key_id == source.key_id)
+    {
+        Some(c) => GatherOutcome::Fetched(c.to_witness_cosignature(sth)),
+        None => GatherOutcome::NoOwnCosignature,
+    }
 }
 
-/// Fetches cosignatures for `head` from every source not already represented
-/// in `head.cosignatures`, with bounded concurrency. Failures yield nothing.
+/// Asks every known-list witness for its own current cosignature over `sth`, with bounded
+/// concurrency. One entry per known-list witness; a `Fetched` entry has already verified against
+/// that witness's known-list key for exactly `sth`.
+pub async fn gather_own_cosignatures(
+    policy: OutboundPolicy,
+    known_list: &[(String, VerifyingKey)],
+    sources: &[WitnessSource],
+    sth: &SignedTreeHead,
+    shard_id: &str,
+) -> Vec<(String, GatherOutcome)> {
+    let mut results = Vec::with_capacity(known_list.len());
+    let mut asked: Vec<&WitnessSource> = Vec::new();
+    for (key_id, _) in known_list {
+        match sources.iter().find(|s| s.key_id == *key_id) {
+            Some(source) => asked.push(source),
+            None => results.push((key_id.clone(), GatherOutcome::NoSource)),
+        }
+    }
+    for batch in asked.chunks(MAX_CONCURRENT_WITNESS_FETCHES) {
+        let outcomes = futures_util::future::join_all(
+            batch
+                .iter()
+                .map(|s| fetch_own_cosignature(policy, s, sth, shard_id)),
+        )
+        .await;
+        for (source, outcome) in batch.iter().zip(outcomes) {
+            let outcome = match outcome {
+                GatherOutcome::Fetched(cosig) => {
+                    let valid = known_list
+                        .iter()
+                        .find(|(id, _)| *id == source.key_id)
+                        .is_some_and(|(_, key)| {
+                            avalon_protocol::witness::verify_witness_cosignature(key, &cosig)
+                        });
+                    if valid {
+                        GatherOutcome::Fetched(cosig)
+                    } else {
+                        GatherOutcome::InvalidSignature
+                    }
+                }
+                other => other,
+            };
+            results.push((source.key_id.clone(), outcome));
+        }
+    }
+    results
+}
+
+/// Fetches cosignatures for `head` from every source whose cosignature is absent from
+/// `head.cosignatures` or older than the freshness window, with bounded concurrency. Failures
+/// yield nothing.
 pub async fn gather_witness_cosignatures(
     policy: OutboundPolicy,
     sources: &[WitnessSource],
     head: &CosignedTreeHead,
     shard_id: &str,
 ) -> Vec<WitnessCosignature> {
+    let cutoff = OffsetDateTime::now_utc() - COSIGNATURE_FRESHNESS_WINDOW;
     let wanted: Vec<&WitnessSource> = sources
         .iter()
         .filter(|s| {
             !head
                 .cosignatures
                 .iter()
-                .any(|c| c.witness_key_id == s.key_id)
+                .any(|c| c.witness_key_id == s.key_id && c.observed_at >= cutoff)
         })
         .collect();
     let mut gathered = Vec::new();
@@ -146,26 +247,32 @@ pub async fn gather_witness_cosignatures(
         let results = futures_util::future::join_all(
             batch
                 .iter()
-                .map(|s| fetch_from_witness(policy, s, head, shard_id)),
+                .map(|s| fetch_own_cosignature(policy, s, &head.sth, shard_id)),
         )
         .await;
-        gathered.extend(results.into_iter().flatten());
+        gathered.extend(results.into_iter().filter_map(|o| match o {
+            GatherOutcome::Fetched(c) => Some(c),
+            _ => None,
+        }));
     }
     gathered
 }
 
-/// Adds `extra` to `head`, skipping any witness id already present.
+/// Adds `extra` to `head`; for a witness already present, the cosignature with the later
+/// `observed_at` is kept.
 pub fn merge_cosignatures(
     mut head: CosignedTreeHead,
     extra: Vec<WitnessCosignature>,
 ) -> CosignedTreeHead {
     for cosig in extra {
-        if !head
+        match head
             .cosignatures
-            .iter()
-            .any(|c| c.witness_key_id == cosig.witness_key_id)
+            .iter_mut()
+            .find(|c| c.witness_key_id == cosig.witness_key_id)
         {
-            head.cosignatures.push(cosig);
+            Some(existing) if existing.observed_at < cosig.observed_at => *existing = cosig,
+            Some(_) => {}
+            None => head.cosignatures.push(cosig),
         }
     }
     head
@@ -390,6 +497,98 @@ mod tests {
         )
         .await;
         assert!(matches!(verdict, HeadVerdict::Trusted(_)));
+    }
+
+    fn stale_cosign(k: &SigningKey, id: &str, sth: &SignedTreeHead) -> WitnessCosignature {
+        sign_witness_cosignature(
+            k,
+            id,
+            sth.tree_size,
+            &sth.root_hash,
+            &sth.network_id,
+            sth.created_at,
+            OffsetDateTime::now_utc() - time::Duration::hours(1),
+        )
+    }
+
+    #[test]
+    fn merge_keeps_the_later_observation_per_witness() {
+        let w1 = witness(1);
+        let mut h = head(1);
+        let old = stale_cosign(&w1.0, &w1.1, &h.sth);
+        let fresh = cosign(&w1.0, &w1.1, &h.sth);
+        h.cosignatures.push(old.clone());
+        let merged = merge_cosignatures(h, vec![fresh.clone()]);
+        assert_eq!(merged.cosignatures, vec![fresh.clone()]);
+        let merged = merge_cosignatures(merged, vec![old]);
+        assert_eq!(merged.cosignatures, vec![fresh]);
+    }
+
+    #[tokio::test]
+    async fn a_stale_attached_copy_does_not_stop_gathering_that_witness() {
+        let (w1, w2) = (witness(1), witness(2));
+        let mut h = head(1);
+        h.cosignatures.push(stale_cosign(&w2.0, &w2.1, &h.sth));
+        h.cosignatures.push(cosign(&w1.0, &w1.1, &h.sth));
+        let s2 = MockServer::start().await;
+        serve(
+            &s2,
+            ResponseTemplate::new(200).set_body_json(body(&h.sth, &[cosign(&w2.0, &w2.1, &h.sth)])),
+        )
+        .await;
+        let sources = [
+            WitnessSource {
+                key_id: w1.1.clone(),
+                base_url: "http://127.0.0.1:1".into(),
+            },
+            source(&w2.1, &s2),
+        ];
+        let got = gather_witness_cosignatures(policy(), &sources, &h, "core").await;
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].witness_key_id, w2.1);
+        let cutoff = OffsetDateTime::now_utc() - COSIGNATURE_FRESHNESS_WINDOW;
+        assert!(got[0].observed_at >= cutoff);
+    }
+
+    #[tokio::test]
+    async fn own_cosignatures_report_a_per_witness_outcome() {
+        let (w1, w2, w3, w4) = (witness(1), witness(2), witness(3), witness(4));
+        let h = head(1);
+        let (s1, s2, s3) = (
+            MockServer::start().await,
+            MockServer::start().await,
+            MockServer::start().await,
+        );
+        // Relayed copy of w2's cosignature is ignored; w1's own is returned.
+        serve(
+            &s1,
+            ResponseTemplate::new(200).set_body_json(body(
+                &h.sth,
+                &[
+                    stale_cosign(&w2.0, &w2.1, &h.sth),
+                    cosign(&w1.0, &w1.1, &h.sth),
+                ],
+            )),
+        )
+        .await;
+        serve(&s2, ResponseTemplate::new(503)).await;
+        // w3's server answers with a cosignature by w1 only.
+        serve(
+            &s3,
+            ResponseTemplate::new(200).set_body_json(body(&h.sth, &[cosign(&w1.0, &w1.1, &h.sth)])),
+        )
+        .await;
+        let list = known(&[&w1, &w2, &w3, &w4]);
+        let sources = [source(&w1.1, &s1), source(&w2.1, &s2), source(&w3.1, &s3)];
+        let out = gather_own_cosignatures(policy(), &list, &sources, &h.sth, "core").await;
+        let get = |id: &str| out.iter().find(|(k, _)| k == id).unwrap().1.clone();
+        match get(&w1.1) {
+            GatherOutcome::Fetched(c) => assert_eq!(c.witness_key_id, w1.1),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(get(&w2.1), GatherOutcome::BadStatus(503));
+        assert_eq!(get(&w3.1), GatherOutcome::NoOwnCosignature);
+        assert_eq!(get(&w4.1), GatherOutcome::NoSource);
     }
 
     #[tokio::test]
