@@ -176,9 +176,11 @@ about 12:57Z. Timings below are UTC.
   the source head, and merging keeps a stale relayed copy over a witness's own fresh one.
   Tracked in #1025 (a candidate change and its live result are recorded there; it did not fully
   repair the symptom).
-- Self-certifying `node:` shards are authored and served but nobody else can mirror or verify
-  them (mirroring resolves only registered or pinned keys), so they have no mirrors and no
-  witnesses, and only `core` had cosigned heads. Tracked in #1026.
+- Self-certifying `node:` shards were authored and served but nobody else could mirror or verify
+  them (mirroring resolved only registered or pinned keys), so they had no mirrors and no
+  witnesses, and only `core` had cosigned heads. Fixed in #1026: a node with
+  `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` verifies the key the head carries, pins it, mirrors the
+  shard and cosigns it, and the per-tick cosignature refresh covers pinned shards.
 - `core` itself has a single writer: with the original down, core could not grow and new
   integrators or registered shards could not be created. Only self-certifying shards kept
   authoring. #824 covers the cross-shard root with an unreachable core authority.

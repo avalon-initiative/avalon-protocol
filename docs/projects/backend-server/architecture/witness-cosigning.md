@@ -283,6 +283,21 @@ finds directly during mirror sync, reconciled into one write path rather
 than two competing `equivocation_evidence` schemas — and marks the shard in
 `HeadGossipTracker::is_equivocating`.
 
+**Self-certifying shards are cosigned like any other.** `GET /ledger/sth/latest`
+and `/ledger/sth/{tree_size}` for a `node:<hash>` shard carry an optional
+`signing_public_key` (hex Ed25519, outside the signed bytes). A node with
+`AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` that discovers such a shard checks the
+key hashes to the id and signed the head (and that the head is for its own
+network), pins it once the head is accepted
+(`crates/server/src/self_certifying_keys.rs`, table
+`self_certifying_shard_keys`, migration `0080_self_certifying_shard_keys`),
+mirrors the log, and runs the same cosigning decision as for any shard. The
+per-tick cosignature refresh (each known witness's own current cosignature over the
+latest observed head, independent of the head's source) covers every pinned
+self-certifying shard as well as the configured mirror shards. A mirror re-serves
+the pinned key with the heads it serves, so a further mirror needs nothing from the
+author.
+
 **Author-level evidence.** Confirmation does not require cosignatures. When a
 gossiped conflict is confirmed, each side is also topped up with cosignatures
 fetched from the confirmed known-list witnesses
@@ -457,9 +472,10 @@ info when it changes and at debug otherwise, with the stored and fetched ages.
   unchanged: same pinned key, same seed nodes. Whether an entry should carry witness
   keys or a client policy is decided together with the SDK work.
 - **Live drill gaps.** The removal-of-the-original and fresh-node steps were run on the
-  dev fleet on 2026-09-28 (see the drill runbook's record). Open findings from it: mirrors
-  do not keep other witnesses' cosignatures fresh on an unchanged head (#1025), and
-  self-certifying `node:` shards cannot be mirrored or verified by other nodes (#1026).
+  dev fleet on 2026-09-28 (see the drill runbook's record). Its findings, that mirrors
+  did not keep other witnesses' cosignatures fresh on an unchanged head (#1025) and that
+  self-certifying `node:` shards could not be mirrored or verified by other nodes (#1026),
+  are both addressed above.
 - **Layer-1 per-identity chains are not wired into the server.** The pure conflict
   rule and types exist (`identity_chain.rs`); chain state, emission sites, the indexer
   and the freeze on a forked identity are #961, with conformance vectors.

@@ -229,7 +229,8 @@ impl From<FetchedSth> for CosignedTreeHead {
 /// `"{namespace}:{owner}"` (e.g.
 /// `"game:ashen-realms"`) to resolve at all — `"core"` (no owning
 /// integrator) and any other unparseable id return no keys, same as an
-/// integrator that has never registered a `shard_settlement` key. Only
+/// integrator that has never registered a `shard_settlement` key. A self-certifying
+/// (`node:`) id resolves to the key this node pinned after verifying it against the id. Only
 /// currently-unrevoked keys are returned — rotation/compromise reuses
 /// `issuer.key_revoked` unchanged, per this mechanism's own design. The
 /// result is the union of the local table and the keys derivable from this
@@ -240,6 +241,12 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
     network_id: &str,
     shard_id: &str,
 ) -> Vec<VerifyingKey> {
+    if avalon_protocol::shard_identity::is_self_certifying(shard_id) {
+        return crate::self_certifying_keys::pinned_key(pool, shard_id)
+            .await
+            .into_iter()
+            .collect();
+    }
     let Some((namespace, owner)) = avalon_protocol::shard::shard_authority(shard_id) else {
         return Vec::new();
     };
