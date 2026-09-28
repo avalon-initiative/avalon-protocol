@@ -427,6 +427,26 @@ cosignature from `GET /ledger/sth/{tree_size}` (only when the head's root
 matches a stored cosignature), so witnesses can serve each other before any
 of them has backfilled.
 
+**A witness speaks only for itself, and copies are refreshed every tick
+(#1025).** A gathered response counts only for the cosignature made by the
+witness that was asked; relayed copies of other witnesses' cosignatures in it
+are ignored, since they may be stale and would otherwise displace the fresh
+one. Merging keeps the later `observed_at` per witness, and a cosignature
+attached to the source's head that is older than the freshness window no
+longer suppresses fetching that witness. Separately from the per-head
+majority check, every mirror-watcher tick asks every known-list witness for
+its own current cosignature over the latest observed head of each watched
+shard and stores those that verify (`refresh_witness_cosignatures`). This runs
+whether or not the head changed and whether or not the head's source answered,
+so with the author down each mirror's stored copies of the other witnesses'
+cosignatures keep the age of the gather interval plus the witness's re-attest
+interval, well inside the freshness window. The store rule is unchanged: same
+root and author timestamp with a later `observed_at` refreshes in place, an
+older one never replaces a newer one, and a different root is refused as a
+possible equivocation. Each witness's gather outcome (stored, no source,
+unreachable, status, no own cosignature, head mismatch, invalid) is logged at
+info when it changes and at debug otherwise, with the stored and fetched ages.
+
 ## Not done yet
 
 - **Clients do not verify cosignatures.** The SDKs and the Hub check the author
