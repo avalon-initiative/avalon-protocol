@@ -287,7 +287,7 @@ than two competing `equivocation_evidence` schemas — and marks the shard in
 and `/ledger/sth/{tree_size}` for a `node:<hash>` shard carry an optional
 `signing_public_key` (hex Ed25519, outside the signed bytes). A node with
 `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` that discovers such a shard checks the
-key hashes to the id and signed the head (and that the head is for its own
+key is canonical and not of small order, hashes to the id and signed the head (and that the head is for its own
 network), pins it once the head is accepted
 (`crates/server/src/self_certifying_keys.rs`, table
 `self_certifying_shard_keys`, migration `0080_self_certifying_shard_keys`),

@@ -430,10 +430,12 @@ witness list, and report the first failing check as a typed reason:
 
 1. `not_self_certifying`: the id is not `node:` followed by 64 lowercase hex characters.
 2. `missing_key`: no key was presented.
-3. `malformed_key`: not exactly 64 lowercase hex characters decoding to a valid Ed25519 point.
+3. `malformed_key`: not exactly 64 lowercase hex characters decoding to a canonical Ed25519 point (y below 2^255-19) that is not of small order (the identity and every point of order 2, 4 or 8 are rejected).
 4. `key_id_mismatch`: SHA-256 of the key bytes differs from the id's hash.
 5. `bad_signature`: the key's signature does not verify over the standard Signed Tree Head signing
-   bytes (the same construction every other tree-head check uses).
+   bytes (the same construction every other tree-head check uses). Verification is cofactorless
+   with S below the group order and R compared by its compressed bytes, identically in the server
+   and all three SDKs.
 
 A small dispatcher names which check a shard id gets: `node:` ids use the check above, `core` uses
 the existing network and witness verification (`verify_network`), and every other kind, or a
