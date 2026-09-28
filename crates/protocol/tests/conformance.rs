@@ -564,15 +564,7 @@ fn self_certifying_outcome(
         return Err("not_self_certifying");
     }
     let key_hex = key_hex.ok_or("missing_key")?;
-    let lowercase_hex = key_hex.len() == 64
-        && key_hex
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-    let key = lowercase_hex
-        .then(|| hex::decode(key_hex).ok())
-        .flatten()
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .and_then(|bytes| avalon_protocol::shard_identity::parse_shard_public_key(&bytes))
+    let key = avalon_protocol::shard_identity::parse_shard_public_key_hex(key_hex)
         .ok_or("malformed_key")?;
     resolve_self_certifying_key(shard_id, &key).ok_or("key_id_mismatch")?;
     if !avalon_protocol::sth::verify_tree_head(&key, sth) {

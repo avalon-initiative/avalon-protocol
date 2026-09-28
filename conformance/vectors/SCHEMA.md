@@ -92,7 +92,9 @@ Each file has this shape:
   `node:` id), `missing_key`, `malformed_key` (not exactly 64 lowercase hex
   characters decoding to a canonical Ed25519 point that is not of small order: y at
   or above 2^255-19, the identity, and every point of order 2, 4 or 8, including
-  x = 0 with the sign bit set, are rejected), `key_id_mismatch` (sha256 of the
+  x = 0 with the sign bit set, are rejected; a point with a torsion component that
+  is neither small-order nor non-canonical, such as the y = 3 vector, is deliberately
+  accepted, so an SDK must not add a prime-order-subgroup-only rule), `key_id_mismatch` (sha256 of the
   key bytes differs from the id's hash), `bad_signature` (the key's signature does
   not verify over the standard Signed Tree Head signing bytes). Signature
   verification is cofactorless: S must be below the group order L, and the point

@@ -43,9 +43,12 @@ pub fn derive_self_certifying_id(key: &VerifyingKey) -> String {
 }
 
 /// Whether `key`'s encoding is acceptable as the key of a `node:` shard:
-/// canonical (y below the field prime; a sign bit on x = 0 only occurs at the
-/// identity and the order-2 point, which the weak-key rule rejects) and not of
-/// small order.
+/// canonical (y below 2^255-19; a sign bit on x = 0 only occurs at the identity
+/// and the order-2 point, which the small-order rule rejects) and not of small
+/// order. Keys with a torsion component that are neither small-order nor
+/// non-canonical are deliberately accepted: the id binds the exact key bytes and
+/// verification is cofactorless, so a prime-order-subgroup-only rule would make
+/// implementations disagree.
 pub fn is_acceptable_shard_key(key: &VerifyingKey) -> bool {
     let bytes = key.as_bytes();
     // p = 2^255 - 19, so y >= p iff the low 255 bits are ff..ff with a first byte >= 0xed.
@@ -59,6 +62,20 @@ pub fn is_acceptable_shard_key(key: &VerifyingKey) -> bool {
 pub fn parse_shard_public_key(bytes: &[u8; 32]) -> Option<VerifyingKey> {
     let key = VerifyingKey::from_bytes(bytes).ok()?;
     is_acceptable_shard_key(&key).then_some(key)
+}
+
+/// Parses a presented key: exactly 64 lowercase hex characters forming a key
+/// that passes [`is_acceptable_shard_key`].
+pub fn parse_shard_public_key_hex(key_hex: &str) -> Option<VerifyingKey> {
+    let lowercase_hex = key_hex.len() == 64
+        && key_hex
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !lowercase_hex {
+        return None;
+    }
+    let bytes: [u8; 32] = hex::decode(key_hex).ok()?.try_into().ok()?;
+    parse_shard_public_key(&bytes)
 }
 
 /// Whether `id` parses as a self-certifying (`node:<hash>`) shard id —
