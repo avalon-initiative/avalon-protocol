@@ -20,7 +20,12 @@ async fn run() {
     // inside `run_with_tracing`, plain `avalon-server`'s path via `run()`)
     // so that startup shows up in the logs too.
     let log_reload_handle = avalon_server::run::init_tracing();
+    // Signal handling starts before the database does, so an interrupted start-up stops
+    // whatever it had started instead of leaving it running.
+    let shutdown = avalon_server::shutdown::install();
     let data_dir = avalon_server::known_list::data_dir_from_env();
+    let pg_root = avalon_server::bundled_postgres::pg_root(&data_dir);
+    avalon_server::bundled_postgres::force_stop_on_exit(&pg_root);
     let bundled = avalon_server::bundled_postgres::BundledPostgres::start_if_needed(&data_dir)
         .await
         .unwrap_or_else(|e| {
@@ -30,8 +35,10 @@ async fn run() {
 
     // Returns after a graceful shutdown; the managed Postgres is stopped only once the
     // server has drained and released its connections.
-    avalon_server::run::run_with_tracing(log_reload_handle).await;
+    avalon_server::run::run_with_tracing(log_reload_handle, shutdown).await;
     if let Some(postgres) = bundled {
-        postgres.stop().await;
+        postgres
+            .stop(avalon_server::shutdown::timeout_from_env())
+            .await;
     }
 }

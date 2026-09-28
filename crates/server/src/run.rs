@@ -58,17 +58,25 @@ pub fn init_tracing() -> crate::admin::LogReloadHandle {
 /// [`init_tracing`] and [`run_with_tracing`] separately — see that
 /// function's own doc comment.
 pub async fn run() {
-    run_with_tracing(init_tracing()).await;
+    avalon_devenv::load();
+    let handle = init_tracing();
+    run_with_tracing(handle, crate::shutdown::install()).await;
 }
 
 /// Runs the full startup/serve sequence with tracing already initialized —
 /// split out from [`run`] so `avalon-server-bundled` can start its managed
 /// Postgres (and have that show up in the logs) between initializing
 /// tracing and everything else that follows.
-pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) {
-    let shutdown = crate::shutdown::install();
-    let shutdown_timeout = crate::shutdown::timeout_from_env();
+pub async fn run_with_tracing(
+    log_reload_handle: crate::admin::LogReloadHandle,
+    shutdown: crate::shutdown::Shutdown,
+) {
     avalon_devenv::load();
+    let shutdown_timeout = crate::shutdown::timeout_from_env();
+    tracing::info!(
+        timeout_secs = shutdown_timeout.as_secs(),
+        "avalon-server: graceful shutdown bound"
+    );
     match crate::node_keys::apply_from_env(&crate::known_list::data_dir_from_env()) {
         Ok(keys) => {
             if !keys.generated.is_empty() {
@@ -777,11 +785,12 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // itself (the rate limiter's IP-fallback key extractor needs it) and
     // also configures hyper's HTTP/1 header-read timeout, which
     // `axum::serve` has no hook for.
+    shutdown.mark_running();
     crate::serve::serve(
         listener,
         app,
         crate::header_read_timeout_from_env(),
-        shutdown,
+        shutdown.clone(),
         shutdown_timeout,
     )
     .await;
@@ -797,5 +806,6 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
             tracing::warn!("outbox worker did not stop within the shutdown timeout");
         }
     }
+    shutdown.begin_final_stop();
     tracing::info!("avalon-server stopped");
 }

@@ -91,6 +91,11 @@ pub async fn run(args: SetupArgs) -> Result<(), String> {
         }
         ServiceChoice::Ask => false,
     };
+    if cfg.variant == Variant::Bundled {
+        let node_is_root =
+            node_runs_as_root(args.service_user.as_deref(), sys::is_root(), want_service);
+        report_bundled_prerequisites(&cfg, node_is_root);
+    }
     if want_service {
         service_running = install_service(&cfg, &args, p)?;
     }
@@ -205,23 +210,40 @@ fn write_config(
             cfg.data_dir.display()
         );
     }
-    if cfg.variant == Variant::Bundled {
-        report_bundled_prerequisites(cfg);
-    }
     Ok((merged, changed))
+}
+
+/// Whether the node process will run as root: the service user when one is named or a
+/// service is installed (setup then creates or uses an ordinary account), else this user.
+fn node_runs_as_root(
+    service_user: Option<&str>,
+    running_as_root: bool,
+    installing_service: bool,
+) -> bool {
+    match service_user {
+        Some(user) => user == "root",
+        None => running_as_root && !installing_service,
+    }
 }
 
 /// Prints the host prerequisites of the managed PostgreSQL that are not met, so a hoster
 /// learns before the first start rather than from a failed one.
-fn report_bundled_prerequisites(cfg: &NodeConfig) {
+fn report_bundled_prerequisites(cfg: &NodeConfig, node_is_root: bool) {
     let install_dir = cfg.data_dir.join("postgres").join("install");
-    let problems = avalon_server::bundled_prereq::check_host(sys::is_root(), &install_dir);
+    let problems = avalon_server::bundled_prereq::check_host(node_is_root, &install_dir);
     if problems.is_empty() {
         println!("Prerequisites: the host can run the bundled PostgreSQL");
-    } else {
+        return;
+    }
+    let blocking = problems.iter().any(|p| p.is_blocking());
+    print!(
+        "{}",
+        avalon_server::bundled_prereq::format_problems(&problems)
+    );
+    if blocking {
         println!(
-            "WARNING: {}Fix these before starting the node.",
-            avalon_server::bundled_prereq::format_problems(&problems)
+            "Fix these before starting the node (or set {} to skip the check).",
+            avalon_server::bundled_prereq::SKIP_ENV
         );
     }
 }
@@ -398,6 +420,15 @@ async fn verify_node(cfg: &NodeConfig, base: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_is_judged_by_the_user_the_node_runs_as() {
+        assert!(!node_runs_as_root(Some("avalon"), true, true));
+        assert!(!node_runs_as_root(None, true, true));
+        assert!(node_runs_as_root(Some("root"), false, true));
+        assert!(node_runs_as_root(None, true, false));
+        assert!(!node_runs_as_root(None, false, false));
+    }
 
     #[test]
     fn existing_webauthn_settings_survive_forced_and_interactive_reruns() {

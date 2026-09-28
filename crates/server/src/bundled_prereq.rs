@@ -2,16 +2,27 @@
 //! starts (and by `avalon setup`) so a missing package is named instead of surfacing as an
 //! opaque Postgres failure. Pure decision logic sits behind [`Probe`] so it is testable
 //! without touching the host.
+//!
+//! Only some findings block the start: running as root, an unresolved library reported by
+//! `ldd` on the downloaded PostgreSQL binary (the reliable check), a missing timezone
+//! database, and an unreachable download host. Whether a library is present before the
+//! download is a best-effort guess and only warns.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Comma-separated prerequisites to report as missing regardless of the host, for testing
-/// the preflight messages: any of `root`, `libxml2`, `tzdata`, `network`.
+/// the preflight messages: `root`, `tzdata`, `network`, `ldd`, or a library stem such as
+/// `libxml2`.
 pub const SIMULATE_ENV: &str = "AVALON_BUNDLED_PREFLIGHT_SIMULATE_MISSING";
+
+/// Set to any non-empty value other than `0`/`false` to skip every check here.
+pub const SKIP_ENV: &str = "AVALON_BUNDLED_SKIP_PREFLIGHT";
 
 const DOWNLOAD_HOST: &str = "github.com";
 const DOWNLOAD_PORT: u16 = 443;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_DEADLINE: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -20,12 +31,36 @@ pub enum Kind {
     Library(String),
     Tzdata,
     Network,
+    /// `ldd` is not installed, so the downloaded binary's libraries cannot be checked.
+    LddMissing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Blocking,
+    Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     pub kind: Kind,
+    pub severity: Severity,
     pub message: String,
+}
+
+impl Problem {
+    pub fn is_blocking(&self) -> bool {
+        self.severity == Severity::Blocking
+    }
+}
+
+/// Outcome of the download-host probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Reachable,
+    Unreachable,
+    /// A proxy is configured, so a direct connection test would prove nothing.
+    ProxySkipped,
 }
 
 /// Facts about the host, injectable for tests.
@@ -33,9 +68,10 @@ pub trait Probe {
     fn is_root(&self) -> bool;
     fn has_library(&self, name: &str) -> bool;
     fn has_tzdata(&self) -> bool;
-    fn https_reachable(&self) -> bool;
-    /// Unresolved shared-library names of an installed PostgreSQL binary, when there is one.
-    fn unresolved_libraries(&self, postgres: &Path) -> Vec<String>;
+    fn download_host(&self) -> Reach;
+    /// Unresolved shared-library names of an installed PostgreSQL binary; `None` when `ldd` is
+    /// not available.
+    fn unresolved_libraries(&self, postgres: &Path) -> Option<Vec<String>>;
 }
 
 /// Returns every unmet prerequisite. `postgres_binary` is the already-installed server binary,
@@ -45,80 +81,137 @@ pub fn check(probe: &dyn Probe, postgres_binary: Option<&Path>) -> Vec<Problem> 
     if probe.is_root() {
         problems.push(Problem {
             kind: Kind::Root,
+            severity: Severity::Blocking,
             message: "running as root: PostgreSQL refuses to start as root. Run the node as an \
                       ordinary user (for example a dedicated `avalon` account)."
                 .to_string(),
         });
     }
     match postgres_binary {
-        Some(bin) => {
-            for lib in probe.unresolved_libraries(bin) {
-                problems.push(library_problem(&lib));
+        Some(bin) => match probe.unresolved_libraries(bin) {
+            Some(missing) => {
+                for lib in missing {
+                    problems.push(library_problem(&lib, Severity::Blocking));
+                }
             }
-        }
+            None => problems.push(Problem {
+                kind: Kind::LddMissing,
+                severity: Severity::Warning,
+                message: "the `ldd` tool was not found, so the shared libraries of the \
+                          downloaded PostgreSQL could not be checked in advance (it is provided \
+                          by libc-bin on Debian/Ubuntu and glibc-common on Fedora/RHEL); a \
+                          missing library will show up when PostgreSQL starts."
+                    .to_string(),
+            }),
+        },
         None => {
             if !probe.has_library("libxml2.so.2") {
-                problems.push(library_problem("libxml2.so.2"));
+                problems.push(library_problem("libxml2.so.2", Severity::Warning));
             }
         }
     }
     if !probe.has_tzdata() {
         problems.push(Problem {
             kind: Kind::Tzdata,
+            severity: Severity::Blocking,
             message: format!(
-                "no timezone database found (no /usr/share/zoneinfo/UTC): PostgreSQL will fail \
-                 with `invalid value for parameter \"TimeZone\"`. Install the tzdata package:\n{}",
+                "no timezone database found (no zoneinfo/UTC under TZDIR or /usr/share/zoneinfo): \
+                 PostgreSQL will fail with `invalid value for parameter \"TimeZone\"`. Install the \
+                 tzdata package:\n{}",
                 install_hint("tzdata", "tzdata")
             ),
         });
     }
-    if postgres_binary.is_none() && !probe.https_reachable() {
-        problems.push(Problem {
-            kind: Kind::Network,
-            message: format!(
-                "the first start downloads PostgreSQL from https://{DOWNLOAD_HOST}, which is not \
-                 reachable on port {DOWNLOAD_PORT}. Allow outbound HTTPS (or set HTTPS_PROXY), \
-                 or run avalon-server with your own PostgreSQL through DATABASE_URL."
-            ),
-        });
+    if postgres_binary.is_none() {
+        match probe.download_host() {
+            Reach::Reachable => {}
+            Reach::ProxySkipped => problems.push(Problem {
+                kind: Kind::Network,
+                severity: Severity::Warning,
+                message: format!(
+                    "the first start downloads PostgreSQL from https://{DOWNLOAD_HOST}; the \
+                     reachability check was skipped because a proxy (HTTPS_PROXY/ALL_PROXY) is \
+                     configured."
+                ),
+            }),
+            Reach::Unreachable => problems.push(Problem {
+                kind: Kind::Network,
+                severity: Severity::Blocking,
+                message: format!(
+                    "the first start downloads PostgreSQL from https://{DOWNLOAD_HOST}, which is \
+                     not reachable on port {DOWNLOAD_PORT} within {}s. Allow outbound HTTPS (or \
+                     set HTTPS_PROXY), or run avalon-server with your own PostgreSQL through \
+                     DATABASE_URL.",
+                    PROBE_DEADLINE.as_secs()
+                ),
+            }),
+        }
     }
     problems
 }
 
-fn library_problem(soname: &str) -> Problem {
+fn library_problem(soname: &str, severity: Severity) -> Problem {
     let stem = soname.split(".so").next().unwrap_or(soname).to_string();
-    let (apt, rpm) = package_for_library(soname);
-    Problem {
-        kind: Kind::Library(stem.clone()),
-        message: format!(
-            "the shared library {soname} needed by the embedded PostgreSQL is missing. \
-             Install the {apt} package:\n{}",
-            install_hint(&apt, &rpm)
+    let how = match package_for_library(soname) {
+        Some((apt, rpm)) => format!("Install the {apt} package:\n{}", install_hint(&apt, &rpm)),
+        None => format!(
+            "Install the package that provides it (find it with `apt-file search {soname}` on \
+             Debian/Ubuntu or `dnf provides '*/{soname}'` on Fedora/RHEL)."
         ),
+    };
+    let message = match severity {
+        Severity::Blocking => {
+            format!(
+                "the shared library {soname} needed by the embedded PostgreSQL is missing. {how}"
+            )
+        }
+        Severity::Warning => format!(
+            "could not confirm the shared library {soname} needed by the embedded PostgreSQL \
+             (checked ldconfig and the standard library directories); if the start fails with a \
+             loading error, {}",
+            lowercase_first(&how)
+        ),
+    };
+    Problem {
+        kind: Kind::Library(stem),
+        severity,
+        message,
     }
 }
 
-/// Package names (Debian family, RPM family) for the libraries the embedded PostgreSQL loads.
-fn package_for_library(soname: &str) -> (String, String) {
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Package names (Debian family, RPM family) for a soname, or `None` when the mapping would be
+/// a guess.
+fn package_for_library(soname: &str) -> Option<(String, String)> {
     let stem = soname.split(".so").next().unwrap_or(soname);
-    let (apt, rpm): (String, &str) = match stem {
-        "libxml2" => ("libxml2".into(), "libxml2"),
-        "libz" => ("zlib1g".into(), "zlib"),
-        "libssl" | "libcrypto" => ("libssl3".into(), "openssl-libs"),
-        "libicuuc" | "libicui18n" | "libicudata" => {
-            let version = soname.rsplit('.').next().unwrap_or_default();
-            (format!("libicu{version}"), "libicu")
+    let version = soname.split(".so.").nth(1).unwrap_or_default();
+    let pair = |a: &str, r: &str| Some((a.to_string(), r.to_string()));
+    match (stem, version) {
+        ("libxml2", _) => pair("libxml2", "libxml2"),
+        ("libz", "1") => pair("zlib1g", "zlib"),
+        ("libssl" | "libcrypto", v) if !v.is_empty() => {
+            Some((format!("libssl{v}"), "openssl-libs".to_string()))
         }
-        "liblz4" => ("liblz4-1".into(), "lz4-libs"),
-        "libzstd" => ("libzstd1".into(), "libzstd"),
-        "liblzma" => ("liblzma5".into(), "xz-libs"),
-        "libgssapi_krb5" | "libkrb5" | "libk5crypto" | "libkrb5support" => {
-            ("libgssapi-krb5-2".into(), "krb5-libs")
+        ("libicuuc" | "libicui18n" | "libicudata", v) if !v.is_empty() => {
+            Some((format!("libicu{v}"), "libicu".to_string()))
         }
-        "libstdc++" => ("libstdc++6".into(), "libstdc++"),
-        _ => (stem.to_string(), stem),
-    };
-    (apt, rpm.to_string())
+        ("liblz4", "1") => pair("liblz4-1", "lz4-libs"),
+        ("libzstd", "1") => pair("libzstd1", "libzstd"),
+        ("liblzma", "5") => pair("liblzma5", "xz-libs"),
+        ("libgssapi_krb5", "2") => pair("libgssapi-krb5-2", "krb5-libs"),
+        ("libkrb5", "3") => pair("libkrb5-3", "krb5-libs"),
+        ("libk5crypto", "3") => pair("libk5crypto3", "krb5-libs"),
+        ("libkrb5support", "0") => pair("libkrb5support0", "krb5-libs"),
+        ("libstdc++", "6") => pair("libstdc++6", "libstdc++"),
+        _ => None,
+    }
 }
 
 /// The install command for the common distro families.
@@ -132,9 +225,17 @@ pub fn install_hint(apt_package: &str, rpm_package: &str) -> String {
 
 /// Renders problems for a terminal or log line.
 pub fn format_problems(problems: &[Problem]) -> String {
-    let mut out = String::from("the bundled PostgreSQL prerequisites are not met:\n");
+    let mut out = if problems.iter().any(Problem::is_blocking) {
+        String::from("the bundled PostgreSQL prerequisites are not met:\n")
+    } else {
+        String::from("bundled PostgreSQL prerequisite warnings:\n")
+    };
     for p in problems {
-        out.push_str("- ");
+        out.push_str(if p.is_blocking() {
+            "- "
+        } else {
+            "- (warning) "
+        });
         out.push_str(&p.message);
         out.push('\n');
     }
@@ -166,26 +267,31 @@ pub fn parse_ldd_not_found(ldd_output: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `ldconfig -p` output lists a library named `name`.
+pub fn ldconfig_lists(output: &str, name: &str) -> bool {
+    output
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .any(|first| first == name)
+}
+
 /// Recognizes a known PostgreSQL startup failure in its output and returns the hint for it.
 pub fn explain_failure(output: &str) -> Option<Problem> {
     if let Some(soname) = shared_library_failure(output) {
-        return Some(library_problem(&soname));
+        return Some(library_problem(&soname, Severity::Blocking));
     }
     if output.contains("parameter \"TimeZone\"") || output.contains("timezone directory") {
-        return check_tz_problem();
+        return Some(Problem {
+            kind: Kind::Tzdata,
+            severity: Severity::Blocking,
+            message: format!(
+                "PostgreSQL rejected the timezone setting because the host has no timezone \
+                 database. Install the tzdata package:\n{}",
+                install_hint("tzdata", "tzdata")
+            ),
+        });
     }
     None
-}
-
-fn check_tz_problem() -> Option<Problem> {
-    Some(Problem {
-        kind: Kind::Tzdata,
-        message: format!(
-            "PostgreSQL rejected the timezone setting because the host has no timezone \
-             database. Install the tzdata package:\n{}",
-            install_hint("tzdata", "tzdata")
-        ),
-    })
 }
 
 /// The soname in `error while loading shared libraries: <soname>: cannot open shared object file`.
@@ -264,6 +370,38 @@ fn tz_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// First existing tool among the fixed system directories.
+fn system_tool(name: &str) -> Option<PathBuf> {
+    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+        .iter()
+        .map(|d| Path::new(d).join(name))
+        .find(|p| p.is_file())
+}
+
+fn ldconfig_output() -> Option<String> {
+    let tool = system_tool("ldconfig")?;
+    let out = std::process::Command::new(tool).arg("-p").output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Connects to the download host on a helper thread so DNS and connect share one deadline.
+fn probe_https() -> bool {
+    use std::net::ToSocketAddrs;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = (DOWNLOAD_HOST, DOWNLOAD_PORT)
+            .to_socket_addrs()
+            .map(|addrs| {
+                addrs
+                    .into_iter()
+                    .any(|a| std::net::TcpStream::connect_timeout(&a, CONNECT_TIMEOUT).is_ok())
+            })
+            .unwrap_or(false);
+        let _ = tx.send(ok);
+    });
+    rx.recv_timeout(PROBE_DEADLINE).unwrap_or(false)
+}
+
 impl Probe for SystemProbe {
     fn is_root(&self) -> bool {
         self.is_root || self.simulating("root")
@@ -273,64 +411,70 @@ impl Probe for SystemProbe {
         if self.simulating(name.split(".so").next().unwrap_or(name)) {
             return false;
         }
-        library_dirs().iter().any(|dir| {
+        let in_dirs = library_dirs().iter().any(|dir| {
             std::fs::read_dir(dir).is_ok_and(|entries| {
                 entries
                     .flatten()
                     .any(|e| e.file_name().to_string_lossy().starts_with(name))
             })
-        })
+        });
+        in_dirs || ldconfig_output().is_some_and(|out| ldconfig_lists(&out, name))
     }
 
     fn has_tzdata(&self) -> bool {
         !self.simulating("tzdata") && tz_dirs().iter().any(|d| d.join("UTC").is_file())
     }
 
-    fn https_reachable(&self) -> bool {
+    fn download_host(&self) -> Reach {
         if self.simulating("network") {
-            return false;
+            return Reach::Unreachable;
         }
-        // A proxy is in use: a direct connection test would give a false negative.
         if ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
             .iter()
             .any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty()))
         {
-            return true;
+            return Reach::ProxySkipped;
         }
-        use std::net::ToSocketAddrs;
-        (DOWNLOAD_HOST, DOWNLOAD_PORT)
-            .to_socket_addrs()
-            .map(|addrs| {
-                addrs.into_iter().any(|a| {
-                    std::net::TcpStream::connect_timeout(&a, Duration::from_secs(5)).is_ok()
-                })
-            })
-            .unwrap_or(false)
+        if probe_https() {
+            Reach::Reachable
+        } else {
+            Reach::Unreachable
+        }
     }
 
-    fn unresolved_libraries(&self, postgres: &Path) -> Vec<String> {
-        let mut missing = Vec::new();
-        for sim in &self.simulated {
-            if sim != "root" && sim != "tzdata" && sim != "network" {
-                missing.push(format!("{sim}.so"));
-            }
-        }
-        let ldd = ["/usr/bin/ldd", "/bin/ldd"]
+    fn unresolved_libraries(&self, postgres: &Path) -> Option<Vec<String>> {
+        let mut missing: Vec<String> = self
+            .simulated
             .iter()
-            .map(Path::new)
-            .find(|p| p.is_file());
-        if let Some(ldd) = ldd {
-            if let Ok(out) = std::process::Command::new(ldd).arg(postgres).output() {
-                missing.extend(parse_ldd_not_found(&String::from_utf8_lossy(&out.stdout)));
-            }
+            .filter(|s| !["root", "tzdata", "network", "ldd"].contains(&s.as_str()))
+            .map(|s| format!("{s}.so"))
+            .collect();
+        if self.simulating("ldd") {
+            return None;
         }
-        missing
+        let ldd = system_tool("ldd")?;
+        let out = std::process::Command::new(ldd)
+            .arg(postgres)
+            .output()
+            .ok()?;
+        missing.extend(parse_ldd_not_found(&String::from_utf8_lossy(&out.stdout)));
+        Some(missing)
     }
 }
 
+/// True when [`SKIP_ENV`] asks to skip the checks.
+pub fn skipped() -> bool {
+    std::env::var(SKIP_ENV)
+        .map(|v| !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+}
+
 /// Checks the host against the bundled variant's prerequisites, given where PostgreSQL would
-/// be (or already is) installed.
+/// be (or already is) installed. Empty when [`SKIP_ENV`] is set.
 pub fn check_host(is_root: bool, install_dir: &Path) -> Vec<Problem> {
+    if skipped() {
+        return Vec::new();
+    }
     let installed = installed_postgres(install_dir);
     check(&SystemProbe::new(is_root), installed.as_deref())
 }
@@ -339,13 +483,24 @@ pub fn check_host(is_root: bool, install_dir: &Path) -> Vec<Problem> {
 mod tests {
     use super::*;
 
-    #[derive(Default)]
     struct Fake {
         root: bool,
         libs: Vec<&'static str>,
         no_tz: bool,
-        no_net: bool,
-        unresolved: Vec<String>,
+        reach: Reach,
+        unresolved: Option<Vec<String>>,
+    }
+
+    impl Default for Fake {
+        fn default() -> Self {
+            Self {
+                root: false,
+                libs: Vec::new(),
+                no_tz: false,
+                reach: Reach::Reachable,
+                unresolved: Some(Vec::new()),
+            }
+        }
     }
 
     impl Probe for Fake {
@@ -358,10 +513,10 @@ mod tests {
         fn has_tzdata(&self) -> bool {
             !self.no_tz
         }
-        fn https_reachable(&self) -> bool {
-            !self.no_net
+        fn download_host(&self) -> Reach {
+            self.reach
         }
-        fn unresolved_libraries(&self, _: &Path) -> Vec<String> {
+        fn unresolved_libraries(&self, _: &Path) -> Option<Vec<String>> {
             self.unresolved.clone()
         }
     }
@@ -373,26 +528,52 @@ mod tests {
         }
     }
 
+    const BIN: &str = "/x/bin/postgres";
+
     #[test]
     fn healthy_host_has_no_problems() {
         assert!(check(&healthy(), None).is_empty());
-        assert!(check(&healthy(), Some(Path::new("/x/bin/postgres"))).is_empty());
+        assert!(check(&healthy(), Some(Path::new(BIN))).is_empty());
     }
 
     #[test]
-    fn missing_libxml2_names_the_package_and_commands() {
+    fn unconfirmed_libxml2_before_download_only_warns() {
         let p = check(&Fake::default(), None);
-        let lib = p
-            .iter()
-            .find(|p| p.kind == Kind::Library("libxml2".into()))
-            .expect("libxml2 problem");
-        assert!(lib.message.contains("libxml2"));
-        assert!(lib.message.contains("apt-get install -y libxml2"));
-        assert!(lib.message.contains("dnf install -y libxml2"));
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].kind, Kind::Library("libxml2".into()));
+        assert_eq!(p[0].severity, Severity::Warning);
+        assert!(p[0].message.contains("apt-get install -y libxml2"));
+        assert!(p[0].message.contains("dnf install -y libxml2"));
+        assert!(!format_problems(&p).contains("are not met"));
     }
 
     #[test]
-    fn missing_tzdata_is_reported() {
+    fn unresolved_library_after_download_blocks() {
+        let probe = Fake {
+            unresolved: Some(vec!["libxml2.so.2".to_string()]),
+            ..healthy()
+        };
+        let p = check(&probe, Some(Path::new(BIN)));
+        assert_eq!(p.len(), 1);
+        assert!(p[0].is_blocking());
+        assert!(format_problems(&p).contains("are not met"));
+    }
+
+    #[test]
+    fn missing_ldd_is_reported_not_skipped_silently() {
+        let probe = Fake {
+            unresolved: None,
+            ..healthy()
+        };
+        let p = check(&probe, Some(Path::new(BIN)));
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].kind, Kind::LddMissing);
+        assert_eq!(p[0].severity, Severity::Warning);
+        assert!(p[0].message.contains("libc-bin"));
+    }
+
+    #[test]
+    fn missing_tzdata_blocks() {
         let p = check(
             &Fake {
                 no_tz: true,
@@ -402,11 +583,12 @@ mod tests {
         );
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].kind, Kind::Tzdata);
+        assert!(p[0].is_blocking());
         assert!(p[0].message.contains("apt-get install -y tzdata"));
     }
 
     #[test]
-    fn root_is_reported() {
+    fn root_blocks() {
         let p = check(
             &Fake {
                 root: true,
@@ -415,35 +597,80 @@ mod tests {
             None,
         );
         assert_eq!(p[0].kind, Kind::Root);
+        assert!(p[0].is_blocking());
     }
 
     #[test]
     fn network_only_matters_when_a_download_is_needed() {
         let offline = Fake {
-            no_net: true,
+            reach: Reach::Unreachable,
             ..healthy()
         };
-        assert!(check(&offline, Some(Path::new("/x/bin/postgres"))).is_empty());
+        assert!(check(&offline, Some(Path::new(BIN))).is_empty());
         let p = check(&offline, None);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].kind, Kind::Network);
+        assert!(p[0].is_blocking());
+    }
+
+    #[test]
+    fn a_proxy_skips_the_probe_and_says_so() {
+        let proxied = Fake {
+            reach: Reach::ProxySkipped,
+            ..healthy()
+        };
+        let p = check(&proxied, None);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].severity, Severity::Warning);
+        assert!(p[0].message.contains("skipped"));
     }
 
     #[test]
     fn installed_binary_uses_unresolved_libraries_not_the_libxml2_guess() {
         let probe = Fake {
-            unresolved: vec!["libxml2.so.2".to_string(), "libicuuc.so.72".to_string()],
+            unresolved: Some(vec![
+                "libxml2.so.2".to_string(),
+                "libicuuc.so.72".to_string(),
+            ]),
             ..Fake::default()
         };
-        let p = check(&probe, Some(Path::new("/x/bin/postgres")));
+        let p = check(&probe, Some(Path::new(BIN)));
         assert_eq!(p.len(), 2);
         assert!(p[1].message.contains("apt-get install -y libicu72"));
+    }
+
+    #[test]
+    fn ssl_package_follows_the_soname_version() {
+        assert_eq!(
+            package_for_library("libssl.so.3"),
+            Some(("libssl3".to_string(), "openssl-libs".to_string()))
+        );
+        assert_eq!(
+            package_for_library("libcrypto.so.1.1"),
+            Some(("libssl1.1".to_string(), "openssl-libs".to_string()))
+        );
+    }
+
+    #[test]
+    fn unknown_libraries_get_a_search_hint_not_a_guessed_package() {
+        assert_eq!(package_for_library("libfoo.so.9"), None);
+        assert_eq!(package_for_library("libz.so.2"), None);
+        let p = library_problem("libfoo.so.9", Severity::Blocking);
+        assert!(p.message.contains("apt-file search libfoo.so.9"));
+        assert!(!p.message.contains("apt-get install -y libfoo"));
     }
 
     #[test]
     fn ldd_output_parsing() {
         let out = "\tlinux-vdso.so.1 (0x00007ffd)\n\tlibxml2.so.2 => not found\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\n";
         assert_eq!(parse_ldd_not_found(out), vec!["libxml2.so.2".to_string()]);
+    }
+
+    #[test]
+    fn ldconfig_cache_lookup() {
+        let out = "2 libs found in cache\n\tlibxml2.so.2 (libc6,x86-64) => /opt/x/libxml2.so.2\n\tlibz.so.1 (libc6,x86-64) => /lib/libz.so.1\n";
+        assert!(ldconfig_lists(out, "libxml2.so.2"));
+        assert!(!ldconfig_lists(out, "libxml2.so"));
     }
 
     #[test]
@@ -460,6 +687,19 @@ mod tests {
         assert_eq!(tz.kind, Kind::Tzdata);
 
         assert!(explain_failure("FATAL: could not create shared memory segment").is_none());
+    }
+
+    #[test]
+    fn skip_env_disables_every_check() {
+        let _guard = crate::test_env::guard();
+        std::env::set_var(SKIP_ENV, "1");
+        std::env::set_var(SIMULATE_ENV, "root,tzdata,network");
+        let skipped_result = check_host(true, Path::new("/nonexistent"));
+        std::env::remove_var(SKIP_ENV);
+        let checked_result = check_host(true, Path::new("/nonexistent"));
+        std::env::remove_var(SIMULATE_ENV);
+        assert!(skipped_result.is_empty());
+        assert!(checked_result.iter().any(|p| p.kind == Kind::Root));
     }
 
     #[test]

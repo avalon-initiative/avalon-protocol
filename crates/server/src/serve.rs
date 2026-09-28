@@ -77,8 +77,11 @@ pub async fn serve(
 
     drop(listener);
     tracing::info!(open = connections.len(), "draining in-flight connections");
+    // Upgraded (websocket) connections leave `connections` at upgrade time; their sessions
+    // are counted separately and close themselves with a close frame on shutdown.
     let drained = tokio::time::timeout(drain_timeout, async {
         while connections.join_next().await.is_some() {}
+        crate::shutdown::sessions_closed().await;
     })
     .await;
     if drained.is_err() {
@@ -151,6 +154,83 @@ mod tests {
             tokio::net::TcpStream::connect(addr).await.is_err(),
             "listener must be closed after shutdown"
         );
+    }
+
+    async fn start_ws(
+        with_session: bool,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use axum::extract::ws::WebSocketUpgrade;
+        let (tx, shutdown) = Shutdown::manual();
+        let handler_shutdown = shutdown.clone();
+        let app = Router::new().route(
+            "/ws",
+            get(move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |mut socket| async move {
+                    if with_session {
+                        let mut session =
+                            crate::shutdown::socket_session_with(handler_shutdown.clone());
+                        session.closing().await;
+                        crate::shutdown::send_going_away(&mut socket).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                })
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(serve(
+            listener,
+            app,
+            Duration::from_secs(5),
+            shutdown,
+            Duration::from_secs(5),
+        ));
+        (addr, tx, task)
+    }
+
+    #[tokio::test]
+    async fn upgraded_socket_gets_a_close_frame_and_the_drain_waits_for_it() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let (addr, tx, task) = start_ws(true).await;
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tx.send(true).unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .expect("close frame within 2s")
+            .expect("stream open")
+            .expect("frame");
+        match frame {
+            Message::Close(Some(close)) => assert_eq!(u16::from(close.code), 1001),
+            other => panic!("expected a going-away close frame, got {other:?}"),
+        }
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn upgraded_socket_without_a_session_is_not_waited_for() {
+        let (addr, tx, task) = start_ws(false).await;
+        let (_client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tx.send(true).unwrap();
+        // Upgraded connections leave the drain set at upgrade time, so serve returns at once.
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("serve returns without waiting for an untracked upgraded socket")
+            .unwrap();
     }
 
     #[tokio::test]
