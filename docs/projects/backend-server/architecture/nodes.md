@@ -1081,6 +1081,12 @@ Wire format:
   `timeout` and replaced by the retry.
 - Caps: 8 branches, 8 hops per branch and 8 KiB for the encoded header.
   Anything beyond is dropped and `truncated` is set; it is never an error.
+- Browsers: both CORS policies (the permissive public-path policy and the
+  `AVALON_HUB_ORIGIN` allowlist) list `X-Avalon-Trace-Hops` in
+  `Access-Control-Expose-Headers` and accept `X-Avalon-Trace` as a request
+  header, so a browser client can send a trace id and read the path back. Origin
+  and method policy are unchanged, and hop data stays self-reported by the nodes
+  on the path.
 
 Invariants:
 

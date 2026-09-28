@@ -150,7 +150,9 @@ fn cors_layer_from_env() -> CorsLayer {
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static(op_trace::TRACE_HEADER),
         ])
+        .expose_headers([axum::http::HeaderName::from_static(op_trace::HOPS_HEADER)])
 }
 
 /// Issue #363, implementing #287's decision: hoster-configurable resource
