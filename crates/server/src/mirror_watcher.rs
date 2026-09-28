@@ -247,6 +247,7 @@ async fn discover_and_verify_shard_peers(
     bounds: &crate::self_certifying_keys::MirrorBounds,
 ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
+    let mut new_self_certifying = 0usize;
     for shard_id in shard_registry.known_shard_ids() {
         if already_configured.contains(&shard_id) {
             continue;
@@ -274,15 +275,27 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
+        let pinned = if self_certifying {
+            let pinned = crate::self_certifying_keys::pinned_key(pool, &shard_id).await;
+            if pinned.is_none() {
+                if new_self_certifying >= bounds.max_new_per_tick {
+                    continue;
+                }
+                new_self_certifying += 1;
+            }
+            pinned
+        } else {
+            None
+        };
+
         match fetch_latest_sth(client, &url, Some(&shard_id)).await {
-            Ok((dto, _peer_protocol_version)) => {
+            Ok((dto, peer_protocol_version)) => {
                 let db_keys = if self_certifying {
+                    if check_peer_version(&url, &peer_protocol_version).is_err() {
+                        continue;
+                    }
                     match verify_self_certifying_shard(
-                        pool,
-                        &shard_id,
-                        dto.signing_public_key.as_deref(),
-                        &dto,
-                        bounds,
+                        pool, network_id, &shard_id, &url, pinned, &dto, bounds,
                     )
                     .await
                     {
@@ -341,18 +354,24 @@ async fn discover_and_verify_shard_peers(
 }
 
 /// Verifies a self-certifying shard's head with only the key it presents (or the
-/// key already pinned): the key must hash to the shard id and sign the head, and
-/// the shard must fit `bounds`. Pins the key on success.
+/// key already pinned): the head must be for this node's network, the key must
+/// hash to the shard id and sign the head, the shard must fit `bounds`, and a shard
+/// not yet pinned must be admissible. Stores nothing: the key is pinned only once
+/// the head is accepted.
 async fn verify_self_certifying_shard(
     pool: &PgPool,
+    network_id: &str,
     shard_id: &str,
-    presented_key: Option<&str>,
+    source_url: &str,
+    pinned: Option<VerifyingKey>,
     dto: &SignedTreeHeadDto,
     bounds: &crate::self_certifying_keys::MirrorBounds,
 ) -> Result<VerifyingKey, crate::self_certifying_keys::Rejection> {
     use crate::self_certifying_keys as keys;
-    let pinned = keys::pinned_key(pool, shard_id).await;
-    let key = keys::select_key(shard_id, pinned, presented_key)?;
+    if dto.network_id != network_id {
+        return Err(keys::Rejection::WrongNetwork);
+    }
+    let key = keys::select_key(shard_id, pinned, dto.signing_public_key.as_deref())?;
     let sth = SignedTreeHead {
         tree_size: dto.tree_size,
         root_hash: dto.root_hash.clone(),
@@ -369,8 +388,52 @@ async fn verify_self_certifying_shard(
         },
         bounds,
     )?;
-    keys::pin_key(pool, shard_id, &key, bounds).await?;
+    if pinned.is_none() {
+        keys::can_admit(pool, shard_id, source_url, bounds).await?;
+    }
     Ok(key)
+}
+
+/// Upper bound on one mirrored entry's payload plus identifying fields for a
+/// self-certifying shard. A local willingness-to-store limit, not a validity rule.
+const MAX_SELF_CERTIFYING_ENTRY_BYTES: usize = 64 * 1024;
+/// Entries fetched per self-certifying shard in one tick.
+const SELF_CERTIFYING_ENTRIES_PER_TICK: usize = 1000;
+/// Wall-clock budget for all self-certifying backfill in one tick.
+const SELF_CERTIFYING_TICK_BUDGET: Duration = Duration::from_secs(60);
+
+/// Per-shard and overall limits on one tick's backfill work.
+#[derive(Clone, Copy)]
+struct BackfillLimits {
+    max_entries: usize,
+    deadline: std::time::Instant,
+}
+
+impl BackfillLimits {
+    fn for_tick(deadline: std::time::Instant) -> Self {
+        Self {
+            max_entries: SELF_CERTIFYING_ENTRIES_PER_TICK,
+            deadline,
+        }
+    }
+
+    fn exhausted(&self, processed: usize, now: std::time::Instant) -> bool {
+        processed >= self.max_entries || now >= self.deadline
+    }
+}
+
+/// Whether a fetched entry is small enough to store for a self-certifying shard.
+fn entry_within_size_limit(entry: &LedgerEntryDto) -> bool {
+    let payload = entry.payload.as_ref().map_or(0, |p| p.to_string().len());
+    payload + entry.kind.len() + entry.issuer.len() + entry.subject.len()
+        <= MAX_SELF_CERTIFYING_ENTRY_BYTES
+}
+
+/// Whether verified mirrored entries of `shard_id` are applied to this node's
+/// indexer. Entries of a self-certifying shard are stored in the mirror tables
+/// only: a shard anyone can mint must not create identities or projected state.
+fn projects_mirrored_entries(shard_id: &str) -> bool {
+    !avalon_protocol::shard_identity::is_self_certifying(shard_id)
 }
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
@@ -426,6 +489,7 @@ struct MajorityContext<'a> {
     known_list: &'a [(String, VerifyingKey)],
     sources: &'a [cosign_gather::WitnessSource],
     policy: crate::outbound_policy::OutboundPolicy,
+    self_certifying: &'a crate::self_certifying_keys::MirrorBounds,
 }
 
 type HeldHeads = std::collections::HashSet<(String, i64, String)>;
@@ -509,6 +573,7 @@ pub async fn run_worker(
             known_list: &known_list_pairs,
             sources: &witness_sources,
             policy,
+            self_certifying: &self_certifying_bounds,
         };
 
         // Phase 1: poll every peer independently for its latest STH,
@@ -583,6 +648,7 @@ pub async fn run_worker(
             }
         }
 
+        let backfill_deadline = std::time::Instant::now() + SELF_CERTIFYING_TICK_BUDGET;
         // Phase 2: for each (network, shard) at least one peer reported
         // this tick, pick a corroborated tree head and backfill against
         // every peer that agreed on it.
@@ -598,6 +664,8 @@ pub async fn run_worker(
                 network_id,
                 shard_id,
                 &observations,
+                (!projects_mirrored_entries(shard_id))
+                    .then(|| BackfillLimits::for_tick(backfill_deadline)),
             )
             .await
             {
@@ -643,6 +711,8 @@ pub enum MirrorWatcherError {
     InvalidInclusionProof { seq: i64, tree_size: i64 },
     #[error("peer's inclusion-proof root_hash did not match the already-verified STH root_hash")]
     RootHashMismatch,
+    #[error("entry seq={seq} exceeds the per-entry size limit for a self-certifying shard")]
+    EntryTooLarge { seq: i64 },
     #[error("every configured peer for this network failed this request")]
     AllPeersFailed,
     #[error("storage error: {0}")]
@@ -957,6 +1027,36 @@ async fn store_valid_cosignatures(
     }
 }
 
+/// Pins (or refreshes) the key of an accepted self-certifying shard's head;
+/// `false` when a bound refuses it.
+async fn pin_accepted_shard(
+    pool: &PgPool,
+    shard_id: &str,
+    source_url: &str,
+    key: &VerifyingKey,
+    majority: &MajorityContext<'_>,
+) -> bool {
+    match crate::self_certifying_keys::pin_key(
+        pool,
+        shard_id,
+        key,
+        source_url,
+        majority.self_certifying,
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(rejection) => {
+            tracing::warn!(
+                shard_id,
+                ?rejection,
+                "mirror-watcher: not mirroring a self-certifying shard"
+            );
+            false
+        }
+    }
+}
+
 /// The shared bookkeeping every head accepted by
 /// [`fetch_and_verify_sth`] or [`discover_and_verify_shard_peers`] goes
 /// through — recording the raw observation (feeding the original
@@ -988,6 +1088,13 @@ async fn record_verified_head(
     majority: &MajorityContext<'_>,
     held_logged: &mut HeldHeads,
 ) {
+    // A self-certifying shard is pinned once its head is accepted. With no
+    // majority to wait for that is immediate, so pin before storing anything.
+    let self_certifying = avalon_protocol::shard_identity::is_self_certifying(shard_id);
+    let pin_first = self_certifying && majority.known_list.len() <= 1;
+    if pin_first && !pin_accepted_shard(pool, shard_id, peer, &author_key, majority).await {
+        return;
+    }
     let observed = ObservedSth::from_sth(peer, shard_id, &head.sth, OffsetDateTime::now_utc());
     match mirror::insert_observation(pool, &observed).await {
         Ok(is_new) => {
@@ -1050,6 +1157,12 @@ async fn record_verified_head(
         }
     };
     let known_list = majority.known_list;
+    if self_certifying
+        && !pin_first
+        && !pin_accepted_shard(pool, shard_id, peer, &author_key, majority).await
+    {
+        return;
+    }
 
     store_valid_cosignatures(chain, shard_id, &head, known_list).await;
 
@@ -1192,6 +1305,7 @@ async fn backfill_network(
     network_id: &str,
     shard_id: &str,
     observations: &[(String, SignedTreeHead)],
+    limits: Option<BackfillLimits>,
 ) -> Result<(), MirrorWatcherError> {
     let equivocations = mirror::unresolved_equivocations(pool, network_id, shard_id).await?;
     if !equivocations.is_empty() {
@@ -1239,6 +1353,7 @@ async fn backfill_network(
         shard_id,
         &candidate_peers,
         &target_sth,
+        limits,
     )
     .await
 }
@@ -1276,6 +1391,7 @@ async fn backfill(
     shard_id: &str,
     candidate_peers: &[String],
     sth: &SignedTreeHead,
+    limits: Option<BackfillLimits>,
 ) -> Result<(), MirrorWatcherError> {
     if candidate_peers.is_empty() {
         return Ok(());
@@ -1301,9 +1417,17 @@ async fn backfill(
     // Rotating start index so repeated ticks don't always hammer the same
     // first candidate — simple round-robin, not load-aware.
     let mut peer_cursor = 0usize;
+    let mut fetched = 0usize;
 
     loop {
         if progress.verified_count >= sth.tree_size {
+            break;
+        }
+        if limits.is_some_and(|l| l.exhausted(fetched, std::time::Instant::now())) {
+            tracing::info!(
+                shard_id,
+                "mirror-watcher: per-tick backfill budget spent, resuming next tick"
+            );
             break;
         }
 
@@ -1339,6 +1463,16 @@ async fn backfill(
             if progress.verified_count >= sth.tree_size {
                 break;
             }
+            if let Some(l) = limits {
+                if l.exhausted(fetched, std::time::Instant::now()) {
+                    break;
+                }
+                if !entry_within_size_limit(&entry) {
+                    tracing::warn!(shard_id, seq = entry.seq, "mirror-watcher: entry exceeds the per-entry size limit, not mirroring this shard further");
+                    return Err(MirrorWatcherError::EntryTooLarge { seq: entry.seq });
+                }
+            }
+            fetched += 1;
 
             // The leaf's rank among all committed entries — a running
             // count of entries this node has already verified and
@@ -1429,7 +1563,9 @@ async fn backfill(
                 batch_id: entry.batch_id,
                 verified_tree_size: sth.tree_size,
             };
-            let protocol_event = protocol_event_from_mirrored(&mirrored_entry);
+            let protocol_event = projects_mirrored_entries(shard_id)
+                .then(|| protocol_event_from_mirrored(&mirrored_entry))
+                .flatten();
 
             // The `mirrored_entries` write always lands — that's the
             // cryptographically-verified fact this node is recording, and
@@ -1473,7 +1609,7 @@ async fn backfill(
                         );
                     }
                 }
-            } else {
+            } else if projects_mirrored_entries(shard_id) {
                 tracing::error!(
                     "mirror-watcher: {}: seq={} could not be decoded into a ProtocolEvent (pruned payload or malformed issuer/subject) — mirrored, but not applied to the local indexer",
                     sth.network_id, mirrored_entry.seq
@@ -1993,6 +2129,248 @@ mod tests {
             .expect("failed to connect to Postgres — is it reachable?")
     }
 
+    // -- self-certifying shard discovery --
+
+    fn signed_head_body(
+        signing: &ed25519_dalek::SigningKey,
+        network_id: &str,
+        protocol_version: &str,
+    ) -> serde_json::Value {
+        let sth = avalon_protocol::sth::sign_tree_head(
+            signing,
+            "k",
+            3,
+            &"ab".repeat(32),
+            network_id,
+            OffsetDateTime::now_utc(),
+        );
+        serde_json::json!({
+            "tree_size": sth.tree_size,
+            "root_hash": sth.root_hash,
+            "network_id": sth.network_id,
+            "signing_key_id": sth.signing_key_id,
+            "signature": sth.signature,
+            "created_at": sth.created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "protocol_version": protocol_version,
+            "signing_public_key": hex::encode(signing.verifying_key().to_bytes()),
+        })
+    }
+
+    async fn serve_head(body: serde_json::Value) -> wiremock::MockServer {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/ledger/sth/latest"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    async fn row_count(pool: &PgPool, table: &str, shard_id: &str) -> i64 {
+        let sql = match table {
+            "self_certifying_shard_keys" => {
+                "SELECT count(*) FROM self_certifying_shard_keys WHERE shard_id = $1"
+            }
+            "observed_sths" => "SELECT count(*) FROM observed_sths WHERE shard_id = $1",
+            "witness_cosignatures" => {
+                "SELECT count(*) FROM witness_cosignatures WHERE shard_id = $1"
+            }
+            _ => "SELECT count(*) FROM mirrored_entries WHERE shard_id = $1",
+        };
+        sqlx::query_scalar(sql)
+            .bind(shard_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn discover_one(
+        pool: &PgPool,
+        network_id: &str,
+        shard_id: &str,
+        url: &str,
+        bounds: &crate::self_certifying_keys::MirrorBounds,
+    ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
+        let registry = crate::nodes::ShardRegistry::new();
+        registry.record_own(shard_id, url, OffsetDateTime::now_utc());
+        discover_and_verify_shard_peers(
+            &reqwest::Client::new(),
+            pool,
+            network_id,
+            &registry,
+            None,
+            &BTreeSet::new(),
+            bounds,
+        )
+        .await
+    }
+
+    async fn nothing_landed(pool: &PgPool, shard_id: &str) {
+        for table in [
+            "self_certifying_shard_keys",
+            "observed_sths",
+            "witness_cosignatures",
+            "mirrored_entries",
+        ] {
+            assert_eq!(row_count(pool, table, shard_id).await, 0, "{table}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_self_certifying_head_for_a_foreign_network_is_rejected_without_side_effects() {
+        let pool = live_test_pool().await;
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let shard_id =
+            avalon_protocol::shard_identity::derive_self_certifying_id(&signing.verifying_key());
+        let identities_before: i64 = sqlx::query_scalar("SELECT count(*) FROM identities")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let bounds = crate::self_certifying_keys::MirrorBounds::default();
+
+        let foreign = serve_head(signed_head_body(
+            &signing,
+            "some-other-network",
+            crate::version::PROTOCOL_VERSION,
+        ))
+        .await;
+        let found = discover_one(
+            &pool,
+            "the-local-network",
+            &shard_id,
+            &foreign.uri(),
+            &bounds,
+        )
+        .await;
+        assert!(found.is_empty());
+        nothing_landed(&pool, &shard_id).await;
+        let identities_after: i64 = sqlx::query_scalar("SELECT count(*) FROM identities")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(identities_before, identities_after);
+
+        // Same head for the local network is returned, so the rejection above is
+        // due to the network id alone; even then nothing is pinned yet.
+        let local = serve_head(signed_head_body(
+            &signing,
+            "the-local-network",
+            crate::version::PROTOCOL_VERSION,
+        ))
+        .await;
+        let found =
+            discover_one(&pool, "the-local-network", &shard_id, &local.uri(), &bounds).await;
+        assert_eq!(found.len(), 1);
+        nothing_landed(&pool, &shard_id).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_self_certifying_head_from_an_unsupported_peer_version_is_rejected() {
+        let pool = live_test_pool().await;
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
+        let shard_id =
+            avalon_protocol::shard_identity::derive_self_certifying_id(&signing.verifying_key());
+        let old = serve_head(signed_head_body(&signing, "net", "")).await;
+        let found = discover_one(
+            &pool,
+            "net",
+            &shard_id,
+            &old.uri(),
+            &crate::self_certifying_keys::MirrorBounds::default(),
+        )
+        .await;
+        assert!(found.is_empty());
+        nothing_landed(&pool, &shard_id).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn unpinned_self_certifying_shards_examined_per_tick_are_limited() {
+        let pool = live_test_pool().await;
+        let bounds = crate::self_certifying_keys::MirrorBounds {
+            max_new_per_tick: 2,
+            ..crate::self_certifying_keys::MirrorBounds::default()
+        };
+        let registry = crate::nodes::ShardRegistry::new();
+        let mut servers = Vec::new();
+        for i in 0..4u8 {
+            let mut seed = [i; 32];
+            seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+            let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let id = avalon_protocol::shard_identity::derive_self_certifying_id(
+                &signing.verifying_key(),
+            );
+            let server = serve_head(signed_head_body(
+                &signing,
+                "net",
+                crate::version::PROTOCOL_VERSION,
+            ))
+            .await;
+            registry.record_own(&id, &server.uri(), OffsetDateTime::now_utc());
+            servers.push(server);
+        }
+        let found = discover_and_verify_shard_peers(
+            &reqwest::Client::new(),
+            &pool,
+            "net",
+            &registry,
+            None,
+            &BTreeSet::new(),
+            &bounds,
+        )
+        .await;
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn self_certifying_entries_are_not_projected_but_named_shards_are() {
+        assert!(!projects_mirrored_entries(&format!(
+            "node:{}",
+            "a".repeat(64)
+        )));
+        assert!(projects_mirrored_entries("game:some-game"));
+        assert!(projects_mirrored_entries("core"));
+    }
+
+    #[test]
+    fn backfill_limits_stop_at_the_entry_budget_and_the_deadline() {
+        let now = std::time::Instant::now();
+        let limits = BackfillLimits {
+            max_entries: 3,
+            deadline: now + Duration::from_secs(10),
+        };
+        assert!(!limits.exhausted(2, now));
+        assert!(limits.exhausted(3, now));
+        assert!(limits.exhausted(0, now + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn oversized_self_certifying_entries_are_refused() {
+        let entry = |payload: serde_json::Value| LedgerEntryDto {
+            seq: 1,
+            event_id: Uuid::nil(),
+            kind: "k".into(),
+            issuer: "i".into(),
+            subject: "s".into(),
+            payload: Some(payload),
+            payload_pruned: false,
+            version: 1,
+            event_timestamp: OffsetDateTime::UNIX_EPOCH,
+            prev_hash: String::new(),
+            entry_hash: String::new(),
+            batch_id: Uuid::nil(),
+        };
+        assert!(entry_within_size_limit(&entry(
+            serde_json::json!({"a": "b"})
+        )));
+        let big = "x".repeat(MAX_SELF_CERTIFYING_ENTRY_BYTES);
+        assert!(!entry_within_size_limit(&entry(
+            serde_json::json!({ "a": big })
+        )));
+    }
+
     /// The equivocation gate ([`backfill_network`]'s first check)
     /// against real Postgres: a network with an unresolved finding
     /// must not have anything written to `mirrored_entries`, even when
@@ -2048,6 +2426,7 @@ mod tests {
             &network_id,
             mirror::CORE_SHARD_ID,
             &observations,
+            None,
         )
         .await
         .expect("backfill_network should return Ok(()) rather than error when gated");
@@ -2122,6 +2501,7 @@ mod tests {
             &network_id,
             mirror::CORE_SHARD_ID,
             &observations,
+            None,
         )
         .await;
         assert!(result.is_ok());

@@ -476,10 +476,26 @@ and re-run without any risk to the network being migrated from.
   that pinned key for a `node:` id, so cross-shard aggregation and equivocation
   checks resolve it too. The mirror-watcher's discovered-shard pass uses this
   path for `node:` ids instead of the `game:` registry lookup, with no authority
-  online. Bounds on how much a node mirrors, never on validity:
-  `AVALON_MIRROR_MAX_SELF_CERTIFYING_SHARDS` (default 32 pinned shards) and
-  `AVALON_MIRROR_MAX_SELF_CERTIFYING_ENTRIES` (default 100000 entries per shard);
-  pins are first come, first kept.
+  online. A discovered `node:` head is refused unless its `network_id` is this
+  node's own network and its peer version is supported, before anything is
+  stored, observed or cosigned. The key is pinned only once the head is
+  accepted (majority reached, or trivially so with a known list of 0 or 1).
+  Mirrored entries of a self-certifying shard are stored in the mirror tables only
+  and are not applied to the indexer, so such a shard creates no identities or
+  projected state; entries of `game:` shards are projected as before.
+  Bounds on how much a node mirrors, never on validity:
+  `AVALON_MIRROR_MAX_SELF_CERTIFYING_SHARDS` (default 32 pinned shards),
+  `AVALON_MIRROR_MAX_SELF_CERTIFYING_SHARDS_PER_SOURCE` (default 4 per source URL),
+  `AVALON_MIRROR_SELF_CERTIFYING_NEW_PER_TICK` (default 4 unpinned shards examined
+  per tick), `AVALON_MIRROR_MAX_SELF_CERTIFYING_ENTRIES` (default 100000 entries per
+  shard) and `AVALON_MIRROR_SELF_CERTIFYING_IDLE_SECS` (default 7 days). Each pin
+  records a last-seen time; when the cap is reached the least recently seen idle
+  pin is evicted, never an active one. Backfill of these shards also refuses any
+  entry above 64 KiB and spends at most 1000 entries per shard and 60 seconds per
+  tick. Pin writes run under an advisory lock so the cap holds across concurrent
+  writers. Shard announcements are unauthenticated and the shard registry is not
+  capped (256 unseen shard URLs are validated per exchange), so these bounds, not
+  the gossip layer, are what limit a flood of minted shard ids.
 
 ## Invariants
 
