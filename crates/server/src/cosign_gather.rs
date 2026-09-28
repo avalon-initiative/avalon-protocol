@@ -114,9 +114,12 @@ async fn fetch_from_witness(
     {
         return Vec::new();
     }
+    // A witness speaks only for itself: relayed copies of other witnesses' cosignatures it holds
+    // may be stale and would otherwise displace their fresh ones when merged.
     parsed
         .cosignatures
         .iter()
+        .filter(|c| c.witness_key_id == source.key_id)
         .map(|c| c.to_witness_cosignature(&head.sth))
         .collect()
 }
@@ -347,6 +350,46 @@ mod tests {
             HeadVerdict::Trusted(merged) => assert_eq!(merged.cosignatures.len(), 2),
             HeadVerdict::Held => panic!("expected majority after gathering"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_relayed_stale_copy_does_not_displace_the_witnesss_own_fresh_cosignature() {
+        let (w1, w2) = (witness(1), witness(2));
+        let h = head(1);
+        let stale = sign_witness_cosignature(
+            &w2.0,
+            &w2.1,
+            h.sth.tree_size,
+            &h.sth.root_hash,
+            &h.sth.network_id,
+            h.sth.created_at,
+            OffsetDateTime::now_utc() - time::Duration::hours(1),
+        );
+        let (s1, s2) = (MockServer::start().await, MockServer::start().await);
+        // The first witness holds its own fresh cosignature plus an old copy of the second's.
+        serve(
+            &s1,
+            ResponseTemplate::new(200)
+                .set_body_json(body(&h.sth, &[cosign(&w1.0, &w1.1, &h.sth), stale])),
+        )
+        .await;
+        serve(
+            &s2,
+            ResponseTemplate::new(200).set_body_json(body(&h.sth, &[cosign(&w2.0, &w2.1, &h.sth)])),
+        )
+        .await;
+        let list = known(&[&w1, &w2]);
+        let sources = [source(&w1.1, &s1), source(&w2.1, &s2)];
+        let verdict = resolve_majority(
+            policy(),
+            &author().verifying_key(),
+            h,
+            &list,
+            &sources,
+            "core",
+        )
+        .await;
+        assert!(matches!(verdict, HeadVerdict::Trusted(_)));
     }
 
     #[tokio::test]
