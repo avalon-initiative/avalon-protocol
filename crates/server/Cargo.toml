@@ -59,6 +59,13 @@ tokio-tungstenite = "0.30"
 futures-util.workspace = true
 utoipa.workspace = true
 sha2 = "0.11"
+# `bundled-postgres` only (see `avalon_server::bundled_postgres`): starts,
+# supervises and stops a private, embedded Postgres instance for
+# `avalon-server-bundled`. Never pulled into the plain `avalon-server`
+# binary's dependency graph.
+postgresql_embedded = { version = "0.21", optional = true }
+# `bundled-postgres` only: refuses to start the embedded Postgres as root.
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "io-util"] }
@@ -84,6 +91,18 @@ path = "src/main.rs"
 name = "dump-openapi"
 path = "src/bin/dump_openapi.rs"
 
+# A second release artifact: the same server, plus a managed embedded
+# Postgres for operators who want a single-command node. Cargo skips
+# building this target at all unless `bundled-postgres` is enabled, so it
+# never pulls `postgresql_embedded`/`libc` into a plain `avalon-server` build.
+[[bin]]
+name = "avalon-server-bundled"
+path = "src/bin/bundled_main.rs"
+required-features = ["bundled-postgres"]
+
 [features]
 # Statically links OpenSSL (built from source) so release binaries need no system libssl.
 vendored-openssl = ["dep:openssl", "openssl/vendored"]
+# Bundled, managed-Postgres variant (`avalon-server-bundled`) — see
+# `avalon_server::bundled_postgres`'s module doc comment.
+bundled-postgres = ["dep:postgresql_embedded", "dep:libc", "tokio/signal"]

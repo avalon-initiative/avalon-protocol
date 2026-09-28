@@ -80,6 +80,17 @@ jobs:
           cargo build --release --locked -p avalon-server --features vendored-openssl
           cargo build --release --locked -p avalon-cli --no-default-features --features vendored-openssl
 
+      - name: Build (bundled variant, Linux only)
+        # avalon-server-bundled: the same server, plus a managed embedded
+        # Postgres (issue #990) — a second, separate artifact, never part
+        # of the plain avalon-server binary above. Linux only for now,
+        # matching #990's own acceptance criteria; not built on macOS/Windows.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --release --locked -p avalon-server --bin avalon-server-bundled \
+            --features bundled-postgres,vendored-openssl
+
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -91,6 +102,15 @@ jobs:
           strip "dist/${name}/avalon-server" "dist/${name}/avalon"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
           rm -rf "dist/${name}"
+
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            bundled_name="avalon-server-bundled-${version}-${{ matrix.target }}"
+            mkdir -p "dist/${bundled_name}"
+            cp target/release/avalon-server-bundled LICENSE README.md "dist/${bundled_name}/"
+            strip "dist/${bundled_name}/avalon-server-bundled"
+            tar -C dist -czf "dist/${bundled_name}.tar.gz" "${bundled_name}"
+            rm -rf "dist/${bundled_name}"
+          fi
           ls -l dist
 
       - name: Package (Windows)
@@ -111,13 +131,20 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          tar -C dist -xzf dist/avalon-*.tar.gz
-          dir="$(ls -d dist/avalon-*/)"
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
+          tar -C dist -xzf "dist/avalon-${version}-${{ matrix.target }}.tar.gz"
+          dir="dist/avalon-${version}-${{ matrix.target }}/"
           ("${dir}avalon" 2>&1 || true) | grep -q "^usage: avalon"
           if [ "$RUNNER_OS" = "macOS" ]; then
             otool -L "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
           else
             ldd "${dir}avalon-server" | tee /dev/stderr | { ! grep -q 'libssl'; }
+          fi
+
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            tar -C dist -xzf "dist/avalon-server-bundled-${version}-${{ matrix.target }}.tar.gz"
+            bundled_dir="dist/avalon-server-bundled-${version}-${{ matrix.target }}/"
+            ldd "${bundled_dir}avalon-server-bundled" | tee /dev/stderr | { ! grep -q 'libssl'; }
           fi
 
       - name: Smoke test the packaged binaries (Windows)
@@ -263,8 +290,12 @@ jobs:
 
       - name: Assemble the image build context from the release tarball
         run: |
-          tar -C dist -xzf dist/avalon-*.tar.gz
-          dir="$(ls -d dist/avalon-*/)"
+          # Excludes avalon-server-bundled-*.tar.gz (issue #990) — a glob
+          # here would match both tarballs once that one's uploaded
+          # alongside this one under the same artifact name.
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
+          tar -C dist -xzf "dist/avalon-${version}-${{ matrix.target }}.tar.gz"
+          dir="dist/avalon-${version}-${{ matrix.target }}/"
           mkdir -p image-ctx
           cp "${dir}avalon-server" "${dir}avalon" image-ctx/
           cp Dockerfile.release image-ctx/Dockerfile

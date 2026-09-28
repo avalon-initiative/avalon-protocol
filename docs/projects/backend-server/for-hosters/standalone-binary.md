@@ -16,10 +16,11 @@ No Docker, no repository checkout at runtime. For the Docker route see
   at `ghcr.io/avalon-initiative/avalon-protocol` — see
   [`hosting-quickstart.md`](hosting-quickstart.md#pulling-and-running-the-image-directly)
   for the Docker route.
-- Not available yet: a variant that bundles its own database (#990), macOS
-  and Windows binaries, and a public network entry to join (#994). NAT
-  traversal is planned; a node still needs an inbound port, see
-  [Ports](#ports).
+- A variant that bundles its own database, `avalon-server-bundled`, is
+  available as of this release — see [Bundled variant](#bundled-variant).
+- Not available yet: macOS and Windows binaries, and a public network entry
+  to join (#994). NAT traversal is planned; a node still needs an inbound
+  port, see [Ports](#ports).
 - Everything below was run against the binary built from `main`.
 
 ## What you need
@@ -55,7 +56,8 @@ sudo install -m 0755 avalon-<version>-<target>/avalon-server /usr/local/bin/
 ```
 
 The tarball has no `migrate` binary; the server applies migrations itself (see
-[Upgrading](#upgrading)).
+[Upgrading](#upgrading)). The [bundled variant](#bundled-variant) is a
+separate download, `avalon-server-bundled-<version>-<target>.tar.gz`.
 
 ### Build from source
 
@@ -70,6 +72,15 @@ cargo build --release --locked -p avalon-server --bin avalon-server --bin migrat
 it needs a C toolchain and `perl`. Without it the binary links the system
 `libssl` and the build needs `pkg-config` and the OpenSSL development package.
 The binaries are `target/release/avalon-server` and `target/release/migrate`.
+
+The [bundled variant](#bundled-variant), `avalon-server-bundled`, is a
+separate binary target behind its own `bundled-postgres` feature — plain
+`avalon-server` never depends on it:
+
+```bash
+cargo build --release --locked -p avalon-server --bin avalon-server-bundled \
+  --features bundled-postgres,vendored-openssl
+```
 
 A binary built this way also reads a `.env` file at the root of the checkout it
 was built from, if one exists. Variables already in the environment win over it.
@@ -293,6 +304,79 @@ Back up two things together:
 
 To move a node, restore both and start the binary with the same
 `AVALON_DATA_DIR` contents.
+
+## Bundled variant
+
+`avalon-server-bundled` is the same server with one difference: if
+`DATABASE_URL` is not set, it starts, initializes and supervises its own
+private PostgreSQL instance instead of requiring one you provide. It is for
+an operator who wants a single command and no separate database step — a
+quick evaluation node, a small personal deployment, or anywhere standing up
+a separate Postgres isn't worth it. For anything you're already running
+Postgres for (a fleet, a managed database service, an existing cluster),
+use the plain `avalon-server` binary with your own `DATABASE_URL` instead;
+the bundled instance is not tuned or intended for that.
+
+If `DATABASE_URL` is set in the environment, `avalon-server-bundled` behaves
+exactly like `avalon-server` and starts no managed database at all — it is
+never overridden.
+
+With no `DATABASE_URL`, on first start it:
+
+- Downloads a PostgreSQL distribution (cached under `~/.theseus/postgresql`
+  by the embedded-Postgres library, not under `AVALON_DATA_DIR`) unless
+  already cached.
+- Initializes a data directory at `AVALON_DATA_DIR/postgres/data`, with the
+  superuser password generated once and kept at
+  `AVALON_DATA_DIR/postgres/superuser_password` (mode `0600`).
+- Starts PostgreSQL bound to `127.0.0.1` on an available local port chosen
+  at random each start (never `5432`, and never reachable except from this
+  process on the same host) and creates an `avalon` database.
+- Exports the resulting `DATABASE_URL` into its own process environment
+  before doing anything else, so every step after this is identical to the
+  plain binary's.
+
+On every later start with the same `AVALON_DATA_DIR` and still no
+`DATABASE_URL`, it reuses the existing data directory and password rather
+than reinitializing. Stopping the process (`SIGTERM` or `SIGINT`) stops the
+managed PostgreSQL cleanly before the process exits; killing it
+(`SIGKILL`) does not, and can leave PostgreSQL running under
+`AVALON_DATA_DIR/postgres/data` — check for a stray `postgres` process
+under that data directory and stop it manually if this happens
+(`pg_ctl -D AVALON_DATA_DIR/postgres/data stop`, using the
+`pg_ctl` under `AVALON_DATA_DIR/postgres/install`).
+
+It refuses to start as root: PostgreSQL itself refuses to run as root, and
+this fails with a clear error at startup instead of a confusing one from
+deep inside PostgreSQL's own start sequence. Run it as an ordinary user,
+same as [systemd](#running-under-systemd) already does for the plain
+binary.
+
+### Backup
+
+Back up `AVALON_DATA_DIR` as a whole — it now holds both the keys
+directory (as above) and the managed database's entire data directory
+(`AVALON_DATA_DIR/postgres/data`) and generated password
+(`AVALON_DATA_DIR/postgres/superuser_password`), so one directory is the
+whole backup, instead of a `pg_dump` plus the keys directory separately.
+Stop the process before copying the data directory for a consistent
+on-disk snapshot, or use PostgreSQL's own
+[continuous archiving](https://www.postgresql.org/docs/current/continuous-archiving.html)
+against it if you need backups without downtime — the bundled variant does
+not set this up for you.
+
+### PostgreSQL major-version upgrades
+
+This is not solved yet. The bundled variant pins a specific PostgreSQL major
+version internally, and there is no in-place major-version upgrade path for
+the managed data directory today — moving to a later major version means
+the standard PostgreSQL dump/restore path (`pg_dump` from the old version,
+`pg_restore` into a freshly initialized data directory under the new
+version), done by hand, not something this binary automates. If this
+matters to you before it's addressed, treat the bundled variant as
+disposable state you can rebuild from a fresh registration rather than
+data you upgrade in place, or run the plain `avalon-server` binary against
+a Postgres you manage yourself, where you already control this.
 
 ## Troubleshooting
 
