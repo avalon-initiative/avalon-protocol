@@ -90,6 +90,10 @@ For the witness-cosigning scenario suite (growth, loss of the original node,
 witness loss, eclipse, fork) and the live-fleet drill procedure, see
 [`witness-drill.md`](../projects/backend-server/for-maintainers/witness-drill.md).
 
+For testing NAT-dependent connectivity (hole punching, relay fallback) against
+emulated home networks, see
+[`nat-lab.md`](../projects/backend-server/for-maintainers/nat-lab.md).
+
 Quick reference once you've read that page:
 
 ```bash
