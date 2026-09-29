@@ -3,7 +3,7 @@
 //! together against a verifier's own known list. Wires the pure primitives
 //! in `sth.rs`/`witness.rs` into one accept/reject decision; storage and
 //! discovery are `crates/chain`/`crates/server`'s job, not this module's
-//! (see `docs/projects/backend-server/architecture/witness-cosigning.md`).
+//! (see `avalon-docs/protocol/witness-cosigning.md`).
 
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeSet;

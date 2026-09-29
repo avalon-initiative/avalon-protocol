@@ -1,6 +1,6 @@
 //! The mirror-watcher — verifies and stores STHs/entries
 //! polled from configured peers, run as a background task inside
-//! `avalon-server`. See `docs/projects/backend-server/architecture/nodes.md`'s "Today in the
+//! `avalon-server`. See `avalon-docs/architecture/nodes/README.md`'s "Today in the
 //! repo" section for the multi-peer polling/backfill/equivocation-
 //! detection design and why it lives in-process rather than as a CLI
 //! daemon.

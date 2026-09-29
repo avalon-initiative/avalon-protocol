@@ -1,7 +1,7 @@
 //! The capability-enforcement extractor and guard — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`). See
-//! `docs/projects/backend-server/architecture/security-model.md`'s "Authorization: one capability,
+//! `avalon-docs/protocol/security-model.md`'s "Authorization: one capability,
 //! one check" section for the caller-kind design,
 //! why lookups key on `(identity_id, integrator_id)` not `binding_id`, and
 //! why there's no cache yet. The DB-backed live proof lives in this

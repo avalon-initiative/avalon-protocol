@@ -31,7 +31,7 @@ self-hosted `avalon-server` instances:
   get a valid cert.
 - Its config format (a `Caddyfile`) is short enough to keep inline in this
   doc and in a deployment repo, which matters for a project that wants
-  self-hosting to stay low-friction (see [`../architecture/self-hosting.md`](../architecture/self-hosting.md)).
+  self-hosting to stay low-friction (see [`avalon-docs: architecture/self-hosting.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/self-hosting.md)).
 - HTTP→HTTPS redirection and modern TLS defaults are on by default, not
   something the operator has to opt into correctly.
 

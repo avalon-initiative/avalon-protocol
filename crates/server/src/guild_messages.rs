@@ -1,6 +1,6 @@
 //! Guild chat messages — deliberately NOT protocol history:
 //! never touches the ledger/outbox, high-volume, non-interoperable. See
-//! `docs/projects/backend-server/architecture/guilds.md` ("Guild chat is a network primitive")
+//! `avalon-docs/protocol/guilds.md` ("Guild chat is a network primitive")
 //! for the archive-tier retention, announcement-only channels,
 //! and moderation-deletion-vs-archive semantics.
 

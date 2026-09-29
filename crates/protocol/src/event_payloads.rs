@@ -1,11 +1,11 @@
 //! Typed `ProtocolEvent::payload` shapes, one per [`crate::events::ProtocolEventKindVariant`]
 //! — the emitter builds one of these and serializes it via
 //! `serde_json::to_value`, instead of hand-typing an ad-hoc
-//! `serde_json::json!({...})` at each call site. `docs/projects/backend-server/architecture/protocol-events-catalogue.md`
+//! `serde_json::json!({...})` at each call site. `avalon-docs/protocol/protocol-events-catalogue.md`
 //! is the normative, human-readable description of the same shapes.
 //!
 //! Deliberately **not** `#[serde(deny_unknown_fields)]` on any of these —
-//! per the versioning policy (`docs/projects/backend-server/architecture/protocol-events.md`), an
+//! per the versioning policy (`avalon-docs/protocol/protocol-events.md`), an
 //! additive field never bumps `version`, so a decoder must silently ignore
 //! a field it doesn't yet know about rather than erroring on it.
 //!
@@ -14,7 +14,7 @@
 //! added-alongside-and-deprecated the way the versioning policy otherwise
 //! requires for a field removal (which would normally bump `version` and
 //! keep the old shape decodable forever). Same grounds
-//! `docs/projects/backend-server/architecture/nodes.md`'s #290 exception already documents: this
+//! `avalon-docs/architecture/nodes/README.md`'s #290 exception already documents: this
 //! repo has no real deployed network and zero external integrators yet,
 //! so there is no real historical data anywhere that needs the old shape
 //! to stay decodable. Once the repo is public this exception is gone

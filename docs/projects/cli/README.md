@@ -70,11 +70,11 @@ table and will stay more current if the two ever drift.
 | A contributor to this repository wanting to exercise the network locally | [`../backend-server/for-hosters/hosting-quickstart.md`](../backend-server/for-hosters/hosting-quickstart.md) to get a node running, then the command table above |
 | A maintainer running the milestone-1 walkthrough by hand | [`../backend-server/for-maintainers/milestone-1-walkthrough.md`](../backend-server/for-maintainers/milestone-1-walkthrough.md) |
 | Responding to a mirror equivocation report | `avalon list-equivocations` / `resolve-equivocation`, and [`../backend-server/for-maintainers/equivocation-response.md`](../backend-server/for-maintainers/equivocation-response.md) |
-| Looking for the equivalent tool as a library instead of a binary | [`../sdks/rust/README.md`](../sdks/rust/README.md) |
+| Looking for the equivalent tool as a library instead of a binary | [`../sdks/rust/README.md`](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/README.md) |
 
 ## Related projects
 
 - [`../backend-server/`](../backend-server/README.md) — what this CLI talks to.
-- [`../sdks/rust/`](../sdks/rust/README.md) — the library this CLI is built
+- [`../sdks/rust/`](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/README.md) — the library this CLI is built
   on top of (`issue-achievement` goes through it directly), for the same
   network calls embedded in a program instead of run from a terminal.

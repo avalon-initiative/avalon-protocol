@@ -16,7 +16,7 @@
 //! Scope: only the promised-durable projections `PROJECTION_TABLES` lists
 //! are touched. `sessions`, `credentials` (for now), presence, and
 //! any other cache are explicitly out of scope — see
-//! `docs/projects/backend-server/architecture/disaster-recovery.md`.
+//! `avalon-docs/architecture/disaster-recovery.md`.
 
 use avalon_chain::PostgresSettlementProvider;
 use avalon_indexer::postgres::PostgresIndexer;

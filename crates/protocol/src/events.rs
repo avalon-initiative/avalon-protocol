@@ -2,8 +2,8 @@
 //! considers interoperable or durable.
 //!
 //! Not every integrator action is a protocol event; ordinary gameplay (combat,
-//! movement, XP ticks) never becomes one. See `docs/stakeholders/Proposal.md` §14 and
-//! `docs/projects/backend-server/architecture/protocol-events.md` for the hot-data/durable-fact
+//! movement, XP ticks) never becomes one. See `avalon-docs/architecture/design-proposal.md` §14 and
+//! `avalon-docs/protocol/protocol-events.md` for the hot-data/durable-fact
 //! distinction, and issue #75 for why durable history is canonical.
 
 use std::convert::Infallible;

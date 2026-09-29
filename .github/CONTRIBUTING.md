@@ -16,8 +16,8 @@ Each feature proposal or implementation should answer:
 - Does this keep a game fully sovereign over its own world, economy, and
   rules — giving Avalon only the connective infrastructure between games,
   never authority over any single one — per the
-  [Guiding Principles](../docs/stakeholders/Proposal.md#30-guiding-principles)
-  and the [architecture tests](../docs/projects/backend-server/architecture/README.md#architecture-tests)?
+  [Guiding Principles](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/design-proposal.md)
+  and the [architecture tests](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md#architecture-tests)?
 
 If no, refine or drop the proposal.
 
@@ -41,7 +41,7 @@ or the workflow is welcome as an issue too.
 
 ## Contribution Principles
 
-Straight from Avalon's [Guiding Principles](../docs/stakeholders/Proposal.md#30-guiding-principles) —
+Straight from Avalon's [Guiding Principles](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/design-proposal.md) —
 read that section for the full reasoning behind each:
 
 - Games remain sovereign — a game keeps final authority over its own world,
@@ -72,9 +72,10 @@ read that section for the full reasoning behind each:
 
 ## Work Tracking
 
-Open work lives in GitHub Issues. Design direction lives in
-[`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) (narrative)
-and [`docs/projects/backend-server/architecture/`](../docs/projects/backend-server/architecture/README.md) (normative —
+Open work lives in GitHub Issues. Design direction lives in the
+[`avalon-docs`](https://github.com/avalon-initiative/avalon-docs) repository: the
+[design proposal](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/design-proposal.md) (narrative)
+and the [architecture reference](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md) (normative —
 invariants and authority boundaries); acceptance criteria for specific work
 items live on their tracking issue, not in a docs file. Architecture
 decisions are closed GitHub issues labeled `architecture-decision-record`;
@@ -216,20 +217,22 @@ addition:
 
 ## Documentation-First Workflow
 
-For non-trivial work: update the relevant file in
-[`docs/projects/backend-server/architecture/`](../docs/projects/backend-server/architecture/README.md) (and
-[`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) if the
-narrative changes) in the same PR as the implementation, not after — a doc
-that lags the code is treated as a bug.
+For non-trivial work: update the relevant page in the
+[`avalon-docs`](https://github.com/avalon-initiative/avalon-docs) repository (architecture, protocol, or the design
+proposal if the narrative changes) alongside the implementation, not after —
+a doc that lags the code is treated as a bug. Open the docs PR in the same
+sitting and link it from the implementation PR. Implementation-only
+material (environment variables, local setup, runbooks) stays in this
+repository's `docs/`.
 
 ### Protocol event versioning policy
 
 Adding a new `ProtocolEvent` kind or changing an existing one's payload?
-[`docs/projects/backend-server/architecture/protocol-events.md`](../docs/projects/backend-server/architecture/protocol-events.md#versioning-policy)
+[`avalon-docs/protocol/protocol-events.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/protocol-events.md#versioning-policy)
 is the normative versioning policy (additive fields never bump `version`;
 removing/renaming/re-meaning a field does; every version ever emitted
 stays decodable forever) and
-[`docs/projects/backend-server/architecture/protocol-events-catalogue.md`](../docs/projects/backend-server/architecture/protocol-events-catalogue.md)
+[`avalon-docs/protocol/protocol-events-catalogue.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/protocol-events-catalogue.md)
 is the full kind-by-kind table. A new kind gets a real
 `ProtocolEventKindVariant` (`crates/protocol/src/events.rs`) and a typed
 payload struct (`crates/protocol/src/event_payloads.rs`) — never a
@@ -260,17 +263,17 @@ two.
 
 ## Where To Contribute
 
-- [`docs/GLOSSARY.md`](../docs/GLOSSARY.md) — start here if the vocabulary
+- [Glossary](https://github.com/avalon-initiative/avalon-docs/blob/main/reference/glossary.md) — start here if the vocabulary
   itself is the barrier (integrator vs. issuer vs. node, authentic vs. valid
   vs. recognized, settlement vs. chain vs. ledger, and the rest). Everything
   below assumes these terms.
-- [`docs/projects/backend-server/architecture/README.md`](../docs/projects/backend-server/architecture/README.md) — start
-  here: invariants, authority boundaries, the crate layout, "what survives a
+- [Architecture](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md) — start
+  here: invariants, authority boundaries, "what survives a
   game's death," and the architecture tests every proposed change is held to
-- [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) — the
+- [Design proposal](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/design-proposal.md) — the
   full narrative design and phased roadmap
-- [`docs/projects/sdks/rust/for-developers/`](../docs/projects/sdks/rust/for-developers/) — the game-developer-facing SDK
-  story
+- [Integrations](https://github.com/avalon-initiative/avalon-docs/blob/main/integrations/README.md) and the
+  [SDK guides](https://github.com/avalon-initiative/avalon-sdks/tree/main/docs) — the developer-facing story
 - [`docs/projects/backend-server/for-hosters/`](../docs/projects/backend-server/for-hosters/) — standing up and deploying a node,
   distinct from contributing code
 - Root `README.md` — current build status and what actually works today

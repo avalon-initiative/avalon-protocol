@@ -2,7 +2,7 @@
 
 Documentation for people maintaining or contributing to this repository
 itself — distinct from people building *on* Avalon (see
-[developer docs](../projects/sdks/README.md)) and distinct from people hosting a
+[developer docs](https://github.com/avalon-initiative/avalon-docs/blob/main/sdk/README.md)) and distinct from people hosting a
 node without contributing code (see
 [`../projects/backend-server/for-hosters/`](../projects/backend-server/for-hosters/README.md)).
 
@@ -18,7 +18,7 @@ settlement signing key) — see that project's own README.
   the docs-first rule, and the local `make` commands
 - [`../projects/README.md`](../projects/README.md) — the project map: what's
   deployable in this repo and how the docs are split around it
-- [`../projects/backend-server/architecture/README.md`](../projects/backend-server/architecture/README.md) —
+- [`avalon-docs: architecture/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md) —
   the normative architecture reference: invariants, authority boundaries,
   the three verticals, what exists in each crate today, and which issue
   governs each area. Read this before proposing or reviewing anything

@@ -266,7 +266,7 @@ A network is described by its entry in
 announce itself and, when it does not author `core` and
 `AVALON_MIRROR_PEERS` is unset, to mirror `core` (`AVALON_MIRROR_PEERS`,
 `AVALON_BOOTSTRAP_PEERS` override). See [`seed-nodes.md`](seed-nodes.md) and
-[`../architecture/network-trust-anchors.md`](../architecture/network-trust-anchors.md).
+[`avalon-docs: protocol/network-trust-anchors.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md).
 
 The entries in the file today:
 

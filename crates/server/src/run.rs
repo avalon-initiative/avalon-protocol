@@ -180,7 +180,7 @@ pub async fn run_with_tracing(
 
     // Issue #662: `AVALON_NODE_ROLES` now load-bearing for the Indexer role
     // specifically (`combined`, the default, counts as every role — same
-    // semantics `docs/projects/backend-server/architecture/nodes.md`'s capability table already
+    // semantics `avalon-docs/architecture/nodes/README.md`'s capability table already
     // assumes) — a process that doesn't include `indexer` in its roles has
     // no local `PostgresIndexer` at all, and instead routes every indexer
     // read/write over #661's `RemoteIndexer`/`/internal/indexer/*`
@@ -355,7 +355,7 @@ pub async fn run_with_tracing(
     // #313's `remote_submit` (above) is the mechanism that actually makes
     // that true for the outbox write path. This doesn't hard-fail when the
     // two disagree (a `chain`/ledger still exists locally either way, per
-    // `AppState::chain`'s own required field — see `docs/projects/backend-server/architecture/nodes.md`
+    // `AppState::chain`'s own required field — see `avalon-docs/architecture/nodes/README.md`
     // for the full reasoning), but
     // it's worth a loud warning: without `AVALON_SETTLEMENT_REMOTE_URL(S)`,
     // this node's outbox worker falls back to committing locally despite

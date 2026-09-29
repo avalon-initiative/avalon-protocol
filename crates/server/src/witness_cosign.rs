@@ -2,7 +2,7 @@
 //! head it has already independently verified (author signature +
 //! majority-of-known-list, done by `crate::mirror_watcher` before this
 //! module is ever called). See
-//! `docs/projects/backend-server/architecture/witness-cosigning.md`'s "What
+//! `avalon-docs/protocol/witness-cosigning.md`'s "What
 //! a witness checks before cosigning" for the three checks this
 //! implements: author-signature verification is already done by the
 //! caller; the two genuinely new checks are this module's whole job.
