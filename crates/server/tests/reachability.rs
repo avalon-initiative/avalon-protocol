@@ -29,6 +29,7 @@ fn config(listen: &str, autonat: AutonatSettings) -> DhtConfig {
         listen_addr: listen.parse().unwrap(),
         external_addr: None,
         autonat,
+        relay: Default::default(),
         bootstrap_scan_interval: Duration::from_millis(300),
     }
 }

@@ -1387,6 +1387,10 @@ pub struct NodeStatusResponse {
     pub reachability: crate::reachability::Reachability,
     /// Addresses a peer confirmed by dialing them back.
     pub confirmed_external_addrs: Vec<String>,
+    /// Accepted relay reservations this node holds while `private`.
+    pub relay_reservations: Vec<crate::reachability::RelayReservation>,
+    /// Addresses peers can dial to reach this node through its relays.
+    pub relayed_listen_addrs: Vec<String>,
 }
 
 /// Issue #629: how many distinct peers currently confirm mirroring a
@@ -1478,9 +1482,15 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
         resources,
         own_shard_replication,
         core_author_pinned: crate::core_author_guard::recorded_outcome(),
-        connectivity: crate::reachability::connectivity_for(detected.reachability),
+        connectivity: crate::reachability::connectivity_for(&detected),
         reachability: detected.reachability,
         confirmed_external_addrs: detected.confirmed_addrs,
+        relayed_listen_addrs: detected
+            .relay_reservations
+            .iter()
+            .map(|r| r.relayed_addr.clone())
+            .collect(),
+        relay_reservations: detected.relay_reservations,
     }
 }
 
@@ -2675,6 +2685,8 @@ mod tests {
             connectivity: Some(avalon_protocol::connectivity::Connectivity::NatTraversed),
             reachability: crate::reachability::Reachability::Public,
             confirmed_external_addrs: vec!["/ip4/203.0.113.7/tcp/4001".to_string()],
+            relay_reservations: Vec::new(),
+            relayed_listen_addrs: Vec::new(),
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
         assert_eq!(json["connectivity"], "nat_traversed");

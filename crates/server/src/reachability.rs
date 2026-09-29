@@ -39,13 +39,27 @@ impl Reachability {
 }
 
 /// `connectivity` reported for a detected reachability. `public` is `direct`; `private` is
-/// `outbound_only` because no relay or traversal exists yet; `unknown` reports nothing.
-pub fn connectivity_for(reachability: Reachability) -> Option<Connectivity> {
-    match reachability {
+/// `relayed` while a relay reservation is held and `outbound_only` otherwise; `unknown` reports
+/// nothing. `nat_traversed` needs hole punching, which does not exist yet.
+pub fn connectivity_for(snapshot: &ReachabilitySnapshot) -> Option<Connectivity> {
+    match snapshot.reachability {
         Reachability::Public => Some(Connectivity::Direct),
+        Reachability::Private if !snapshot.relay_reservations.is_empty() => {
+            Some(Connectivity::Relayed)
+        }
         Reachability::Private => Some(Connectivity::OutboundOnly),
         Reachability::Unknown => None,
     }
+}
+
+/// An accepted reservation this node holds on a relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelayReservation {
+    pub relay_peer_id: String,
+    /// The `/p2p-circuit` address peers can dial to reach this node through the relay.
+    pub relayed_addr: String,
+    /// How many times the relay has renewed this reservation since it was accepted.
+    pub renewals: u64,
 }
 
 /// Point-in-time detection result.
@@ -54,6 +68,8 @@ pub struct ReachabilitySnapshot {
     pub reachability: Reachability,
     /// Addresses a peer confirmed by dialing them, as multiaddr strings.
     pub confirmed_addrs: Vec<String>,
+    /// Accepted relay reservations only; a requested one is not listed until the relay accepts.
+    pub relay_reservations: Vec<RelayReservation>,
 }
 
 impl ReachabilitySnapshot {
@@ -61,6 +77,7 @@ impl ReachabilitySnapshot {
         Self {
             reachability: Reachability::Unknown,
             confirmed_addrs: Vec::new(),
+            relay_reservations: Vec::new(),
         }
     }
 }
@@ -96,10 +113,13 @@ impl ReachabilityHandle {
         self.tx.subscribe()
     }
 
-    /// Addresses to put in announce: the confirmed ones, plus the operator-set external address
-    /// (stated, not inferred). Listen addresses are never advertised unconfirmed.
+    /// Addresses to put in announce: the confirmed ones, accepted relayed ones, plus the
+    /// operator-set external address (stated, not inferred). Listen addresses are never
+    /// advertised unconfirmed.
     pub fn advertised_addrs(&self) -> Vec<String> {
-        let mut addrs = self.snapshot().confirmed_addrs;
+        let snap = self.snapshot();
+        let mut addrs = snap.confirmed_addrs;
+        addrs.extend(snap.relay_reservations.into_iter().map(|r| r.relayed_addr));
         if let Some(configured) = &self.configured_addr {
             if !addrs.contains(configured) {
                 addrs.push(configured.clone());
@@ -112,6 +132,14 @@ impl ReachabilityHandle {
         self.tx.send_if_modified(|s| {
             let changed = s.reachability != reachability;
             s.reachability = reachability;
+            changed
+        });
+    }
+
+    pub(crate) fn set_relay_reservations(&self, reservations: Vec<RelayReservation>) {
+        self.tx.send_if_modified(|s| {
+            let changed = s.relay_reservations != reservations;
+            s.relay_reservations = reservations;
             changed
         });
     }
@@ -253,15 +281,51 @@ mod tests {
 
     #[test]
     fn connectivity_mapping_never_claims_direct_without_detection() {
+        let at = |reachability, reserved: bool| {
+            let relay_reservations = reserved
+                .then(|| RelayReservation {
+                    relay_peer_id: "12D3KooWRelay".into(),
+                    relayed_addr: "/ip4/203.0.113.7/tcp/4001/p2p-circuit".into(),
+                    renewals: 0,
+                })
+                .into_iter()
+                .collect();
+            ReachabilitySnapshot {
+                reachability,
+                confirmed_addrs: Vec::new(),
+                relay_reservations,
+            }
+        };
         assert_eq!(
-            connectivity_for(Reachability::Public),
+            connectivity_for(&at(Reachability::Public, false)),
             Some(Connectivity::Direct)
         );
         assert_eq!(
-            connectivity_for(Reachability::Private),
+            connectivity_for(&at(Reachability::Private, false)),
             Some(Connectivity::OutboundOnly)
         );
-        assert_eq!(connectivity_for(Reachability::Unknown), None);
+        assert_eq!(
+            connectivity_for(&at(Reachability::Private, true)),
+            Some(Connectivity::Relayed)
+        );
+        assert_eq!(connectivity_for(&at(Reachability::Unknown, false)), None);
+        // A reservation never upgrades an undetected node.
+        assert_eq!(connectivity_for(&at(Reachability::Unknown, true)), None);
+    }
+
+    #[test]
+    fn accepted_relayed_addresses_are_advertised_and_dropped_with_the_reservation() {
+        let handle = ReachabilityHandle::unknown();
+        let addr = "/ip4/203.0.113.7/tcp/4001/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWMe";
+        handle.set_relay_reservations(vec![RelayReservation {
+            relay_peer_id: "12D3KooWRelay".into(),
+            relayed_addr: addr.into(),
+            renewals: 0,
+        }]);
+        assert_eq!(handle.advertised_addrs(), vec![addr]);
+        assert!(handle.snapshot().confirmed_addrs.is_empty());
+        handle.set_relay_reservations(Vec::new());
+        assert!(handle.advertised_addrs().is_empty());
     }
 
     #[test]
