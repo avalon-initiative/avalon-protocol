@@ -166,6 +166,16 @@ from one key space.
 
 This is the same key-space metric the DHT uses for interest lookups; the DHT resolves which nodes hold an interest, this rule chooses the neighbor to forward a request toward a named node.
 
+## Connectivity
+
+How a node is reached (direct, NAT-traversed, relayed or outbound-only) is a transport
+property, separate from which shard a node authors or which interests it holds. It
+never changes settlement authority or realtime routing rules, and a node in any state
+takes part in both problems as a full node. The states, their preference order and
+where they are advertised are defined in [`nodes.md`](nodes.md#connectivity); the
+topology read model carries each node's connectivity and each edge's path type as
+additive descriptive fields.
+
 ## Current implementation
 
 - Section 1: two independent settlement authorities exist today (the
