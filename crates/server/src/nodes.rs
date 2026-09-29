@@ -1380,6 +1380,9 @@ pub struct NodeStatusResponse {
     /// not author `core` or its network has no pinned key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core_author_pinned: Option<bool>,
+    /// How this node is reachable (#917). Always `direct` until reachability
+    /// detection lands: every node-to-node path today needs an inbound connection.
+    pub connectivity: avalon_protocol::connectivity::Connectivity,
 }
 
 /// Issue #629: how many distinct peers currently confirm mirroring a
@@ -1470,6 +1473,7 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
         resources,
         own_shard_replication,
         core_author_pinned: crate::core_author_guard::recorded_outcome(),
+        connectivity: avalon_protocol::connectivity::Connectivity::Direct,
     }
 }
 
@@ -2660,8 +2664,10 @@ mod tests {
                 eligible_for_new_registrations: true,
             },
             core_author_pinned: Some(true),
+            connectivity: avalon_protocol::connectivity::Connectivity::NatTraversed,
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
+        assert_eq!(json["connectivity"], "nat_traversed");
         assert_eq!(json["core_author_pinned"], true);
         assert!(json.get("resources").is_some());
         assert_eq!(

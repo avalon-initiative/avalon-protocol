@@ -26,6 +26,7 @@ pub(crate) mod test_env {
 
 pub mod achievements;
 pub mod client_known_list;
+pub mod connectivity;
 pub mod continuation;
 pub mod cosigned_sth;
 pub mod cross_node_login;

@@ -325,6 +325,24 @@ async fn node_status_reports_own_roles() {
     );
 }
 
+/// `GET /nodes/status` reports `connectivity`; `direct` is the only state a node has today.
+#[tokio::test]
+#[ignore]
+async fn node_status_reports_connectivity() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let body: serde_json::Value = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed — is `make start` running?")
+        .json()
+        .await
+        .expect("response was not JSON");
+    assert_eq!(body["connectivity"], "direct");
+}
+
 /// `GET /nodes/discover` must return exactly what `GET /nodes/status` and
 /// `GET /nodes/peers` would each return on their own, bundled into one
 /// response — the whole point being one round trip instead of two.

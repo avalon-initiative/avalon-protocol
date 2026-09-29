@@ -378,6 +378,67 @@ configured mirror source, the 404 body includes `is_mirror: true` and
 `mirror_peers`, naming the peer to ask instead, rather than looking like a
 broken/misconfigured node.
 
+## Connectivity
+
+Connectivity is how other nodes and clients can reach a node. It is a property of
+the network path, not of the node's standing. **A node in any connectivity state is
+a full node.**
+
+### States
+
+| State | Meaning | Wire name |
+|---|---|---|
+| Direct | Peers open connections straight to a routable address of this node. | `direct` |
+| NAT-traversed | Peers reach this node over a direct connection established by hole punching, with no routable address of its own. | `nat_traversed` |
+| Relayed | Peers reach this node through a relay node that only carries bytes. | `relayed` |
+| Outbound-only | This node only dials out. Peers never open a connection to it; it pulls and pushes over connections it initiated. | `outbound_only` |
+
+### Preference order
+
+`direct` > `nat_traversed` > `relayed` > `outbound_only`. When more than one path to
+a node exists, selection uses the most preferred one and falls back down the list
+automatically. Outbound-only is the floor, not a failure: it is a complete way to
+participate. The order is a transport preference only and ranks nothing about the
+node itself. The Rust type is `avalon_protocol::connectivity::Connectivity`
+(`crates/protocol/src/connectivity.rs`).
+
+### Separate from authority
+
+Connectivity is independent of authority, roles, capabilities, services and trust.
+No connectivity state changes what a node may sign, store, verify, mirror or serve,
+and a publicly reachable node is not more authoritative than an outbound-only one.
+Relays and traversal are transport: they never create separate networks, authorities
+or state domains, and they never relax verification. Every rule in
+[Node authority](#node-authority) and the three configuration axes above holds
+unchanged in every state.
+
+### Where it is advertised
+
+All additions are additive; no existing field changes meaning or is removed.
+
+- `GET /nodes/status`: a `connectivity` field holding one wire name above. It is the
+  node's own report.
+- `POST /nodes/announce` and the peer table: an optional `connectivity` field on the
+  announcing node's entry. Older peers omit it and readers treat a missing value as
+  unknown, never as `direct`.
+- `GET /nodes/topology` (the topology read model, see
+  [`./distributed-topology.md`](./distributed-topology.md)): a `connectivity` field
+  per node, and the path type of each edge. The topology view shows connectivity as
+  descriptive data, never as a ranking of nodes.
+
+Connectivity is self-reported until an observer can confirm it, so consumers treat it
+as a hint for path selection and display, never as an input to any trust or
+authorization decision.
+
+### Today
+
+Only the `/nodes/status` field is implemented, and it reports `direct` because
+`direct` is the only state a node can be in today: every node-to-node path
+(announce, relay fan-out, mirror polling, probe, trace) needs an inbound connection.
+The value is the node's mode, not a measurement, until reachability detection lands
+(#904). The announce and topology fields, and the other three states, are specified
+here and tracked under the NAT-aware connectivity epic (#918).
+
 ## Discovery
 
 A developer should not need to know `postgres://...` or
@@ -1202,8 +1263,9 @@ bounded and validated (`crates/server/src/peer_admission.rs`).
   client (3 second timeout, body capped at 256 KiB) and requires the same
   `network_id`. At most `AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS` (default 16)
   run at once; `AVALON_ANNOUNCE_VERIFY_REACHABILITY=false` turns the fetch off
-  (local test clusters only). The announcing node must therefore be reachable
-  from the node it announces to.
+  (local test clusters only). Today this check is a direct inbound fetch, so an
+  announcing node must be `direct` (see [Connectivity](#connectivity)); the other
+  connectivity states need their own path and are tracked in #918.
 
 ### Replica-only mode
 
