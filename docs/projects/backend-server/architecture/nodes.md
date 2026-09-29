@@ -437,18 +437,23 @@ client it asks connected peers to dial it back and learns whether it is dialable
 server it dials back peers that ask, within a rate limit. Detection runs in the
 background and never delays startup: until a probe finishes, reachability is `unknown`.
 
-`GET /nodes/status` reports the measurement in two additive fields:
+`GET /nodes/status` reports the measurement and the relay state in additive fields:
 
 - `reachability`: `unknown`, `public` or `private`.
 - `confirmed_external_addrs`: the multiaddrs a peer confirmed by dialing them. Empty
   unless `public`.
+- `relay_reservations`: the accepted relay reservations this node holds, each with
+  `relay_peer_id`, `relayed_addr` and `renewals`. Empty unless `private`.
+- `relayed_listen_addrs`: the `/p2p-circuit` addresses peers can dial to reach this node
+  through those relays.
 
 `connectivity` is derived from it:
 
 | `reachability` | `connectivity` |
 |---|---|
 | `public` | `direct` |
-| `private` | `outbound_only` (relay and traversal do not exist yet; they will take precedence when they do) |
+| `private`, at least one accepted relay reservation | `relayed` |
+| `private`, no reservation | `outbound_only` |
 | `unknown` | omitted; never reported as `direct` |
 
 `unknown` also covers a node with `AVALON_DHT_ENABLED=false` or
@@ -456,8 +461,10 @@ background and never delays startup: until a probe finishes, reachability is `un
 network).
 
 The addresses a node puts in `POST /nodes/announce` (`libp2p_listen_addrs`) are its
-confirmed addresses plus `AVALON_LIBP2P_EXTERNAL_ADDR`, which the operator states
-explicitly and AutoNAT also probes. Bind addresses are never advertised unconfirmed.
+confirmed addresses, its accepted relayed addresses, plus `AVALON_LIBP2P_EXTERNAL_ADDR`,
+which the operator states explicitly and AutoNAT also probes. Bind addresses are never
+advertised unconfirmed, and a relayed address is advertised only once the relay has
+accepted the reservation.
 A network therefore needs at least one node with `AVALON_LIBP2P_EXTERNAL_ADDR` set
 (a seed) so other nodes have something to dial and be probed through.
 
@@ -470,8 +477,58 @@ connecting from addresses the outbound policy always refuses. It answers at most
 none) and 3 per peer per minute.
 
 Only the `/nodes/status` fields are implemented. The announce and topology
-`connectivity` fields, and the `nat_traversed` and `relayed` states, are specified
-here and tracked under the NAT-aware connectivity epic (#918).
+`connectivity` fields and the `nat_traversed` state are specified here and tracked under
+the NAT-aware connectivity epic (#918).
+
+### Relays
+
+Nodes speak libp2p circuit relay v2 on the same DHT swarm. A relay carries bytes and
+nothing else: the two ends of a relayed connection run their own noise handshake over
+the circuit, so the relay cannot read or alter the traffic and never holds state or
+authority.
+
+**Client role** (on by default, `AVALON_RELAY_CLIENT_ENABLED`). A node whose
+reachability is `private` reserves a slot on a relay and listens on its `/p2p-circuit`
+address; once the relay accepts, that address is advertised and `connectivity` becomes
+`relayed`. Nothing is reserved while reachability is `unknown`, and reservations are
+released if the node turns out to be `public`. The node holds up to
+`AVALON_RELAY_CLIENT_MAX_RESERVATIONS` (default 2) reservations at once.
+
+Relay candidates, in order: relays listed in `AVALON_RELAY_ADDRS` (list order), then
+connected peers that advertise the relay hop protocol (found through identify, so any
+peer the DHT swarm has connected to), by peer id. The choice is deterministic; ranking
+by latency or capacity is not done yet (#914). Candidate addresses obey the outbound
+address policy: link-local and other always-refused addresses are never used, and
+private or loopback ones only with `AVALON_ALLOW_PRIVATE_PEERS=true`.
+
+Reservations are managed without a restart. The client renews each one before it
+expires. When a relay refuses, times out, drops the connection or stops, the
+reservation is dropped, that relay is skipped for 30 seconds and the next candidate is
+tried at the next 5 second reconcile. `relay_reservations` shows what is held.
+
+**Server role** (off by default, `AVALON_RELAY_SERVER_ENABLED=true`). A relay is only
+useful when peers can dial it, so it advertises the hop protocol only while its
+reachability is `public`, or `unknown` with `AVALON_LIBP2P_EXTERNAL_ADDR` set; a
+`private` node never relays. Every limit is finite, at least 1 and has a ceiling:
+
+| Limit | Variable | Default | Ceiling |
+|---|---|---|---|
+| Reservations at once | `AVALON_RELAY_MAX_RESERVATIONS` | 128 | 4096 |
+| Reservations per peer | `AVALON_RELAY_MAX_RESERVATIONS_PER_PEER` | 2 | 4096 |
+| Reservation lifetime (s) | `AVALON_RELAY_RESERVATION_SECS` | 3600 | 86400 |
+| Circuits at once | `AVALON_RELAY_MAX_CIRCUITS` | 16 | 1024 |
+| Circuits per peer | `AVALON_RELAY_MAX_CIRCUITS_PER_PEER` | 4 | 1024 |
+| Circuit lifetime (s) | `AVALON_RELAY_MAX_CIRCUIT_SECS` | 120 | 3600 |
+| Bytes per circuit | `AVALON_RELAY_MAX_CIRCUIT_BYTES` | 524288 | 67108864 |
+
+libp2p's per-peer and per-IP request rate limiters also apply. A relay does not dial
+anything itself: circuits run over connections the two peers opened to it. With the
+defaults at most 16 circuits are open, each cut after 2 minutes or 512 KiB, so relayed
+traffic is bounded to about 8 MiB per circuit window. Connections from always-refused
+addresses are dropped like any other DHT peer.
+
+Relayed circuits are limited by design, so they suit control traffic and small
+exchanges. A direct path replaces them once hole punching exists (`nat_traversed`, #906).
 
 ## Discovery
 

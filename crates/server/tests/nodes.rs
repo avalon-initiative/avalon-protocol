@@ -342,6 +342,8 @@ async fn node_status_reports_connectivity() {
         .await
         .expect("response was not JSON");
     assert!(body["confirmed_external_addrs"].is_array());
+    assert!(body["relay_reservations"].is_array());
+    assert!(body["relayed_listen_addrs"].is_array());
     match body["reachability"]
         .as_str()
         .expect("reachability is a string")

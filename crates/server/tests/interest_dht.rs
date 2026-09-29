@@ -41,6 +41,7 @@ fn test_config_for_network(network_id: &str) -> DhtConfig {
         listen_addr: "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
         external_addr: None,
         autonat: Default::default(),
+        relay: Default::default(),
         bootstrap_scan_interval: TEST_SCAN_INTERVAL,
     }
 }

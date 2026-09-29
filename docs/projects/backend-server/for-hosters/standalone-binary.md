@@ -200,6 +200,14 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_AUTONAT_ENABLED` | Reachability detection and dial-back service on the peer-discovery swarm. Default `true`. |
 | `AVALON_AUTONAT_DIALBACKS_PER_MINUTE` | Most dial-backs this node performs for other nodes per minute, in total. Default `30`; `0` answers none. |
 | `AVALON_AUTONAT_ALLOW_PRIVATE_DIALBACK` | Dial back and probe through private and loopback peers, for a fleet on one LAN. Default `false`; needs `AVALON_ALLOW_PRIVATE_PEERS=true` too. |
+| `AVALON_RELAY_SERVER_ENABLED` | Serve as a circuit relay for nodes that cannot be dialed. Default `false`. Only useful on a node that is publicly reachable (set `AVALON_LIBP2P_EXTERNAL_ADDR`); it costs bandwidth, capped by the limits below. |
+| `AVALON_RELAY_MAX_RESERVATIONS`, `AVALON_RELAY_MAX_RESERVATIONS_PER_PEER` | Reservations held at once, and per peer. Defaults `128` and `2`. |
+| `AVALON_RELAY_RESERVATION_SECS` | Reservation lifetime before a client must renew. Default `3600`. |
+| `AVALON_RELAY_MAX_CIRCUITS`, `AVALON_RELAY_MAX_CIRCUITS_PER_PEER` | Relayed connections open at once, and per peer. Defaults `16` and `4`. |
+| `AVALON_RELAY_MAX_CIRCUIT_SECS`, `AVALON_RELAY_MAX_CIRCUIT_BYTES` | Lifetime and byte cap of one relayed connection. Defaults `120` and `524288`. Every relay limit must be at least 1 and has a ceiling. |
+| `AVALON_RELAY_CLIENT_ENABLED` | A node that detects it is not dialable reserves a slot on a relay. Default `true`. |
+| `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` | Relay reservations to hold at once. Default `2`, at most `8`. |
+| `AVALON_RELAY_ADDRS` | Comma-separated relay addresses to use first, each ending in `/p2p/<relay peer id>`. Relays found among connected peers are used after these. |
 | `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |
 
