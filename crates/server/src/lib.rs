@@ -77,6 +77,7 @@ pub mod peer_admission;
 pub mod presence;
 pub mod principal_limits;
 pub mod proto_schema;
+pub mod reachability;
 pub mod realtime_proxy;
 pub mod realtime_relay;
 pub mod rebuild;

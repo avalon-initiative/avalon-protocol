@@ -430,13 +430,47 @@ Connectivity is self-reported until an observer can confirm it, so consumers tre
 as a hint for path selection and display, never as an input to any trust or
 authorization decision.
 
-### Today
+### Detection
 
-Only the `/nodes/status` field is implemented, and it reports `direct` because
-`direct` is the only state a node can be in today: every node-to-node path
-(announce, relay fan-out, mirror polling, probe, trace) needs an inbound connection.
-The value is the node's mode, not a measurement, until reachability detection lands
-(#904). The announce and topology fields, and the other three states, are specified
+Every node runs libp2p AutoNAT, as both client and server, on its DHT swarm. As a
+client it asks connected peers to dial it back and learns whether it is dialable; as a
+server it dials back peers that ask, within a rate limit. Detection runs in the
+background and never delays startup: until a probe finishes, reachability is `unknown`.
+
+`GET /nodes/status` reports the measurement in two additive fields:
+
+- `reachability`: `unknown`, `public` or `private`.
+- `confirmed_external_addrs`: the multiaddrs a peer confirmed by dialing them. Empty
+  unless `public`.
+
+`connectivity` is derived from it:
+
+| `reachability` | `connectivity` |
+|---|---|
+| `public` | `direct` |
+| `private` | `outbound_only` (relay and traversal do not exist yet; they will take precedence when they do) |
+| `unknown` | omitted; never reported as `direct` |
+
+`unknown` also covers a node with `AVALON_DHT_ENABLED=false` or
+`AVALON_AUTONAT_ENABLED=false`, and a node with no peer to probe it (a first node in a
+network).
+
+The addresses a node puts in `POST /nodes/announce` (`libp2p_listen_addrs`) are its
+confirmed addresses plus `AVALON_LIBP2P_EXTERNAL_ADDR`, which the operator states
+explicitly and AutoNAT also probes. Bind addresses are never advertised unconfirmed.
+A network therefore needs at least one node with `AVALON_LIBP2P_EXTERNAL_ADDR` set
+(a seed) so other nodes have something to dial and be probed through.
+
+Dial-back safety: the server dials only the IP it observed on the requesting
+connection (never an address the requester supplies), refuses observed private and
+loopback addresses unless `AVALON_AUTONAT_ALLOW_PRIVATE_DIALBACK=true` and the outbound
+policy allows private peers (`AVALON_ALLOW_PRIVATE_PEERS=true`), and drops peers
+connecting from addresses the outbound policy always refuses. It answers at most
+`AVALON_AUTONAT_DIALBACKS_PER_MINUTE` dial-backs in total (default 30, `0` answers
+none) and 3 per peer per minute.
+
+Only the `/nodes/status` fields are implemented. The announce and topology
+`connectivity` fields, and the `nat_traversed` and `relayed` states, are specified
 here and tracked under the NAT-aware connectivity epic (#918).
 
 ## Discovery

@@ -197,6 +197,9 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_DATA_DIR` | Where generated keys live (`keys/`). Default `./data` relative to the working directory; set an absolute path for a service. |
 | `AVALON_SERVER_ADDR` | HTTP bind address. Default `127.0.0.1:8080`. |
 | `AVALON_LIBP2P_LISTEN_ADDR` | Peer-discovery bind, e.g. `/ip4/0.0.0.0/tcp/4001`. Default is an ephemeral port, which cannot be opened in a firewall ahead of time; set a fixed one. |
+| `AVALON_AUTONAT_ENABLED` | Reachability detection and dial-back service on the peer-discovery swarm. Default `true`. |
+| `AVALON_AUTONAT_DIALBACKS_PER_MINUTE` | Most dial-backs this node performs for other nodes per minute, in total. Default `30`; `0` answers none. |
+| `AVALON_AUTONAT_ALLOW_PRIVATE_DIALBACK` | Dial back and probe through private and loopback peers, for a fleet on one LAN. Default `false`; needs `AVALON_ALLOW_PRIVATE_PEERS=true` too. |
 | `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |
 
@@ -312,8 +315,12 @@ curl -s -X POST http://127.0.0.1:8080/identities/register/start \
 Both listeners must be reachable by other nodes: the HTTP port (through your
 TLS proxy, as `AVALON_NODE_URL`) and the `AVALON_LIBP2P_LISTEN_ADDR` port. If
 the host sits behind NAT or a container network, also set
-`AVALON_LIBP2P_EXTERNAL_ADDR` to the address peers should dial. Nodes behind
-NAT with no forwarded port cannot yet take part; NAT traversal is planned.
+`AVALON_LIBP2P_EXTERNAL_ADDR` to the address peers should dial; it is advertised as
+given and checked by reachability detection. Only confirmed addresses are announced
+otherwise, so a seed node must set it. `GET /nodes/status` shows the result as
+`reachability` (`unknown`, `public` or `private`) and `confirmed_external_addrs`. Nodes
+behind NAT with no forwarded port report `private` and cannot yet take part as
+dialable peers; NAT traversal is planned.
 
 ## Running under systemd
 

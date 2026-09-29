@@ -325,7 +325,8 @@ async fn node_status_reports_own_roles() {
     );
 }
 
-/// `GET /nodes/status` reports `connectivity`; `direct` is the only state a node has today.
+/// `GET /nodes/status` reports detected `reachability`, its confirmed addresses, and a
+/// `connectivity` derived from it (absent while `unknown`).
 #[tokio::test]
 #[ignore]
 async fn node_status_reports_connectivity() {
@@ -340,7 +341,16 @@ async fn node_status_reports_connectivity() {
         .json()
         .await
         .expect("response was not JSON");
-    assert_eq!(body["connectivity"], "direct");
+    assert!(body["confirmed_external_addrs"].is_array());
+    match body["reachability"]
+        .as_str()
+        .expect("reachability is a string")
+    {
+        "public" => assert_eq!(body["connectivity"], "direct"),
+        "private" => assert_eq!(body["connectivity"], "outbound_only"),
+        "unknown" => assert!(body.get("connectivity").is_none()),
+        other => panic!("unexpected reachability {other}"),
+    }
 }
 
 /// `GET /nodes/discover` must return exactly what `GET /nodes/status` and
