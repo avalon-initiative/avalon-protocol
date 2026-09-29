@@ -2,8 +2,8 @@
 //!
 //! Avalon records that an issuer made a claim about a user. It never
 //! dictates what a receiving integrator does with that claim — see
-//! `docs/stakeholders/Proposal.md` §8–9, `docs/projects/backend-server/architecture/achievements-and-attestations.md`, and the trust
-//! model in `docs/projects/backend-server/architecture/trust-model.md`.
+//! `avalon-docs/architecture/design-proposal.md` §8–9, `avalon-docs/protocol/achievements-and-attestations.md`, and the trust
+//! model in `avalon-docs/protocol/trust-model.md`.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

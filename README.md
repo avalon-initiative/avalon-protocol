@@ -30,6 +30,11 @@ opt into the network. Gaming is where the idea started and where it's
 furthest along today — the same layer works for any app or service that
 wants persistent identity and community without owning it outright.
 
+> **Documentation:** what Avalon is, how it works, and how the projects fit together
+> is documented in [`avalon-docs`](https://github.com/avalon-initiative/avalon-docs), the canonical knowledge base for the
+> ecosystem. This repository holds the protocol implementation and the docs
+> specific to building, running, and operating it.
+
 ## Why Avalon
 
 Games are where the idea is proven out first:
@@ -49,8 +54,8 @@ Games are where the idea is proven out first:
   arbitrary rows in someone else's database.
 - **Settlement is a public transparency log, not federation or blockchain consensus.**
   Durable facts are independently verifiable and mirrorable by anyone, and
-  consensus is a permissioned validator set reaching agreement — not mining
-  or a stake-weighted token.
+  independent witnesses cosign tree heads — there is no validator consensus,
+  mining, or token.
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination — a game stays fully sovereign over
   its own world, economy, and rules.
@@ -63,7 +68,7 @@ verify, or a social graph a user actually owns in a portable sense rather
 than one that belongs to whichever platform happens to host it. Avalon isn't
 a competitor to Discord or Slack — it's the open identity and social layer
 underneath, that any of them could plug into as a client, the same way a
-game or the Hub app can. See [Why Avalon](docs/WhyAvalon.md) for the full
+game or the Hub app can. See [Why Avalon](https://github.com/avalon-initiative/avalon-docs/blob/main/getting-started/why-avalon.md) for the full
 argument.
 
 ## Screenshots
@@ -103,7 +108,7 @@ C# SDK, resetting the database, and running the live test suite).
   another can independently verify without taking your word for it.
 - Stand up your own `avalon-server` node — the network is self-hostable, not
   a single company's service you have to depend on.
-- Build a client entirely on the [official SDKs](docs/projects/sdks/README.md)
+- Build a client entirely on the [official SDKs](https://github.com/avalon-initiative/avalon-docs/blob/main/sdk/README.md)
   without touching this repo's own apps.
 
 ```text
@@ -122,9 +127,9 @@ The Hub client applications (web app and the Tauri desktop/mobile app) live in
 
 Every official SDK (Rust, C#, TypeScript) lives in a separate `avalon-sdks`
 repository rather than in this workspace; see the
-[Rust](docs/projects/sdks/rust/README.md),
-[C#](docs/projects/sdks/csharp/README.md), and
-[TypeScript](docs/projects/sdks/typescript/README.md) SDK docs.
+[Rust](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/README.md),
+[C#](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/csharp/README.md), and
+[TypeScript](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/typescript/README.md) SDK docs.
 
 ## Trusted networks
 
@@ -139,7 +144,7 @@ Ed25519 public key, so a client can verify a server's Signed Tree Heads
 rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
 single canonical copy — not a hand-maintained duplicate, and `make check`
 fails if the two ever drift. See
-[Network trust anchors](docs/projects/backend-server/architecture/network-trust-anchors.md)
+[Network trust anchors](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md)
 for the full model, how the Hub enforces it, and what this deliberately does
 not solve (a compromised maintainer publishing a bad key here is a
 governance problem, not one client-side pinning can fix).
@@ -158,8 +163,8 @@ and the actual hex from that deployment's `AVALON_SETTLEMENT_VERIFY_KEY`
 are supported — `avalon-dev-<name>` (single-node), `avalon-int-<name>` (a
 1-5 node interconnected test bed for verifying changes integrate before
 mainnet), and `avalon-mainnet-N` (the real, independently growing/shrinking
-validator set) — see the
-[trust anchor list](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
+set of nodes) — see the
+[trust anchor list](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
 The SDKs fetch this same file at runtime from its raw GitHub URL and report
@@ -170,7 +175,9 @@ see `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`.
 
 ## Learn more
 
-[Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md)
+[Avalon documentation](https://github.com/avalon-initiative/avalon-docs) · [Architecture](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md) · [Protocol concepts](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/README.md) · [Glossary](https://github.com/avalon-initiative/avalon-docs/blob/main/reference/glossary.md) · [Why Avalon](https://github.com/avalon-initiative/avalon-docs/blob/main/getting-started/why-avalon.md) · [Architectural decisions](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/decisions/README.md)
+
+Implementation docs in this repository: [local development](docs/maintainers/local-development.md) · [hosting a node](docs/projects/backend-server/for-hosters/README.md) · [maintainer runbooks](docs/maintainers/README.md) · [CLI](docs/projects/cli/README.md)
 
 ## Community
 
@@ -201,8 +208,8 @@ branch/PR workflow and the full feature proposal gate.
 **Is there a token, or is this a blockchain?** No. No native currency at
 launch — a cross-game currency layer is an explicitly later, optional phase
 if ever proposed on its own merits. Settlement is a signed, append-only
-transparency log with a permissioned validator set reaching agreement, not
-mining or a stake-weighted token.
+transparency log that independent witnesses cosign, not a blockchain, with
+no validator consensus, mining, or token.
 
 **Who owns my identity and data?** You do. An identity is a self-custodied
 keypair — a WebAuthn passkey for login plus a separate Ed25519 key that
@@ -221,16 +228,20 @@ for rolling out new versions and security patches to one already running.
 **Is it stable enough for production?** Avalon is pre-release. The core
 vertical slice (identity/auth, social graph, guilds, achievements/
 attestations) runs end to end against a live Postgres instance, not
-scaffolding — see the [architecture docs](docs/projects/backend-server/architecture/)
+scaffolding — see the [architecture docs](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md)
 for the current state of each area, one file per topic — but no network has
 publicly launched yet.
 
-<!--
 ## Related projects
 
-TODO: once the backend, SDKs, Hub, and hub-app split into their own
-repositories, list them here.
--->
+| Repository | Description |
+|---|---|
+| [`avalon-docs`](https://github.com/avalon-initiative/avalon-docs) | Canonical ecosystem documentation. |
+| [`avalon-sdks`](https://github.com/avalon-initiative/avalon-sdks) | Rust, C#, and TypeScript client SDKs. |
+| [`avalon-hub`](https://github.com/avalon-initiative/avalon-hub) | The Hub web app and desktop/mobile app. |
+| [`avalon-common-ui`](https://github.com/avalon-initiative/avalon-common-ui) | Shared Vue component library. |
+| [`avalon-topology-visualizer`](https://github.com/avalon-initiative/avalon-topology-visualizer) | Network topology developer tool. |
+| [`avalon-bot`](https://github.com/avalon-initiative/avalon-bot) | Community Discord bot. |
 
 ## Support the project
 

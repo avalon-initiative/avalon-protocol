@@ -1,7 +1,7 @@
 //! Postgres-backed `SettlementProvider` — milestone 1's implementation:
 //! a sequential hash
 //! chain plus a real RFC 6962 Merkle tree with signed tree heads. See
-//! `docs/projects/backend-server/architecture/settlement.md` and `settlement-implementation-notes.md`
+//! `avalon-docs/architecture/settlement.md` and `settlement-implementation-notes.md`
 //! for the two tamper-evidence structures, why `tree_size` is a derived
 //! leaf count rather than raw `seq`, batching, and node-tiered
 //! payload retention.

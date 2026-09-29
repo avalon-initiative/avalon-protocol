@@ -1,12 +1,12 @@
 //! The binding-status cache, built from `game.binding_established` /
-//! `game.binding_ended` — see `docs/projects/backend-server/architecture/bindings.md` and
+//! `game.binding_ended` — see `avalon-docs/protocol/bindings.md` and
 //! `avalon_protocol::integrators::IntegratorBinding`, whose shape this projection's
 //! payload expectations mirror.
 //!
 //! Kept as its own table (`indexer_integrator_bindings`) rather than reusing
 //! `crates/server`'s existing `bindings` (0012_game_bindings), same reason
 //! `friendships`/`guild_rosters`/`attestations` already get their own
-//! tables per `docs/projects/backend-server/architecture/query-and-indexing.md`: `bindings` is
+//! tables per `avalon-docs/architecture/query-and-indexing.md`: `bindings` is
 //! still written directly by `crates/server/src/connections.rs` at request
 //! time, and issue #506 deliberately left it out of scope —
 //! `bindings`/`permission_grants` are genuinely `connections.rs`'s own

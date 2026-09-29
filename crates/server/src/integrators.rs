@@ -1,5 +1,5 @@
 //! Integrator registration and server-to-server integrator authentication.
-//! See `docs/projects/backend-server/architecture/issuers.md` and `docs/projects/backend-server/architecture/registry.md`
+//! See `avalon-docs/protocol/issuers.md` and `avalon-docs/protocol/registry.md`
 //! for registration, key rotation, and listing details.
 
 use std::collections::HashMap;

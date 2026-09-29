@@ -608,7 +608,7 @@ fn full_routes(state: AppState) -> Router {
         // the Hub (a game's own tooling, a researcher, a future client).
         // `/integrations/{slug}/registry` above keeps working unchanged;
         // this is additive, not a replacement — see
-        // `docs/projects/backend-server/architecture/registry.md`'s "External read surface"
+        // `avalon-docs/protocol/registry.md`'s "External read surface"
         // section for the stability policy.
         .route("/registry/{slug}", get(registry::get_integrator_registry))
         // Domain-proven names for self-certifying (`node:<key-hash>`)

@@ -11,7 +11,7 @@
 //! What this test can and cannot prove: no headless environment can drive a
 //! real phone over Bluetooth through an actual hybrid ceremony, so this does
 //! NOT exercise hybrid transport itself — only a human with a real browser
-//! and a real phone can do that (see `docs/projects/backend-server/architecture/identity.md`).
+//! and a real phone can do that (see `avalon-docs/protocol/identity.md`).
 //! What this test asserts instead, against a real running
 //! server:
 //!

@@ -1,4 +1,4 @@
-//! Cross-shard commitment. See `docs/projects/backend-server/architecture/settlement.md`'s
+//! Cross-shard commitment. See `avalon-docs/architecture/settlement.md`'s
 //! "Cross-shard commitment" section for the full design this
 //! implements — this module is the aggregation math alone, deliberately
 //! pure and DB-free (no network I/O, no Postgres): given the set of

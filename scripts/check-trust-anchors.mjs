@@ -32,7 +32,7 @@ if (!Array.isArray(networks) || networks.length === 0) {
     }
   }
 }
-for (const needle of ['docs/trusted-networks.json', 'docs/projects/backend-server/architecture/network-trust-anchors.md']) {
+for (const needle of ['docs/trusted-networks.json', 'avalon-docs/blob/main/protocol/network-trust-anchors.md']) {
   if (!readme.includes(needle)) problems.push(`README does not link ${needle}`)
 }
 

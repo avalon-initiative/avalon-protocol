@@ -86,5 +86,5 @@ active incident, and consider whether STHs signed after the suspected
 compromise point need manual review before mirrors treat them as trusted.
 If trust in the network's history up to that point cannot be
 re-established at all, a fresh `AVALON_NETWORK_ID` genesis is the fallback
-of last resort — see `docs/projects/backend-server/architecture/self-hosting.md` on why
+of last resort — see `avalon-docs/architecture/self-hosting.md` on why
 `network_id` is load-bearing, not just a label.

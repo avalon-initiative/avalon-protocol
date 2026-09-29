@@ -1,7 +1,7 @@
 //! Claim-definition CRUD per issuer, generalized to
 //! `App`/`Service` — an issuer defines its achievements or
 //! milestones before it can issue them. See
-//! `docs/projects/backend-server/architecture/achievements-and-attestations.md`'s "Today in the
+//! `avalon-docs/protocol/achievements-and-attestations.md`'s "Today in the
 //! repo" and "Namespacing" sections for the category-driven claim
 //! vocabulary, auth model, and update/retirement semantics.
 

@@ -446,7 +446,7 @@ async fn rebuild_reproduces_integrator_data_deletion() {
 
     // The tombstone event is real, durable ledger history — never a
     // physical delete/mutation of the original entry, per
-    // docs/projects/backend-server/architecture/revocation.md's own standard.
+    // avalon-docs/protocol/revocation.md's own standard.
     let ledger_kinds: Vec<String> = sqlx::query_scalar(
         "SELECT kind FROM ledger_entries WHERE payload->>'id' = $1 OR payload->>'instance_id' = $1 ORDER BY seq",
     )

@@ -3,7 +3,7 @@
 //! into its own genuinely separate deployable role.
 //!
 //! **Connection-topology decision: proxy-through-Gateway, not
-//! direct-connect.** See `docs/projects/backend-server/architecture/nodes.md` — the short version:
+//! direct-connect.** See `avalon-docs/architecture/nodes/README.md` — the short version:
 //! a client keeps talking to exactly one node's URL for everything, the
 //! same invariant every other role extraction (internal RPC,
 //! Indexer) already preserves, and client

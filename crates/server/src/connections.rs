@@ -1,6 +1,6 @@
 //! Integrator bindings and capability grants — the user consent flow
 //! that establishes an `IntegratorBinding`. See
-//! `docs/projects/backend-server/architecture/bindings.md` for why one
+//! `avalon-docs/protocol/bindings.md` for why one
 //! endpoint owns both concerns, the durable event history, and the
 //! no-grant-without-a-binding invariants enforced here.
 
