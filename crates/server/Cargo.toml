@@ -48,7 +48,7 @@ protobuf-json-mapping.workspace = true
 tempfile.workspace = true
 semver.workspace = true
 redis.workspace = true
-libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
+libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "autonat", "tokio", "macros"] }
 sysinfo.workspace = true
 # Issue #663: `crate::realtime_proxy` dials a remote Realtime node's own
 # `/ws/presence`/`/ws/messages` as a real websocket client — promoted from

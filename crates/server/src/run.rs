@@ -240,13 +240,15 @@ pub async fn run_with_tracing(
     });
     let mut dht_identity = None;
     let mut dht_commands = None;
+    let mut reachability = crate::reachability::ReachabilityHandle::unknown();
     if let Some(dht_config) = dht_config {
         let handle = crate::dht::start(peers.clone(), dht_config).await;
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
         dht_identity = Some(crate::nodes::DhtIdentity {
             peer_id: handle.peer_id.to_string(),
-            listen_addrs: handle.listen_addrs.iter().map(|a| a.to_string()).collect(),
+            reachability: handle.reachability.clone(),
         });
+        reachability = handle.reachability;
         dht_commands = Some(handle.commands);
     }
 
@@ -578,6 +580,7 @@ pub async fn run_with_tracing(
         shard_mirror_sources: crate::settlement::ShardMirrorSources::from_env(),
         interest,
         dht_commands,
+        reachability,
         own_witness: witness_signer.clone(),
         own_base_url: announce_config.own_base_url.clone(),
         own_libp2p_peer_id: dht_identity.as_ref().map(|d| d.peer_id.clone()),
