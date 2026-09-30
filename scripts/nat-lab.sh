@@ -4,6 +4,7 @@
 #
 # usage: nat-lab.sh up <name> <type>     type: full-cone | restricted-cone |
 #                                              port-restricted | symmetric | no-inbound
+#        nat-lab.sh up-inet                 (just the shared public side, no homes)
 #        nat-lab.sh down <name>
 #        nat-lab.sh down-all
 #        nat-lab.sh exec <name> -- cmd...   (<name> = a home, or "inet" for the shared public side)
@@ -214,6 +215,12 @@ cmd_exec() {
   exec ip netns exec "$ns" "$@"
 }
 
+cmd_up_inet() {
+  lock
+  ensure_inet
+  echo "inet up"
+}
+
 cmd_status() {
   local f name idx type
   if ! ns_exists "$INET_NS"; then echo "no lab running"; return 0; fi
@@ -232,8 +239,8 @@ main() {
   local c=${1:-}
   [ $# -gt 0 ] && shift
   case $c in
-    up | down | down-all | exec | status) need_root ;;
-    *) sed -n '2,17p' "$0"; exit 2 ;;
+    up | up-inet | down | down-all | exec | status) need_root ;;
+    *) sed -n '2,18p' "$0"; exit 2 ;;
   esac
   "cmd_${c//-/_}" "$@"
 }
