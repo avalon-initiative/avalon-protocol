@@ -33,6 +33,8 @@ Always available:
 
 | Command | What it does |
 |---|---|
+| `avalon setup [--yes] [flags]` | Guided, idempotent first-run flow for hosting a node, following [`standalone-binary.md`](../backend-server/for-hosters/standalone-binary.md): database path (a bring-your-own `DATABASE_URL` is checked by connecting, or the bundled variant), data directory, listen address and public URL, network from the built-in trust list, witness and mirror settings, optional systemd unit. Writes `avalon.env` (mode `0600`) into the data directory in the format the server and `EnvironmentFile=` already read, starts the node, and checks that it answers, discovers peers and serves a head that verifies against the pinned key. `--yes` plus flags or `AVALON_*` variables runs it without prompts; without a terminal and without `--yes` it refuses instead of waiting. Reruns keep existing keys and differing values unless `--force`. `avalon setup --help` lists the flags. |
+| `avalon guide [topic]` | Prints the hosting guide embedded in the binary. The text is `include_str!`-ed from `docs/projects/backend-server/for-hosters/` at build time, and topics map to that guide's `##`/`###` headings, so renaming a heading there is caught by the CLI's tests. |
 | `avalon inspect-ledger` / `inspect-ledger-full` | Read-only ledger view; `-full` also shows each entry's payload. Safe against a real deployment. |
 | `avalon outbox-status` | Diagnostics for the write/settlement outbox pattern identity/guild/achievement writes use to stay atomic with their ledger entry. |
 | `avalon prune-ledger [--dry-run]` | The operator-facing entry point for node-tiered retention pruning — reads `AVALON_RETENTION_*` from the environment and reports or executes exactly what that config says. |
@@ -68,11 +70,11 @@ table and will stay more current if the two ever drift.
 | A contributor to this repository wanting to exercise the network locally | [`../backend-server/for-hosters/hosting-quickstart.md`](../backend-server/for-hosters/hosting-quickstart.md) to get a node running, then the command table above |
 | A maintainer running the milestone-1 walkthrough by hand | [`../backend-server/for-maintainers/milestone-1-walkthrough.md`](../backend-server/for-maintainers/milestone-1-walkthrough.md) |
 | Responding to a mirror equivocation report | `avalon list-equivocations` / `resolve-equivocation`, and [`../backend-server/for-maintainers/equivocation-response.md`](../backend-server/for-maintainers/equivocation-response.md) |
-| Looking for the equivalent tool as a library instead of a binary | [`../sdks/rust/README.md`](../sdks/rust/README.md) |
+| Looking for the equivalent tool as a library instead of a binary | [`../sdks/rust/README.md`](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/README.md) |
 
 ## Related projects
 
 - [`../backend-server/`](../backend-server/README.md) — what this CLI talks to.
-- [`../sdks/rust/`](../sdks/rust/README.md) — the library this CLI is built
+- [`../sdks/rust/`](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/README.md) — the library this CLI is built
   on top of (`issue-achievement` goes through it directly), for the same
   network calls embedded in a program instead of run from a terminal.

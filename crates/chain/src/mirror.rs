@@ -1,6 +1,6 @@
 //! Mirror-watcher storage and equivocation detection — issue #299,
 //! implementing #40's decided no-consensus mirror model. See
-//! `docs/projects/backend-server/architecture/settlement.md`'s equivocation-
+//! `avalon-docs/architecture/settlement.md`'s equivocation-
 //! detection section for the storage tables, why `detect_equivocation` is
 //! a pure I/O-free function, and the durable-row-plus-structured-log
 //! surfacing mechanism.
@@ -1167,6 +1167,24 @@ pub async fn latest_observed_sth(
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
     row.map(observed_sth_from_row).transpose()
+}
+
+/// For each network that has an observation of `shard_id`, that network's highest-`tree_size`
+/// observed STH.
+pub async fn latest_observed_sths_for_shard(
+    pool: &PgPool,
+    shard_id: &str,
+) -> Result<Vec<ObservedSth>, SettlementError> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (network_id) source_url, network_id, shard_id, tree_size, root_hash, \
+         signature, signing_key_id, created_at, observed_at FROM observed_sths \
+         WHERE shard_id = $1 ORDER BY network_id, tree_size DESC, observed_at DESC",
+    )
+    .bind(shard_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    rows.into_iter().map(observed_sth_from_row).collect()
 }
 
 /// Every mirrored `seq` (for `network_id`/`shard_id`, optionally one

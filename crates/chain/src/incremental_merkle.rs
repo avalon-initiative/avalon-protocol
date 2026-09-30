@@ -6,7 +6,7 @@
 //! see this crate's exhaustive equivalence tests for the actual correctness
 //! bar.
 //!
-//! Design/tradeoff notes live in `docs/projects/backend-server/architecture/settlement.md`, not here.
+//! Design/tradeoff notes live in `avalon-docs/architecture/settlement.md`, not here.
 
 use crate::merkle::{leaf_hash, node_hash, split_point};
 use std::collections::HashMap;

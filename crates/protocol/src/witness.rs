@@ -1,7 +1,7 @@
 //! Witness cosigning primitives — pure logic and signature format, no I/O.
 //! Prototype for the #934 design spike; production known-list management,
 //! gossip and server wiring are separate tickets (see
-//! `docs/projects/backend-server/architecture/witness-cosigning.md`).
+//! `avalon-docs/protocol/witness-cosigning.md`).
 //!
 //! A witness cosignature is a second, independent signature over the exact
 //! same `(tree_size, root_hash, network_id, created_at)` tuple an author's

@@ -192,7 +192,7 @@ If the new version is broken:
 
 There is no coordinated-rollout mechanism that pushes an upgrade to every
 node at once, and there shouldn't be — no party can force any operator to
-upgrade (see [`../architecture/nodes.md`](../architecture/nodes.md) on
+upgrade (see [`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md) on
 decentralized version rollout). What exists instead is organic, and it's worth
 understanding so you can actually use it rather than treating every node
 as fully isolated:

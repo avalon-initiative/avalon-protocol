@@ -58,15 +58,25 @@ pub fn init_tracing() -> crate::admin::LogReloadHandle {
 /// [`init_tracing`] and [`run_with_tracing`] separately — see that
 /// function's own doc comment.
 pub async fn run() {
-    run_with_tracing(init_tracing()).await;
+    avalon_devenv::load();
+    let handle = init_tracing();
+    run_with_tracing(handle, crate::shutdown::install()).await;
 }
 
 /// Runs the full startup/serve sequence with tracing already initialized —
 /// split out from [`run`] so `avalon-server-bundled` can start its managed
 /// Postgres (and have that show up in the logs) between initializing
 /// tracing and everything else that follows.
-pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) {
+pub async fn run_with_tracing(
+    log_reload_handle: crate::admin::LogReloadHandle,
+    shutdown: crate::shutdown::Shutdown,
+) {
     avalon_devenv::load();
+    let shutdown_timeout = crate::shutdown::timeout_from_env();
+    tracing::info!(
+        timeout_secs = shutdown_timeout.as_secs(),
+        "avalon-server: graceful shutdown bound"
+    );
     match crate::node_keys::apply_from_env(&crate::known_list::data_dir_from_env()) {
         Ok(keys) => {
             if !keys.generated.is_empty() {
@@ -170,7 +180,7 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
 
     // Issue #662: `AVALON_NODE_ROLES` now load-bearing for the Indexer role
     // specifically (`combined`, the default, counts as every role — same
-    // semantics `docs/projects/backend-server/architecture/nodes.md`'s capability table already
+    // semantics `avalon-docs/architecture/nodes/README.md`'s capability table already
     // assumes) — a process that doesn't include `indexer` in its roles has
     // no local `PostgresIndexer` at all, and instead routes every indexer
     // read/write over #661's `RemoteIndexer`/`/internal/indexer/*`
@@ -230,13 +240,15 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     });
     let mut dht_identity = None;
     let mut dht_commands = None;
+    let mut reachability = crate::reachability::ReachabilityHandle::unknown();
     if let Some(dht_config) = dht_config {
         let handle = crate::dht::start(peers.clone(), dht_config).await;
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
         dht_identity = Some(crate::nodes::DhtIdentity {
             peer_id: handle.peer_id.to_string(),
-            listen_addrs: handle.listen_addrs.iter().map(|a| a.to_string()).collect(),
+            reachability: handle.reachability.clone(),
         });
+        reachability = handle.reachability;
         dht_commands = Some(handle.commands);
     }
 
@@ -343,7 +355,7 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // #313's `remote_submit` (above) is the mechanism that actually makes
     // that true for the outbox write path. This doesn't hard-fail when the
     // two disagree (a `chain`/ledger still exists locally either way, per
-    // `AppState::chain`'s own required field — see `docs/projects/backend-server/architecture/nodes.md`
+    // `AppState::chain`'s own required field — see `avalon-docs/architecture/nodes/README.md`
     // for the full reasoning), but
     // it's worth a loud warning: without `AVALON_SETTLEMENT_REMOTE_URL(S)`,
     // this node's outbox worker falls back to committing locally despite
@@ -568,6 +580,7 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
         shard_mirror_sources: crate::settlement::ShardMirrorSources::from_env(),
         interest,
         dht_commands,
+        reachability,
         own_witness: witness_signer.clone(),
         own_base_url: announce_config.own_base_url.clone(),
         own_libp2p_peer_id: dht_identity.as_ref().map(|d| d.peer_id.clone()),
@@ -629,14 +642,17 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // two-phase flow (`POST /ledger/prepare-batch`/`finalize-batch`)
     // and `POST /ledger/submit` commit directly, bypassing the
     // outbox entirely — neither depends on this worker running.
-    if gateway_enabled && !replica_only {
-        tokio::spawn(outbox::run_worker(
+    let outbox_worker = if gateway_enabled && !replica_only {
+        Some(tokio::spawn(outbox::run_worker(
             pool.clone(),
             chain.clone(),
             remote_submit,
             mirror_push_config,
-        ));
-    }
+            shutdown.clone(),
+        )))
+    } else {
+        None
+    };
 
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs. Gateway-only:
@@ -772,5 +788,27 @@ pub async fn run_with_tracing(log_reload_handle: crate::admin::LogReloadHandle) 
     // itself (the rate limiter's IP-fallback key extractor needs it) and
     // also configures hyper's HTTP/1 header-read timeout, which
     // `axum::serve` has no hook for.
-    crate::serve::serve(listener, app, crate::header_read_timeout_from_env()).await;
+    shutdown.mark_running();
+    crate::serve::serve(
+        listener,
+        app,
+        crate::header_read_timeout_from_env(),
+        shutdown.clone(),
+        shutdown_timeout,
+    )
+    .await;
+
+    // The outbox commits each batch in one transaction, so waiting for its current tick keeps
+    // a request's write and its ledger entry together; other workers are cancelled at their
+    // next await point when the runtime drops.
+    if let Some(worker) = outbox_worker {
+        if tokio::time::timeout(shutdown_timeout, worker)
+            .await
+            .is_err()
+        {
+            tracing::warn!("outbox worker did not stop within the shutdown timeout");
+        }
+    }
+    shutdown.begin_final_stop();
+    tracing::info!("avalon-server stopped");
 }

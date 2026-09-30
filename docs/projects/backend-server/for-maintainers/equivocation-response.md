@@ -61,7 +61,7 @@ symptom — check these first, in order, before assuming key compromise:
 4. **If none of the above explain it**: treat it as a real compromise
    candidate. Do not attempt automatic resolution — this is a human
    trust judgment, matching Certificate Transparency's own precedent (see
-   `docs/projects/backend-server/architecture/settlement.md`). Escalate to whoever holds the
+   `avalon-docs/architecture/settlement.md`). Escalate to whoever holds the
    operator/validator signing key for this network, then follow the
    emergency path in [`key-rotation.md`](key-rotation.md).
 
@@ -119,5 +119,5 @@ since the equivocation gate stops backfill the same tick detection fires),
 - **Automated rotation.** [`key-rotation.md`](key-rotation.md) is a written
   manual procedure, not automation — nothing here rotates a key for you.
 - **Automatic resolution.** Deliberately never built — see
-  `docs/projects/backend-server/architecture/settlement.md` for why this
+  `avalon-docs/architecture/settlement.md` for why this
   stays a human decision.

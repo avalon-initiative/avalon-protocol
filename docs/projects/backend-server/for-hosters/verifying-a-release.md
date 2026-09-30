@@ -2,7 +2,9 @@
 
 Each [release](https://github.com/avalon-initiative/avalon-protocol/releases)
 carries one tarball per platform (`avalon-<version>-<target>.tar.gz`, holding
-`avalon-server` and the `avalon` CLI), a `SHA256SUMS` file, and a GitHub build
+`avalon-server` and the `avalon` CLI), one bundled-variant tarball per Linux
+platform (`avalon-server-bundled-<version>-<target>.tar.gz`, holding only
+`avalon-server-bundled`), a `SHA256SUMS` file covering all of them, and a GitHub build
 provenance attestation for every tarball, plus a multi-arch container image at
 `ghcr.io/avalon-initiative/avalon-protocol`, also attested. Artifacts are
 built by the release workflow from a tagged commit on `main`; there are no
@@ -22,7 +24,13 @@ Download the tarball for your platform and `SHA256SUMS` into one directory:
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
+`--ignore-missing` skips the platforms you did not download. GNU `sha256sum` is
+assumed; on macOS use `shasum -a 256 --check` (not run yet).
+
 ## Provenance
+
+The attestation and image commands below have not been run against a published
+release yet: the first release is still to come.
 
 With the [GitHub CLI](https://cli.github.com/):
 

@@ -27,6 +27,13 @@
 //! own; it only watches `PeerTable` (already kept fresh by
 //! `nodes::run_worker`) for peers whose DHT identity it hasn't dialed yet.
 //!
+//! **AutoNAT** (client and server) shares this swarm; see `crate::reachability`. Detection runs in
+//! the worker, never blocks [`start`], and publishes into [`DhtHandle::reachability`].
+//!
+//! **Circuit relay v2** (client and opt-in server) also shares this swarm; see `crate::relay`. A
+//! node AutoNAT finds `private` reserves slots on relays and lists them in
+//! [`DhtHandle::reachability`].
+//!
 //! **`AVALON_DHT_ENABLED` defaults to on** — an opt-*out*
 //! escape hatch, not an opt-in gate. There are no real deployments of
 //! this software outside this project's own development sandbox yet, so
@@ -38,17 +45,24 @@
 //! while this is still genuinely young, unproven-at-real-scale code.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use libp2p::futures::StreamExt;
 use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
+use libp2p::multiaddr::Protocol;
+use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
-    identify, identity, noise, tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    autonat, identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId, StreamProtocol,
+    Swarm, SwarmBuilder,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use crate::nodes::{PeerInfo, PeerTable};
+use crate::outbound_policy::OutboundPolicy;
+use crate::reachability::{peer_ip_allowed, AutonatSettings, Reachability, ReachabilityHandle};
+use crate::relay::{RelayClient, RelayServerStats, RelaySettings};
 
 /// Bounded so a burst of interest registrations/lookups can't grow this
 /// unboundedly if [`run_worker`] is momentarily busy — same rationale
@@ -154,6 +168,9 @@ const INITIAL_LISTEN_COLLECTION_WINDOW: Duration = Duration::from_secs(2);
 struct DhtBehaviour {
     kad: kad::Behaviour<MemoryStore>,
     identify: identify::Behaviour,
+    autonat: Toggle<autonat::Behaviour>,
+    relay_client: relay::client::Behaviour,
+    relay_server: Toggle<relay::Behaviour>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -212,17 +229,13 @@ pub struct DhtConfig {
     /// `main.rs`), so this is never empty in practice.
     pub network_id: String,
     pub listen_addr: Multiaddr,
-    /// Discovered live against the two-node LAN sandbox's
-    /// actual Docker-deployed shape: a containerized node's own
-    /// `NewListenAddr` events only ever report its container-internal
-    /// bridge/loopback addresses, never its host's LAN-reachable one —
-    /// the exact same problem `AVALON_NODE_URL` already exists to solve
-    /// for the HTTP peer table (`crate::nodes::AnnounceConfig::own_base_url`
-    /// is likewise never auto-detected). `Some` overrides
-    /// [`start`]'s observed listen addresses entirely for announcing
-    /// purposes — the local bind still happens on `listen_addr` as normal,
-    /// this only changes what other peers are told to dial.
+    /// Operator-stated address peers should dial (a containerized node only sees its
+    /// internal addresses). It is advertised as given and also probed by AutoNAT.
     pub external_addr: Option<Multiaddr>,
+    /// AutoNAT reachability detection and dial-back settings.
+    pub autonat: AutonatSettings,
+    /// Circuit relay client and server settings.
+    pub relay: RelaySettings,
     /// `AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS`, defaulting to
     /// [`DEFAULT_BOOTSTRAP_SCAN_INTERVAL`] — see that constant's own doc
     /// comment.
@@ -267,12 +280,17 @@ impl DhtConfig {
             .filter(|secs| *secs > 0)
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_BOOTSTRAP_SCAN_INTERVAL);
+        let policy = OutboundPolicy::from_env();
+        let autonat = AutonatSettings::from_env(policy)?;
+        let relay = RelaySettings::from_env(policy)?;
 
         Ok(Some(Self {
             identity,
             network_id: network_id.to_string(),
             listen_addr,
             external_addr,
+            autonat,
+            relay,
             bootstrap_scan_interval,
         }))
     }
@@ -285,11 +303,21 @@ impl DhtConfig {
 /// the swarm this handle was created from.
 pub struct DhtHandle {
     pub peer_id: PeerId,
+    /// Addresses the swarm bound locally. Not advertised: announce uses
+    /// [`ReachabilityHandle::advertised_addrs`].
     pub listen_addrs: Vec<Multiaddr>,
     pub commands: DhtCommandSender,
+    pub reachability: ReachabilityHandle,
+    /// Counters for the relay server role; all zero unless it is enabled.
+    pub relay_stats: Arc<RelayServerStats>,
 }
 
-fn build_swarm(identity: identity::Keypair, network_id: &str) -> Swarm<DhtBehaviour> {
+fn build_swarm(
+    identity: identity::Keypair,
+    network_id: &str,
+    autonat_settings: &AutonatSettings,
+    relay_settings: &RelaySettings,
+) -> Swarm<DhtBehaviour> {
     let peer_id = PeerId::from(identity.public());
     let kad_config = kad::Config::new(kad_protocol_name(network_id));
     SwarmBuilder::with_existing_identity(identity)
@@ -300,12 +328,24 @@ fn build_swarm(identity: identity::Keypair, network_id: &str) -> Swarm<DhtBehavi
             yamux::Config::default,
         )
         .expect("TCP/noise/yamux transport construction is infallible for these fixed configs")
-        .with_behaviour(|key| DhtBehaviour {
+        .with_relay_client(noise::Config::new, yamux::Config::default)
+        .expect("relay client transport construction is infallible for these fixed configs")
+        .with_behaviour(|key, relay_client| DhtBehaviour {
             kad: kad::Behaviour::with_config(peer_id, MemoryStore::new(peer_id), kad_config),
             identify: identify::Behaviour::new(identify::Config::new(
                 identify_protocol_version(network_id),
                 key.public(),
             )),
+            autonat: autonat_settings
+                .enabled
+                .then(|| autonat::Behaviour::new(peer_id, autonat_settings.libp2p_config()))
+                .into(),
+            relay_client,
+            relay_server: relay_settings
+                .server
+                .as_ref()
+                .map(|s| relay::Behaviour::new(peer_id, s.libp2p_config()))
+                .into(),
         })
         .expect("behaviour construction from a fixed, valid config is infallible")
         .build()
@@ -319,9 +359,15 @@ fn build_swarm(identity: identity::Keypair, network_id: &str) -> Swarm<DhtBehavi
 /// `main.rs`'s call site.
 pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
     let external_addr = config.external_addr.clone();
+    let reachability = ReachabilityHandle::new(external_addr.as_ref().map(|a| a.to_string()));
     let bootstrap_scan_interval = config.bootstrap_scan_interval;
     let expected_identify_version = identify_protocol_version(&config.network_id);
-    let mut swarm = build_swarm(config.identity, &config.network_id);
+    let mut swarm = build_swarm(
+        config.identity,
+        &config.network_id,
+        &config.autonat,
+        &config.relay,
+    );
     let local_peer_id = *swarm.local_peer_id();
     swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
     swarm
@@ -343,24 +389,37 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         }
     }
 
-    // Discovered live against a real Docker-deployed node: an
-    // observed listen address is only ever container-internal in that
-    // shape — never what a LAN/WAN peer should actually dial. An operator
-    // who sets AVALON_LIBP2P_EXTERNAL_ADDR is telling us so explicitly;
-    // trust that over whatever `NewListenAddr` reported, the same way
-    // `AVALON_NODE_URL` already overrides HTTP self-announcement.
-    let announced_addrs = if let Some(external_addr) = external_addr {
-        tracing::info!(%external_addr, "avalon-dht: announcing explicit external address instead of observed listen addresses");
-        vec![external_addr]
-    } else {
-        if listen_addrs.is_empty() {
-            tracing::warn!(
-                "avalon-dht: no listen address observed within {:?} — this node's DHT identity \
-                 will be announced without any dialable address until one appears",
-                INITIAL_LISTEN_COLLECTION_WINDOW
-            );
+    if listen_addrs.is_empty() {
+        tracing::warn!(
+            "avalon-dht: no listen address observed within {:?}",
+            INITIAL_LISTEN_COLLECTION_WINDOW
+        );
+    }
+    let relay_stats = RelayServerStats::new();
+    let serves_relay = config.relay.server.is_some();
+    if serves_relay {
+        // A relay hands its external address to clients in reservation replies.
+        if let Some(addr) = &external_addr {
+            swarm.add_external_address(addr.clone());
         }
-        listen_addrs
+        set_relay_server_status(&mut swarm, Reachability::Unknown, external_addr.is_some());
+    }
+    if let (Some(addr), Some(autonat)) = (
+        external_addr.clone(),
+        swarm.behaviour_mut().autonat.as_mut(),
+    ) {
+        autonat.probe_address(addr);
+    }
+    let relay = RelayRuntime {
+        client: RelayClient::new(
+            config.relay.client.clone(),
+            local_peer_id,
+            reachability.clone(),
+        ),
+        stats: relay_stats.clone(),
+        serves: serves_relay,
+        has_external_addr: external_addr.is_some(),
+        reconcile_interval: config.relay.client.reconcile_interval,
     };
 
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -370,12 +429,46 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         commands_rx,
         bootstrap_scan_interval,
         expected_identify_version,
+        reachability.clone(),
+        relay,
     ));
 
     DhtHandle {
         peer_id: local_peer_id,
-        listen_addrs: announced_addrs,
+        listen_addrs,
         commands: commands_tx,
+        reachability,
+        relay_stats,
+    }
+}
+
+/// The relay pieces the worker drives.
+struct RelayRuntime {
+    client: RelayClient,
+    stats: Arc<RelayServerStats>,
+    serves: bool,
+    has_external_addr: bool,
+    reconcile_interval: Duration,
+}
+
+/// Advertises the relay hop protocol only while this node is dialable: detected `public`, or
+/// undetected with an operator-stated external address. A `private` node never relays.
+fn set_relay_server_status(
+    swarm: &mut Swarm<DhtBehaviour>,
+    reachability: Reachability,
+    has_external_addr: bool,
+) {
+    let dialable = match reachability {
+        Reachability::Public => true,
+        Reachability::Unknown => has_external_addr,
+        Reachability::Private => false,
+    };
+    if let Some(server) = swarm.behaviour_mut().relay_server.as_mut() {
+        server.set_status(Some(if dialable {
+            relay::Status::Enable
+        } else {
+            relay::Status::Disable
+        }));
     }
 }
 
@@ -402,6 +495,104 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
     Some((peer_id, addrs))
 }
 
+fn endpoint_ip_allowed(addr: &Multiaddr) -> bool {
+    addr.iter().all(|p| match p {
+        Protocol::Ip4(ip) => peer_ip_allowed(ip.into()),
+        Protocol::Ip6(ip) => peer_ip_allowed(ip.into()),
+        _ => true,
+    })
+}
+
+/// Publishes AutoNAT status changes and confirmed external addresses into `reachability`.
+fn track_reachability(
+    swarm: &mut Swarm<DhtBehaviour>,
+    reachability: &ReachabilityHandle,
+    event: &SwarmEvent<DhtBehaviourEvent>,
+) {
+    match event {
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::StatusChanged {
+            old,
+            new,
+        })) => {
+            tracing::info!(?old, ?new, "avalon-dht: AutoNAT reachability changed");
+            let detected = Reachability::from_nat_status(new);
+            reachability.set_reachability(detected);
+            if detected == Reachability::Private {
+                let stale: Vec<Multiaddr> = swarm.external_addresses().cloned().collect();
+                for addr in stale {
+                    swarm.remove_external_address(&addr);
+                }
+            }
+        }
+        SwarmEvent::ExternalAddrConfirmed { address }
+            if !address.iter().any(|p| matches!(p, Protocol::P2pCircuit)) =>
+        {
+            tracing::info!(%address, "avalon-dht: external address confirmed");
+            reachability.confirm_addr(address.to_string());
+        }
+        SwarmEvent::ExternalAddrExpired { address } => {
+            reachability.expire_addr(&address.to_string());
+        }
+        _ => {}
+    }
+}
+
+/// Feeds relay-related events to the relay client and stats. `true` when the event was
+/// consumed by relay handling alone.
+fn handle_relay_event(
+    swarm: &mut Swarm<DhtBehaviour>,
+    relay: &mut RelayRuntime,
+    reachability: &ReachabilityHandle,
+    event: &SwarmEvent<DhtBehaviourEvent>,
+) -> bool {
+    let now = Instant::now();
+    let detected = || reachability.snapshot().reachability;
+    match event {
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::StatusChanged {
+            ..
+        })) => {
+            if relay.serves {
+                set_relay_server_status(swarm, detected(), relay.has_external_addr);
+            }
+            relay.client.reconcile(swarm, detected(), now);
+            false
+        }
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify::Event::Received {
+            peer_id,
+            info,
+            ..
+        })) => {
+            if info.protocols.contains(&relay::HOP_PROTOCOL_NAME) {
+                relay
+                    .client
+                    .note_hop_relay(*peer_id, info.listen_addrs.clone());
+                relay.client.reconcile(swarm, detected(), now);
+            }
+            false
+        }
+        SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(
+            relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                renewal,
+                ..
+            },
+        )) => {
+            relay.client.on_accepted(*relay_peer_id, *renewal);
+            true
+        }
+        SwarmEvent::ListenerClosed { listener_id, .. } => {
+            relay.client.on_listener_closed(*listener_id, now);
+            relay.client.reconcile(swarm, detected(), now);
+            false
+        }
+        SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(server_event)) => {
+            relay.stats.record(server_event);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Never returns. Handles `identify` responses (feeding a directly-dialed
 /// peer's own reported listen addresses into `kad` — without this, a fresh
 /// connection never actually populates the DHT routing table), on
@@ -422,7 +613,10 @@ async fn run_worker(
     mut commands: mpsc::Receiver<DhtCommand>,
     bootstrap_scan_interval: Duration,
     expected_identify_version: String,
+    reachability: ReachabilityHandle,
+    mut relay: RelayRuntime,
 ) {
+    let mut reconcile_tick = tokio::time::interval(relay.reconcile_interval);
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // The first tick fires immediately; bootstrap from whatever the peer
@@ -505,8 +699,20 @@ async fn run_worker(
                     }
                 }
             }
+            _ = reconcile_tick.tick() => {
+                relay.client.reconcile(&mut swarm, reachability.snapshot().reachability, Instant::now());
+            }
             event = swarm.select_next_some() => {
+                track_reachability(&mut swarm, &reachability, &event);
+                if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
+                    continue;
+                }
                 if let SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } = event {
+                    if !endpoint_ip_allowed(endpoint.get_remote_address()) {
+                        tracing::warn!(%peer_id, "avalon-dht: disconnecting peer at an address the outbound policy always refuses");
+                        let _ = swarm.disconnect_peer_id(peer_id);
+                        continue;
+                    }
                     // Seed the routing table from the connection's own
                     // address immediately —
                     // otherwise a peer dialed directly (not yet known to

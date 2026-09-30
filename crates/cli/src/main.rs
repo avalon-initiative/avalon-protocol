@@ -1,6 +1,7 @@
 //! `avalon` — local dev/ops CLI.
 //!
-//! Always available, in any build: `avalon inspect-ledger`,
+//! Always available, in any build: `avalon setup` (guided, idempotent first-run node setup) and
+//! `avalon guide` (the embedded hosting guide), `avalon inspect-ledger`,
 //! `avalon inspect-ledger-full` (same view, plus each entry's payload),
 //! `avalon outbox-status` — read-only diagnostics, safe against any
 //! deployment including a real one. `avalon logs export`
@@ -36,7 +37,9 @@
 
 #[cfg(feature = "dev-tools")]
 mod dev_tools;
+mod guide;
 mod logs_export;
+mod setup;
 
 use avalon_chain::PostgresSettlementProvider;
 use sqlx::postgres::PgPoolOptions;
@@ -44,11 +47,37 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!(
+            "{}",
+            avalon_server::cli_args::version_line("avalon", env!("CARGO_PKG_VERSION"))
+        );
+        return;
+    }
     avalon_devenv::load();
 
     let mut args = std::env::args();
     let command = args.nth(1);
     match command.as_deref() {
+        Some("setup") => {
+            let raw_args: Vec<String> = args.collect();
+            if raw_args.iter().any(|a| a == "--help" || a == "-h") {
+                println!("{}", setup::USAGE);
+                return;
+            }
+            let result = match setup::parse_args(&raw_args) {
+                Ok(parsed) => setup::run(parsed).await,
+                Err(message) => Err(format!("{message}\n{}", setup::USAGE)),
+            };
+            if let Err(message) = result {
+                eprintln!("avalon setup: {message}");
+                std::process::exit(1);
+            }
+        }
+        Some("guide") => {
+            let raw_args: Vec<String> = args.collect();
+            guide::run(&raw_args);
+        }
         Some("inspect-ledger") => inspect_ledger(false).await,
         Some("inspect-ledger-full") => inspect_ledger(true).await,
         #[cfg(feature = "dev-tools")]
@@ -162,14 +191,19 @@ async fn main() {
             }
         }
         _ => {
-            eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|promote-mirror <network_id> [--shard-id <id>] [--source <url>] --target-database-url <url> [--dry-run]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
+            let text = format!(
+                "usage: avalon <setup [--yes] [flags]|guide [topic]|inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|promote-mirror <network_id> [--shard-id <id>] [--source <url>] --target-database-url <url> [--dry-run]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|add-shard-key --integrator <slug> [--verify-key <hex>] [--key <path>] [--server <url>]|pair-device"
                 } else {
                     ""
                 }
             );
+            if matches!(command.as_deref(), Some("--help" | "-h")) {
+                println!("{text}");
+                return;
+            }
+            eprintln!("{text}");
             std::process::exit(1);
         }
     }
@@ -1315,7 +1349,7 @@ async fn inspect_ledger(full: bool) {
         println!("retention: full — every entry's payload is present");
     } else {
         println!(
-            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see docs/projects/backend-server/architecture/nodes.md)",
+            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see avalon-docs/architecture/nodes/README.md)",
             entries.len()
         );
     }

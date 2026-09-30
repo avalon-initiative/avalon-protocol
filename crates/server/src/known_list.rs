@@ -3,7 +3,7 @@
 //! reservation + per-prefix diversity cap): persistence across restarts,
 //! real discovery integration, tenure-weighted refill and a probation
 //! period before a newly-admitted slot counts toward the list. See
-//! `docs/projects/backend-server/architecture/witness-cosigning.md`'s "The known list" section.
+//! `avalon-docs/protocol/witness-cosigning.md`'s "The known list" section.
 //!
 //! **Boundary with `crate::nodes::PeerTable`.** The peer table is this
 //! node's general, unbounded "who do I gossip/announce with" address book

@@ -47,7 +47,7 @@
 //! completely unchanged — it's exactly `AVALON_SETTLEMENT_REMOTE_URLS`'s
 //! implicit `core=<url>` entry, so milestone-1's single-shard topology
 //! needs zero configuration change. See
-//! `docs/projects/backend-server/architecture/settlement.md`'s "Write routing to the correct
+//! `avalon-docs/architecture/settlement.md`'s "Write routing to the correct
 //! shard" section for the full design.
 //!
 //! **Push-based mirror sync.** Right after a batch commits
@@ -413,14 +413,20 @@ pub async fn run_worker(
     chain: PostgresSettlementProvider,
     remote: Option<RemoteSubmitConfig>,
     mirror_push: Option<crate::mirror_push::MirrorPushConfig>,
+    mut shutdown: crate::shutdown::Shutdown,
 ) {
     let poll_interval = poll_interval_from_env();
-    loop {
+    // A tick in progress always runs to completion; shutdown is only observed between ticks.
+    while !shutdown.is_requested() {
         if let Err(err) = drain_once(&pool, &chain, remote.as_ref(), mirror_push.as_ref()).await {
             tracing::error!("outbox worker: {err}");
         }
-        tokio::time::sleep(poll_interval).await;
+        tokio::select! {
+            _ = tokio::time::sleep(poll_interval) => {}
+            _ = shutdown.requested() => {}
+        }
     }
+    tracing::info!("outbox worker stopped");
 }
 
 /// Postgres advisory lock key guarding a drain tick, issue #536: without

@@ -4,7 +4,7 @@ Documentation for people standing up an `avalon-server` node to actually run
 it — for their own community, a game, or just to see it work — not for
 people contributing code to this repository itself (see
 [maintainers docs](../../../maintainers/)) or integrating Avalon into their own
-game/app/service as a developer (see [developer docs](../../sdks/rust/for-developers/)).
+game/app/service as a developer (see [developer docs](https://github.com/avalon-initiative/avalon-docs/blob/main/integrations/README.md)).
 
 The Docker route needs only [Docker](https://docs.docker.com/get-docker/); the
 standalone-binary route needs only a Postgres database.
@@ -12,9 +12,12 @@ standalone-binary route needs only a Postgres database.
 ## Start here
 
 0. [`standalone-binary.md`](standalone-binary.md) — run the `avalon-server`
-   binary directly against your own Postgres: configuration for a replica or a
-   shard-authoring node, first start, a systemd unit, upgrading, backup and
-   troubleshooting.
+   binary directly: start with `avalon setup`, a guided, idempotent first-run
+   flow (also non-interactive with `--yes`), then configuration for a replica or
+   a shard-authoring node, first start, a systemd unit, upgrading, backup and
+   troubleshooting, for both the plain and the bundled-database
+   (`avalon-server-bundled`) variant. These guides are embedded in the `avalon` binary:
+   `avalon guide [topic]`.
 
 1. [`hosting-quickstart.md`](hosting-quickstart.md) — the fastest path from
    a fresh checkout to a running node: `make stack-up`, one command, safe
@@ -55,8 +58,8 @@ first-run failures. Beyond that:
 
 ## Background
 
-[`../architecture/self-hosting.md`](../architecture/self-hosting.md) and
-[`../architecture/nodes.md`](../architecture/nodes.md) cover the concepts
+[`avalon-docs: architecture/self-hosting.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/self-hosting.md) and
+[`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md) cover the concepts
 behind what these guides walk through — what a node's roles mean today,
 running a private instance versus joining the public network, and the
 combined-binary default versus the multi-role topology available today —

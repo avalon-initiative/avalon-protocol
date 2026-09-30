@@ -4,14 +4,28 @@
 //! `Cargo.toml`'s `[[bin]]` entry and `avalon_server::bundled_postgres`'s
 //! module doc comment.
 
+fn main() {
+    avalon_server::cli_args::handle_or_exit(
+        "avalon-server-bundled",
+        env!("CARGO_PKG_VERSION"),
+        "the Avalon Protocol node with a managed, embedded PostgreSQL",
+    );
+    run();
+}
+
 #[tokio::main]
-async fn main() {
+async fn run() {
     avalon_devenv::load();
     // Tracing initialized before starting the managed Postgres (rather than
     // inside `run_with_tracing`, plain `avalon-server`'s path via `run()`)
     // so that startup shows up in the logs too.
     let log_reload_handle = avalon_server::run::init_tracing();
+    // Signal handling starts before the database does, so an interrupted start-up stops
+    // whatever it had started instead of leaving it running.
+    let shutdown = avalon_server::shutdown::install();
     let data_dir = avalon_server::known_list::data_dir_from_env();
+    let pg_root = avalon_server::bundled_postgres::pg_root(&data_dir);
+    avalon_server::bundled_postgres::force_stop_on_exit(&pg_root);
     let bundled = avalon_server::bundled_postgres::BundledPostgres::start_if_needed(&data_dir)
         .await
         .unwrap_or_else(|e| {
@@ -19,40 +33,12 @@ async fn main() {
             std::process::exit(1);
         });
 
-    match bundled {
-        None => avalon_server::run::run_with_tracing(log_reload_handle).await,
-        Some(postgres) => {
-            tokio::select! {
-                _ = avalon_server::run::run_with_tracing(log_reload_handle) => {}
-                _ = shutdown_signal() => {
-                    postgres.stop().await;
-                }
-            }
-        }
-    }
-}
-
-/// Resolves once SIGTERM (or, portably, Ctrl-C) is received, so the managed
-/// Postgres started above gets a clean `stop()` instead of being killed
-/// alongside the rest of the process.
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c().await.ok();
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+    // Returns after a graceful shutdown; the managed Postgres is stopped only once the
+    // server has drained and released its connections.
+    avalon_server::run::run_with_tracing(log_reload_handle, shutdown).await;
+    if let Some(postgres) = bundled {
+        postgres
+            .stop(avalon_server::shutdown::timeout_from_env())
+            .await;
     }
 }

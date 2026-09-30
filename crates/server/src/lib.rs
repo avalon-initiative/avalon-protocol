@@ -22,9 +22,11 @@ pub mod backing_services;
 pub mod blocks;
 #[cfg(feature = "bundled-postgres")]
 pub mod bundled_postgres;
+pub mod bundled_prereq;
 pub mod channels;
 pub mod chat;
 pub mod chat_replication;
+pub mod cli_args;
 pub mod connections;
 pub mod continuation;
 pub mod conversations;
@@ -75,6 +77,7 @@ pub mod peer_admission;
 pub mod presence;
 pub mod principal_limits;
 pub mod proto_schema;
+pub mod reachability;
 pub mod realtime_proxy;
 pub mod realtime_relay;
 pub mod rebuild;
@@ -82,14 +85,17 @@ pub mod recognitions;
 pub mod recovery;
 pub mod redis_limits;
 pub mod registry;
+pub mod relay;
 pub mod replica;
 pub mod replication;
 pub mod resources;
 pub mod retention;
 pub mod rollback;
 pub mod run;
+pub mod self_certifying_keys;
 pub mod serve;
 pub mod settlement;
+pub mod shutdown;
 pub mod signature_gate;
 pub mod state;
 pub mod topology;
@@ -101,6 +107,7 @@ pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
 pub mod witness_cosign;
+pub mod witness_refresh;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, StatusCode};
@@ -146,7 +153,9 @@ fn cors_layer_from_env() -> CorsLayer {
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static(op_trace::TRACE_HEADER),
         ])
+        .expose_headers([axum::http::HeaderName::from_static(op_trace::HOPS_HEADER)])
 }
 
 /// Issue #363, implementing #287's decision: hoster-configurable resource
@@ -599,7 +608,7 @@ fn full_routes(state: AppState) -> Router {
         // the Hub (a game's own tooling, a researcher, a future client).
         // `/integrations/{slug}/registry` above keeps working unchanged;
         // this is additive, not a replacement — see
-        // `docs/projects/backend-server/architecture/registry.md`'s "External read surface"
+        // `avalon-docs/protocol/registry.md`'s "External read surface"
         // section for the stability policy.
         .route("/registry/{slug}", get(registry::get_integrator_registry))
         // Domain-proven names for self-certifying (`node:<key-hash>`)

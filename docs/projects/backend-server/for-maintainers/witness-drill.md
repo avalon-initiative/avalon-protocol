@@ -4,7 +4,7 @@ A scenario suite that grows a network from one real `avalon-server` process
 to several, removes nodes including the original, drops and refills a
 known-list witness, floods a victim with same-prefix candidates, forks a log,
 and reconnects a node that was offline for a long stretch. The property under
-test is in [`../architecture/witness-cosigning.md`](../architecture/witness-cosigning.md):
+test is in [`avalon-docs: protocol/witness-cosigning.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/witness-cosigning.md):
 the network behaves the same at one node and at many, and survives losing any
 operator's nodes, including the original.
 
@@ -92,10 +92,169 @@ at real addresses and real timings:
    `equivocation_detected` in its log and a row in `equivocation_findings`
    (`avalon list-equivocations`). See
    [`equivocation-response.md`](equivocation-response.md) for handling.
+8. Unchanged head: leave the `core` head unchanged for well over the freshness
+   window and sample `curl "<ip>:8080/ledger/sth/latest?shard_id=core&witnesses=1"`
+   on each mirror every minute or so. The `observed_at` of every confirmed
+   known-list witness's cosignature should stay within one re-attest interval
+   plus one mirror-watcher tick (about 320 seconds by default), and feeding the
+   response to `verify_sth cosigned <known-list keys>` (with the pinned
+   `AVALON_SETTLEMENT_VERIFY_KEY`) should keep returning success. Repeat with
+   an outbound firewall drop from a mirror to its source (not a changed
+   `AVALON_MIRROR_PEERS`, which changes the source identity the mirror serves
+   under) to show refresh does not depend on the author being reachable. A witness that is not in a
+   mirror's confirmed known list is refreshed there too, when it is in the mirror's peer
+   directory with a direct advert and within `AVALON_WITNESS_REFRESH_MAX_PER_TICK`; one the
+   mirror cannot reach (or beyond that limit) ages out.
+   A restarted node's list may need its probation window before it gathers.
 
-A live drill should be repeated once cosigning-decision logic has landed and
-before the witness-cosigning epic closes, with `known_list.json` sizes above
-one on every node so majority verification, not the single-signer case, is
-what is being exercised. After a drill, restore the fleet to its previous
-state (off and freshly reset if that is how it was left) and record what was
+After a drill, restore the fleet to its previous state and record what was
 run and the results in the epic.
+
+### Tools used for the observations
+
+- Known list: `data/known_list.json` on each node (`witness_key_id`, `status`, `prefix`).
+- Held cosignatures and their age: `GET /ledger/sth/latest?shard_id=<shard>&witnesses=1`
+  (`observed_at` per cosignature).
+- Client-style majority check that gathers each witness's own cosignature from that witness
+  and feeds them to `target/debug/examples/verify_sth cosigned <witness-key-hex>...`
+  (needs `AVALON_SETTLEMENT_VERIFY_KEY` set to the pinned key).
+- The Rust SDK's `verify_network()` and zero-URL `discover()` from a scratch binary, and its
+  `verify_network_with_policy(Explicit(..))` with a chosen witness list.
+- Self-certifying shard check: the node's own shard id equals `node:` plus the sha256 of its
+  settlement public key, and `verify_sth old` accepts its head under only that key.
+- Registrations with `avalon create-identity` (a signed `identity.created` event) and
+  `avalon login` against each node, with `AVALON_SERVER_URL` and `AVALON_WEBAUTHN_ORIGIN` set.
+
+## Live drill record, 2026-09-28
+
+Fleet: network `avalon-dev-lan`, five nodes on one /24, main at 5f71364 (peers rebuilt fresh
+that day). Roles: 192.168.7.113 authors the pinned `core` and runs no witness role in any peer's
+list; .174, .183, .204 each author their own self-certifying `node:` shard and cosign; .194 was
+reinitialised mid-drill. Every node held a known list of two (see limits), all `confirmed` by
+about 12:57Z. Timings below are UTC.
+
+1. Baseline, 12:43 to 13:05. All five nodes healthy; every witness re-attested its own
+   cosignature of the `core` head about every 200 seconds (ages seen at 29, 53, 117 seconds and
+   so on, resetting between samples; two or more intervals on each). After a write on core the
+   head advanced 1 to 4 and every mirror converged on the same root. The client-style gather
+   check accepted the head for two and for four witnesses.
+2. Original node stopped, 13:05:15 to 13:31:52 (26 min 37 s). The four survivors answered
+   `/nodes/status`, kept a full peer set among themselves and kept re-attesting (every node's own
+   cosignature stayed under 200 seconds old for the whole window). Registration
+   (`identity.created`, signed by the identity key) and `login` succeeded on each survivor's own
+   shard, growing each shard's log from 3 to 6 entries. Survivors' heads verified under the
+   witness policy: the client-style gather check returned exit 0 for two and four witnesses, and
+   the Rust SDK `verify_network_with_policy(Explicit([c6137167, 5d31f6ec]))` returned `Verified`
+   against .204 (see findings for the default `Auto` list, which returned `Mismatch`).
+3. Fresh node with no authority online, 13:08:58 onward (original still down). .194 was
+   stopped, its database reset, its data directory removed and its `.env` replaced with only
+   the network id, its own addresses, the pinned public verify key, and a single surviving peer
+   (.204) as both bootstrap and core mirror. On first boot it generated its own settlement,
+   submit, witness and libp2p keys and chose the self-certifying shard
+   `node:07ea8656...`. Within four seconds it announced, learned the other three peers and their
+   shards by gossip, mirrored the `core` head from .204 (verified against the pinned key) and
+   cosigned it. A registration on it wrote to its own shard (3 entries); the shard id equals
+   the sha256 of its public key and its head verifies under that key alone. It filled a known
+   list of two from discovery (one confirmed after a 60 second probation set for the drill) and
+   appeared as a witness in the other nodes' peer tables. Its log shows two indexer projection
+   errors when replaying mirrored core entries (foreign key on the identity row), which the node
+   itself reports as expected for a replay-only node.
+4. Original node restarted, 13:31:52. Its peer table held all four peers within a minute. A
+   registration on it advanced core from 4 to 7 entries; by 13:35 every survivor and the fresh
+   node had mirrored root `5ed1919e...` at tree size 7 and gathered a full set of fresh
+   cosignatures. No node logged `equivocation_detected`, and the primary's own log had none. With
+   the head fresh the Rust SDK `verify_network()` returned `Verified` for .204 and .174 and
+   zero-URL `discover()` selected .204.
+
+### Findings and limits
+
+- What is demonstrated: the network kept serving, gossiping, re-attesting and accepting
+  registrations and signed actions on the survivors' own shards with the original down; a
+  freshly initialised node joined and authored with no authority reachable; the original
+  rejoined ordinarily and converged with no fork or evidence.
+- A `core` head that stays unchanged while its author is away stops verifying from a mirror after
+  about ten minutes, and the SDK `Auto` policy returned `Mismatch` on every survivor during the
+  outage: a mirror only gathers other witnesses' cosignatures inside a tick that first fetched
+  the source head, and merging keeps a stale relayed copy over a witness's own fresh one.
+  Tracked in #1025 (a candidate change and its live result are recorded there; it did not fully
+  repair the symptom).
+- Self-certifying `node:` shards were authored and served but nobody else could mirror or verify
+  them (mirroring resolved only registered or pinned keys), so they had no mirrors and no
+  witnesses, and only `core` had cosigned heads. Fixed in #1026: a node with
+  `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` verifies the key the head carries, pins it, mirrors the
+  shard and cosigns it, and the per-tick cosignature refresh covers pinned shards.
+- `core` itself has a single writer: with the original down, core could not grow and new
+  integrators or registered shards could not be created. Only self-certifying shards kept
+  authoring. #824 covers the cross-shard root with an unreachable core authority.
+- The fleet shares one /24, so the per-prefix cap of 2 limits every known list to two
+  witnesses and majority is both of them. It cannot show lists above two, prefix diversity or
+  the diversity-cap eclipse behaviour; that needs hosts on several subnets. The fresh node also
+  cannot enter the other nodes' lists while two same-prefix slots are held.
+- The original was never a slot in any known list (it advertises no witness role in the peer
+  tables), so pruning of the original's slot after the freshness window was not exercised on the
+  fleet; the local `lifecycle` scenario covers it.
+- Not run on the fleet this time: witness loss with a frozen witness, a long-offline rejoin,
+  the fork scenario and the rollout rollback (`AVALON_WITNESS_COSIGNING_ENABLED=false`); an
+  earlier fleet run is recorded in [`witness-policy-rollout.md`](witness-policy-rollout.md).
+
+## Live drill record, 2026-09-28 (second run, after the #1025/#1026 fixes)
+
+Re-ran "loss of the original" only, on main at `77b5779` (both fixes from the first run's
+findings merged: #1025's per-tick refresh of every known-list witness's own cosignature, and
+#1026's mirroring/verification/cosigning of self-certifying `node:` shards). Fleet: same five
+nodes. Two nodes (.183, .204) already ran with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`; .194
+did not and had a stale `observed_sths`/`mirrored_entries` state for `core` left over from the
+first drill (serving `SIGNED_TREE_HEAD_NOT_FOUND` for `core` even after a fresh baseline) — its
+`.env` was corrected to mirror the primary directly (`AVALON_MIRROR_PEERS`/`AVALON_BOOTSTRAP_PEERS`
+now include `192.168.7.113`, matching the other three peers) and given
+`AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` too; its stale `core` rows were cleared and it
+re-backfilled cleanly. This is a fleet configuration fix, not a code change. Timings UTC.
+
+1. Baseline, 18:00 to 18:24. All five nodes healthy; every node's known list held two confirmed
+   witnesses (the one-/24 cap); `core` cosignatures fresh (under ~250s) on every survivor; all
+   four `node:` shards mirrored and cosigned identically across the nodes that discover them.
+2. Original stopped, 18:24:04 to 18:56:44 (32 min 40 s, over three freshness windows). Sampled
+   roughly every 100s. All four survivors answered `/nodes/status` with 200 for the entire
+   window. Registration (`identity.created`) succeeded on each survivor's own shard at four
+   checkpoints spread through the outage (18:29:50, 18:38:55, 18:47:58, 18:55:15), with no
+   errors. `node:` shards kept growing and being mirrored/cosigned identically across the nodes
+   configured to discover them.
+   - The Rust SDK's `verify_network_with_policy(Explicit(<that node's own confirmed known
+     list>))` returned `Verified` on every survivor at every sample throughout the outage — the
+     #1025 property holds for a client using a witness's own list, not just for the witness's own
+     copy of its own cosignature as the first drill could only show.
+   - The default `Auto` policy (built once from the trust-anchor seeds, which include the
+     now-unreachable original) still returned `Mismatch` on two of the four survivors at most
+     samples: whichever node's own two-slot known list didn't happen to match the seed-derived
+     list saw a stale cosignature for the witness it doesn't itself track. This is the mirror
+     staleness #1040 describes (filed after the first drill), confirmed still present on
+     `77b5779`. A fix for it landed on `main` after this drill started; rebuilding mid-outage
+     would have confounded the measurement, so this run stayed on the version it started with
+     end to end.
+3. Original restarted, 18:56:44. Rejoined within a minute (peer table, known-list refill).
+   Registration on it advanced `core` from 10 to 13. By 19:04 every node had converged on the
+   same root (`89cb64...`, tree size 13). No `equivocation` in any node's log
+   (`grep -i equivocation` on all five, zero matches) and no `equivocation_findings` rows.
+
+### Findings and limits, second run
+
+- What is newly demonstrated over the first run: for the full 32-minute outage, a client that
+  builds its own known list from the mirror it's actually talking to (`Explicit` with that node's
+  own confirmed list) verifies the network continuously, with no freshness gap — #1025's fix
+  holds under sustained load, not just briefly. Registrations and logins on survivors' own shards,
+  and `node:` shard mirroring/cosigning across nodes, both continued to work exactly as #1026
+  intended.
+- What still isn't demonstrated: `core` itself has one writer. With the original down, no new
+  integrator or registered shard could be created — the same structural limit the first drill
+  found, unchanged by either fix. This directly conflicts with the acceptance box as worded ("no
+  loss of operation"): core's own growth is lost operation for that window, even though
+  everything self-certifying kept working.
+- The default `Auto` witness policy (no explicit list) is still not reliable during an outage,
+  because #1040 (the mirror-serves-stale-cosignature-for-a-witness-outside-its-own-list effect)
+  is unfixed on the version this drill ran. A client that supplies its own discovered known list
+  (`Explicit`) is unaffected; `Auto`'s seed-derived list is the one exposed to it.
+- Same fleet limit as before: one /24 caps every known list at two witnesses, so majority is
+  always both of them and diversity behavior is unexercised.
+- Verdict: the "original node removed with no loss of operation" acceptance box stays unticked.
+  The two bugs the first drill blocked it on are verified fixed live; the remaining reason is
+  `core`'s single-writer design, tracked separately, not a live-drill finding.

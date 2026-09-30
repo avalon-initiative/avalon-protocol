@@ -1380,6 +1380,17 @@ pub struct NodeStatusResponse {
     /// not author `core` or its network has no pinned key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core_author_pinned: Option<bool>,
+    /// How this node is reachable, derived from `reachability`; omitted while it is `unknown`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connectivity: Option<avalon_protocol::connectivity::Connectivity>,
+    /// What AutoNAT detected about whether peers can dial this node.
+    pub reachability: crate::reachability::Reachability,
+    /// Addresses a peer confirmed by dialing them back.
+    pub confirmed_external_addrs: Vec<String>,
+    /// Accepted relay reservations this node holds while `private`.
+    pub relay_reservations: Vec<crate::reachability::RelayReservation>,
+    /// Addresses peers can dial to reach this node through its relays.
+    pub relayed_listen_addrs: Vec<String>,
 }
 
 /// Issue #629: how many distinct peers currently confirm mirroring a
@@ -1461,6 +1472,7 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
                 || confirmed_mirror_count >= state.replication_gate.min_confirmations),
     };
 
+    let detected = state.reachability.snapshot();
     NodeStatusResponse {
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
@@ -1470,6 +1482,15 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
         resources,
         own_shard_replication,
         core_author_pinned: crate::core_author_guard::recorded_outcome(),
+        connectivity: crate::reachability::connectivity_for(&detected),
+        reachability: detected.reachability,
+        confirmed_external_addrs: detected.confirmed_addrs,
+        relayed_listen_addrs: detected
+            .relay_reservations
+            .iter()
+            .map(|r| r.relayed_addr.clone())
+            .collect(),
+        relay_reservations: detected.relay_reservations,
     }
 }
 
@@ -1504,7 +1525,8 @@ pub async fn discover(State(state): State<AppState>) -> Json<DiscoverResponse> {
 #[derive(Debug, Clone)]
 pub struct DhtIdentity {
     pub peer_id: String,
-    pub listen_addrs: Vec<String>,
+    /// Source of the addresses announced with this identity.
+    pub reachability: crate::reachability::ReachabilityHandle,
 }
 
 /// This node's own outbound announce/bootstrap configuration.
@@ -2174,7 +2196,7 @@ fn announce_request(
         network_id: network_id.to_string(),
         libp2p_peer_id: dht_identity.map(|d| d.peer_id.clone()),
         libp2p_listen_addrs: dht_identity
-            .map(|d| d.listen_addrs.clone())
+            .map(|d| d.reachability.advertised_addrs())
             .unwrap_or_default(),
         known_shards: known_shards.to_vec(),
         head_summaries: head_summaries.to_vec(),
@@ -2660,8 +2682,19 @@ mod tests {
                 eligible_for_new_registrations: true,
             },
             core_author_pinned: Some(true),
+            connectivity: Some(avalon_protocol::connectivity::Connectivity::NatTraversed),
+            reachability: crate::reachability::Reachability::Public,
+            confirmed_external_addrs: vec!["/ip4/203.0.113.7/tcp/4001".to_string()],
+            relay_reservations: Vec::new(),
+            relayed_listen_addrs: Vec::new(),
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
+        assert_eq!(json["connectivity"], "nat_traversed");
+        assert_eq!(json["reachability"], "public");
+        assert_eq!(
+            json["confirmed_external_addrs"][0],
+            "/ip4/203.0.113.7/tcp/4001"
+        );
         assert_eq!(json["core_author_pinned"], true);
         assert!(json.get("resources").is_some());
         assert_eq!(

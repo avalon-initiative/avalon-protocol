@@ -217,6 +217,8 @@ pub struct AppState {
     /// posture), so nothing here can look anything up or register
     /// anything either.
     pub dht_commands: Option<crate::dht::DhtCommandSender>,
+    /// AutoNAT detection result; stays `unknown` when the DHT swarm is off.
+    pub reachability: crate::reachability::ReachabilityHandle,
     /// This node's own `AVALON_NODE_URL`
     /// (`AnnounceConfig::own_base_url`), so `crate::realtime_relay` can
     /// filter its own base URL out of a DHT interest lookup's results —

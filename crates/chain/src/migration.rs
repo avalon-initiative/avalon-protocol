@@ -14,7 +14,7 @@
 //! migrate-network` in `crates/cli`), not a routine sync mechanism —
 //! consistent with `avalon-mainnet-N` only ever incrementing for a
 //! genuine, maintainer-decided reset (see
-//! `docs/projects/backend-server/architecture/network-trust-anchors.md`). It works across two
+//! `avalon-docs/protocol/network-trust-anchors.md`). It works across two
 //! independent `PgPool`s (source and target may be, and in the real
 //! mainnet-reset case always will be, entirely separate databases) rather
 //! than assuming they share a connection.
@@ -79,8 +79,9 @@ pub async fn read_source_checkpoint(pool: &PgPool) -> Result<SourceCheckpoint, M
 
     let latest = sqlx::query(
         "SELECT tree_size, root_hash, signing_key_id, signature, created_at \
-         FROM signed_tree_heads ORDER BY tree_size DESC LIMIT 1",
+         FROM signed_tree_heads WHERE network_id = $1 ORDER BY tree_size DESC LIMIT 1",
     )
+    .bind(&network_id)
     .fetch_optional(pool)
     .await?;
 

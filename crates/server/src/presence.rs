@@ -1,6 +1,6 @@
 //! Presence tracking: publish + read. Ephemeral realtime
 //! state — never a `ProtocolEvent`, never durable, lost on
-//! restart. See `docs/projects/backend-server/architecture/presence.md`'s "Rules" and "Today in
+//! restart. See `avalon-docs/protocol/presence.md`'s "Rules" and "Today in
 //! the repo" sections for the publish/read auth model, sticky manual
 //! overrides, and the durable `hide_active_in` opt-out.
 
@@ -626,9 +626,14 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
     let mut hidden_playing: HashSet<Uuid> = HashSet::new();
     let mut visibility_by_id: HashMap<Uuid, Visibility> = HashMap::new();
     let mut updates = state.presence.subscribe();
+    let mut session = crate::shutdown::socket_session();
 
     loop {
         tokio::select! {
+            _ = session.closing() => {
+                crate::shutdown::send_going_away(&mut socket).await;
+                return;
+            }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {

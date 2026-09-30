@@ -78,7 +78,7 @@ than guessing here.
 
 Publishing a release doesn't push it to every running node — nothing can,
 by design (no party can force an operator to upgrade; see
-[`../architecture/nodes.md`](../architecture/nodes.md)). In practice,
+[`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md)). In practice,
 shipping an upgrade to even a handful of well-connected nodes starts a
 real, organic upgrade chain rather than requiring every hoster to be
 watching the Releases page directly:

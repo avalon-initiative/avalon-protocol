@@ -5,7 +5,7 @@
 //! definitions as the source of truth for what Avalon *is*, independent of how
 //! any particular deployment implements it.
 //!
-//! See `docs/stakeholders/Proposal.md` for the narrative version of this model. Real
+//! See `avalon-docs/architecture/design-proposal.md` for the narrative version of this model. Real
 //! architecture decisions are recorded as closed GitHub issues labeled
 //! `architecture-decision-record`, not as files in this repo.
 
@@ -26,6 +26,7 @@ pub(crate) mod test_env {
 
 pub mod achievements;
 pub mod client_known_list;
+pub mod connectivity;
 pub mod continuation;
 pub mod cosigned_sth;
 pub mod cross_node_login;

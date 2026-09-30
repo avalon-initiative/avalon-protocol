@@ -2,7 +2,7 @@
 
 Multi-node hosting is already real — `AVALON_MIRROR_PEERS`/
 `AVALON_BOOTSTRAP_PEERS` and the mirror-watcher's backfill machinery
-(see [`../architecture/settlement.md`](../architecture/settlement.md)) work
+(see [`avalon-docs: architecture/settlement.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/settlement.md)) work
 today. What's missing is a repeatable way to actually stand up more than
 one node locally and watch it work — today that kind of testing mostly
 happens ad hoc, against whatever sandbox hosts happen to be available. This

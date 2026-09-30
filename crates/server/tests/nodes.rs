@@ -325,6 +325,36 @@ async fn node_status_reports_own_roles() {
     );
 }
 
+/// `GET /nodes/status` reports detected `reachability`, its confirmed addresses, and a
+/// `connectivity` derived from it (absent while `unknown`).
+#[tokio::test]
+#[ignore]
+async fn node_status_reports_connectivity() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let body: serde_json::Value = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed — is `make start` running?")
+        .json()
+        .await
+        .expect("response was not JSON");
+    assert!(body["confirmed_external_addrs"].is_array());
+    assert!(body["relay_reservations"].is_array());
+    assert!(body["relayed_listen_addrs"].is_array());
+    match body["reachability"]
+        .as_str()
+        .expect("reachability is a string")
+    {
+        "public" => assert_eq!(body["connectivity"], "direct"),
+        "private" => assert_eq!(body["connectivity"], "outbound_only"),
+        "unknown" => assert!(body.get("connectivity").is_none()),
+        other => panic!("unexpected reachability {other}"),
+    }
+}
+
 /// `GET /nodes/discover` must return exactly what `GET /nodes/status` and
 /// `GET /nodes/peers` would each return on their own, bundled into one
 /// response — the whole point being one round trip instead of two.

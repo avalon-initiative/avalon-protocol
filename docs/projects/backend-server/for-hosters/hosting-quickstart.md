@@ -5,8 +5,9 @@ no Rust or Node toolchain needed, only [Docker](https://docs.docker.com/get-dock
 (with Compose, bundled with Docker Desktop and modern Docker Engine
 installs).
 
-To run the binary directly against your own Postgres instead of Docker, see
-[`standalone-binary.md`](standalone-binary.md).
+To run the binary directly instead of Docker, start with `avalon setup`, the
+guided first-run flow described in [`standalone-binary.md`](standalone-binary.md)
+(this guide is also embedded in the CLI: `avalon guide quickstart`).
 
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see
@@ -17,6 +18,11 @@ edit/rebuild cycles.
 Running this node makes you part of the Avalon Initiative's actual
 infrastructure, not a downstream consumer of someone else's — the network is
 only as real and as decentralized as the operators actually running it.
+
+No release has been published yet, so the image `make stack-up` pulls does not
+exist (`docker pull` answers `denied`). Until the first release, use
+`make stack-up-source`, which builds `avalon-server` from the checkout; this page's
+image steps have not been run against a published image.
 
 ## One command
 
@@ -105,7 +111,7 @@ repository's root `Dockerfile`.
 ## What you get, and what you don't
 
 - A single node running every role together (Settlement, Indexer, Realtime,
-  Gateway) — see [`../architecture/nodes.md`](../architecture/nodes.md) for
+  Gateway) — see [`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md) for
   what that means today versus the target multi-role topology.
 - **Plain HTTP, bound to `127.0.0.1` only.** Fine for trying this out or for
   a node that only ever talks to other processes on the same machine.
@@ -114,13 +120,13 @@ repository's root `Dockerfile`.
   requirement the moment this leaves loopback, and that doc covers exposing
   the port behind a reverse proxy correctly.
 - A single-node deployment, not a mirrored/multi-Settlement-node network —
-  see [`../architecture/settlement.md`](../architecture/settlement.md) if
+  see [`avalon-docs: architecture/settlement.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/settlement.md) if
   you're looking to run alongside other operators on the same network.
 
 ## Node roles at a glance
 
 Three independent choices, not one — see
-[`../architecture/nodes.md`](../architecture/nodes.md)'s "A node's three
+[`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md)'s "A node's three
 configuration axes are independent" section for the full reference. This
 `make stack-up` quickstart leaves all three at their defaults (below);
 change them by adding the corresponding line to `.env`.

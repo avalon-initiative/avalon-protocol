@@ -1,7 +1,7 @@
 //! Mirror-facing, public transparency-log reads — issue #211, the read-side
 //! API surface for the RFC 6962 Merkle tree and Signed Tree Heads issue
 //! #210 already computes and stores (`crates/chain/src/merkle.rs`,
-//! `crates/chain/src/sth.rs`). See `docs/projects/backend-server/architecture/settlement.md`'s
+//! `crates/chain/src/sth.rs`). See `avalon-docs/architecture/settlement.md`'s
 //! "What is decided (continued)" section for the design this implements —
 //! #40/#39's decision that mirror sync stays minimal: expose the latest
 //! STH, a historical STH by `tree_size`, RFC 6962 consistency proofs, and
@@ -59,7 +59,7 @@
 //! [`ShardMirrorSources`], to the specific peer configured for that
 //! `shard_id`, not blended across every peer this node happens to mirror.
 //! Live-verified against the exact scenario that surfaced the bug — see
-//! `docs/projects/backend-server/architecture/nodes.md`'s `avalon-peer` entry.
+//! `avalon-docs/architecture/nodes/README.md`'s `avalon-peer` entry.
 
 use avalon_chain::merkle;
 use avalon_chain::mirror;
@@ -187,6 +187,11 @@ pub struct SignedTreeHeadResponse {
     /// per that function's own documented degenerate case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cosignatures: Vec<crate::cosign_verify::WitnessCosignatureDto>,
+    /// Lowercase hex Ed25519 public key that signed this head, present only for a
+    /// self-certifying (`node:<hash>`) shard. A verifier checks it hashes to the
+    /// shard id and that it signed the head; not part of the signed bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_public_key: Option<String>,
 }
 
 impl SignedTreeHeadResponse {
@@ -206,8 +211,33 @@ impl SignedTreeHeadResponse {
                 .iter()
                 .map(crate::cosign_verify::WitnessCosignatureDto::from_witness_cosignature)
                 .collect(),
+            signing_public_key: None,
         }
     }
+
+    fn with_signing_public_key(mut self, key: Option<String>) -> Self {
+        self.signing_public_key = key;
+        self
+    }
+}
+
+/// The public key to attach to a head of `shard_id`: this node's own signing key
+/// for the shard it authors, or the pinned key of a mirrored self-certifying
+/// shard. `None` for any shard that is not self-certifying.
+async fn signing_public_key_for(state: &AppState, shard_id: &str) -> Option<String> {
+    if !avalon_protocol::shard_identity::is_self_certifying(shard_id) {
+        return None;
+    }
+    if shard_id == state.own_shard_id {
+        let (signing_key, _) = avalon_protocol::sth::load_signing_key_from_env().ok()?;
+        let verifying = signing_key.verifying_key();
+        return (avalon_protocol::shard_identity::derive_self_certifying_id(&verifying)
+            == shard_id)
+            .then(|| hex::encode(verifying.to_bytes()));
+    }
+    crate::self_certifying_keys::pinned_key(&state.pool, shard_id)
+        .await
+        .map(|key| hex::encode(key.to_bytes()))
 }
 
 impl From<SignedTreeHead> for SignedTreeHeadResponse {
@@ -244,7 +274,10 @@ pub async fn latest_sth(
             } else {
                 Vec::new()
             };
-            return Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)));
+            return Ok(Json(
+                SignedTreeHeadResponse::new(sth, cosigs)
+                    .with_signing_public_key(signing_public_key_for(&state, shard_id).await),
+            ));
         }
     }
     // A mirrored head has no locally-stored cosignatures at
@@ -260,7 +293,10 @@ pub async fn latest_sth(
         .chain
         .list_witness_cosignatures(&sth.network_id, shard_id, sth.tree_size)
         .await?;
-    Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)))
+    Ok(Json(
+        SignedTreeHeadResponse::new(sth, cosigs)
+            .with_signing_public_key(signing_public_key_for(&state, shard_id).await),
+    ))
 }
 
 /// Issue #519: `GET /ledger/sth/latest` and `/ledger/sth/{tree_size}`
@@ -312,7 +348,10 @@ pub async fn sth_at_tree_size(
             } else {
                 Vec::new()
             };
-            return Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)));
+            return Ok(Json(
+                SignedTreeHeadResponse::new(sth, cosigs)
+                    .with_signing_public_key(signing_public_key_for(&state, shard_id).await),
+            ));
         }
     }
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
@@ -334,7 +373,10 @@ pub async fn sth_at_tree_size(
         .chain
         .list_witness_cosignatures(&sth.network_id, shard_id, tree_size)
         .await?;
-    Ok(Json(SignedTreeHeadResponse::new(sth, cosigs)))
+    Ok(Json(
+        SignedTreeHeadResponse::new(sth, cosigs)
+            .with_signing_public_key(signing_public_key_for(&state, shard_id).await),
+    ))
 }
 
 /// Issue #520: `GET /ledger/sth/latest`'s mirror-backed fallback, reached

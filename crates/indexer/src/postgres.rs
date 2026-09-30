@@ -260,7 +260,7 @@ impl PostgresIndexer {
             // rather than falling into the `other` branch below, which
             // would log them as unrecognized on every rebuild even though
             // nothing is actually missing. See
-            // `docs/projects/backend-server/architecture/query-and-indexing.md`'s
+            // `avalon-docs/architecture/query-and-indexing.md`'s
             // "Events with their own source of truth" section for the full
             // table-by-kind mapping and why each one is scoped this way.
             "game.registered"
@@ -298,7 +298,7 @@ impl PostgresIndexer {
             other => {
                 // Never an error — an old indexer must survive a new event
                 // kind being introduced elsewhere in the protocol. See
-                // docs/projects/backend-server/architecture/query-and-indexing.md.
+                // avalon-docs/architecture/query-and-indexing.md.
                 eprintln!("indexer: skipping unrecognized event kind {other:?}");
             }
         }

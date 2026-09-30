@@ -1,7 +1,7 @@
 //! The capability-enforcement extractor and guard — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`). See
-//! `docs/projects/backend-server/architecture/security-model.md`'s "Authorization: one capability,
+//! `avalon-docs/protocol/security-model.md`'s "Authorization: one capability,
 //! one check" section for the caller-kind design,
 //! why lookups key on `(identity_id, integrator_id)` not `binding_id`, and
 //! why there's no cache yet. The DB-backed live proof lives in this
@@ -395,6 +395,7 @@ mod live_tests {
             shard_mirror_sources: crate::settlement::ShardMirrorSources::default(),
             interest: crate::interest::InterestRegistry::new().0,
             dht_commands: None,
+            reachability: crate::reachability::ReachabilityHandle::unknown(),
             own_base_url: None,
             own_libp2p_peer_id: None,
             interest_redis_fast_path: None,

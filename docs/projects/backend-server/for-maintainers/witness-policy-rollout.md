@@ -3,8 +3,8 @@
 How to move a running single-key network (the dev fleet, the integration
 environment, a future production network) onto witness cosigning without a reset,
 what old and new clients see at each step, and how to undo it. Design:
-[`witness-cosigning.md`](../architecture/witness-cosigning.md). Trust-anchor
-background: [`network-trust-anchors.md`](../architecture/network-trust-anchors.md).
+[`witness-cosigning.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/witness-cosigning.md). Trust-anchor
+background: [`network-trust-anchors.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md).
 
 ## What changes and what does not
 
