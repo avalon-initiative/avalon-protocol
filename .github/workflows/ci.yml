@@ -191,4 +191,4 @@ jobs:
       - name: NAT scenarios (CI subset)
         env:
           AVALON_ENV_FILE: ${{ runner.temp }}/nat.env
-        run: sudo -E env "PATH=$PATH" scripts/nat-scenarios.sh public relayed-symmetric
+        run: sudo -E env "PATH=$PATH" scripts/nat-scenarios.sh public relayed-symmetric punch-port-restricted
