@@ -219,7 +219,7 @@ curl -s -X POST "$BASE/integrations/walkthrough-game-a/connect" \
 ```
 
 Then Game A exchanges Player A's session token for a `Session` scoped to
-itself, entirely through the SDK (`docs/projects/sdks/rust/for-developers/getting-started.md`):
+itself, entirely through the SDK ([the Rust SDK getting-started guide](https://github.com/avalon-initiative/avalon-sdks/blob/main/docs/rust/for-developers/getting-started.md)):
 
 ```rust
 let client = AvalonClient::new(AvalonConfig {

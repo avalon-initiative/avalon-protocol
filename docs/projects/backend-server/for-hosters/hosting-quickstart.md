@@ -111,7 +111,7 @@ repository's root `Dockerfile`.
 ## What you get, and what you don't
 
 - A single node running every role together (Settlement, Indexer, Realtime,
-  Gateway) — see [`../architecture/nodes.md`](../architecture/nodes.md) for
+  Gateway) — see [`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md) for
   what that means today versus the target multi-role topology.
 - **Plain HTTP, bound to `127.0.0.1` only.** Fine for trying this out or for
   a node that only ever talks to other processes on the same machine.
@@ -120,13 +120,13 @@ repository's root `Dockerfile`.
   requirement the moment this leaves loopback, and that doc covers exposing
   the port behind a reverse proxy correctly.
 - A single-node deployment, not a mirrored/multi-Settlement-node network —
-  see [`../architecture/settlement.md`](../architecture/settlement.md) if
+  see [`avalon-docs: architecture/settlement.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/settlement.md) if
   you're looking to run alongside other operators on the same network.
 
 ## Node roles at a glance
 
 Three independent choices, not one — see
-[`../architecture/nodes.md`](../architecture/nodes.md)'s "A node's three
+[`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md)'s "A node's three
 configuration axes are independent" section for the full reference. This
 `make stack-up` quickstart leaves all three at their defaults (below);
 change them by adding the corresponding line to `.env`.

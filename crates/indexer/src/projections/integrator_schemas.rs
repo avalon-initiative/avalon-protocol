@@ -2,7 +2,7 @@
 //! published `IntegratorSchemaVersion`s, surfaced through the
 //! same indexer-projection machinery every other read model in this crate
 //! already uses, rather than a separate discovery path
-//! (`docs/projects/backend-server/architecture/registry.md`).
+//! (`avalon-docs/protocol/registry.md`).
 //!
 //! Decodes `game_schema.published`
 //! (`crates/server/src/integrator_schemas.rs::publish_schema_version`) into an

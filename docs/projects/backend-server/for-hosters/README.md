@@ -4,7 +4,7 @@ Documentation for people standing up an `avalon-server` node to actually run
 it — for their own community, a game, or just to see it work — not for
 people contributing code to this repository itself (see
 [maintainers docs](../../../maintainers/)) or integrating Avalon into their own
-game/app/service as a developer (see [developer docs](../../sdks/rust/for-developers/)).
+game/app/service as a developer (see [developer docs](https://github.com/avalon-initiative/avalon-docs/blob/main/integrations/README.md)).
 
 The Docker route needs only [Docker](https://docs.docker.com/get-docker/); the
 standalone-binary route needs only a Postgres database.
@@ -58,8 +58,8 @@ first-run failures. Beyond that:
 
 ## Background
 
-[`../architecture/self-hosting.md`](../architecture/self-hosting.md) and
-[`../architecture/nodes.md`](../architecture/nodes.md) cover the concepts
+[`avalon-docs: architecture/self-hosting.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/self-hosting.md) and
+[`avalon-docs: architecture/nodes/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/nodes/README.md) cover the concepts
 behind what these guides walk through — what a node's roles mean today,
 running a private instance versus joining the public network, and the
 combined-binary default versus the multi-role topology available today —

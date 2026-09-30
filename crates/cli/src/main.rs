@@ -1349,7 +1349,7 @@ async fn inspect_ledger(full: bool) {
         println!("retention: full — every entry's payload is present");
     } else {
         println!(
-            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see docs/projects/backend-server/architecture/nodes.md)",
+            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see avalon-docs/architecture/nodes/README.md)",
             entries.len()
         );
     }

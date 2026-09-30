@@ -3,7 +3,7 @@
 //!
 //! Two independent keys, two independent jobs (see
 //! `db/migrations/0001_identity_and_auth/up.sql` and
-//! `docs/projects/backend-server/architecture/identity.md`):
+//! `avalon-docs/protocol/identity.md`):
 //!
 //! * A WebAuthn passkey proves interactive presence — "the holder of this
 //!   device authorized this HTTP request, right now." That's `webauthn-rs`'s

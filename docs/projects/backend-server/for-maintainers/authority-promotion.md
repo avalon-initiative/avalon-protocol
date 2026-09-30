@@ -6,7 +6,7 @@ serving reads from its own verified copy, but it never becomes a writer on
 its own: **promotion is a manual, operator-driven procedure, deliberately
 never automatic.** An election mechanism would reintroduce the
 multi-writer consensus this network decided against (see
-[`../architecture/settlement.md`](../architecture/settlement.md)), and the
+[`avalon-docs: architecture/settlement.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/settlement.md)), and the
 failure it guards against, two nodes both signing for one shard, is exactly
 what [`equivocation-response.md`](equivocation-response.md) exists to clean
 up after.
@@ -163,7 +163,7 @@ The new authority signs Signed Tree Heads with `AVALON_SETTLEMENT_SIGNING_KEY`.
    those identities. Sessions and login credentials are server-local and are
    not in the log, so people log in again; everything the protocol promises
    durably is rebuilt from history
-   ([`../architecture/disaster-recovery.md`](../architecture/disaster-recovery.md)).
+   ([`avalon-docs: architecture/disaster-recovery.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/disaster-recovery.md)).
 6. Run `avalon inspect-ledger` and confirm `chain intact` and an entry count
    equal to the converged `tree_size` from step 2. It reports the carried
    tree heads as failing signature verification when the configured verify key
@@ -193,7 +193,7 @@ governance control. SDK builds and the Hub bundle the file at build time, so
 already-shipped builds keep the old key until they are rebuilt, and show the
 network as a key mismatch in the meantime. Until they are updated, the
 runbook's announcement (step 0) is how users learn why. See
-[`../architecture/network-trust-anchors.md`](../architecture/network-trust-anchors.md).
+[`avalon-docs: protocol/network-trust-anchors.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md).
 
 ## After the incident
 

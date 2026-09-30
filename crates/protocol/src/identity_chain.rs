@@ -14,7 +14,7 @@
 //!
 //! This module is pure logic: no I/O, no Postgres, no signature
 //! verification (that already happens before an event is accepted at all
-//! — see `docs/projects/backend-server/architecture/protocol-events.md`).
+//! — see `avalon-docs/protocol/protocol-events.md`).
 //! It answers exactly one question: given a set of events that all claim
 //! the same position in an identity's chain, which one wins, and does the
 //! identity need to be frozen instead.

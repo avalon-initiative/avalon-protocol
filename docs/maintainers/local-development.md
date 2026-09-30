@@ -3,7 +3,7 @@
 Everything needed to get the full stack — server, CLI, Hub web client,
 Storybook, and the C# SDK — running from a clean clone. This page is
 operational only; for what the code actually does and why, see
-[`../architecture/`](../projects/backend-server/architecture/) (linked from each section below, not
+[`avalon-docs: architecture/README.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/README.md) (linked from each section below, not
 repeated here).
 
 ## Prerequisites
@@ -84,7 +84,7 @@ make inspect-ledger
 
 `make create-identity` registers a new self-custodied identity via
 `avalon-cli` (a WebAuthn passkey ceremony plus its own Ed25519 signing key —
-see [`../architecture/identity.md`](../projects/backend-server/architecture/identity.md)).
+see [`avalon-docs: protocol/identity.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/identity.md)).
 `make inspect-ledger` pretty-prints the hash-chained settlement ledger
 (`make inspect-ledger-full` includes each entry's payload).
 
@@ -93,7 +93,7 @@ the identity you just created, with `issuer = identity:<id>:self:created`.
 `make outbox-status` should show zero pending entries once the outbox worker
 has caught up — identity creation and its ledger entry are committed
 atomically via an outbox pattern (see
-[`../architecture/settlement.md`](../projects/backend-server/architecture/settlement.md)).
+[`avalon-docs: architecture/settlement.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/architecture/settlement.md)).
 
 To log back in with an identity `create-identity` already saved locally:
 
@@ -205,7 +205,7 @@ the selected scenarios, for ranges on a noisy machine), `LOAD_PORT_BASE`
 `announce-strict`, `mesh`, `concurrency`, `db-pool`, `db-pool-reads`,
 `db-pool-writes`, `db-pool-large`, `slow-conn`, `oversized`, `sustained`. The
 measured results and their interpretation are in
-`docs/projects/backend-server/architecture/scalability.md`. CI runs the smoke
+`avalon-docs/architecture/scalability.md`. CI runs the smoke
 scale in a separate `load-smoke` job with a Postgres service container.
 
 ### `.env` loading in tests and live-verification code

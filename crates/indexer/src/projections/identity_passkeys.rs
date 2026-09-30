@@ -4,7 +4,7 @@
 //! a mirror-only node: a live node that actually ran the WebAuthn ceremony
 //! keeps writing `identity_keys` directly (`crates/server/src/passkeys.rs`,
 //! `crates/server/src/handlers.rs`), same as before this ticket. See
-//! `docs/projects/backend-server/architecture/identity.md`'s durability table.
+//! `avalon-docs/protocol/identity.md`'s durability table.
 
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{Postgres, Row, Transaction};

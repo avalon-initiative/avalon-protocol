@@ -4,7 +4,7 @@ A scenario suite that grows a network from one real `avalon-server` process
 to several, removes nodes including the original, drops and refills a
 known-list witness, floods a victim with same-prefix candidates, forks a log,
 and reconnects a node that was offline for a long stretch. The property under
-test is in [`../architecture/witness-cosigning.md`](../architecture/witness-cosigning.md):
+test is in [`avalon-docs: protocol/witness-cosigning.md`](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/witness-cosigning.md):
 the network behaves the same at one node and at many, and survives losing any
 operator's nodes, including the original.
 
