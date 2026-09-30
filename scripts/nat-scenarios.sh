@@ -243,6 +243,17 @@ scenario_relay-failover() {
     "the reservation to move to the other relay"
 }
 
+# dump_logs: the lines of each node's log that explain a failed wait.
+dump_logs() {
+  local f
+  for f in "$LOG_DIR"/*.log; do
+    [ -e "$f" ] || continue
+    echo "--- $(basename "$f")"
+    grep -E "AutoNAT|reachab|relay|reservation|hole punch|WARN|ERROR|panicked" "$f" \
+      | grep -v "mirror_watcher\|node-announce: http://192" | cut -c1-260 | tail -${NAT_LAB_DUMP_LINES:-25}
+  done
+}
+
 # --- runner ------------------------------------------------------------------------
 
 ALL="public full-cone-direct restricted-cone-detected-public punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only relay-failover"
@@ -259,6 +270,7 @@ for s in "${SCENARIOS[@]}"; do
     echo "   PASS"
     RESULTS+=("PASS $s")
   else
+    dump_logs
     echo "   FAIL (logs: $LOG_DIR)"
     RESULTS+=("FAIL $s")
     FAILED=1
