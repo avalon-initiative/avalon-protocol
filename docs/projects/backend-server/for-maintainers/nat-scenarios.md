@@ -36,7 +36,7 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `full-cone-direct` | A node behind the lab's full-cone NAT, which forwards every inbound port, is detected `public`. | no |
 | `restricted-cone-detected-public` | A node behind a restricted-cone NAT is detected `public`. This is a known limitation, see below. | no |
 | `relayed-port-restricted`, `relayed-symmetric`, `relayed-no-inbound` | A node behind that NAT is detected `private`, reserves a slot on a relay it found through gossip from one HTTP seed, reports `relayed` and advertises its circuit address. | `relayed-symmetric` |
-| `punch-port-restricted` | Two nodes behind port-restricted NATs, bootstrapped from the seed only, find each other through the relay and upgrade to a direct connection: `nat_traversed`, `punched_peers` and a successful `hole_punches` entry. | no |
+| `punch-port-restricted` | Two nodes behind port-restricted NATs, bootstrapped from the seed only, find each other through the relay and upgrade to a direct connection: `nat_traversed`, `punched_peers` and a successful `hole_punches` entry. | `punch-port-restricted` |
 | `punch-symmetric-fallback` | The same with symmetric NATs. The punch fails, the failure is recorded, and both nodes keep reporting `relayed`. | no |
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |

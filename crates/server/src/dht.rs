@@ -624,11 +624,16 @@ enum HttpDial {
 /// Dials `peer` with the peer table's addresses (direct first) unless a dial is already in
 /// flight.
 fn dial_for_http(swarm: &mut Swarm<DhtBehaviour>, peers: &PeerTable, peer: PeerId) -> HttpDial {
-    let opts = DialOpts::peer_id(peer)
-        .addresses(table_addrs(peers, &peer))
+    let addrs = table_addrs(peers, &peer);
+    // Direct dials avoid the listen port: a NAT mapping left by a failed one blocks a later punch.
+    let mut builder = DialOpts::peer_id(peer)
+        .addresses(addrs.clone())
         .extend_addresses_through_behaviour()
-        .condition(PeerCondition::DisconnectedAndNotDialing)
-        .build();
+        .condition(PeerCondition::DisconnectedAndNotDialing);
+    if !addrs.iter().any(is_relayed_addr) {
+        builder = builder.allocate_new_port();
+    }
+    let opts = builder.build();
     let id = opts.connection_id();
     match swarm.dial(opts) {
         Ok(()) => HttpDial::Started(id),
@@ -761,11 +766,14 @@ fn flushable_connection(event: &SwarmEvent<DhtBehaviourEvent>) -> Option<PeerId>
 fn scan_dial(swarm: &mut Swarm<DhtBehaviour>, peer_id: PeerId, addr: Multiaddr) -> bool {
     // Peer-aware, so a stream request's own dial to the same peer joins this one instead of
     // racing it.
-    let opts = DialOpts::peer_id(peer_id)
-        .addresses(vec![addr])
-        .condition(PeerCondition::DisconnectedAndNotDialing)
-        .build();
-    match swarm.dial(opts) {
+    // Direct dials avoid the listen port; relayed ones keep it so the relay sees the punch port.
+    let mut builder = DialOpts::peer_id(peer_id)
+        .addresses(vec![addr.clone()])
+        .condition(PeerCondition::DisconnectedAndNotDialing);
+    if !is_relayed_addr(&addr) {
+        builder = builder.allocate_new_port();
+    }
+    match swarm.dial(builder.build()) {
         Ok(()) => true,
         Err(DialError::DialPeerConditionFalse(_)) => swarm.is_connected(&peer_id),
         Err(e) => {
