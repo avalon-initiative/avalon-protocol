@@ -494,7 +494,7 @@ async fn create_definition(
     tag = "achievements",
     params(("slug" = String, Path)),
     request_body = CreateAchievementDefinitionRequest,
-    responses((status = 200, body = AchievementDefinitionResponse)),
+    responses((status = 200, description = "The resulting achievement definition", body = AchievementDefinitionResponse)),
 )]
 pub async fn create_achievement_definition(
     State(state): State<AppState>,
@@ -512,7 +512,7 @@ pub async fn create_achievement_definition(
     tag = "achievements",
     params(("slug" = String, Path)),
     request_body = CreateAchievementDefinitionRequest,
-    responses((status = 200, body = AchievementDefinitionResponse)),
+    responses((status = 200, description = "The resulting achievement definition", body = AchievementDefinitionResponse)),
 )]
 pub async fn create_milestone_definition(
     State(state): State<AppState>,
@@ -707,7 +707,7 @@ async fn update_definition(
     tag = "achievements",
     params(("slug" = String, Path), ("key" = String, Path)),
     request_body = UpdateAchievementDefinitionRequest,
-    responses((status = 200, body = AchievementDefinitionResponse)),
+    responses((status = 200, description = "The resulting achievement definition", body = AchievementDefinitionResponse)),
 )]
 pub async fn update_achievement_definition(
     State(state): State<AppState>,
@@ -725,7 +725,7 @@ pub async fn update_achievement_definition(
     tag = "achievements",
     params(("slug" = String, Path), ("key" = String, Path)),
     request_body = UpdateAchievementDefinitionRequest,
-    responses((status = 200, body = AchievementDefinitionResponse)),
+    responses((status = 200, description = "The resulting achievement definition", body = AchievementDefinitionResponse)),
 )]
 pub async fn update_milestone_definition(
     State(state): State<AppState>,
@@ -798,7 +798,7 @@ async fn list_definitions(
     path = "/integrations/{slug}/achievements",
     tag = "achievements",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<AchievementDefinitionResponse>)),
+    responses((status = 200, description = "List of achievement definition entries", body = Vec<AchievementDefinitionResponse>)),
 )]
 pub async fn list_achievement_definitions(
     State(state): State<AppState>,
@@ -813,7 +813,7 @@ pub async fn list_achievement_definitions(
     path = "/integrations/{slug}/milestones",
     tag = "achievements",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<AchievementDefinitionResponse>)),
+    responses((status = 200, description = "List of achievement definition entries", body = Vec<AchievementDefinitionResponse>)),
 )]
 pub async fn list_milestone_definitions(
     State(state): State<AppState>,
@@ -1094,7 +1094,7 @@ async fn issue_attestation(
     tag = "achievements",
     params(("slug" = String, Path), ("key" = String, Path)),
     request_body = IssueAttestationRequest,
-    responses((status = 200, body = AttestationResponse)),
+    responses((status = 200, description = "The resulting attestation", body = AttestationResponse)),
 )]
 pub async fn issue_achievement(
     State(state): State<AppState>,
@@ -1112,7 +1112,7 @@ pub async fn issue_achievement(
     tag = "achievements",
     params(("slug" = String, Path), ("key" = String, Path)),
     request_body = IssueAttestationRequest,
-    responses((status = 200, body = AttestationResponse)),
+    responses((status = 200, description = "The resulting attestation", body = AttestationResponse)),
 )]
 pub async fn issue_milestone(
     State(state): State<AppState>,
@@ -1424,7 +1424,7 @@ async fn bulk_issue_attestation(
     tag = "achievements",
     params(("slug" = String, Path)),
     request_body = BulkIssueAttestationRequest,
-    responses((status = 200, body = BulkIssueAttestationResponse)),
+    responses((status = 200, description = "The resulting bulk issue attestation", body = BulkIssueAttestationResponse)),
 )]
 pub async fn bulk_issue_achievements(
     State(state): State<AppState>,
@@ -1442,7 +1442,7 @@ pub async fn bulk_issue_achievements(
     tag = "achievements",
     params(("slug" = String, Path)),
     request_body = BulkIssueAttestationRequest,
-    responses((status = 200, body = BulkIssueAttestationResponse)),
+    responses((status = 200, description = "The resulting bulk issue attestation", body = BulkIssueAttestationResponse)),
 )]
 pub async fn bulk_issue_milestones(
     State(state): State<AppState>,

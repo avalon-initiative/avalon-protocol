@@ -86,7 +86,7 @@ pub struct DiscoverPeopleResponse {
     get,
     path = "/people/discover",
     tag = "discovery",
-    responses((status = 200, body = DiscoverPeopleResponse)),
+    responses((status = 200, description = "The discover people", body = DiscoverPeopleResponse)),
 )]
 pub async fn discover_people(
     State(state): State<AppState>,
@@ -223,7 +223,7 @@ fn build_search_query(
     path = "/identities/search",
     tag = "discovery",
     params(SearchIdentitiesQuery),
-    responses((status = 200, body = SearchIdentitiesResponse)),
+    responses((status = 200, description = "The search identities", body = SearchIdentitiesResponse)),
 )]
 pub async fn search_identities(
     State(state): State<AppState>,

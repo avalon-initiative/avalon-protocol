@@ -95,7 +95,7 @@ pub struct StartPairingResponse {
     post,
     path = "/auth/device/start",
     tag = "devices",
-    responses((status = 200, body = StartPairingResponse)),
+    responses((status = 200, description = "The resulting start pairing", body = StartPairingResponse)),
 )]
 pub async fn start_pairing(
     State(state): State<AppState>,
@@ -163,7 +163,7 @@ fn pending_status(status: &str) -> PollPairingResponse {
     post,
     path = "/auth/device/poll",
     tag = "devices",
-    responses((status = 200, body = PollPairingResponse)),
+    responses((status = 200, description = "The resulting poll pairing", body = PollPairingResponse)),
 )]
 pub async fn poll_pairing(
     State(state): State<AppState>,
@@ -305,7 +305,7 @@ async fn fetch_pending_pairing_id(state: &AppState, user_code: &str) -> Result<U
     path = "/auth/device/approve",
     tag = "devices",
     request_body = ApprovePairingRequest,
-    responses((status = 200, body = ResolvePairingResponse)),
+    responses((status = 200, description = "The resulting resolve pairing", body = ResolvePairingResponse)),
 )]
 pub async fn approve_pairing(
     State(state): State<AppState>,
@@ -381,7 +381,7 @@ pub async fn approve_pairing(
     path = "/auth/device/deny",
     tag = "devices",
     request_body = UserCodeRequest,
-    responses((status = 200, body = ResolvePairingResponse)),
+    responses((status = 200, description = "The resulting resolve pairing", body = ResolvePairingResponse)),
 )]
 pub async fn deny_pairing(
     State(state): State<AppState>,

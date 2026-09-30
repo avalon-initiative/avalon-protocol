@@ -106,7 +106,7 @@ pub struct RegistrationChallengeResponse {
     path = "/issuers/registration-challenge",
     tag = "issuers",
     request_body = RegistrationChallengeRequest,
-    responses((status = 200, body = RegistrationChallengeResponse)),
+    responses((status = 200, description = "The resulting registration challenge", body = RegistrationChallengeResponse)),
 )]
 pub async fn create_registration_challenge(
     State(state): State<AppState>,
@@ -185,7 +185,7 @@ fn proof_of_possession_message(
     path = "/issuers/register",
     tag = "issuers",
     request_body = RegisterIssuerRequest,
-    responses((status = 200, body = IssuerRegistrationResponse)),
+    responses((status = 200, description = "The resulting issuer registration", body = IssuerRegistrationResponse)),
 )]
 pub async fn register_issuer(
     State(state): State<AppState>,

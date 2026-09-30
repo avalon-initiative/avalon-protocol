@@ -150,7 +150,7 @@ pub struct RegisterStartResponse {
     path = "/identities/register/start",
     tag = "identity",
     request_body = RegisterStartRequest,
-    responses((status = 200, body = RegisterStartResponse)),
+    responses((status = 200, description = "The resulting register start", body = RegisterStartResponse)),
 )]
 pub async fn register_start(
     State(state): State<AppState>,
@@ -270,7 +270,7 @@ pub struct RegisterFinishResponse {
     path = "/identities/register/finish",
     tag = "identity",
     request_body = RegisterFinishRequest,
-    responses((status = 200, body = RegisterFinishResponse)),
+    responses((status = 200, description = "The resulting register finish", body = RegisterFinishResponse)),
 )]
 pub async fn register_finish(
     State(state): State<AppState>,
@@ -550,7 +550,7 @@ async fn fetch_passkeys(state: &AppState, identity_id: Uuid) -> Result<Vec<Passk
     path = "/sessions/start",
     tag = "identity",
     request_body = SessionStartRequest,
-    responses((status = 200, body = SessionStartResponse)),
+    responses((status = 200, description = "The resulting session start", body = SessionStartResponse)),
 )]
 pub async fn session_start(
     State(state): State<AppState>,
@@ -605,7 +605,7 @@ pub struct SessionFinishResponse {
     path = "/sessions/finish",
     tag = "identity",
     request_body = SessionFinishRequest,
-    responses((status = 200, body = SessionFinishResponse)),
+    responses((status = 200, description = "The resulting session finish", body = SessionFinishResponse)),
 )]
 pub async fn session_finish(
     State(state): State<AppState>,
@@ -783,7 +783,7 @@ where
     get,
     path = "/me",
     tag = "identity",
-    responses((status = 200, body = ProfileResponse)),
+    responses((status = 200, description = "The profile", body = ProfileResponse)),
 )]
 pub async fn me(
     State(state): State<AppState>,
@@ -882,7 +882,7 @@ pub struct PublicIdentityProfileResponse {
     path = "/identities/{id}/profile",
     tag = "identity",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = PublicIdentityProfileResponse)),
+    responses((status = 200, description = "The public identity profile", body = PublicIdentityProfileResponse)),
 )]
 pub async fn get_identity_profile(
     State(state): State<AppState>,
@@ -938,7 +938,7 @@ pub async fn get_identity_profile(
     path = "/identities/profiles",
     tag = "identity",
     params(ProfilesQuery),
-    responses((status = 200, body = Vec<PublicProfileResponse>)),
+    responses((status = 200, description = "List of public profile entries", body = Vec<PublicProfileResponse>)),
 )]
 pub async fn list_profiles(
     State(state): State<AppState>,
@@ -1014,7 +1014,7 @@ pub struct HistoryEntryResponse {
     get,
     path = "/me/history",
     tag = "identity",
-    responses((status = 200, body = Vec<HistoryEntryResponse>)),
+    responses((status = 200, description = "List of history entry entries", body = Vec<HistoryEntryResponse>)),
 )]
 pub async fn my_history(
     State(state): State<AppState>,
@@ -1349,7 +1349,7 @@ pub(crate) fn profile_updated_payload(
     path = "/me",
     tag = "identity",
     request_body = UpdateProfileRequest,
-    responses((status = 200, body = ProfileResponse)),
+    responses((status = 200, description = "The resulting profile", body = ProfileResponse)),
 )]
 pub async fn update_profile(
     State(state): State<AppState>,

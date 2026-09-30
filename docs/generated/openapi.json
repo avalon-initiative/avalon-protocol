@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.8.0"
+    "version": "0.8.1"
   },
   "paths": {
     "/attestations/{id}": {
@@ -30,6 +30,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The attestation read",
             "content": {
               "application/json": {
                 "schema": {
@@ -71,6 +72,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting revocation",
             "content": {
               "application/json": {
                 "schema": {
@@ -101,6 +103,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting deny",
             "content": {
               "application/json": {
                 "schema": {
@@ -131,6 +134,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The lookup cross node login",
             "content": {
               "application/json": {
                 "schema": {
@@ -151,6 +155,7 @@
         "operationId": "poll",
         "responses": {
           "200": {
+            "description": "The resulting poll cross node login",
             "content": {
               "application/json": {
                 "schema": {
@@ -171,6 +176,7 @@
         "operationId": "start",
         "responses": {
           "200": {
+            "description": "The resulting start cross node login",
             "content": {
               "application/json": {
                 "schema": {
@@ -201,6 +207,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting submit grant",
             "content": {
               "application/json": {
                 "schema": {
@@ -231,6 +238,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting resolve pairing",
             "content": {
               "application/json": {
                 "schema": {
@@ -261,6 +269,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting resolve pairing",
             "content": {
               "application/json": {
                 "schema": {
@@ -281,6 +290,7 @@
         "operationId": "poll_pairing",
         "responses": {
           "200": {
+            "description": "The resulting poll pairing",
             "content": {
               "application/json": {
                 "schema": {
@@ -301,6 +311,7 @@
         "operationId": "start_pairing",
         "responses": {
           "200": {
+            "description": "The resulting start pairing",
             "content": {
               "application/json": {
                 "schema": {
@@ -321,6 +332,7 @@
         "operationId": "list_blocks",
         "responses": {
           "200": {
+            "description": "List of block list entry entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -352,6 +364,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting block",
             "content": {
               "application/json": {
                 "schema": {
@@ -397,6 +410,7 @@
         "operationId": "list_my_conversations",
         "responses": {
           "200": {
+            "description": "List of conversation entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -428,6 +442,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting conversation",
             "content": {
               "application/json": {
                 "schema": {
@@ -484,6 +499,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of message entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -527,6 +543,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting message",
             "content": {
               "application/json": {
                 "schema": {
@@ -546,6 +563,7 @@
         "operationId": "list_friends",
         "responses": {
           "200": {
+            "description": "List of friendship entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -579,6 +597,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resolve handle",
             "content": {
               "application/json": {
                 "schema": {
@@ -598,6 +617,7 @@
         "operationId": "list_friend_requests",
         "responses": {
           "200": {
+            "description": "List of friend request entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -628,6 +648,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting friend request",
             "content": {
               "application/json": {
                 "schema": {
@@ -682,6 +703,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting friendship",
             "content": {
               "application/json": {
                 "schema": {
@@ -735,6 +757,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild",
             "content": {
               "application/json": {
                 "schema": {
@@ -842,6 +865,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The discover guilds",
             "content": {
               "application/json": {
                 "schema": {
@@ -872,6 +896,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The guild",
             "content": {
               "application/json": {
                 "schema": {
@@ -910,6 +935,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild",
             "content": {
               "application/json": {
                 "schema": {
@@ -941,6 +967,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of channel entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -983,6 +1010,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting channel",
             "content": {
               "application/json": {
                 "schema": {
@@ -1033,6 +1061,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting channel",
             "content": {
               "application/json": {
                 "schema": {
@@ -1073,6 +1102,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting channel",
             "content": {
               "application/json": {
                 "schema": {
@@ -1138,6 +1168,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of message entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -1189,6 +1220,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting message",
             "content": {
               "application/json": {
                 "schema": {
@@ -1254,6 +1286,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of archived message entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -1355,6 +1388,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of event entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -1397,6 +1431,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting event",
             "content": {
               "application/json": {
                 "schema": {
@@ -1479,6 +1514,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting event",
             "content": {
               "application/json": {
                 "schema": {
@@ -1529,6 +1565,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting rsvp",
             "content": {
               "application/json": {
                 "schema": {
@@ -1569,6 +1606,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of rsvp roster entry entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -1603,6 +1641,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The favorite games",
             "content": {
               "application/json": {
                 "schema": {
@@ -1642,6 +1681,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting favorite games",
             "content": {
               "application/json": {
                 "schema": {
@@ -1681,6 +1721,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting guild",
             "content": {
               "application/json": {
                 "schema": {
@@ -1713,6 +1754,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The game breakdown",
             "content": {
               "application/json": {
                 "schema": {
@@ -1753,6 +1795,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild invite",
             "content": {
               "application/json": {
                 "schema": {
@@ -1792,6 +1835,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting guild member",
             "content": {
               "application/json": {
                 "schema": {
@@ -1855,6 +1899,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting guild member",
             "content": {
               "application/json": {
                 "schema": {
@@ -1898,6 +1943,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of guild join request entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -1940,6 +1986,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild join request",
             "content": {
               "application/json": {
                 "schema": {
@@ -1971,6 +2018,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The guild join request, or null if there is none",
             "content": {
               "application/json": {
                 "schema": {
@@ -2052,6 +2100,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting guild member",
             "content": {
               "application/json": {
                 "schema": {
@@ -2140,6 +2189,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of guild member entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2223,6 +2273,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild member",
             "content": {
               "application/json": {
                 "schema": {
@@ -2271,6 +2322,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of permission override entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2313,6 +2365,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting permission override",
             "content": {
               "application/json": {
                 "schema": {
@@ -2386,6 +2439,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of role entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2427,6 +2481,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting role",
             "content": {
               "application/json": {
                 "schema": {
@@ -2517,6 +2572,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting role",
             "content": {
               "application/json": {
                 "schema": {
@@ -2557,6 +2613,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guild",
             "content": {
               "application/json": {
                 "schema": {
@@ -2588,6 +2645,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of public profile entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2620,6 +2678,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting register finish",
             "content": {
               "application/json": {
                 "schema": {
@@ -2649,6 +2708,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting register start",
             "content": {
               "application/json": {
                 "schema": {
@@ -2691,6 +2751,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The search identities",
             "content": {
               "application/json": {
                 "schema": {
@@ -2722,6 +2783,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of visible integrator data instance entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -2756,6 +2818,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The locations",
             "content": {
               "application/json": {
                 "schema": {
@@ -2787,6 +2850,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The public identity profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -2818,6 +2882,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The recovery request, or null if there is none",
             "content": {
               "application/json": {
                 "schema": {
@@ -2896,6 +2961,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The list integrators",
             "content": {
               "application/json": {
                 "schema": {
@@ -2923,6 +2989,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting integrator",
             "content": {
               "application/json": {
                 "schema": {
@@ -2943,6 +3010,7 @@
         "operationId": "integrator_whoami",
         "responses": {
           "200": {
+            "description": "The integrator whoami",
             "content": {
               "application/json": {
                 "schema": {
@@ -2973,6 +3041,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The integrator public",
             "content": {
               "application/json": {
                 "schema": {
@@ -3003,6 +3072,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of achievement definition entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3044,6 +3114,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting achievement definition",
             "content": {
               "application/json": {
                 "schema": {
@@ -3084,6 +3155,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting bulk issue attestation",
             "content": {
               "application/json": {
                 "schema": {
@@ -3132,6 +3204,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting achievement definition",
             "content": {
               "application/json": {
                 "schema": {
@@ -3180,6 +3253,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting attestation",
             "content": {
               "application/json": {
                 "schema": {
@@ -3209,6 +3283,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting integrator challenge",
             "content": {
               "application/json": {
                 "schema": {
@@ -3249,6 +3324,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting connect",
             "content": {
               "application/json": {
                 "schema": {
@@ -3333,6 +3409,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of issuer key entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3374,6 +3451,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting issuer key",
             "content": {
               "application/json": {
                 "schema": {
@@ -3423,6 +3501,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting issuer key",
             "content": {
               "application/json": {
                 "schema": {
@@ -3453,6 +3532,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of integrator schema mapping entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3494,6 +3574,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting integrator schema mapping",
             "content": {
               "application/json": {
                 "schema": {
@@ -3534,6 +3615,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The integrator schema mapping",
             "content": {
               "application/json": {
                 "schema": {
@@ -3564,6 +3646,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of achievement definition entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3605,6 +3688,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting achievement definition",
             "content": {
               "application/json": {
                 "schema": {
@@ -3645,6 +3729,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting bulk issue attestation",
             "content": {
               "application/json": {
                 "schema": {
@@ -3693,6 +3778,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting achievement definition",
             "content": {
               "application/json": {
                 "schema": {
@@ -3741,6 +3827,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting attestation",
             "content": {
               "application/json": {
                 "schema": {
@@ -3771,6 +3858,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of recognition entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3812,6 +3900,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting recognition",
             "content": {
               "application/json": {
                 "schema": {
@@ -3876,6 +3965,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of recognition entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3909,6 +3999,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The integrator registry",
             "content": {
               "application/json": {
                 "schema": {
@@ -3939,6 +4030,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of integrator schema version entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -3980,6 +4072,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting integrator schema version",
             "content": {
               "application/json": {
                 "schema": {
@@ -4020,6 +4113,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The integrator schema version",
             "content": {
               "application/json": {
                 "schema": {
@@ -4070,6 +4164,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting integrator data instance",
             "content": {
               "application/json": {
                 "schema": {
@@ -4153,6 +4248,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting issuer registration",
             "content": {
               "application/json": {
                 "schema": {
@@ -4183,6 +4279,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting registration challenge",
             "content": {
               "application/json": {
                 "schema": {
@@ -4202,6 +4299,7 @@
         "operationId": "me",
         "responses": {
           "200": {
+            "description": "The profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -4229,6 +4327,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -4302,6 +4401,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The list my achievements",
             "content": {
               "application/json": {
                 "schema": {
@@ -4322,6 +4422,7 @@
         "operationId": "list_my_connections",
         "responses": {
           "200": {
+            "description": "List of connection entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4345,6 +4446,7 @@
         "operationId": "list_devices",
         "responses": {
           "200": {
+            "description": "List of device entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4382,6 +4484,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of device grant entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4413,6 +4516,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting device grant",
             "content": {
               "application/json": {
                 "schema": {
@@ -4444,6 +4548,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The device grant",
             "content": {
               "application/json": {
                 "schema": {
@@ -4485,6 +4590,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting device",
             "content": {
               "application/json": {
                 "schema": {
@@ -4526,6 +4632,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting device",
             "content": {
               "application/json": {
                 "schema": {
@@ -4582,6 +4689,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The my grants",
             "content": {
               "application/json": {
                 "schema": {
@@ -4603,6 +4711,7 @@
         "operationId": "list_my_guild_announcements",
         "responses": {
           "200": {
+            "description": "List of guild announcement alert entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4626,6 +4735,7 @@
         "operationId": "my_guild_invites",
         "responses": {
           "200": {
+            "description": "List of my guild invite entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4648,6 +4758,7 @@
         "operationId": "list_my_guilds",
         "responses": {
           "200": {
+            "description": "List of my guild membership entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4671,6 +4782,7 @@
         "operationId": "my_history",
         "responses": {
           "200": {
+            "description": "List of history entry entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4694,6 +4806,7 @@
         "operationId": "list_passkeys",
         "responses": {
           "200": {
+            "description": "List of passkey entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4727,6 +4840,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting passkey",
             "content": {
               "application/json": {
                 "schema": {
@@ -4747,6 +4861,7 @@
         "operationId": "register_start",
         "responses": {
           "200": {
+            "description": "The resulting add passkey start",
             "content": {
               "application/json": {
                 "schema": {
@@ -4788,6 +4903,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting passkey",
             "content": {
               "application/json": {
                 "schema": {
@@ -4853,6 +4969,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting presence",
             "content": {
               "application/json": {
                 "schema": {
@@ -4873,6 +4990,7 @@
         "operationId": "guardian_of",
         "responses": {
           "200": {
+            "description": "List of guardian of summary entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4921,6 +5039,7 @@
         "operationId": "guardian_requests",
         "responses": {
           "200": {
+            "description": "List of guardian request summary entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -4944,6 +5063,7 @@
         "operationId": "get_guardians",
         "responses": {
           "200": {
+            "description": "The guardian settings",
             "content": {
               "application/json": {
                 "schema": {
@@ -4972,6 +5092,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting guardian settings",
             "content": {
               "application/json": {
                 "schema": {
@@ -4992,6 +5113,7 @@
         "operationId": "my_recovery_status",
         "responses": {
           "200": {
+            "description": "The recovery request, or null if there is none",
             "content": {
               "application/json": {
                 "schema": {
@@ -5030,6 +5152,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The rollback candidates",
             "content": {
               "application/json": {
                 "schema": {
@@ -5071,6 +5194,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting reverse event",
             "content": {
               "application/json": {
                 "schema": {
@@ -5102,6 +5226,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting probe",
             "content": {
               "application/json": {
                 "schema": {
@@ -5184,6 +5309,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting trace",
             "content": {
               "application/json": {
                 "schema": {
@@ -5213,6 +5339,7 @@
         "operationId": "discover_people",
         "responses": {
           "200": {
+            "description": "The discover people",
             "content": {
               "application/json": {
                 "schema": {
@@ -5244,6 +5371,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of presence entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -5288,6 +5416,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting presence",
             "content": {
               "application/json": {
                 "schema": {
@@ -5318,6 +5447,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting recovery request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5348,6 +5478,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting recovery start",
             "content": {
               "application/json": {
                 "schema": {
@@ -5379,6 +5510,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The recovery request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5410,6 +5542,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting recovery request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5451,6 +5584,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting recovery request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5482,6 +5616,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The resulting recovery request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5511,6 +5646,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting session finish",
             "content": {
               "application/json": {
                 "schema": {
@@ -5540,6 +5676,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting session start",
             "content": {
               "application/json": {
                 "schema": {
@@ -5570,6 +5707,7 @@
         ],
         "responses": {
           "200": {
+            "description": "The name claim",
             "content": {
               "application/json": {
                 "schema": {
@@ -5603,6 +5741,7 @@
         ],
         "responses": {
           "200": {
+            "description": "List of name claim entries",
             "content": {
               "application/json": {
                 "schema": {
@@ -5644,6 +5783,7 @@
         },
         "responses": {
           "200": {
+            "description": "The resulting name claim",
             "content": {
               "application/json": {
                 "schema": {

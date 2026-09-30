@@ -251,7 +251,7 @@ pub struct IntegratorResponse {
     path = "/integrations",
     tag = "integrators",
     request_body = CreateIntegratorRequest,
-    responses((status = 200, body = IntegratorResponse)),
+    responses((status = 200, description = "The resulting integrator", body = IntegratorResponse)),
 )]
 pub async fn register_integrator(
     State(state): State<AppState>,
@@ -425,7 +425,7 @@ pub struct IntegratorPublicResponse {
     path = "/integrations/{slug}",
     tag = "integrators",
     params(("slug" = String, Path)),
-    responses((status = 200, body = IntegratorPublicResponse)),
+    responses((status = 200, description = "The integrator public", body = IntegratorPublicResponse)),
 )]
 pub async fn get_integrator(
     State(state): State<AppState>,
@@ -580,7 +580,7 @@ fn build_integrators_list_query(
     path = "/integrations",
     tag = "integrators",
     params(ListIntegratorsQuery),
-    responses((status = 200, body = ListIntegratorsResponse)),
+    responses((status = 200, description = "The list integrators", body = ListIntegratorsResponse)),
 )]
 pub async fn list_integrators(
     State(state): State<AppState>,
@@ -636,7 +636,7 @@ pub struct IntegratorChallengeResponse {
     path = "/integrations/{slug}/challenge",
     tag = "integrators",
     params(("slug" = String, Path)),
-    responses((status = 200, body = IntegratorChallengeResponse)),
+    responses((status = 200, description = "The resulting integrator challenge", body = IntegratorChallengeResponse)),
 )]
 pub async fn create_integrator_challenge(
     State(state): State<AppState>,
@@ -759,7 +759,7 @@ pub(crate) async fn fetch_issuer_keys_batch(
     path = "/integrations/{slug}/keys",
     tag = "integrators",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<IssuerKeyResponse>)),
+    responses((status = 200, description = "List of issuer key entries", body = Vec<IssuerKeyResponse>)),
 )]
 pub async fn list_issuer_keys(
     State(state): State<AppState>,
@@ -939,7 +939,7 @@ pub struct IssuerKeyResponse {
     tag = "integrators",
     params(("slug" = String, Path)),
     request_body = AddIssuerKeyRequest,
-    responses((status = 200, body = IssuerKeyResponse)),
+    responses((status = 200, description = "The resulting issuer key", body = IssuerKeyResponse)),
 )]
 pub async fn add_issuer_key(
     State(state): State<AppState>,
@@ -1042,7 +1042,7 @@ pub struct RevokeIssuerKeyRequest {
     tag = "integrators",
     params(("slug" = String, Path), ("key_id" = Uuid, Path)),
     request_body = RevokeIssuerKeyRequest,
-    responses((status = 200, body = IssuerKeyResponse)),
+    responses((status = 200, description = "The resulting issuer key", body = IssuerKeyResponse)),
 )]
 pub async fn revoke_issuer_key(
     State(state): State<AppState>,
@@ -1124,7 +1124,7 @@ pub struct IntegratorWhoamiResponse {
     get,
     path = "/integrations/whoami",
     tag = "integrators",
-    responses((status = 200, body = IntegratorWhoamiResponse)),
+    responses((status = 200, description = "The integrator whoami", body = IntegratorWhoamiResponse)),
 )]
 pub async fn integrator_whoami(
     State(state): State<AppState>,

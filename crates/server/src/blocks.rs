@@ -132,7 +132,7 @@ pub struct BlockResponse {
     path = "/blocks",
     tag = "blocks",
     request_body = CreateBlockRequest,
-    responses((status = 200, body = BlockResponse)),
+    responses((status = 200, description = "The resulting block", body = BlockResponse)),
 )]
 pub async fn create_block(
     State(state): State<AppState>,
@@ -226,7 +226,7 @@ pub struct BlockListEntry {
     get,
     path = "/blocks",
     tag = "blocks",
-    responses((status = 200, body = Vec<BlockListEntry>)),
+    responses((status = 200, description = "List of block list entry entries", body = Vec<BlockListEntry>)),
 )]
 pub async fn list_blocks(
     State(state): State<AppState>,

@@ -148,7 +148,7 @@ pub struct CreateConversationRequest {
     path = "/conversations",
     tag = "chat",
     request_body = CreateConversationRequest,
-    responses((status = 200, body = ConversationResponse)),
+    responses((status = 200, description = "The resulting conversation", body = ConversationResponse)),
 )]
 pub async fn create_conversation(
     State(state): State<AppState>,
@@ -235,7 +235,7 @@ pub async fn create_conversation(
     get,
     path = "/conversations",
     tag = "chat",
-    responses((status = 200, body = Vec<ConversationResponse>)),
+    responses((status = 200, description = "List of conversation entries", body = Vec<ConversationResponse>)),
 )]
 pub async fn list_my_conversations(
     State(state): State<AppState>,
@@ -307,7 +307,7 @@ pub struct ListMessagesQuery {
     path = "/conversations/{id}/messages",
     tag = "chat",
     params(("id" = Uuid, Path), ListMessagesQuery),
-    responses((status = 200, body = Vec<MessageResponse>)),
+    responses((status = 200, description = "List of message entries", body = Vec<MessageResponse>)),
 )]
 pub async fn list_messages(
     State(state): State<AppState>,
@@ -407,7 +407,7 @@ pub struct SendMessageRequest {
     tag = "chat",
     params(("id" = Uuid, Path)),
     request_body = SendMessageRequest,
-    responses((status = 200, body = MessageResponse)),
+    responses((status = 200, description = "The resulting message", body = MessageResponse)),
 )]
 pub async fn send_message(
     State(state): State<AppState>,

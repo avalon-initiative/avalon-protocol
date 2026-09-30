@@ -97,7 +97,7 @@ pub struct AddPasskeyStartResponse {
     post,
     path = "/me/passkeys/register/start",
     tag = "devices",
-    responses((status = 200, body = AddPasskeyStartResponse)),
+    responses((status = 200, description = "The resulting add passkey start", body = AddPasskeyStartResponse)),
 )]
 pub async fn register_start(
     State(state): State<AppState>,
@@ -201,7 +201,7 @@ pub struct PasskeyResponse {
     path = "/me/passkeys/register/finish",
     tag = "devices",
     request_body = AddPasskeyFinishRequest,
-    responses((status = 200, body = PasskeyResponse)),
+    responses((status = 200, description = "The resulting passkey", body = PasskeyResponse)),
 )]
 pub async fn register_finish(
     State(state): State<AppState>,
@@ -302,7 +302,7 @@ pub async fn register_finish(
     get,
     path = "/me/passkeys",
     tag = "devices",
-    responses((status = 200, body = Vec<PasskeyResponse>)),
+    responses((status = 200, description = "List of passkey entries", body = Vec<PasskeyResponse>)),
 )]
 pub async fn list_passkeys(
     State(state): State<AppState>,
@@ -341,7 +341,7 @@ pub struct RenamePasskeyRequest {
     tag = "devices",
     params(("id" = Uuid, Path)),
     request_body = RenamePasskeyRequest,
-    responses((status = 200, body = PasskeyResponse)),
+    responses((status = 200, description = "The resulting passkey", body = PasskeyResponse)),
 )]
 pub async fn rename_passkey(
     State(state): State<AppState>,

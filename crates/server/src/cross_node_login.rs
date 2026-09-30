@@ -111,7 +111,7 @@ pub struct StartCrossNodeLoginResponse {
     post,
     path = "/auth/cross-node/start",
     tag = "identity",
-    responses((status = 200, body = StartCrossNodeLoginResponse)),
+    responses((status = 200, description = "The resulting start cross node login", body = StartCrossNodeLoginResponse)),
 )]
 pub async fn start(
     State(state): State<AppState>,
@@ -291,7 +291,7 @@ fn is_verified_seed_node(
     path = "/auth/cross-node/lookup",
     tag = "identity",
     params(LookupQuery),
-    responses((status = 200, body = LookupCrossNodeLoginResponse)),
+    responses((status = 200, description = "The lookup cross node login", body = LookupCrossNodeLoginResponse)),
 )]
 pub async fn lookup(
     State(state): State<AppState>,
@@ -356,7 +356,7 @@ fn pending_status(status: &str) -> PollCrossNodeLoginResponse {
     post,
     path = "/auth/cross-node/poll",
     tag = "identity",
-    responses((status = 200, body = PollCrossNodeLoginResponse)),
+    responses((status = 200, description = "The resulting poll cross node login", body = PollCrossNodeLoginResponse)),
 )]
 pub async fn poll(
     State(state): State<AppState>,
@@ -750,7 +750,7 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
     path = "/auth/cross-node/submit",
     tag = "identity",
     request_body = SubmitGrantRequest,
-    responses((status = 200, body = SubmitGrantResponse)),
+    responses((status = 200, description = "The resulting submit grant", body = SubmitGrantResponse)),
 )]
 pub async fn submit(
     State(state): State<AppState>,
@@ -829,7 +829,7 @@ pub struct DenyResponse {
     path = "/auth/cross-node/deny",
     tag = "identity",
     request_body = UserCodeRequest,
-    responses((status = 200, body = DenyResponse)),
+    responses((status = 200, description = "The resulting deny", body = DenyResponse)),
 )]
 pub async fn deny(
     State(state): State<AppState>,

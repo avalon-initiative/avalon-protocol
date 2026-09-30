@@ -277,7 +277,7 @@ impl From<ChannelRow> for ChannelResponse {
     path = "/guilds/{id}/channels",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Vec<ChannelResponse>)),
+    responses((status = 200, description = "List of channel entries", body = Vec<ChannelResponse>)),
 )]
 pub async fn list_channels(
     State(state): State<AppState>,
@@ -341,7 +341,7 @@ pub struct CreateChannelRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = CreateChannelRequest,
-    responses((status = 200, body = ChannelResponse)),
+    responses((status = 200, description = "The resulting channel", body = ChannelResponse)),
 )]
 pub async fn create_channel(
     State(state): State<AppState>,
@@ -430,7 +430,7 @@ pub struct UpdateChannelRequest {
     tag = "guilds",
     params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
     request_body = UpdateChannelRequest,
-    responses((status = 200, body = ChannelResponse)),
+    responses((status = 200, description = "The resulting channel", body = ChannelResponse)),
 )]
 pub async fn update_channel(
     State(state): State<AppState>,
@@ -512,7 +512,7 @@ pub async fn update_channel(
     path = "/guilds/{id}/channels/{cid}/archive",
     tag = "guilds",
     params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
-    responses((status = 200, body = ChannelResponse)),
+    responses((status = 200, description = "The resulting channel", body = ChannelResponse)),
 )]
 pub async fn archive_channel(
     State(state): State<AppState>,

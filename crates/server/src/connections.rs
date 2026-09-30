@@ -100,7 +100,7 @@ pub struct ConnectResponse {
     tag = "integrators",
     params(("slug" = String, Path)),
     request_body = ConnectRequest,
-    responses((status = 200, body = ConnectResponse)),
+    responses((status = 200, description = "The resulting connect", body = ConnectResponse)),
 )]
 pub async fn connect(
     State(state): State<AppState>,
@@ -456,7 +456,7 @@ pub struct Connection {
     get,
     path = "/me/connections",
     tag = "integrators",
-    responses((status = 200, body = Vec<Connection>)),
+    responses((status = 200, description = "List of connection entries", body = Vec<Connection>)),
 )]
 pub async fn list_my_connections(
     State(state): State<AppState>,
@@ -541,7 +541,7 @@ pub struct MyGrantsResponse {
     path = "/me/grants",
     tag = "integrators",
     params(("x-avalon-integrator-key-id" = String, Header)),
-    responses((status = 200, body = MyGrantsResponse)),
+    responses((status = 200, description = "The my grants", body = MyGrantsResponse)),
 )]
 pub async fn my_grants(
     State(state): State<AppState>,

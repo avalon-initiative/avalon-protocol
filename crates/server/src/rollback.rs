@@ -430,7 +430,7 @@ pub struct RollbackCandidatesResponse {
     path = "/me/rollback/candidates",
     tag = "devices",
     params(RollbackCandidatesQuery),
-    responses((status = 200, body = RollbackCandidatesResponse)),
+    responses((status = 200, description = "The rollback candidates", body = RollbackCandidatesResponse)),
 )]
 pub async fn list_rollback_candidates(
     State(state): State<AppState>,
@@ -515,7 +515,7 @@ pub struct ReverseEventResponse {
     tag = "devices",
     params(("event_id" = Uuid, Path)),
     request_body = ReverseEventRequest,
-    responses((status = 200, body = ReverseEventResponse)),
+    responses((status = 200, description = "The resulting reverse event", body = ReverseEventResponse)),
 )]
 pub async fn reverse_event(
     State(state): State<AppState>,

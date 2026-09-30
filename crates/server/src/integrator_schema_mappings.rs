@@ -136,7 +136,7 @@ async fn require_owned_schema(
     tag = "integrator-space",
     params(("slug" = String, Path)),
     request_body = PublishIntegratorSchemaMappingRequest,
-    responses((status = 200, body = IntegratorSchemaMappingResponse)),
+    responses((status = 200, description = "The resulting integrator schema mapping", body = IntegratorSchemaMappingResponse)),
 )]
 pub async fn publish_mapping(
     State(state): State<AppState>,
@@ -248,7 +248,7 @@ pub async fn publish_mapping(
     path = "/integrations/{slug}/mappings",
     tag = "integrator-space",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<IntegratorSchemaMappingResponse>)),
+    responses((status = 200, description = "List of integrator schema mapping entries", body = Vec<IntegratorSchemaMappingResponse>)),
 )]
 pub async fn list_mappings(
     State(state): State<AppState>,
@@ -288,7 +288,7 @@ pub async fn list_mappings(
     path = "/integrations/{slug}/mappings/{seq}",
     tag = "integrator-space",
     params(("slug" = String, Path), ("seq" = u32, Path)),
-    responses((status = 200, body = IntegratorSchemaMappingResponse)),
+    responses((status = 200, description = "The integrator schema mapping", body = IntegratorSchemaMappingResponse)),
 )]
 pub async fn get_mapping(
     State(state): State<AppState>,
