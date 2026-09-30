@@ -77,13 +77,13 @@ fn replication_target(state: &AppState) -> Option<String> {
         .list_all()
         .into_iter()
         .filter(|peer| advertises_storage_role(&peer.roles))
-        .map(|peer| peer.base_url)
-        .min()
+        .min_by(|a, b| a.base_url.cmp(&b.base_url))
+        .map(|peer| crate::node_http::NodeClient::url_for(&peer))
 }
 
-fn replication_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+fn replication_client() -> &'static crate::node_http::NodeClient {
+    static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
+    CLIENT.get_or_init(crate::node_http::NodeClient::new)
 }
 
 /// Posts `event` to this node's one designated replication target, if it

@@ -187,7 +187,7 @@ fn decode_proof_nodes(hex_nodes: &[String]) -> Option<Vec<[u8; 32]>> {
 /// holds. `false` for any decode/verification failure, never a panic on
 /// peer-controlled input.
 async fn verify_consistency_extends_checkpoint(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer_base_url: &str,
     shard_id: &str,
     checkpoint: &WitnessCheckpoint,
@@ -289,7 +289,7 @@ async fn verify_consistency_extends_checkpoint(
 pub async fn decide_and_cosign(
     chain: &PostgresSettlementProvider,
     pool: &PgPool,
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     config: Option<&WitnessCosignConfig>,
     head_gossip: &HeadGossipTracker,
     peer_base_url: &str,

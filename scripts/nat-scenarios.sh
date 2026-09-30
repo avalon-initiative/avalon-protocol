@@ -110,6 +110,21 @@ wait_status() {
   return 1
 }
 
+# wait_topology <ns> <ip> <jq filter> [what]: waits until the filter is true on /nodes/topology.
+wait_topology() {
+  local ns="$1" ip="$2" filter="$3" what="${4:-$3}" i
+  for i in $(seq 1 $((WAIT / 2))); do
+    if "$LAB" exec "$ns" -- curl -s -m 5 "http://$ip:8080/nodes/topology" | jq -e "$filter" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "    timed out after ${WAIT}s waiting for: $what" >&2
+  "$LAB" exec "$ns" -- curl -s -m 5 "http://$ip:8080/nodes/topology" \
+    | jq -c '[.neighbors[]|{base_url,connectivity,latency:(.latency|{samples,failed_recent,path})}]' >&2
+  return 1
+}
+
 # peer_id <node name>: the libp2p peer id a node logged at startup.
 peer_id() {
   local i id
@@ -207,6 +222,18 @@ scenario_restricted-cone-detected-public() {
     "AutoNAT to report a restricted-cone node public"
 }
 
+# A node reachable only through a relay still answers the seed's announces, which travel over
+# a libp2p stream because its HTTP URL cannot be reached.
+scenario_stream-announce-relayed() {
+  "$LAB" up home1 symmetric >/dev/null || return 1
+  public_pair || return 1
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.1:8080,http://10.99.0.2:8080
+  wait_status home1 10.1.0.2 '.connectivity == "relayed"' "home1 to be relayed" || return 1
+  WAIT=150 wait_topology inet 10.99.0.2 \
+    '[.neighbors[]|select(.base_url == "http://10.1.0.2:8080")|.latency.samples] | (.[0] // 0) >= 1' \
+    "the seed to complete an announce to the relayed node"
+}
+
 # With no relay to use, a private node still participates and reports outbound_only.
 scenario_outbound-only() {
   "$LAB" up home1 no-inbound >/dev/null || return 1
@@ -256,7 +283,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct restricted-cone-detected-public punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only relay-failover"
+ALL="public stream-announce-relayed full-cone-direct restricted-cone-detected-public punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only relay-failover"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 

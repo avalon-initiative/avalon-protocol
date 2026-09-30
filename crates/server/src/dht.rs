@@ -51,14 +51,20 @@ use std::time::{Duration, Instant};
 use libp2p::futures::StreamExt;
 use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
 use libp2p::multiaddr::Protocol;
+use libp2p::request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel};
 use libp2p::swarm::behaviour::toggle::Toggle;
-use libp2p::swarm::{ConnectionId, NetworkBehaviour, SwarmEvent};
+use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
+use libp2p::swarm::{ConnectionId, DialError, NetworkBehaviour, SwarmEvent};
 use libp2p::{
     autonat, dcutr, identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId,
     StreamProtocol, Swarm, SwarmBuilder,
 };
 use tokio::sync::{mpsc, oneshot};
 
+use crate::node_http::{
+    InboundPermit, InboundService, NodeHttpCodec, NodeHttpError, NodeHttpRequest, NodeHttpResponse,
+    NodeHttpSettings, RouterSlot, StreamErrorKind, StreamHandle,
+};
 use crate::nodes::{PeerInfo, PeerTable};
 use crate::outbound_policy::OutboundPolicy;
 use crate::reachability::{
@@ -97,6 +103,12 @@ pub enum DhtCommand {
     GetRecord {
         key: Vec<u8>,
         respond_to: oneshot::Sender<Vec<Vec<u8>>>,
+    },
+    /// One node-to-node HTTP exchange with `peer` over a stream, dialing it first if needed.
+    HttpRequest {
+        peer: PeerId,
+        request: NodeHttpRequest,
+        respond_to: oneshot::Sender<Result<NodeHttpResponse, NodeHttpError>>,
     },
 }
 
@@ -138,6 +150,14 @@ fn kad_protocol_name(network_id: &str) -> StreamProtocol {
         .expect("a network_id-scoped protocol string always starts with '/'")
 }
 
+/// Extra time past the handler timeout for the answer to cross the stream.
+const NODE_HTTP_ANSWER_GRACE: Duration = Duration::from_secs(5);
+
+/// The node-to-node HTTP stream protocol, namespaced by network id like [`kad_protocol_name`].
+fn node_http_protocol(network_id: &str) -> StreamProtocol {
+    crate::node_http::protocol_name(network_id)
+}
+
 /// The `identify` protocol-version string this node advertises — informs
 /// [`run_worker`]'s own defense-in-depth check (disconnecting a peer whose
 /// advertised value doesn't match, rather than relying solely on
@@ -174,6 +194,7 @@ struct DhtBehaviour {
     relay_client: relay::client::Behaviour,
     relay_server: Toggle<relay::Behaviour>,
     dcutr: Toggle<dcutr::Behaviour>,
+    node_http: request_response::Behaviour<NodeHttpCodec>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -313,6 +334,10 @@ pub struct DhtHandle {
     pub reachability: ReachabilityHandle,
     /// Counters for the relay server role; all zero unless it is enabled.
     pub relay_stats: Arc<RelayServerStats>,
+    /// Fill this once the axum router exists; until then stream requests get a 503.
+    pub router_slot: RouterSlot,
+    /// The client side of the node-to-node stream transport.
+    pub node_http: StreamHandle,
 }
 
 /// How long a connection with no active substream stays open. Long enough that AutoNAT probes
@@ -324,6 +349,7 @@ fn build_swarm(
     network_id: &str,
     autonat_settings: &AutonatSettings,
     relay_settings: &RelaySettings,
+    node_http: &NodeHttpSettings,
 ) -> Swarm<DhtBehaviour> {
     let peer_id = PeerId::from(identity.public());
     let kad_config = kad::Config::new(kad_protocol_name(network_id));
@@ -357,6 +383,13 @@ fn build_swarm(
                 .hole_punching
                 .then(|| dcutr::Behaviour::new(peer_id))
                 .into(),
+            node_http: request_response::Behaviour::with_codec(
+                NodeHttpCodec::new(node_http),
+                [(node_http_protocol(network_id), ProtocolSupport::Full)],
+                // Outlasts the handler's own bound so its 504 can still be sent.
+                request_response::Config::default()
+                    .with_request_timeout(node_http.timeout + NODE_HTTP_ANSWER_GRACE),
+            ),
         })
         .expect("behaviour construction from a fixed, valid config is infallible")
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
@@ -370,6 +403,20 @@ fn build_swarm(
 /// in this node's own outbound announces from the very first one — see
 /// `main.rs`'s call site.
 pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
+    start_with_node_http(
+        peers,
+        config,
+        NodeHttpSettings::from_env().unwrap_or_default(),
+    )
+    .await
+}
+
+/// [`start`] with explicit node-to-node stream limits instead of the environment's.
+pub async fn start_with_node_http(
+    peers: PeerTable,
+    config: DhtConfig,
+    node_http: NodeHttpSettings,
+) -> DhtHandle {
     let external_addr = config.external_addr.clone();
     let reachability = ReachabilityHandle::new(external_addr.as_ref().map(|a| a.to_string()));
     let bootstrap_scan_interval = config.bootstrap_scan_interval;
@@ -379,6 +426,7 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         &config.network_id,
         &config.autonat,
         &config.relay,
+        &node_http,
     );
     let local_peer_id = *swarm.local_peer_id();
     swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
@@ -435,6 +483,13 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
     };
 
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+    let router_slot = RouterSlot::new();
+    let inbound = NodeHttpInbound::new(
+        InboundService::new(router_slot.clone(), node_http),
+        node_http.max_inflight,
+        node_http.timeout,
+    );
+    let stream_peers = peers.clone();
     tokio::spawn(run_worker(
         swarm,
         peers,
@@ -443,15 +498,272 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         expected_identify_version,
         reachability.clone(),
         relay,
+        inbound,
     ));
 
     DhtHandle {
         peer_id: local_peer_id,
         listen_addrs,
-        commands: commands_tx,
+        commands: commands_tx.clone(),
         reachability,
         relay_stats,
+        router_slot,
+        node_http: StreamHandle {
+            commands: commands_tx,
+            peers: Some(stream_peers),
+            settings: node_http,
+        },
     }
+}
+
+type HttpResponder = oneshot::Sender<Result<NodeHttpResponse, NodeHttpError>>;
+type HttpAnswer = (ResponseChannel<NodeHttpResponse>, NodeHttpResponse);
+
+/// Inbound stream requests: the service that answers them and the queue that returns finished
+/// answers to the worker, which owns the swarm and so must send every response.
+struct NodeHttpInbound {
+    service: InboundService,
+    answers: mpsc::Sender<HttpAnswer>,
+    finished: mpsc::Receiver<HttpAnswer>,
+    /// Bound on dialing a peer for a stream request.
+    timeout: Duration,
+}
+
+impl NodeHttpInbound {
+    /// `capacity` is the in-flight ceiling, so a finished answer never waits for queue room.
+    fn new(service: InboundService, capacity: usize, timeout: Duration) -> Self {
+        let (answers, finished) = mpsc::channel(capacity.max(1));
+        Self {
+            service,
+            answers,
+            finished,
+            timeout,
+        }
+    }
+
+    /// Answers a 429 at once when over a limit, else serves it on its own task.
+    fn accept(
+        &self,
+        swarm: &mut Swarm<DhtBehaviour>,
+        peer: PeerId,
+        request: NodeHttpRequest,
+        channel: ResponseChannel<NodeHttpResponse>,
+    ) {
+        let permit: InboundPermit = match self.service.admit(peer) {
+            Ok(p) => p,
+            Err(refusal) => {
+                let _ = swarm
+                    .behaviour_mut()
+                    .node_http
+                    .send_response(channel, refusal);
+                return;
+            }
+        };
+        let (service, answers) = (self.service.clone(), self.answers.clone());
+        tokio::spawn(async move {
+            let response = service.handle(peer, request).await;
+            let _ = answers.send((channel, response)).await;
+            drop(permit);
+        });
+    }
+}
+
+/// A stream request waiting for a connection to its peer.
+struct ParkedHttp {
+    request: NodeHttpRequest,
+    respond_to: HttpResponder,
+    deadline: Instant,
+}
+
+/// Requests parked per peer, and whether this queue has dialed that peer itself yet.
+#[derive(Default)]
+struct ParkedPeer {
+    waiting: Vec<ParkedHttp>,
+    own_dial: bool,
+}
+
+type ParkedRequests = HashMap<PeerId, ParkedPeer>;
+
+fn connect_failure(message: &str) -> NodeHttpError {
+    NodeHttpError::Stream {
+        kind: StreamErrorKind::Connect,
+        message: message.to_string(),
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum HttpDial {
+    /// This queue started a dial.
+    Started,
+    /// Another dial to the peer is already in flight.
+    Joined,
+    Failed,
+}
+
+/// Dials `peer` with the peer table's addresses (direct first) unless a dial is already in
+/// flight.
+fn dial_for_http(swarm: &mut Swarm<DhtBehaviour>, peers: &PeerTable, peer: PeerId) -> HttpDial {
+    let opts = DialOpts::peer_id(peer)
+        .addresses(table_addrs(peers, &peer))
+        .extend_addresses_through_behaviour()
+        .condition(PeerCondition::DisconnectedAndNotDialing)
+        .build();
+    match swarm.dial(opts) {
+        Ok(()) => HttpDial::Started,
+        Err(DialError::DialPeerConditionFalse(_)) => HttpDial::Joined,
+        Err(e) => {
+            tracing::debug!(%peer, "avalon-dht: node-http dial not started: {e}");
+            HttpDial::Failed
+        }
+    }
+}
+
+/// Sends `request` to a connected `peer` and tracks its response.
+fn send_http(
+    swarm: &mut Swarm<DhtBehaviour>,
+    pending: &mut HashMap<OutboundRequestId, HttpResponder>,
+    peer: PeerId,
+    request: NodeHttpRequest,
+    respond_to: HttpResponder,
+) {
+    let id =
+        swarm
+            .behaviour_mut()
+            .node_http
+            .send_request_with_addresses(&peer, request, Vec::new());
+    pending.insert(id, respond_to);
+}
+
+/// Sends `request` now if `peer` is connected, else parks it behind a dial.
+fn start_http(
+    swarm: &mut Swarm<DhtBehaviour>,
+    peers: &PeerTable,
+    pending: &mut HashMap<OutboundRequestId, HttpResponder>,
+    parked: &mut ParkedRequests,
+    peer: PeerId,
+    parked_request: ParkedHttp,
+) {
+    if swarm.is_connected(&peer) {
+        send_http(
+            swarm,
+            pending,
+            peer,
+            parked_request.request,
+            parked_request.respond_to,
+        );
+        return;
+    }
+    let entry = parked.entry(peer).or_default();
+    if !entry.own_dial {
+        match dial_for_http(swarm, peers, peer) {
+            HttpDial::Started => entry.own_dial = true,
+            HttpDial::Joined => {}
+            HttpDial::Failed => {
+                let entry = parked.remove(&peer).unwrap_or_default();
+                for w in entry.waiting.into_iter().chain([parked_request]) {
+                    let _ = w
+                        .respond_to
+                        .send(Err(connect_failure("no address to dial the peer")));
+                }
+                return;
+            }
+        }
+    }
+    entry.waiting.push(parked_request);
+}
+
+/// A connection to `peer` is up: send everything parked for it.
+fn flush_parked(
+    swarm: &mut Swarm<DhtBehaviour>,
+    pending: &mut HashMap<OutboundRequestId, HttpResponder>,
+    parked: &mut ParkedRequests,
+    peer: PeerId,
+) {
+    for w in parked.remove(&peer).unwrap_or_default().waiting {
+        send_http(swarm, pending, peer, w.request, w.respond_to);
+    }
+}
+
+/// A dial to `peer` failed: try once with this queue's own addresses if the failed dial was
+/// someone else's, otherwise fail what is parked.
+fn parked_dial_failed(
+    swarm: &mut Swarm<DhtBehaviour>,
+    peers: &PeerTable,
+    parked: &mut ParkedRequests,
+    peer: PeerId,
+) {
+    let Some(entry) = parked.get_mut(&peer) else {
+        return;
+    };
+    if swarm.is_connected(&peer) {
+        return;
+    }
+    if !entry.own_dial {
+        match dial_for_http(swarm, peers, peer) {
+            HttpDial::Started => {
+                entry.own_dial = true;
+                return;
+            }
+            HttpDial::Joined => return,
+            HttpDial::Failed => {}
+        }
+    }
+    for w in parked.remove(&peer).unwrap_or_default().waiting {
+        let _ = w
+            .respond_to
+            .send(Err(connect_failure("failed to dial the peer")));
+    }
+}
+
+/// Drops parked requests whose caller gave up and fails those past their deadline.
+fn expire_parked(parked: &mut ParkedRequests, now: Instant) {
+    for entry in parked.values_mut() {
+        entry.waiting.retain_mut(|w| {
+            if w.respond_to.is_closed() {
+                return false;
+            }
+            if now >= w.deadline {
+                let timeout = NodeHttpError::Stream {
+                    kind: StreamErrorKind::Timeout,
+                    message: "timed out dialing the peer".to_string(),
+                };
+                // The responder moves out only when sent; replace with a closed one.
+                let (dead, _) = oneshot::channel();
+                let real = std::mem::replace(&mut w.respond_to, dead);
+                let _ = real.send(Err(timeout));
+                return false;
+            }
+            true
+        });
+    }
+    parked.retain(|_, e| !e.waiting.is_empty());
+}
+
+/// Maps a stream failure to the error call sites see.
+fn node_http_error(failure: request_response::OutboundFailure) -> NodeHttpError {
+    use request_response::OutboundFailure as F;
+    let kind = match &failure {
+        F::Timeout => StreamErrorKind::Timeout,
+        F::DialFailure | F::ConnectionClosed | F::UnsupportedProtocols => StreamErrorKind::Connect,
+        F::Io(_) => StreamErrorKind::Protocol,
+    };
+    NodeHttpError::Stream {
+        kind,
+        message: failure.to_string(),
+    }
+}
+
+/// Candidate addresses for `peer` from the peer table, direct before relayed.
+fn table_addrs(peers: &PeerTable, peer: &PeerId) -> Vec<Multiaddr> {
+    peers
+        .list_all()
+        .into_iter()
+        .chain(peers.list_unverified())
+        .find_map(|info| {
+            let (id, addrs) = new_dht_peer(&info, &HashSet::new())?;
+            (id == *peer).then_some(addrs)
+        })
+        .unwrap_or_default()
 }
 
 /// The relay pieces the worker drives.
@@ -690,6 +1002,47 @@ fn handle_relay_event(
     }
 }
 
+fn handle_node_http_event(
+    swarm: &mut Swarm<DhtBehaviour>,
+    inbound: &NodeHttpInbound,
+    pending: &mut HashMap<OutboundRequestId, HttpResponder>,
+    event: request_response::Event<NodeHttpRequest, NodeHttpResponse>,
+) {
+    use request_response::{Event, Message};
+    match event {
+        Event::Message {
+            peer,
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
+        } => inbound.accept(swarm, peer, request, channel),
+        Event::Message {
+            message:
+                Message::Response {
+                    request_id,
+                    response,
+                },
+            ..
+        } => {
+            if let Some(respond_to) = pending.remove(&request_id) {
+                let _ = respond_to.send(Ok(response));
+            }
+        }
+        Event::OutboundFailure {
+            request_id, error, ..
+        } => {
+            if let Some(respond_to) = pending.remove(&request_id) {
+                let _ = respond_to.send(Err(node_http_error(error)));
+            }
+        }
+        Event::InboundFailure { peer, error, .. } => {
+            tracing::debug!(%peer, "avalon-dht: node-http inbound request failed: {error}");
+        }
+        Event::ResponseSent { .. } => {}
+    }
+}
+
 /// Never returns. Handles `identify` responses (feeding a directly-dialed
 /// peer's own reported listen addresses into `kad` — without this, a fresh
 /// connection never actually populates the DHT routing table), on
@@ -704,6 +1057,7 @@ fn handle_relay_event(
 /// mismatch (which already prevents any Kademlia RPC from working between
 /// differently-networked swarms regardless of this check): a mismatched
 /// peer is dropped outright here rather than left connected-but-useless.
+#[allow(clippy::too_many_arguments)]
 async fn run_worker(
     mut swarm: Swarm<DhtBehaviour>,
     peers: PeerTable,
@@ -712,7 +1066,11 @@ async fn run_worker(
     expected_identify_version: String,
     reachability: ReachabilityHandle,
     mut relay: RelayRuntime,
+    mut inbound: NodeHttpInbound,
 ) {
+    let mut pending_http: HashMap<OutboundRequestId, HttpResponder> = HashMap::new();
+    let mut parked_http = ParkedRequests::new();
+    let connect_timeout = inbound.timeout;
     let mut reconcile_tick = tokio::time::interval(relay.reconcile_interval);
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
@@ -774,9 +1132,24 @@ async fn run_worker(
                         let query_id = swarm.behaviour_mut().kad.get_record(key.into());
                         pending_gets.insert(query_id, (respond_to, Vec::new()));
                     }
+                    DhtCommand::HttpRequest { peer, request, respond_to } => {
+                        // Callers that gave up leave a closed responder behind; drop those first.
+                        pending_http.retain(|_, r| !r.is_closed());
+                        expire_parked(&mut parked_http, Instant::now());
+                        let parked = ParkedHttp {
+                            request,
+                            respond_to,
+                            deadline: Instant::now() + connect_timeout,
+                        };
+                        start_http(&mut swarm, &peers, &mut pending_http, &mut parked_http, peer, parked);
+                    }
                 }
             }
+            Some((channel, response)) = inbound.finished.recv() => {
+                let _ = swarm.behaviour_mut().node_http.send_response(channel, response);
+            }
             _ = scan_interval.tick() => {
+                expire_parked(&mut parked_http, Instant::now());
                 // Gossip-learned peers that cannot be reached over HTTP (a relayed node has no
                 // reachable URL) sit in the unverified pool; dial a few per scan so a libp2p
                 // connection can confirm them.
@@ -808,8 +1181,15 @@ async fn run_worker(
                             swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
                         }
                         if let Some(addr) = addrs.into_iter().next() {
-                            if let Err(e) = swarm.dial(addr) {
-                                tracing::warn!(%peer_id, "avalon-dht: dial failed: {e}");
+                            // Peer-aware, so a stream request's own dial to the same peer joins this
+                            // one instead of racing it.
+                            let opts = DialOpts::peer_id(peer_id)
+                                .addresses(vec![addr])
+                                .condition(PeerCondition::DisconnectedAndNotDialing)
+                                .build();
+                            match swarm.dial(opts) {
+                                Ok(()) | Err(DialError::DialPeerConditionFalse(_)) => {}
+                                Err(e) => tracing::warn!(%peer_id, "avalon-dht: dial failed: {e}"),
                             }
                         }
                         known_peers.insert(peer_id);
@@ -825,7 +1205,18 @@ async fn run_worker(
                 if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
                     continue;
                 }
-                if let SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } = event {
+                match &event {
+                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                        flush_parked(&mut swarm, &mut pending_http, &mut parked_http, *peer_id);
+                    }
+                    SwarmEvent::OutgoingConnectionError { peer_id: Some(peer_id), .. } => {
+                        parked_dial_failed(&mut swarm, &peers, &mut parked_http, *peer_id);
+                    }
+                    _ => {}
+                }
+                if let SwarmEvent::Behaviour(DhtBehaviourEvent::NodeHttp(http_event)) = event {
+                    handle_node_http_event(&mut swarm, &inbound, &mut pending_http, http_event);
+                } else if let SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } = event {
                     if endpoint.is_dialer() {
                         for url in peers.promote_unverified_by_libp2p_peer(
                             &peer_id.to_string(),

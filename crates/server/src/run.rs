@@ -240,9 +240,18 @@ pub async fn run_with_tracing(
     });
     let mut dht_identity = None;
     let mut dht_commands = None;
+    let mut dht_router_slot = None;
     let mut reachability = crate::reachability::ReachabilityHandle::unknown();
     if let Some(dht_config) = dht_config {
-        let handle = crate::dht::start(peers.clone(), dht_config).await;
+        let node_http_settings =
+            crate::node_http::NodeHttpSettings::from_env().unwrap_or_else(|e| {
+                tracing::error!("refusing to start: {e}");
+                std::process::exit(1);
+            });
+        let handle =
+            crate::dht::start_with_node_http(peers.clone(), dht_config, node_http_settings).await;
+        crate::node_http::install_stream_handle(handle.node_http.clone());
+        dht_router_slot = Some(handle.router_slot.clone());
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
         dht_identity = Some(crate::nodes::DhtIdentity {
             peer_id: handle.peer_id.to_string(),
@@ -779,6 +788,9 @@ pub async fn run_with_tracing(
     } else {
         crate::router(state, redis_limiter)
     };
+    if let Some(slot) = dht_router_slot {
+        slot.set(app.clone());
+    }
 
     tracing::info!(%addr, "avalon-server listening");
     let listener = tokio::net::TcpListener::bind(&addr)

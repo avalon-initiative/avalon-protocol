@@ -23,7 +23,7 @@ use std::time::Duration;
 use url::{Host, Url};
 
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// HTTP client for requests to other nodes: a peer that accepts the connection but never answers
 /// costs one bounded attempt instead of stalling the caller.
@@ -73,9 +73,21 @@ pub struct CheckedTarget {
     /// Host name to pin, `None` when the URL host is an IP literal.
     pub pinned_host: Option<String>,
     pub addr: SocketAddr,
+    /// Set for a `p2p://` target, which has no address to check or pin.
+    pub stream_peer: Option<libp2p::PeerId>,
 }
 
 impl CheckedTarget {
+    /// [`Self::client`] as a [`crate::node_http::NodeClient`], which also reaches `p2p://` targets.
+    pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
+        let http = if self.stream_peer.is_some() {
+            reqwest::Client::new()
+        } else {
+            self.client(timeout)
+        };
+        crate::node_http::NodeClient::from(http).with_timeout(timeout)
+    }
+
     /// A client that talks only to the checked address, follows no redirects
     /// and gives up after `timeout`.
     pub fn client(&self, timeout: Duration) -> reqwest::Client {
@@ -213,8 +225,23 @@ impl OutboundPolicy {
                     base_url: base,
                     pinned_host: Some(name.to_string()),
                     addr,
+                    stream_peer: None,
                 })
             }
+        }
+    }
+
+    /// Like [`Self::check_base_url`], but also accepts a `p2p://<peer id>` node URL, which is
+    /// reached over a libp2p stream and so has no address to check.
+    pub async fn check_node_url(&self, url: &str) -> Result<CheckedTarget, PolicyError> {
+        match crate::node_http::parse_p2p_base(url) {
+            Some(peer) => Ok(CheckedTarget {
+                base_url: crate::node_http::p2p_base_url(&peer),
+                pinned_host: None,
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                stream_peer: Some(peer),
+            }),
+            None => self.check_base_url(url).await,
         }
     }
 
@@ -229,6 +256,7 @@ impl OutboundPolicy {
             base_url,
             pinned_host: None,
             addr: SocketAddr::new(ip, port),
+            stream_peer: None,
         })
     }
 }

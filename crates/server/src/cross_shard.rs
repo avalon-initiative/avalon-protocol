@@ -315,7 +315,7 @@ pub async fn fetch_and_compute(
     known_list: &[(String, VerifyingKey)],
     sources: &[cosign_gather::WitnessSource],
 ) -> (CrossShardRoot, Vec<ShardTreeHead>) {
-    let client = crate::outbound_policy::peer_client();
+    let client = crate::node_http::NodeClient::peer();
     let mut shards = Vec::new();
 
     for (shard_id, url) in urls {

@@ -374,6 +374,28 @@ impl PeerTable {
             .collect()
     }
 
+    /// The URL requests to the known peer `base_url` should use: `p2p://` when it is not
+    /// reachable by URL, else `base_url` itself (see [`crate::node_http::NodeClient::url_for`]).
+    pub fn transport_url(&self, base_url: &str) -> String {
+        let peers = self.peers.read().expect("peer table lock poisoned");
+        peers
+            .get(base_url)
+            .map(crate::node_http::NodeClient::url_for)
+            .unwrap_or_else(|| base_url.to_string())
+    }
+
+    /// The libp2p id of the known peer whose `base_url` `url` is under, for the stream fallback.
+    pub fn libp2p_peer_for_url(&self, url: &str) -> Option<libp2p::PeerId> {
+        let peers = self.peers.read().expect("peer table lock poisoned");
+        peers
+            .values()
+            .filter(|p| {
+                url.strip_prefix(p.base_url.trim_end_matches('/'))
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?']))
+            })
+            .find_map(|p| p.libp2p_peer_id.as_ref()?.parse().ok())
+    }
+
     /// Every known peer — what `GET /nodes/peers` returns.
     pub fn list_all(&self) -> Vec<PeerInfo> {
         self.peers
@@ -2001,10 +2023,13 @@ pub async fn run_worker(
         );
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(ANNOUNCE_TIMEOUT)
-        .build()
-        .unwrap_or_default();
+    let client = crate::node_http::NodeClient::from(
+        reqwest::Client::builder()
+            .timeout(ANNOUNCE_TIMEOUT)
+            .build()
+            .unwrap_or_default(),
+    )
+    .with_timeout(ANNOUNCE_TIMEOUT);
     let roles = node_roles();
     let network_id = chain.network_id().to_string();
     let mut active_peers: Vec<String> = config.peers.clone();
@@ -2054,7 +2079,7 @@ pub async fn run_worker(
                     peer,
                     announce_to(
                         &client,
-                        peer,
+                        &peers.transport_url(peer),
                         &announce_request(
                             own_base_url,
                             &roles,
@@ -2263,7 +2288,7 @@ fn pick_vouch_targets(
 /// and nothing else in the response is merged. Only the URL's own response
 /// can create a direct advert.
 async fn vouch_contact(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peers: &PeerTable,
     adm: &PeerAdmission,
     peer: &str,
@@ -2342,7 +2367,7 @@ fn announce_request(
 }
 
 async fn announce_to(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer_base_url: &str,
     request: &AnnounceRequest,
 ) -> Result<AnnounceResponse, String> {
@@ -2403,7 +2428,7 @@ mod tests {
 
         let neighbors = crate::neighbors::NeighborTable::new();
         neighbors.set_active(&[up.clone(), down.clone()], &[]);
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         for peer in [&up, &down] {
             let _ = measured(
                 &neighbors,
@@ -2458,7 +2483,7 @@ mod tests {
         let peer = server.uri();
         let neighbors = crate::neighbors::NeighborTable::new();
         neighbors.set_active(std::slice::from_ref(&peer), &[]);
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         let start = neighbors.own_coordinate();
 
         for _ in 0..2 {
@@ -3423,10 +3448,12 @@ mod tests {
         assert_eq!(targets.len(), 2);
 
         let adm = admission_for_tests(true, |_| {});
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .unwrap();
+        let client = crate::node_http::NodeClient::from(
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+        );
         let request = announce_request(
             "http://me",
             &[],
@@ -3762,9 +3789,13 @@ mod tests {
             None,
             Coordinate::default(),
         );
-        announce_to(&reqwest::Client::new(), &server.uri(), &request)
-            .await
-            .expect("announce succeeds")
+        announce_to(
+            &crate::node_http::NodeClient::new(),
+            &server.uri(),
+            &request,
+        )
+        .await
+        .expect("announce succeeds")
     }
 
     #[tokio::test]

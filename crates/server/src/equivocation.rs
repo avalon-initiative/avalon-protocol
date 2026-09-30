@@ -87,7 +87,7 @@ impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
 /// Fetches full cosignature detail for `shard_id` at `tree_size` directly
 /// from `base_url` — the fetch-on-demand half of head-summary gossip.
 async fn fetch_cosigned_head(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     base_url: &str,
     shard_id: &str,
     tree_size: i64,
@@ -97,7 +97,7 @@ async fn fetch_cosigned_head(
         .query(&[("shard_id", shard_id), ("witnesses", "1")])
         .send()
         .await
-        .and_then(reqwest::Response::error_for_status)
+        .and_then(crate::node_http::NodeResponse::error_for_status)
         .map_err(|e| format!("{base_url}: {e}"))?
         .json()
         .await
@@ -195,7 +195,7 @@ pub async fn confirm_and_record(
         return;
     }
 
-    let client = crate::outbound_policy::peer_client();
+    let client = crate::node_http::NodeClient::peer();
     let (head_a, head_b) = tokio::join!(
         fetch_cosigned_head(
             &client,

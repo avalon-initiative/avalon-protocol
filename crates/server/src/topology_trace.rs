@@ -339,6 +339,8 @@ pub fn sanitize(mut resp: TraceResponse, expected: Uuid, max_hops: usize) -> Opt
 /// Forwards over HTTP to a neighbor after the outbound policy check.
 pub struct HttpForwarder {
     pub policy: OutboundPolicy,
+    /// Picks `p2p://` for neighbors with no reachable URL; `None` always uses the base URL.
+    pub peers: Option<crate::nodes::PeerTable>,
 }
 
 impl Forwarder for HttpForwarder {
@@ -349,18 +351,21 @@ impl Forwarder for HttpForwarder {
         timeout: Duration,
     ) -> impl std::future::Future<Output = ForwardOutcome> + Send {
         let policy = self.policy;
-        let url = neighbor.base_url.clone();
+        let url = match &self.peers {
+            Some(peers) => peers.transport_url(&neighbor.base_url),
+            None => neighbor.base_url.clone(),
+        };
         let body = serde_json::to_vec(request).unwrap_or_default();
         let trace_id = request.trace_id.unwrap_or_default();
         let max_hops = request.ttl.unwrap_or(0) as usize + 1;
         async move {
             let attempt = async {
-                let checked = match policy.check_base_url(&url).await {
+                let checked = match policy.check_node_url(&url).await {
                     Ok(c) => c,
                     Err(_) => return ForwardOutcome::Unreachable("outbound_policy"),
                 };
                 let mut response = match checked
-                    .client(timeout)
+                    .node_client(timeout)
                     .post(format!("{}/nodes/trace", checked.base_url))
                     .header("content-type", "application/json")
                     .body(body)
@@ -494,6 +499,7 @@ pub async fn trace(
     };
     let forwarder = HttpForwarder {
         policy: OutboundPolicy::from_env(),
+        peers: Some(state.peers.clone()),
     };
     Ok(Json(run_trace(&ctx, &forwarder, &req, started).await))
 }
@@ -870,6 +876,7 @@ mod tests {
         fn fwd(allow_private: bool) -> HttpForwarder {
             HttpForwarder {
                 policy: OutboundPolicy::new(allow_private),
+                peers: None,
             }
         }
 

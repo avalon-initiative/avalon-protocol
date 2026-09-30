@@ -57,7 +57,7 @@ pub struct MirrorPushConfig {
     dht_commands: DhtCommandSender,
     redis_fast_path: Option<RedisFastPath>,
     own_base_url: Option<String>,
-    client: reqwest::Client,
+    client: crate::node_http::NodeClient,
 }
 
 impl MirrorPushConfig {
@@ -70,7 +70,7 @@ impl MirrorPushConfig {
             dht_commands,
             redis_fast_path,
             own_base_url,
-            client: crate::outbound_policy::peer_client(),
+            client: crate::node_http::NodeClient::peer(),
         }
     }
 }

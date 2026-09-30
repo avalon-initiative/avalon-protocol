@@ -248,7 +248,7 @@ struct MirrorProgressBody {
 /// reason every other peer's confirmation is ignored, and must never turn
 /// into a hard error for the caller either.
 async fn peer_confirms_mirroring(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer_base_url: &str,
     network_id: &str,
     shard_id: &str,
@@ -292,7 +292,7 @@ pub async fn run_worker(
     own_shard_id: String,
     config: ReplicationConfig,
 ) {
-    let client = crate::outbound_policy::peer_client();
+    let client = crate::node_http::NodeClient::peer();
     loop {
         let mut shard_ids = shard_registry.known_shard_ids();
         if own_shard_id != crate::replica::NO_AUTHORED_SHARD {
@@ -476,20 +476,20 @@ mod tests {
     #[tokio::test]
     async fn a_peer_reporting_any_mirrored_entries_confirms() {
         let peer = spawn_fake_peer(5).await;
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         assert!(peer_confirms_mirroring(&client, &peer, "avalon-test", "core").await);
     }
 
     #[tokio::test]
     async fn a_peer_reporting_zero_mirrored_entries_does_not_confirm() {
         let peer = spawn_fake_peer(0).await;
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         assert!(!peer_confirms_mirroring(&client, &peer, "avalon-test", "core").await);
     }
 
     #[tokio::test]
     async fn an_unreachable_peer_does_not_confirm_rather_than_erroring() {
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         assert!(
             !peer_confirms_mirroring(&client, "http://127.0.0.1:1", "avalon-test", "core").await
         );

@@ -208,6 +208,9 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_RELAY_CLIENT_ENABLED` | A node that detects it is not dialable reserves a slot on a relay. Default `true`. |
 | `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` | Relay reservations to hold at once. Default `2`, at most `8`. |
 | `AVALON_RELAY_ADDRS` | Comma-separated relay addresses to use first, each ending in `/p2p/<relay peer id>`. Relays found among connected peers are used after these. |
+| `AVALON_NODE_HTTP_MAX_REQUEST_BYTES`, `AVALON_NODE_HTTP_MAX_RESPONSE_BYTES` | Largest request body this node accepts, and response body it reads, on node-to-node HTTP carried over libp2p streams. Defaults 1 MiB and 8 MiB, ceilings 16 MiB and 64 MiB. A relay's own circuit byte cap still applies to relayed streams. |
+| `AVALON_NODE_HTTP_TIMEOUT_SECS` | Time bound on one stream exchange, dial included. Default `30`, at most `300`. |
+| `AVALON_NODE_HTTP_MAX_INFLIGHT`, `AVALON_NODE_HTTP_MAX_INFLIGHT_PER_PEER` | Stream requests served at once, in total and per peer; beyond them the answer is an immediate 429. Defaults `64` and `8`. |
 | `AVALON_DCUTR_ENABLED` | Try to replace a relayed connection with a direct one by hole punching. Default `true`. A failed attempt leaves the relayed connection in use. |
 | `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |

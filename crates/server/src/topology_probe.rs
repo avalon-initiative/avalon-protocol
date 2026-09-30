@@ -93,7 +93,7 @@ pub async fn measure(
     samples: u8,
     timeout: Duration,
 ) -> ProbeResponse {
-    let client = target.client(timeout);
+    let client = target.node_client(timeout);
     let url = format!("{}/nodes/status", target.base_url);
     let mut samples_ms = Vec::new();
     let mut error = None;
