@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
+use libp2p::multiaddr::Protocol;
+use libp2p::{Multiaddr, PeerId};
 
 use crate::outbound_policy::{CheckedTarget, OutboundPolicy, PolicyError};
 use crate::topology_limits::{InFlightGate, IpRateLimiter, TopologyError};
@@ -254,6 +256,85 @@ impl PeerAdmission {
     }
 }
 
+/// Longest accepted libp2p multiaddr string.
+const MAX_LIBP2P_ADDR_LEN: usize = 256;
+/// Most libp2p addresses kept per peer.
+const MAX_LIBP2P_ADDRS_PER_PEER: usize = 8;
+
+/// Keeps the announced libp2p addresses that are safe to dial for `peer_id`: direct ip4/ip6 tcp
+/// addresses and relayed ones ending in the announced peer id, all passing `policy`.
+pub fn sanitize_libp2p_addrs(
+    peer_id: Option<&str>,
+    addrs: &[String],
+    policy: &OutboundPolicy,
+) -> Vec<String> {
+    let Some(peer_id) = peer_id.and_then(|p| p.parse::<PeerId>().ok()) else {
+        return Vec::new();
+    };
+    let mut kept: Vec<String> = Vec::new();
+    for raw in addrs {
+        if kept.len() >= MAX_LIBP2P_ADDRS_PER_PEER {
+            break;
+        }
+        if raw.len() > MAX_LIBP2P_ADDR_LEN {
+            continue;
+        }
+        let Ok(addr) = raw.parse::<Multiaddr>() else {
+            continue;
+        };
+        if addr_acceptable(&addr, &peer_id, policy) {
+            let canonical = addr.to_string();
+            if !kept.contains(&canonical) {
+                kept.push(canonical);
+            }
+        }
+    }
+    kept
+}
+
+/// `/ip/tcp[/p2p/<id>]`, the part of an address dialed directly; a trailing id must equal
+/// `expected` when given and is required when `require_id` is set.
+fn direct_part_ok(
+    parts: &[Protocol<'_>],
+    policy: &OutboundPolicy,
+    expected: Option<&PeerId>,
+    require_id: bool,
+) -> bool {
+    let ip_ok = match parts.first() {
+        Some(Protocol::Ip4(ip)) => policy.check_ip(IpAddr::V4(*ip)).is_ok(),
+        Some(Protocol::Ip6(ip)) => policy.check_ip(IpAddr::V6(*ip)).is_ok(),
+        _ => false,
+    };
+    if !ip_ok || !matches!(parts.get(1), Some(Protocol::Tcp(port)) if *port != 0) {
+        return false;
+    }
+    match (parts.len(), parts.get(2)) {
+        (2, _) => !require_id,
+        (3, Some(Protocol::P2p(id))) => expected.is_none_or(|want| want == id),
+        _ => false,
+    }
+}
+
+fn addr_acceptable(addr: &Multiaddr, peer_id: &PeerId, policy: &OutboundPolicy) -> bool {
+    let parts: Vec<Protocol<'_>> = addr.iter().collect();
+    let circuits = parts
+        .iter()
+        .filter(|p| matches!(p, Protocol::P2pCircuit))
+        .count();
+    match circuits {
+        0 => direct_part_ok(&parts, policy, Some(peer_id), false),
+        1 => {
+            let Some(at) = parts.iter().position(|p| matches!(p, Protocol::P2pCircuit)) else {
+                return false;
+            };
+            let relay_part = &parts[..at];
+            direct_part_ok(relay_part, policy, None, true)
+                && matches!(&parts[at + 1..], [Protocol::P2p(id)] if id == peer_id)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +460,119 @@ mod tests {
         assert!(a.enter_check().is_err());
         drop(p);
         assert!(a.enter_check().is_ok());
+    }
+
+    fn pid(seed: u8) -> PeerId {
+        let kp = libp2p::identity::Keypair::ed25519_from_bytes([seed; 32]).unwrap();
+        PeerId::from(kp.public())
+    }
+
+    fn sanitize(id: &PeerId, addrs: &[String], allow_private: bool) -> Vec<String> {
+        sanitize_libp2p_addrs(
+            Some(&id.to_string()),
+            addrs,
+            &OutboundPolicy::new(allow_private),
+        )
+    }
+
+    #[test]
+    fn sanitize_keeps_direct_and_relayed_forms_for_the_announced_peer() {
+        let (me, relay) = (pid(1), pid(2));
+        let addrs = vec![
+            "/ip4/203.0.113.7/tcp/4001".to_string(),
+            format!("/ip4/203.0.113.7/tcp/4002/p2p/{me}"),
+            "/ip6/2001:db8::1/tcp/4001".to_string(),
+            format!("/ip4/198.51.100.9/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{me}"),
+        ];
+        assert_eq!(sanitize(&me, &addrs, false), addrs);
+    }
+
+    #[test]
+    fn sanitize_drops_everything_without_a_peer_id() {
+        let addrs = vec!["/ip4/203.0.113.7/tcp/4001".to_string()];
+        let p = OutboundPolicy::new(false);
+        assert!(sanitize_libp2p_addrs(None, &addrs, &p).is_empty());
+        assert!(sanitize_libp2p_addrs(Some("not-a-peer-id"), &addrs, &p).is_empty());
+    }
+
+    #[test]
+    fn sanitize_rejects_a_forged_peer_id() {
+        let (me, other, relay) = (pid(1), pid(3), pid(2));
+        let addrs = vec![
+            format!("/ip4/203.0.113.7/tcp/4001/p2p/{other}"),
+            format!("/ip4/198.51.100.9/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{other}"),
+            "/ip4/203.0.113.7/tcp/4003".to_string(),
+        ];
+        assert_eq!(sanitize(&me, &addrs, false), vec![addrs[2].clone()]);
+    }
+
+    #[test]
+    fn sanitize_applies_the_ip_policy_to_direct_and_relay_parts() {
+        let (me, relay) = (pid(1), pid(2));
+        let addrs = vec![
+            "/ip4/10.0.0.5/tcp/4001".to_string(),
+            "/ip6/fd00::1/tcp/4001".to_string(),
+            format!("/ip4/192.168.1.2/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{me}"),
+            "/ip4/169.254.169.254/tcp/4001".to_string(),
+            "/ip4/127.0.0.1/tcp/4001".to_string(),
+        ];
+        assert!(sanitize(&me, &addrs, false).is_empty());
+        let lax = sanitize(&me, &addrs, true);
+        assert_eq!(lax, [&addrs[..3], &addrs[4..]].concat());
+        assert!(sanitize_libp2p_addrs(
+            Some(&me.to_string()),
+            &["/ip4/169.254.169.254/tcp/1".to_string()],
+            &OutboundPolicy::new(true)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn sanitize_rejects_dns_and_unsupported_transports() {
+        let me = pid(1);
+        let addrs = vec![
+            "/dns4/example.com/tcp/4001".to_string(),
+            "/dns/example.com/tcp/4001".to_string(),
+            "/ip4/203.0.113.7/udp/4001/quic-v1".to_string(),
+            "/ip4/203.0.113.7".to_string(),
+            "/ip4/203.0.113.7/tcp/0".to_string(),
+            "garbage".to_string(),
+        ];
+        assert!(sanitize(&me, &addrs, false).is_empty());
+    }
+
+    #[test]
+    fn sanitize_rejects_malformed_circuits() {
+        let (me, relay) = (pid(1), pid(2));
+        let base = "/ip4/198.51.100.9/tcp/4001";
+        let addrs = vec![
+            format!("{base}/p2p-circuit/p2p/{me}"),
+            format!("{base}/p2p/{relay}/p2p-circuit"),
+            format!("{base}/p2p/{relay}/p2p-circuit/p2p/{me}/p2p-circuit/p2p/{me}"),
+            format!("{base}/p2p/{relay}/p2p-circuit/p2p/{relay}/p2p-circuit/p2p/{me}"),
+            format!("{base}/p2p/{relay}/p2p-circuit/tcp/1"),
+            format!("{base}/p2p/{relay}/p2p-circuit/p2p/{me}/tcp/1"),
+            format!("/p2p/{relay}/p2p-circuit/p2p/{me}"),
+        ];
+        assert!(sanitize(&me, &addrs, false).is_empty());
+    }
+
+    #[test]
+    fn sanitize_bounds_length_count_and_duplicates() {
+        let me = pid(1);
+        let long = format!(
+            "/ip4/203.0.113.7/tcp/4001/p2p/{me}/{}",
+            "x".repeat(MAX_LIBP2P_ADDR_LEN)
+        );
+        assert!(long.len() > MAX_LIBP2P_ADDR_LEN);
+        let mut addrs = vec![long, "/ip4/203.0.113.7/tcp/4001".to_string()];
+        addrs.push(addrs[1].clone());
+        assert_eq!(sanitize(&me, &addrs, false).len(), 1);
+
+        let many: Vec<String> = (0..20)
+            .map(|i| format!("/ip4/203.0.113.7/tcp/{}", 5000 + i))
+            .collect();
+        let kept = sanitize(&me, &many, false);
+        assert_eq!(kept, many[..MAX_LIBP2P_ADDRS_PER_PEER].to_vec());
     }
 }

@@ -229,6 +229,7 @@ mod tests {
                 last_announced_at: now,
                 libp2p_peer_id: Some(format!("peer-{i}")),
                 libp2p_listen_addrs: Vec::new(),
+                connectivity: None,
                 witness: advert,
             });
             signers.push((key, id));
@@ -242,6 +243,7 @@ mod tests {
             last_announced_at: now,
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
             witness: None,
         });
 
@@ -308,6 +310,7 @@ mod tests {
             last_announced_at: now,
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
             witness: advert,
         });
         let policy = crate::outbound_policy::OutboundPolicy::new(true);

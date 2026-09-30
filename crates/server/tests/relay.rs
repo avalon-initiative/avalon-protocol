@@ -96,6 +96,7 @@ fn introduce(into: &PeerTable, node: &DhtHandle) {
         last_announced_at: time::OffsetDateTime::now_utc(),
         libp2p_peer_id: Some(node.peer_id.to_string()),
         libp2p_listen_addrs: node.listen_addrs.iter().map(|a| a.to_string()).collect(),
+        connectivity: None,
         witness: None,
     });
 }
