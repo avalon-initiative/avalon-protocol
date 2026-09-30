@@ -703,7 +703,7 @@ pub struct CreateGuildRequest {
     path = "/guilds",
     tag = "guilds",
     request_body = CreateGuildRequest,
-    responses((status = 200, body = GuildResponse)),
+    responses((status = 200, description = "The resulting guild", body = GuildResponse)),
 )]
 pub async fn create_guild(
     State(state): State<AppState>,
@@ -830,7 +830,7 @@ pub async fn create_guild(
     path = "/guilds/{id}",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = GuildResponse)),
+    responses((status = 200, description = "The guild", body = GuildResponse)),
 )]
 pub async fn get_guild(
     State(state): State<AppState>,
@@ -893,7 +893,7 @@ pub struct UpdateGuildRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = UpdateGuildRequest,
-    responses((status = 200, body = GuildResponse)),
+    responses((status = 200, description = "The resulting guild", body = GuildResponse)),
 )]
 pub async fn update_guild(
     State(state): State<AppState>,
@@ -1124,7 +1124,7 @@ async fn fetch_role(
     path = "/guilds/{id}/roles",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Vec<RoleResponse>)),
+    responses((status = 200, description = "List of role entries", body = Vec<RoleResponse>)),
 )]
 pub async fn list_roles(
     State(state): State<AppState>,
@@ -1193,7 +1193,7 @@ pub struct CreateRoleRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = CreateRoleRequest,
-    responses((status = 200, body = RoleResponse)),
+    responses((status = 200, description = "The resulting role", body = RoleResponse)),
 )]
 pub async fn create_role(
     State(state): State<AppState>,
@@ -1314,7 +1314,7 @@ pub struct UpdateRoleRequest {
     tag = "guilds",
     params(("id" = Uuid, Path), ("idx" = i32, Path)),
     request_body = UpdateRoleRequest,
-    responses((status = 200, body = RoleResponse)),
+    responses((status = 200, description = "The resulting role", body = RoleResponse)),
 )]
 pub async fn update_role(
     State(state): State<AppState>,
@@ -1621,7 +1621,7 @@ pub struct SetPermissionOverrideRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = SetPermissionOverrideRequest,
-    responses((status = 200, body = PermissionOverrideResponse)),
+    responses((status = 200, description = "The resulting permission override", body = PermissionOverrideResponse)),
 )]
 pub async fn set_permission_override(
     State(state): State<AppState>,
@@ -1696,7 +1696,7 @@ pub struct ListPermissionOverridesQuery {
     path = "/guilds/{id}/permission-overrides",
     tag = "guilds",
     params(("id" = Uuid, Path), ListPermissionOverridesQuery),
-    responses((status = 200, body = Vec<PermissionOverrideResponse>)),
+    responses((status = 200, description = "List of permission override entries", body = Vec<PermissionOverrideResponse>)),
 )]
 pub async fn list_permission_overrides(
     State(state): State<AppState>,
@@ -1804,7 +1804,7 @@ pub struct TransferOwnershipRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = TransferOwnershipRequest,
-    responses((status = 200, body = GuildResponse)),
+    responses((status = 200, description = "The resulting guild", body = GuildResponse)),
 )]
 pub async fn transfer_ownership(
     State(state): State<AppState>,
@@ -1907,7 +1907,7 @@ pub async fn transfer_ownership(
     path = "/guilds/{id}/integrations/{integrator_id}",
     tag = "guilds",
     params(("id" = Uuid, Path), ("integrator_id" = Uuid, Path)),
-    responses((status = 200, body = GuildResponse)),
+    responses((status = 200, description = "The resulting guild", body = GuildResponse)),
 )]
 pub async fn associate_integrator(
     State(state): State<AppState>,
@@ -2060,7 +2060,7 @@ pub struct GuildInviteResponse {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = CreateGuildInviteRequest,
-    responses((status = 200, body = GuildInviteResponse)),
+    responses((status = 200, description = "The resulting guild invite", body = GuildInviteResponse)),
 )]
 pub async fn create_invite(
     State(state): State<AppState>,
@@ -2162,7 +2162,7 @@ pub struct MyGuildInviteResponse {
     get,
     path = "/me/guild-invites",
     tag = "guilds",
-    responses((status = 200, body = Vec<MyGuildInviteResponse>)),
+    responses((status = 200, description = "List of my guild invite entries", body = Vec<MyGuildInviteResponse>)),
 )]
 pub async fn my_guild_invites(
     State(state): State<AppState>,
@@ -2276,7 +2276,7 @@ async fn add_member(
     path = "/guilds/{id}/invites/{invite_id}/accept",
     tag = "guilds",
     params(("id" = Uuid, Path), ("invite_id" = Uuid, Path)),
-    responses((status = 200, body = GuildMemberResponse)),
+    responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn accept_invite(
     State(state): State<AppState>,
@@ -2362,7 +2362,7 @@ pub async fn decline_invite(
     path = "/guilds/{id}/join",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = GuildMemberResponse)),
+    responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn join_guild(
     State(state): State<AppState>,
@@ -2639,7 +2639,7 @@ fn join_request_response(
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = CreateJoinRequestRequest,
-    responses((status = 200, body = GuildJoinRequestResponse)),
+    responses((status = 200, description = "The resulting guild join request", body = GuildJoinRequestResponse)),
 )]
 pub async fn create_join_request(
     State(state): State<AppState>,
@@ -2720,7 +2720,7 @@ pub struct ListJoinRequestsQuery {
     path = "/guilds/{id}/join-requests",
     tag = "guilds",
     params(("id" = Uuid, Path), ListJoinRequestsQuery),
-    responses((status = 200, body = Vec<GuildJoinRequestResponse>)),
+    responses((status = 200, description = "List of guild join request entries", body = Vec<GuildJoinRequestResponse>)),
 )]
 pub async fn list_join_requests(
     State(state): State<AppState>,
@@ -2778,7 +2778,7 @@ pub async fn list_join_requests(
     path = "/guilds/{id}/join-requests/mine",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Option<GuildJoinRequestResponse>)),
+    responses((status = 200, description = "The guild join request, or null if there is none", body = Option<GuildJoinRequestResponse>)),
 )]
 pub async fn my_join_request(
     State(state): State<AppState>,
@@ -2836,7 +2836,7 @@ async fn fetch_pending_join_request(
     path = "/guilds/{id}/join-requests/{request_id}/approve",
     tag = "guilds",
     params(("id" = Uuid, Path), ("request_id" = Uuid, Path)),
-    responses((status = 200, body = GuildMemberResponse)),
+    responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn approve_join_request(
     State(state): State<AppState>,
@@ -2996,7 +2996,7 @@ pub struct UpdateGuildMemberRequest {
     tag = "guilds",
     params(("id" = Uuid, Path), ("identity_id" = Uuid, Path)),
     request_body = UpdateGuildMemberRequest,
-    responses((status = 200, body = GuildMemberResponse)),
+    responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn update_member_role(
     State(state): State<AppState>,
@@ -3098,7 +3098,7 @@ pub async fn update_member_role(
     path = "/guilds/{id}/members",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Vec<GuildMemberResponse>)),
+    responses((status = 200, description = "List of guild member entries", body = Vec<GuildMemberResponse>)),
 )]
 pub async fn list_members(
     State(state): State<AppState>,
@@ -3161,7 +3161,7 @@ pub struct MyGuildMembershipResponse {
     get,
     path = "/me/guilds",
     tag = "guilds",
-    responses((status = 200, body = Vec<MyGuildMembershipResponse>)),
+    responses((status = 200, description = "List of my guild membership entries", body = Vec<MyGuildMembershipResponse>)),
 )]
 pub async fn list_my_guilds(
     State(state): State<AppState>,
@@ -3375,7 +3375,7 @@ fn build_discover_query(
     path = "/guilds/discover",
     tag = "guilds",
     params(DiscoverGuildsQuery),
-    responses((status = 200, body = DiscoverGuildsResponse)),
+    responses((status = 200, description = "The discover guilds", body = DiscoverGuildsResponse)),
 )]
 pub async fn discover_guilds(
     State(state): State<AppState>,
@@ -3518,7 +3518,7 @@ fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
     path = "/guilds/{id}/integrator-breakdown",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = GameBreakdownResponse)),
+    responses((status = 200, description = "The game breakdown", body = GameBreakdownResponse)),
 )]
 pub async fn game_breakdown(
     State(state): State<AppState>,
@@ -3648,7 +3648,7 @@ async fn fetch_favorite_games(
     path = "/guilds/{id}/favorite-integrators",
     tag = "guilds",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = FavoriteGamesResponse)),
+    responses((status = 200, description = "The favorite games", body = FavoriteGamesResponse)),
 )]
 pub async fn list_favorite_games(
     State(state): State<AppState>,
@@ -3714,7 +3714,7 @@ fn validate_favorite_game_ids(
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = SetFavoriteGamesRequest,
-    responses((status = 200, body = FavoriteGamesResponse)),
+    responses((status = 200, description = "The resulting favorite games", body = FavoriteGamesResponse)),
 )]
 pub async fn set_favorite_games(
     State(state): State<AppState>,

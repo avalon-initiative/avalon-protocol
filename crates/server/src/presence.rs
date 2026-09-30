@@ -325,7 +325,7 @@ pub struct UpdatePresenceRequest {
     path = "/me/presence",
     tag = "presence",
     request_body = UpdatePresenceRequest,
-    responses((status = 200, body = PresenceResponse)),
+    responses((status = 200, description = "The resulting presence", body = PresenceResponse)),
 )]
 pub async fn update_my_presence(
     State(state): State<AppState>,
@@ -400,7 +400,7 @@ pub struct UpdateIntegratorPresenceRequest {
     tag = "presence",
     params(("identity_id" = Uuid, Path)),
     request_body = UpdateIntegratorPresenceRequest,
-    responses((status = 200, body = PresenceResponse)),
+    responses((status = 200, description = "The resulting presence", body = PresenceResponse)),
 )]
 pub async fn update_integrator_presence(
     State(state): State<AppState>,
@@ -495,7 +495,7 @@ fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> Presen
     path = "/presence",
     tag = "presence",
     params(PresenceQuery),
-    responses((status = 200, body = Vec<PresenceResponse>)),
+    responses((status = 200, description = "List of presence entries", body = Vec<PresenceResponse>)),
 )]
 pub async fn get_presence(
     State(state): State<AppState>,

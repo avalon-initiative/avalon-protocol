@@ -84,7 +84,7 @@ pub struct ResolveHandleResponse {
     path = "/friends/handle/{handle}",
     tag = "friends",
     params(("handle" = String, Path)),
-    responses((status = 200, body = ResolveHandleResponse)),
+    responses((status = 200, description = "The resolve handle", body = ResolveHandleResponse)),
 )]
 pub async fn resolve_handle(
     State(state): State<AppState>,
@@ -124,7 +124,7 @@ pub struct FriendRequestResponse {
     path = "/friends/requests",
     tag = "friends",
     request_body = CreateFriendRequestRequest,
-    responses((status = 200, body = FriendRequestResponse)),
+    responses((status = 200, description = "The resulting friend request", body = FriendRequestResponse)),
 )]
 pub async fn create_friend_request(
     State(state): State<AppState>,
@@ -247,7 +247,7 @@ pub struct FriendshipResponse {
     path = "/friends/requests/{id}/accept",
     tag = "friends",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = FriendshipResponse)),
+    responses((status = 200, description = "The resulting friendship", body = FriendshipResponse)),
 )]
 pub async fn accept_friend_request(
     State(state): State<AppState>,
@@ -393,7 +393,7 @@ pub async fn remove_friend(
     get,
     path = "/friends",
     tag = "friends",
-    responses((status = 200, body = Vec<FriendshipResponse>)),
+    responses((status = 200, description = "List of friendship entries", body = Vec<FriendshipResponse>)),
 )]
 pub async fn list_friends(
     State(state): State<AppState>,
@@ -417,7 +417,7 @@ pub async fn list_friends(
     get,
     path = "/friends/requests",
     tag = "friends",
-    responses((status = 200, body = Vec<FriendRequestResponse>)),
+    responses((status = 200, description = "List of friend request entries", body = Vec<FriendRequestResponse>)),
 )]
 pub async fn list_friend_requests(
     State(state): State<AppState>,

@@ -261,7 +261,7 @@ async fn fetch_domain_proof(name: &str) -> Result<String, TopologyError> {
     params(("self_certifying_id" = String, Path)),
     request_body = NameClaimRequest,
     responses(
-        (status = 200, body = NameClaimResponse),
+        (status = 200, description = "The resulting name claim", body = NameClaimResponse),
         (status = 400, description = "malformed claim, id mismatch, or a name with no domain shape"),
         (status = 409, description = "name already verified for a different, contest-winning claim"),
         (status = 422, description = "domain proof did not match the claim"),
@@ -343,7 +343,7 @@ pub async fn submit_name_claim(
     tag = "shard-identity",
     params(("name" = String, Path)),
     responses(
-        (status = 200, body = NameClaimResponse),
+        (status = 200, description = "The name claim", body = NameClaimResponse),
         (status = 404, description = "no verified claim for this name"),
     ),
 )]
@@ -369,7 +369,7 @@ pub async fn resolve_name(
     path = "/shards/{self_certifying_id}/name-claims",
     tag = "shard-identity",
     params(("self_certifying_id" = String, Path)),
-    responses((status = 200, body = Vec<NameClaimResponse>)),
+    responses((status = 200, description = "List of name claim entries", body = Vec<NameClaimResponse>)),
 )]
 pub async fn list_names_for_shard(
     State(state): State<AppState>,

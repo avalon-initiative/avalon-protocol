@@ -128,7 +128,7 @@ pub struct ListMessagesQuery {
     path = "/guilds/{id}/channels/{cid}/messages",
     tag = "guilds",
     params(("id" = Uuid, Path), ("cid" = Uuid, Path), ListMessagesQuery),
-    responses((status = 200, body = Vec<MessageResponse>)),
+    responses((status = 200, description = "List of message entries", body = Vec<MessageResponse>)),
 )]
 pub async fn list_messages(
     State(state): State<AppState>,
@@ -207,7 +207,7 @@ pub struct ArchivedMessageResponse {
     path = "/guilds/{id}/channels/{cid}/messages/archive",
     tag = "guilds",
     params(("id" = Uuid, Path), ("cid" = Uuid, Path), ListMessagesQuery),
-    responses((status = 200, body = Vec<ArchivedMessageResponse>)),
+    responses((status = 200, description = "List of archived message entries", body = Vec<ArchivedMessageResponse>)),
 )]
 pub async fn list_archive(
     State(state): State<AppState>,
@@ -275,7 +275,7 @@ pub struct SendMessageRequest {
     tag = "guilds",
     params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
     request_body = SendMessageRequest,
-    responses((status = 200, body = MessageResponse)),
+    responses((status = 200, description = "The resulting message", body = MessageResponse)),
 )]
 pub async fn send_message(
     State(state): State<AppState>,
@@ -550,7 +550,7 @@ pub struct GuildAnnouncementAlert {
     get,
     path = "/me/guild-announcements",
     tag = "guilds",
-    responses((status = 200, body = Vec<GuildAnnouncementAlert>)),
+    responses((status = 200, description = "List of guild announcement alert entries", body = Vec<GuildAnnouncementAlert>)),
 )]
 pub async fn list_my_guild_announcements(
     State(state): State<AppState>,

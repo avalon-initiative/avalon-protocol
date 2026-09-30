@@ -84,7 +84,7 @@ pub struct IntegratorRegistryResponse {
     path = "/integrations/{slug}/registry",
     tag = "registry",
     params(("slug" = String, Path)),
-    responses((status = 200, body = IntegratorRegistryResponse)),
+    responses((status = 200, description = "The integrator registry", body = IntegratorRegistryResponse)),
 )]
 pub async fn get_integrator_registry(
     State(state): State<AppState>,

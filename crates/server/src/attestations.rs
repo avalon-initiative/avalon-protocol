@@ -147,7 +147,7 @@ pub struct AttestationReadResponse {
     path = "/attestations/{id}",
     tag = "achievements",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = AttestationReadResponse)),
+    responses((status = 200, description = "The attestation read", body = AttestationReadResponse)),
 )]
 pub async fn get_attestation(
     State(state): State<AppState>,
@@ -451,7 +451,7 @@ fn build_my_achievements_query(
     path = "/me/achievements",
     tag = "achievements",
     params(ListMyAchievementsQuery),
-    responses((status = 200, body = ListMyAchievementsResponse)),
+    responses((status = 200, description = "The list my achievements", body = ListMyAchievementsResponse)),
 )]
 pub async fn list_my_achievements(
     State(state): State<AppState>,
@@ -607,7 +607,7 @@ pub struct RevocationResponse {
     tag = "achievements",
     params(("id" = Uuid, Path)),
     request_body = RevokeAttestationRequest,
-    responses((status = 200, body = RevocationResponse)),
+    responses((status = 200, description = "The resulting revocation", body = RevocationResponse)),
 )]
 pub async fn revoke_attestation(
     State(state): State<AppState>,

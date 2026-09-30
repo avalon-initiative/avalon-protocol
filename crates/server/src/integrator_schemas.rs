@@ -131,7 +131,7 @@ fn default_visibility_public() -> String {
     tag = "integrator-space",
     params(("slug" = String, Path)),
     request_body = PublishIntegratorSchemaVersionRequest,
-    responses((status = 200, body = IntegratorSchemaVersionResponse)),
+    responses((status = 200, description = "The resulting integrator schema version", body = IntegratorSchemaVersionResponse)),
 )]
 pub async fn publish_schema_version(
     State(state): State<AppState>,
@@ -288,7 +288,7 @@ pub async fn publish_schema_version(
     path = "/integrations/{slug}/schemas",
     tag = "integrator-space",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<IntegratorSchemaVersionResponse>)),
+    responses((status = 200, description = "List of integrator schema version entries", body = Vec<IntegratorSchemaVersionResponse>)),
 )]
 pub async fn list_schema_versions(
     State(state): State<AppState>,
@@ -332,7 +332,7 @@ pub async fn list_schema_versions(
     path = "/integrations/{slug}/schemas/{version}",
     tag = "integrator-space",
     params(("slug" = String, Path), ("version" = u32, Path)),
-    responses((status = 200, body = IntegratorSchemaVersionResponse)),
+    responses((status = 200, description = "The integrator schema version", body = IntegratorSchemaVersionResponse)),
 )]
 pub async fn get_schema_version(
     State(state): State<AppState>,

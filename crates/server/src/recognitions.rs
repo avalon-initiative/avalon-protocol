@@ -89,7 +89,7 @@ pub struct RecognitionResponse {
     tag = "registry",
     params(("slug" = String, Path)),
     request_body = PublishRecognitionRequest,
-    responses((status = 200, body = RecognitionResponse)),
+    responses((status = 200, description = "The resulting recognition", body = RecognitionResponse)),
 )]
 pub async fn publish_recognition(
     State(state): State<AppState>,
@@ -230,7 +230,7 @@ pub async fn revoke_recognition(
     path = "/integrations/{slug}/recognitions",
     tag = "registry",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<RecognitionResponse>)),
+    responses((status = 200, description = "List of recognition entries", body = Vec<RecognitionResponse>)),
 )]
 pub async fn list_recognitions(
     State(state): State<AppState>,
@@ -262,7 +262,7 @@ pub async fn list_recognitions(
     path = "/integrations/{slug}/recognized-by",
     tag = "registry",
     params(("slug" = String, Path)),
-    responses((status = 200, body = Vec<RecognitionResponse>)),
+    responses((status = 200, description = "List of recognition entries", body = Vec<RecognitionResponse>)),
 )]
 pub async fn list_recognized_by(
     State(state): State<AppState>,

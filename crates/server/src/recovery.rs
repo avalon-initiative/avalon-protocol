@@ -200,7 +200,7 @@ pub struct GuardianSettingsResponse {
     path = "/me/recovery/guardians",
     tag = "recovery",
     request_body = SetGuardiansRequest,
-    responses((status = 200, body = GuardianSettingsResponse)),
+    responses((status = 200, description = "The resulting guardian settings", body = GuardianSettingsResponse)),
 )]
 pub async fn set_guardians(
     State(state): State<AppState>,
@@ -323,7 +323,7 @@ pub async fn set_guardians(
     get,
     path = "/me/recovery/guardians",
     tag = "recovery",
-    responses((status = 200, body = GuardianSettingsResponse)),
+    responses((status = 200, description = "The guardian settings", body = GuardianSettingsResponse)),
 )]
 pub async fn get_guardians(
     State(state): State<AppState>,
@@ -385,7 +385,7 @@ pub struct GuardianOfSummary {
     get,
     path = "/me/recovery/guardian-of",
     tag = "recovery",
-    responses((status = 200, body = Vec<GuardianOfSummary>)),
+    responses((status = 200, description = "List of guardian of summary entries", body = Vec<GuardianOfSummary>)),
 )]
 pub async fn guardian_of(
     State(state): State<AppState>,
@@ -546,7 +546,7 @@ async fn recent_request_count(state: &AppState, identity_id: Uuid) -> Result<i64
     path = "/recovery/requests/start",
     tag = "recovery",
     request_body = RecoveryStartRequest,
-    responses((status = 200, body = RecoveryStartResponse)),
+    responses((status = 200, description = "The resulting recovery start", body = RecoveryStartResponse)),
 )]
 pub async fn start_request(
     State(state): State<AppState>,
@@ -657,7 +657,7 @@ pub struct RecoveryRequestResponse {
     path = "/recovery/requests/finish",
     tag = "recovery",
     request_body = RecoveryFinishRequest,
-    responses((status = 200, body = RecoveryRequestResponse)),
+    responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn finish_request(
     State(state): State<AppState>,
@@ -835,7 +835,7 @@ fn to_response(id: Uuid, row: RequestRow, approvals_count: i64) -> RecoveryReque
     path = "/recovery/requests/{id}/approve",
     tag = "recovery",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = RecoveryRequestResponse)),
+    responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn approve_request(
     State(state): State<AppState>,
@@ -974,7 +974,7 @@ pub struct CancelRecoveryRequest {
     tag = "recovery",
     params(("id" = Uuid, Path)),
     request_body = CancelRecoveryRequest,
-    responses((status = 200, body = RecoveryRequestResponse)),
+    responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn cancel_request(
     State(state): State<AppState>,
@@ -1060,7 +1060,7 @@ pub async fn cancel_request(
     path = "/recovery/requests/{id}/finalize",
     tag = "recovery",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = RecoveryRequestResponse)),
+    responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn finalize_request(
     State(state): State<AppState>,
@@ -1165,7 +1165,7 @@ pub async fn finalize_request(
     path = "/recovery/requests/{id}",
     tag = "recovery",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = RecoveryRequestResponse)),
+    responses((status = 200, description = "The recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn get_request(
     State(state): State<AppState>,
@@ -1189,7 +1189,7 @@ pub async fn get_request(
     path = "/identities/{id}/recovery/status",
     tag = "recovery",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Option<RecoveryRequestResponse>)),
+    responses((status = 200, description = "The recovery request, or null if there is none", body = Option<RecoveryRequestResponse>)),
 )]
 pub async fn identity_recovery_status(
     State(state): State<AppState>,
@@ -1221,7 +1221,7 @@ pub async fn identity_recovery_status(
     get,
     path = "/me/recovery/status",
     tag = "recovery",
-    responses((status = 200, body = Option<RecoveryRequestResponse>)),
+    responses((status = 200, description = "The recovery request, or null if there is none", body = Option<RecoveryRequestResponse>)),
 )]
 pub async fn my_recovery_status(
     State(state): State<AppState>,
@@ -1245,7 +1245,7 @@ pub struct GuardianRequestSummary {
     get,
     path = "/me/recovery/guardian-requests",
     tag = "recovery",
-    responses((status = 200, body = Vec<GuardianRequestSummary>)),
+    responses((status = 200, description = "List of guardian request summary entries", body = Vec<GuardianRequestSummary>)),
 )]
 pub async fn guardian_requests(
     State(state): State<AppState>,

@@ -155,7 +155,7 @@ pub fn policy_error(e: PolicyError) -> TopologyError {
     tag = "nodes",
     request_body = ProbeRequest,
     responses(
-        (status = 200, body = ProbeResponse),
+        (status = 200, description = "The resulting probe", body = ProbeResponse),
         (status = 400, description = "Invalid sample count or target"),
         (status = 403, description = "Target address refused by outbound policy"),
         (status = 404, description = "unknown_target: not in this node's peer table"),

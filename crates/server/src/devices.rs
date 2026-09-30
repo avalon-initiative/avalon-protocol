@@ -116,7 +116,7 @@ pub struct DeviceGrantResponse {
     path = "/me/devices/grants",
     tag = "devices",
     request_body = RequestDeviceGrantRequest,
-    responses((status = 200, body = DeviceGrantResponse)),
+    responses((status = 200, description = "The resulting device grant", body = DeviceGrantResponse)),
 )]
 pub async fn request_device_grant(
     State(state): State<AppState>,
@@ -187,7 +187,7 @@ pub struct ListDeviceGrantsQuery {
     path = "/me/devices/grants",
     tag = "devices",
     params(ListDeviceGrantsQuery),
-    responses((status = 200, body = Vec<DeviceGrantResponse>)),
+    responses((status = 200, description = "List of device grant entries", body = Vec<DeviceGrantResponse>)),
 )]
 pub async fn list_device_grants(
     State(state): State<AppState>,
@@ -225,7 +225,7 @@ pub async fn list_device_grants(
     path = "/me/devices/grants/{id}",
     tag = "devices",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = DeviceGrantResponse)),
+    responses((status = 200, description = "The device grant", body = DeviceGrantResponse)),
 )]
 pub async fn get_device_grant(
     State(state): State<AppState>,
@@ -330,7 +330,7 @@ pub struct DeviceResponse {
     tag = "devices",
     params(("id" = Uuid, Path)),
     request_body = ApproveDeviceGrantRequest,
-    responses((status = 200, body = DeviceResponse)),
+    responses((status = 200, description = "The resulting device", body = DeviceResponse)),
 )]
 pub async fn approve_device_grant(
     State(state): State<AppState>,
@@ -434,7 +434,7 @@ pub async fn approve_device_grant(
     get,
     path = "/me/devices",
     tag = "devices",
-    responses((status = 200, body = Vec<DeviceResponse>)),
+    responses((status = 200, description = "List of device entries", body = Vec<DeviceResponse>)),
 )]
 pub async fn list_devices(
     State(state): State<AppState>,
@@ -479,7 +479,7 @@ pub struct RenameDeviceRequest {
     tag = "devices",
     params(("id" = Uuid, Path)),
     request_body = RenameDeviceRequest,
-    responses((status = 200, body = DeviceResponse)),
+    responses((status = 200, description = "The resulting device", body = DeviceResponse)),
 )]
 pub async fn rename_device(
     State(state): State<AppState>,

@@ -98,7 +98,7 @@ pub struct IntegratorDataInstanceResponse {
     tag = "integrator-space",
     params(("slug" = String, Path), ("version" = u32, Path)),
     request_body = PublishInstanceRequest,
-    responses((status = 200, body = IntegratorDataInstanceResponse)),
+    responses((status = 200, description = "The resulting integrator data instance", body = IntegratorDataInstanceResponse)),
 )]
 pub async fn publish_instance(
     State(state): State<AppState>,
@@ -408,7 +408,7 @@ pub struct VisibleIntegratorDataInstanceResponse {
     path = "/identities/{id}/integrator-data",
     tag = "integrator-space",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = Vec<VisibleIntegratorDataInstanceResponse>)),
+    responses((status = 200, description = "List of visible integrator data instance entries", body = Vec<VisibleIntegratorDataInstanceResponse>)),
 )]
 pub async fn get_identity_integrator_data(
     State(state): State<AppState>,

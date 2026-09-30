@@ -322,7 +322,7 @@ pub struct ListEventsQuery {
     path = "/guilds/{id}/events",
     tag = "guilds",
     params(("id" = Uuid, Path), ListEventsQuery),
-    responses((status = 200, body = Vec<EventResponse>)),
+    responses((status = 200, description = "List of event entries", body = Vec<EventResponse>)),
 )]
 pub async fn list_events(
     State(state): State<AppState>,
@@ -431,7 +431,7 @@ pub struct CreateEventRequest {
     tag = "guilds",
     params(("id" = Uuid, Path)),
     request_body = CreateEventRequest,
-    responses((status = 200, body = EventResponse)),
+    responses((status = 200, description = "The resulting event", body = EventResponse)),
 )]
 pub async fn create_event(
     State(state): State<AppState>,
@@ -519,7 +519,7 @@ pub struct UpdateEventRequest {
     tag = "guilds",
     params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
     request_body = UpdateEventRequest,
-    responses((status = 200, body = EventResponse)),
+    responses((status = 200, description = "The resulting event", body = EventResponse)),
 )]
 pub async fn update_event(
     State(state): State<AppState>,
@@ -636,7 +636,7 @@ pub struct RsvpResponse {
     tag = "guilds",
     params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
     request_body = RsvpRequest,
-    responses((status = 200, body = RsvpResponse)),
+    responses((status = 200, description = "The resulting rsvp", body = RsvpResponse)),
 )]
 pub async fn upsert_rsvp(
     State(state): State<AppState>,
@@ -692,7 +692,7 @@ pub struct RsvpRosterEntry {
     path = "/guilds/{id}/events/{eid}/rsvps",
     tag = "guilds",
     params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
-    responses((status = 200, body = Vec<RsvpRosterEntry>)),
+    responses((status = 200, description = "List of rsvp roster entry entries", body = Vec<RsvpRosterEntry>)),
 )]
 pub async fn list_rsvps(
     State(state): State<AppState>,

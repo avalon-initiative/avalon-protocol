@@ -165,7 +165,7 @@ pub struct LocationsResponse {
     path = "/identities/{id}/locations",
     tag = "identity",
     params(("id" = Uuid, Path)),
-    responses((status = 200, body = LocationsResponse)),
+    responses((status = 200, description = "The locations", body = LocationsResponse)),
 )]
 pub async fn get_locations(
     State(state): State<AppState>,

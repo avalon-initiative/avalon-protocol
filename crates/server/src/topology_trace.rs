@@ -435,7 +435,7 @@ fn limits() -> &'static EndpointLimits {
     tag = "nodes",
     request_body = TraceRequest,
     responses(
-        (status = 200, body = TraceResponse),
+        (status = 200, description = "The resulting trace", body = TraceResponse),
         (status = 400, description = "Invalid target"),
         (status = 429, description = "Rate limit or in-flight cap hit; see Retry-After"),
         (status = 503, description = "This node has no AVALON_NODE_URL"),
