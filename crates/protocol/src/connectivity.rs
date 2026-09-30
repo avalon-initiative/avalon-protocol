@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// How a node is reachable, listed in preference order (most preferred first).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Connectivity {
     /// Peers connect straight to a routable address of this node.
@@ -46,6 +46,19 @@ impl Connectivity {
     }
 }
 
+/// The kind of path a measurement was taken over. A relayed measurement is never reported as
+/// direct: it includes the relay's hop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PathType {
+    /// A direct connection to a routable address.
+    Direct,
+    /// A direct connection established by hole punching.
+    Traversed,
+    /// A connection through a relay.
+    Relayed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +74,17 @@ mod tests {
             let json = serde_json::to_string(&state).unwrap();
             assert_eq!(json, format!("\"{name}\""));
             assert_eq!(serde_json::from_str::<Connectivity>(&json).unwrap(), state);
+        }
+    }
+
+    #[test]
+    fn path_types_use_snake_case_wire_names() {
+        for (path, name) in [
+            (PathType::Direct, "direct"),
+            (PathType::Traversed, "traversed"),
+            (PathType::Relayed, "relayed"),
+        ] {
+            assert_eq!(serde_json::to_string(&path).unwrap(), format!("\"{name}\""));
         }
     }
 
