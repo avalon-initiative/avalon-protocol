@@ -280,6 +280,37 @@ async fn two_nodes_connect_only_through_a_relay() {
     assert_eq!(r.relay_stats.counts().circuits_accepted, 1);
 }
 
+/// AutoNAT probes only over a connection that is still open, and nothing redials a dropped
+/// one, so an idle connection has to outlive libp2p's 10s default.
+#[tokio::test]
+async fn an_idle_connection_outlives_the_default_idle_window() {
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let mut quiet = config(&addr, None, RelaySettings::default());
+    quiet.autonat.enabled = false;
+    let node = dht::start(PeerTable::new(), quiet).await;
+
+    let mut peer = raw_swarm();
+    peer.dial(
+        format!("{addr}/p2p/{}", node.peer_id)
+            .parse::<Multiaddr>()
+            .unwrap(),
+    )
+    .unwrap();
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            peer.select_next_some().await,
+            SwarmEvent::ConnectionEstablished { .. }
+        ) {}
+    })
+    .await
+    .expect("connected");
+
+    assert!(
+        !closes_within(&mut peer, Duration::from_secs(13)).await,
+        "the node closed an idle connection"
+    );
+}
+
 /// With a 5s reservation lifetime the client renews on its own before each expiry and stays
 /// reachable past several lifetimes. (libp2p schedules renewals in whole seconds, so very short
 /// lifetimes renew too late.)
