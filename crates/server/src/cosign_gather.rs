@@ -701,6 +701,7 @@ mod tests {
             last_announced_at: now,
             libp2p_peer_id: None,
             libp2p_listen_addrs: vec![],
+            connectivity: None,
             witness: Some(WitnessAdvert {
                 key_id: id.into(),
                 announced_at: now,

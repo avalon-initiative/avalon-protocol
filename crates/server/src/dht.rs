@@ -504,7 +504,23 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
         .iter()
         .filter_map(|a| a.parse().ok())
         .collect();
-    Some((peer_id, addrs))
+    Some((peer_id, direct_first(addrs)))
+}
+
+/// Direct addresses before relayed ones, each group in its original order.
+fn direct_first(addrs: Vec<Multiaddr>) -> Vec<Multiaddr> {
+    let (relayed, direct): (Vec<_>, Vec<_>) = addrs
+        .into_iter()
+        .partition(|a| a.iter().any(|p| matches!(p, Protocol::P2pCircuit)));
+    direct.into_iter().chain(relayed).collect()
+}
+
+/// Kademlia serves queries unless AutoNAT found this node unreachable.
+fn kad_mode_for(reachability: Reachability) -> kad::Mode {
+    match reachability {
+        Reachability::Private => Mode::Client,
+        Reachability::Public | Reachability::Unknown => Mode::Server,
+    }
 }
 
 fn endpoint_ip_allowed(addr: &Multiaddr) -> bool {
@@ -529,6 +545,10 @@ fn track_reachability(
             tracing::info!(?old, ?new, "avalon-dht: AutoNAT reachability changed");
             let detected = Reachability::from_nat_status(new);
             reachability.set_reachability(detected);
+            swarm
+                .behaviour_mut()
+                .kad
+                .set_mode(Some(kad_mode_for(detected)));
             if detected == Reachability::Private {
                 let stale: Vec<Multiaddr> = swarm.external_addresses().cloned().collect();
                 for addr in stale {
@@ -964,12 +984,46 @@ mod tests {
             last_announced_at: time::OffsetDateTime::now_utc(),
             libp2p_peer_id: peer_id.map(|s| s.to_string()),
             libp2p_listen_addrs: addrs.into_iter().map(|s| s.to_string()).collect(),
+            connectivity: None,
             witness: None,
         }
     }
 
     fn sample_peer_id() -> PeerId {
         identity::Keypair::generate_ed25519().public().into()
+    }
+
+    #[test]
+    fn kad_runs_as_client_only_when_autonat_reports_private() {
+        assert_eq!(kad_mode_for(Reachability::Private), Mode::Client);
+        assert_eq!(kad_mode_for(Reachability::Public), Mode::Server);
+        assert_eq!(kad_mode_for(Reachability::Unknown), Mode::Server);
+    }
+
+    #[test]
+    fn candidate_addresses_are_ordered_direct_first_then_relayed() {
+        let relay = sample_peer_id();
+        let me = sample_peer_id();
+        let relayed = format!("/ip4/198.51.100.9/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{me}");
+        let info = peer_info(
+            "http://a",
+            Some(&me.to_string()),
+            vec![
+                &relayed,
+                "/ip4/203.0.113.7/tcp/4001",
+                "/ip4/203.0.113.8/tcp/4001",
+            ],
+        );
+        let (_, addrs) = new_dht_peer(&info, &HashSet::new()).unwrap();
+        let strs: Vec<String> = addrs.iter().map(|a| a.to_string()).collect();
+        assert_eq!(
+            strs,
+            vec![
+                "/ip4/203.0.113.7/tcp/4001",
+                "/ip4/203.0.113.8/tcp/4001",
+                &relayed
+            ]
+        );
     }
 
     #[test]

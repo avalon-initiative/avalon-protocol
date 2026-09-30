@@ -77,7 +77,7 @@ use time::OffsetDateTime;
 
 use crate::error::AppError;
 use crate::network_coordinates::Coordinate;
-use crate::peer_admission::{admission, AdmitError, PeerAdmission};
+use crate::peer_admission::{admission, sanitize_libp2p_addrs, AdmitError, PeerAdmission};
 use crate::state::AppState;
 use crate::topology_limits::{client_ip, TopologyError};
 
@@ -113,6 +113,9 @@ pub struct PeerInfo {
     /// dropped before an entry is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<WitnessAdvert>,
+    /// Self-reported reachability hint; never used for trust decisions. `None` from old peers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectivity: Option<avalon_protocol::connectivity::Connectivity>,
 }
 
 /// A witness key advertisement: the hex Ed25519 verifying key a node
@@ -957,6 +960,9 @@ pub struct AnnounceRequest {
     pub witness: Option<WitnessAdvert>,
     /// The sender's own network coordinate.
     pub coordinate: Coordinate,
+    /// Self-reported reachability hint; see [`PeerInfo::connectivity`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectivity: Option<avalon_protocol::connectivity::Connectivity>,
 }
 
 /// `Deserialize` too: this is also the shape `run_worker` parses back out
@@ -977,6 +983,10 @@ pub struct AnnounceResponse {
     pub witness: Option<WitnessAdvert>,
     /// The responder's own network coordinate.
     pub coordinate: Coordinate,
+    /// The responder's own entry, so a caller that only knows its HTTP URL learns its libp2p
+    /// identity. Only set when the responder has an own base URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<PeerInfo>,
 }
 
 /// `POST /nodes/announce`. Rejects an announcement naming a different
@@ -1010,9 +1020,14 @@ pub async fn announce(
         protocol_version: body.protocol_version,
         network_id: body.network_id,
         last_announced_at: OffsetDateTime::now_utc(),
+        libp2p_listen_addrs: sanitize_libp2p_addrs(
+            body.libp2p_peer_id.as_deref(),
+            &body.libp2p_listen_addrs,
+            &adm.policy,
+        ),
         libp2p_peer_id: body.libp2p_peer_id,
-        libp2p_listen_addrs: body.libp2p_listen_addrs,
         witness: None,
+        connectivity: body.connectivity,
     };
     if crate::version::is_supported(&info.protocol_version) {
         info.base_url = adm
@@ -1104,6 +1119,15 @@ pub async fn announce(
         known_shards: state.shard_registry.snapshot(),
         head_summaries: state.head_gossip.snapshot(),
         coordinate: state.peers.neighbors().own_coordinate(),
+        node: state.own_base_url.as_deref().map(|base_url| {
+            own_peer_info(
+                base_url,
+                state.own_libp2p_peer_id.clone(),
+                &state.reachability,
+                state.chain.network_id(),
+                OffsetDateTime::now_utc(),
+            )
+        }),
     }))
 }
 
@@ -1226,6 +1250,76 @@ pub(crate) fn promote_on_contact(peers: &PeerTable, adm: &PeerAdmission, contact
     }
 }
 
+/// This node's own peer table entry, as returned in an announce response.
+fn own_peer_info(
+    base_url: &str,
+    libp2p_peer_id: Option<String>,
+    reachability: &crate::reachability::ReachabilityHandle,
+    network_id: &str,
+    now: OffsetDateTime,
+) -> PeerInfo {
+    let libp2p_listen_addrs = if libp2p_peer_id.is_some() {
+        reachability.advertised_addrs()
+    } else {
+        Vec::new()
+    };
+    PeerInfo {
+        base_url: base_url.to_string(),
+        roles: node_roles(),
+        protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+        network_id: network_id.to_string(),
+        last_announced_at: now,
+        libp2p_peer_id,
+        libp2p_listen_addrs,
+        witness: None,
+        connectivity: crate::reachability::connectivity_for(&reachability.snapshot()),
+    }
+}
+
+/// Stores the responder's own entry from an announce response, only if it names `called_url`
+/// itself on this network at a supported version. Goes through `insert_bounded`, so the table
+/// cap and its protected entries hold. Returns whether an entry was stored.
+fn admit_responder_node(
+    peers: &PeerTable,
+    adm: &PeerAdmission,
+    network_id: &str,
+    called_url: &str,
+    mut node: PeerInfo,
+) -> bool {
+    let called = normalized_base_url(called_url);
+    if node.network_id != network_id
+        || normalized_base_url(&node.base_url) != called
+        || adm.check_shape(&node.base_url).is_err()
+        || !crate::version::is_supported(&node.protocol_version)
+    {
+        tracing::warn!(
+            event = "responder_identity_rejected",
+            peer = %called,
+            "ignored a responder's own entry that did not match the URL called",
+        );
+        return false;
+    }
+    node.base_url = called;
+    node.libp2p_listen_addrs = sanitize_libp2p_addrs(
+        node.libp2p_peer_id.as_deref(),
+        &node.libp2p_listen_addrs,
+        &adm.policy,
+    );
+    node.last_announced_at = OffsetDateTime::now_utc();
+    node.witness = None;
+    match peers.insert_bounded(node, adm.cfg.max_known_peers) {
+        Ok(_) => true,
+        Err(TableFull) => {
+            tracing::warn!(
+                event = "peer_table_full",
+                peer = %called_url,
+                "peer table full; could not store a responder's own entry",
+            );
+            false
+        }
+    }
+}
+
 /// Counts of gossip entries skipped by [`merge_gossip`].
 #[derive(Debug, Default, PartialEq, Eq)]
 struct GossipSkipped {
@@ -1262,6 +1356,11 @@ async fn merge_gossip(
             continue;
         };
         info.base_url = base;
+        info.libp2p_listen_addrs = sanitize_libp2p_addrs(
+            info.libp2p_peer_id.as_deref(),
+            &info.libp2p_listen_addrs,
+            &adm.policy,
+        );
         info.last_announced_at = info.last_announced_at.min(now);
         info.witness = verified_advert(&info.base_url, info.witness.take(), now);
         if !crate::version::is_supported(&info.protocol_version) {
@@ -1950,6 +2049,9 @@ pub async fn run_worker(
                         neighbors.observe_coordinate(peer, &discovered.coordinate, rtt);
                         let adm = admission();
                         promote_on_contact(&peers, adm, peer);
+                        if let Some(node) = discovered.node {
+                            admit_responder_node(&peers, adm, &network_id, peer, node);
+                        }
                         if let Some(advert) = verified_advert(
                             &normalized_base_url(peer),
                             discovered.witness.clone(),
@@ -2208,6 +2310,8 @@ fn announce_request(
         head_summaries: head_summaries.to_vec(),
         witness,
         coordinate,
+        connectivity: dht_identity
+            .and_then(|d| crate::reachability::connectivity_for(&d.reachability.snapshot())),
     }
 }
 
@@ -2246,6 +2350,7 @@ mod tests {
             last_announced_at: announced_at,
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
             witness: None,
         }
     }
@@ -2421,6 +2526,7 @@ mod tests {
             last_announced_at: OffsetDateTime::now_utc(),
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
             witness: None,
         }
     }
@@ -3588,5 +3694,208 @@ mod tests {
         tracker.merge("http://peer-a", &[head_summary("core", 5, 1)], now);
         let (_, conflicts, _) = tracker.merge("http://peer-b", &[head_summary("core", 5, 1)], now);
         assert!(conflicts.is_empty());
+    }
+
+    fn responder(base_url: &str, peer_id: &libp2p::PeerId, addrs: &[&str]) -> PeerInfo {
+        PeerInfo {
+            libp2p_peer_id: Some(peer_id.to_string()),
+            libp2p_listen_addrs: addrs.iter().map(|a| a.to_string()).collect(),
+            connectivity: Some(avalon_protocol::connectivity::Connectivity::Direct),
+            ..supported(base_url, OffsetDateTime::now_utc())
+        }
+    }
+
+    fn fresh_peer_id() -> libp2p::PeerId {
+        libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .into()
+    }
+
+    async fn announce_response_from(
+        server: &wiremock::MockServer,
+        node: &PeerInfo,
+    ) -> AnnounceResponse {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "peers": [],
+                "coordinate": Coordinate::default(),
+                "node": node,
+            })))
+            .mount(server)
+            .await;
+        let request = announce_request(
+            "http://me",
+            &[],
+            "avalon-dev-local",
+            None,
+            &[],
+            &[],
+            None,
+            Coordinate::default(),
+        );
+        announce_to(&reqwest::Client::new(), &server.uri(), &request)
+            .await
+            .expect("announce succeeds")
+    }
+
+    #[tokio::test]
+    async fn a_responders_own_entry_is_stored_with_its_libp2p_identity() {
+        let server = wiremock::MockServer::start().await;
+        let id = fresh_peer_id();
+        let node = responder(
+            &server.uri(),
+            &id,
+            &["/ip4/203.0.113.7/tcp/4001", "/dns4/x.example/tcp/1"],
+        );
+        let response = announce_response_from(&server, &node).await;
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let node = response.node.expect("response carries the responder");
+        assert!(admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &server.uri(),
+            node
+        ));
+        let stored = &table.list_all()[0];
+        assert_eq!(stored.base_url, normalized_base_url(&server.uri()));
+        assert_eq!(stored.libp2p_peer_id, Some(id.to_string()));
+        assert_eq!(
+            stored.libp2p_listen_addrs,
+            vec!["/ip4/203.0.113.7/tcp/4001".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_responder_naming_another_url_network_or_old_version_is_ignored() {
+        let server = wiremock::MockServer::start().await;
+        let id = fresh_peer_id();
+        let hostile = responder("http://victim.example", &id, &["/ip4/203.0.113.7/tcp/4001"]);
+        let response = announce_response_from(&server, &hostile).await;
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let called = server.uri();
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            response.node.unwrap()
+        ));
+        let own = responder(&called, &id, &[]);
+        let other_net = PeerInfo {
+            network_id: "other".into(),
+            ..own.clone()
+        };
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            other_net
+        ));
+        let old = PeerInfo {
+            protocol_version: "0.0.0".into(),
+            ..own
+        };
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            old
+        ));
+        assert!(table.list_all().is_empty());
+    }
+
+    #[test]
+    fn a_responder_entry_respects_the_peer_table_cap() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |c| c.max_known_peers = 1);
+        let protected = "http://127.0.0.1:1";
+        table.upsert(supported(protected, OffsetDateTime::now_utc()));
+        table.neighbors().set_active(&[protected.to_string()], &[]);
+        let node = responder("http://127.0.0.1:2", &fresh_peer_id(), &[]);
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            "http://127.0.0.1:2",
+            node
+        ));
+        assert_eq!(table.len(), 1);
+        assert!(table.contains(protected));
+    }
+
+    #[test]
+    fn own_peer_info_carries_identity_addresses_and_connectivity() {
+        let handle =
+            crate::reachability::ReachabilityHandle::new(Some("/ip4/203.0.113.7/tcp/4001".into()));
+        handle.set_reachability(crate::reachability::Reachability::Public);
+        let id = fresh_peer_id().to_string();
+        let info = own_peer_info(
+            "http://me",
+            Some(id.clone()),
+            &handle,
+            "n",
+            OffsetDateTime::now_utc(),
+        );
+        assert_eq!(info.libp2p_peer_id, Some(id));
+        assert_eq!(
+            info.libp2p_listen_addrs,
+            vec!["/ip4/203.0.113.7/tcp/4001".to_string()]
+        );
+        assert_eq!(
+            info.connectivity,
+            Some(avalon_protocol::connectivity::Connectivity::Direct)
+        );
+        let no_dht = own_peer_info("http://me", None, &handle, "n", OffsetDateTime::now_utc());
+        assert!(no_dht.libp2p_listen_addrs.is_empty());
+    }
+
+    #[test]
+    fn announce_payloads_without_node_or_connectivity_still_decode() {
+        let info: PeerInfo = serde_json::from_str(
+            r#"{"base_url":"http://old","roles":[],"protocol_version":"0.1.0","network_id":"n","last_announced_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(info.connectivity, None);
+        let req: AnnounceRequest = serde_json::from_str(
+            r#"{"base_url":"http://old","roles":[],"protocol_version":"0.1.0","network_id":"n","coordinate":{"vector":[0.0,0.0,0.0],"height":0.01,"error":1.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(req.connectivity, None);
+        let resp: AnnounceResponse = serde_json::from_str(
+            r#"{"peers":[],"coordinate":{"vector":[0.0,0.0,0.0],"height":0.01,"error":1.0}}"#,
+        )
+        .unwrap();
+        assert!(resp.node.is_none());
+        let out = serde_json::to_value(&resp).unwrap();
+        assert!(out.get("node").is_none());
+    }
+
+    #[tokio::test]
+    async fn gossip_merge_sanitizes_libp2p_addresses() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let id = fresh_peer_id();
+        let other = fresh_peer_id();
+        let gossiped = responder(
+            "http://127.0.0.1:9",
+            &id,
+            &[
+                "/ip4/203.0.113.7/tcp/4001",
+                &format!("/ip4/203.0.113.8/tcp/4001/p2p/{other}"),
+            ],
+        );
+        let (admitted, _) = merge_gossip(&table, &adm, "avalon-dev-local", vec![gossiped]).await;
+        assert_eq!(
+            admitted[0].libp2p_listen_addrs,
+            vec!["/ip4/203.0.113.7/tcp/4001".to_string()]
+        );
     }
 }

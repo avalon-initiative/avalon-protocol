@@ -132,6 +132,7 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
             last_announced_at: now,
             libp2p_peer_id: None,
             libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
             witness: Some(WitnessAdvert {
                 key_id: id.clone(),
                 announced_at: now,

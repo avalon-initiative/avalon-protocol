@@ -168,6 +168,49 @@ async fn announcing_upserts_the_caller_and_the_response_excludes_it() {
 
 #[tokio::test]
 #[ignore]
+async fn the_response_names_the_responder_and_announced_libp2p_addrs_are_sanitized() {
+    use libp2p::{identity::Keypair, PeerId};
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let caller_base_url = fabricated_url();
+    let id = PeerId::from(Keypair::generate_ed25519().public());
+    let other = PeerId::from(Keypair::generate_ed25519().public());
+    let good = "/ip4/203.0.113.7/tcp/4001";
+    let forged = format!("/ip4/203.0.113.8/tcp/4001/p2p/{other}");
+
+    require_isolated_target(&base);
+    let body: serde_json::Value = http
+        .post(format!("{base}/nodes/announce"))
+        .json(&serde_json::json!({
+            "base_url": caller_base_url,
+            "roles": ["combined"],
+            "protocol_version": avalon_server::version::PROTOCOL_VERSION,
+            "network_id": network_id(),
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+            "libp2p_peer_id": id.to_string(),
+            "libp2p_listen_addrs": [good, forged, "/dns4/example.com/tcp/1"],
+        }))
+        .send()
+        .await
+        .expect("POST /nodes/announce failed")
+        .json()
+        .await
+        .unwrap();
+    // Present only when the target has AVALON_NODE_URL set.
+    if let Some(node) = body.get("node") {
+        assert_eq!(node["network_id"], network_id());
+        assert!(node["base_url"].as_str().is_some_and(|u| !u.is_empty()));
+    }
+    let peers = list_peers(&http, &base).await;
+    let stored = peers
+        .iter()
+        .find(|p| p["base_url"] == caller_base_url)
+        .expect("announcer stored");
+    assert_eq!(stored["libp2p_listen_addrs"], serde_json::json!([good]));
+}
+
+#[tokio::test]
+#[ignore]
 async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {
     let http = reqwest::Client::new();
     let base = server_url();
