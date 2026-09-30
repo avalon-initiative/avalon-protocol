@@ -466,6 +466,12 @@ pub async fn start_with_node_http(
     }
     let relay_stats = RelayServerStats::new();
     let serves_relay = config.relay.server.is_some();
+    if let Some(settings) = &config.relay.server {
+        reachability.set_relay_server(crate::relay::RelayServerView {
+            settings: settings.clone(),
+            stats: relay_stats.clone(),
+        });
+    }
     if serves_relay {
         // A relay hands its external address to clients in reservation replies.
         if let Some(addr) = &external_addr {

@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.7.2"
+    "version": "0.8.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -6390,6 +6390,16 @@
           }
         }
       },
+      "Connectivity": {
+        "type": "string",
+        "description": "How a node is reachable, listed in preference order (most preferred first).",
+        "enum": [
+          "direct",
+          "nat_traversed",
+          "relayed",
+          "outbound_only"
+        ]
+      },
       "ConversationMessageResponse": {
         "type": "object",
         "required": [
@@ -8209,6 +8219,17 @@
           "base_url": {
             "type": "string"
           },
+          "connectivity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Connectivity",
+                "description": "Self-reported reachability; see [`Neighbor::connectivity`]."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_announced_at": {
             "type": "string",
             "format": "date-time"
@@ -8613,6 +8634,17 @@
           "bootstrap": {
             "type": "boolean"
           },
+          "connectivity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Connectivity",
+                "description": "How the neighbor says it is reachable. A self-reported hint: absent for a peer that does\nnot announce it, never an assumption of `direct`. A node with no dialable address shows\nhere as `relayed` or `outbound_only`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "coordinate": {
             "oneOf": [
               {
@@ -8767,6 +8799,15 @@
             ]
           }
         }
+      },
+      "PathType": {
+        "type": "string",
+        "description": "The kind of path a measurement was taken over. A relayed measurement is never reported as\ndirect: it includes the relay's hop.",
+        "enum": [
+          "direct",
+          "traversed",
+          "relayed"
+        ]
       },
       "PermissionOverrideResponse": {
         "type": "object",
@@ -9895,6 +9936,7 @@
         "description": "Rolling round-trip statistics for one neighbor, as observed by this node.",
         "required": [
           "measurement",
+          "path",
           "samples",
           "failed_recent",
           "attempts_recent",
@@ -9961,6 +10003,10 @@
             ],
             "format": "double",
             "description": "Minimum over the last successful round trips."
+          },
+          "path": {
+            "$ref": "#/components/schemas/PathType",
+            "description": "The path the most recent successful round trip took; a relayed one includes the relay."
           },
           "samples": {
             "type": "integer",
@@ -10102,6 +10148,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "connectivity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Connectivity",
+                "description": "How this node is reachable; absent until detection has finished."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "coordinate": {

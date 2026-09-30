@@ -112,6 +112,8 @@ impl ReachabilitySnapshot {
 pub struct ReachabilityHandle {
     tx: Arc<watch::Sender<ReachabilitySnapshot>>,
     configured_addr: Option<String>,
+    /// Set once at startup when this node serves as a relay.
+    relay_server: Arc<std::sync::OnceLock<crate::relay::RelayServerView>>,
 }
 
 impl ReachabilityHandle {
@@ -125,7 +127,17 @@ impl ReachabilityHandle {
         Self {
             tx: Arc::new(watch::channel(ReachabilitySnapshot::unknown()).0),
             configured_addr,
+            relay_server: Arc::default(),
         }
+    }
+
+    pub(crate) fn set_relay_server(&self, view: crate::relay::RelayServerView) {
+        let _ = self.relay_server.set(view);
+    }
+
+    /// Limits and usage of the relay server role; `None` when this node does not relay.
+    pub fn relay_server_status(&self) -> Option<crate::relay::RelayServerStatus> {
+        self.relay_server.get().map(|v| v.status())
     }
 
     pub fn snapshot(&self) -> ReachabilitySnapshot {

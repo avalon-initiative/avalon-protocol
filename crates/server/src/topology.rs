@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use avalon_chain::mirror;
+use avalon_protocol::connectivity::Connectivity;
 use axum::extract::{Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::response::IntoResponse;
@@ -55,6 +56,8 @@ pub struct SelfView {
     pub shards: Vec<ShardHead>,
     /// This node's advisory network coordinate; see `network_coordinates`.
     pub coordinate: Coordinate,
+    /// How this node is reachable; absent until detection has finished.
+    pub connectivity: Option<Connectivity>,
 }
 
 /// A round-trip measurement together with the node that took it.
@@ -80,6 +83,10 @@ pub struct Neighbor {
     pub latency: Option<ObservedLatency>,
     /// The neighbor's own coordinate as it last reported it; advisory.
     pub coordinate: Option<Coordinate>,
+    /// How the neighbor says it is reachable. A self-reported hint: absent for a peer that does
+    /// not announce it, never an assumption of `direct`. A node with no dialable address shows
+    /// here as `relayed` or `outbound_only`.
+    pub connectivity: Option<Connectivity>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -91,6 +98,8 @@ pub struct KnownPeer {
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub last_announced_at: OffsetDateTime,
+    /// Self-reported reachability; see [`Neighbor::connectivity`].
+    pub connectivity: Option<Connectivity>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -186,6 +195,7 @@ pub fn assemble(inputs: TopologyInputs) -> TopologyResponse {
             protocol_version: p.protocol_version.clone(),
             libp2p_peer_id: p.libp2p_peer_id.clone(),
             last_announced_at: p.last_announced_at,
+            connectivity: p.connectivity,
         })
         .collect();
 
@@ -204,6 +214,7 @@ pub fn assemble(inputs: TopologyInputs) -> TopologyResponse {
                     stats,
                 }),
                 coordinate: n.coordinate,
+                connectivity: info.and_then(|p| p.connectivity),
                 base_url: n.base_url,
             }
         })
@@ -304,6 +315,7 @@ pub async fn topology(
         resources: status.resources,
         shards,
         coordinate: neighbor_table.own_coordinate(),
+        connectivity: status.connectivity,
     };
     let response = assemble(TopologyInputs {
         self_view,
@@ -349,6 +361,7 @@ mod tests {
             resources: Default::default(),
             shards: vec![],
             coordinate: Default::default(),
+            connectivity: None,
         }
     }
 
@@ -426,6 +439,83 @@ mod tests {
         assert_eq!(lat["measurement"], "application_round_trip");
         assert!(lat["last_ms"].as_f64().unwrap() > 0.0);
         assert!(json.get("self").is_some());
+    }
+
+    fn with_connectivity(url: &str, secs: i64, connectivity: Option<Connectivity>) -> PeerInfo {
+        PeerInfo {
+            connectivity,
+            ..peer(url, secs)
+        }
+    }
+
+    #[test]
+    fn a_mesh_of_direct_relayed_and_outbound_only_nodes_reports_each_state() {
+        let peers = vec![
+            with_connectivity("http://direct", 1, Some(Connectivity::Direct)),
+            with_connectivity("http://relayed", 2, Some(Connectivity::Relayed)),
+            with_connectivity("http://outbound", 3, Some(Connectivity::OutboundOnly)),
+            with_connectivity("http://old-peer", 4, None),
+        ];
+        let mut i = inputs(
+            peers,
+            vec![snap("http://direct", true), snap("http://relayed", false)],
+            10,
+        );
+        i.self_view.connectivity = Some(Connectivity::NatTraversed);
+        let json = serde_json::to_value(assemble(i)).unwrap();
+
+        assert_eq!(json["self"]["connectivity"], "nat_traversed");
+        assert_eq!(json["neighbors"][0]["connectivity"], "direct");
+        assert_eq!(json["neighbors"][1]["connectivity"], "relayed");
+        let known: std::collections::HashMap<_, _> = json["known"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| (k["base_url"].as_str().unwrap(), k["connectivity"].clone()))
+            .collect();
+        assert_eq!(known["http://outbound"], "outbound_only");
+        // A peer that does not announce connectivity is unknown, never assumed direct.
+        assert!(known["http://old-peer"].is_null());
+    }
+
+    #[test]
+    fn a_neighbor_missing_from_the_peer_table_has_no_connectivity() {
+        let r = assemble(inputs(vec![], vec![snap("http://boot", true)], 10));
+        assert!(serde_json::to_value(&r).unwrap()["neighbors"][0]["connectivity"].is_null());
+    }
+
+    #[test]
+    fn latency_states_the_path_that_produced_it() {
+        let table = crate::neighbors::NeighborTable::new();
+        table.set_active(&["http://a".to_string(), "http://b".to_string()], &[]);
+        table.record_success("http://a", std::time::Duration::from_millis(5));
+        table.record_success_via(
+            "http://b",
+            std::time::Duration::from_millis(40),
+            avalon_protocol::connectivity::PathType::Relayed,
+        );
+        let r = assemble(inputs(
+            vec![peer("http://a", 1), peer("http://b", 2)],
+            table.snapshot(),
+            10,
+        ));
+        let json = serde_json::to_value(&r).unwrap();
+        let paths: std::collections::HashMap<_, _> = json["neighbors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                (
+                    n["base_url"].as_str().unwrap(),
+                    n["latency"]["path"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paths["http://a"], "direct",
+            "an HTTP round trip is a direct path"
+        );
+        assert_eq!(paths["http://b"], "relayed");
     }
 
     #[test]
