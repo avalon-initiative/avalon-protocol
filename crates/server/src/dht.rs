@@ -52,16 +52,18 @@ use libp2p::futures::StreamExt;
 use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::behaviour::toggle::Toggle;
-use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
+use libp2p::swarm::{ConnectionId, NetworkBehaviour, SwarmEvent};
 use libp2p::{
-    autonat, identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId, StreamProtocol,
-    Swarm, SwarmBuilder,
+    autonat, dcutr, identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId,
+    StreamProtocol, Swarm, SwarmBuilder,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use crate::nodes::{PeerInfo, PeerTable};
 use crate::outbound_policy::OutboundPolicy;
-use crate::reachability::{peer_ip_allowed, AutonatSettings, Reachability, ReachabilityHandle};
+use crate::reachability::{
+    peer_ip_allowed, AutonatSettings, HolePunchOutcome, Reachability, ReachabilityHandle,
+};
 use crate::relay::{RelayClient, RelayServerStats, RelaySettings};
 
 /// Bounded so a burst of interest registrations/lookups can't grow this
@@ -171,6 +173,7 @@ struct DhtBehaviour {
     autonat: Toggle<autonat::Behaviour>,
     relay_client: relay::client::Behaviour,
     relay_server: Toggle<relay::Behaviour>,
+    dcutr: Toggle<dcutr::Behaviour>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -349,6 +352,10 @@ fn build_swarm(
                 .server
                 .as_ref()
                 .map(|s| relay::Behaviour::new(peer_id, s.libp2p_config()))
+                .into(),
+            dcutr: relay_settings
+                .hole_punching
+                .then(|| dcutr::Behaviour::new(peer_id))
                 .into(),
         })
         .expect("behaviour construction from a fixed, valid config is infallible")
@@ -542,6 +549,46 @@ fn track_reachability(
     }
 }
 
+/// Records each hole-punch outcome and which punched connections are still open. A failed
+/// punch changes nothing: the relayed connection it started from stays in use.
+fn track_hole_punch(
+    punched: &mut HashMap<ConnectionId, PeerId>,
+    reachability: &ReachabilityHandle,
+    event: &SwarmEvent<DhtBehaviourEvent>,
+) {
+    match event {
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(outcome)) => {
+            let peer = outcome.remote_peer_id;
+            let error = match &outcome.result {
+                Ok(connection) => {
+                    tracing::info!(%peer, "avalon-dht: hole punch succeeded, using a direct connection");
+                    punched.insert(*connection, peer);
+                    None
+                }
+                Err(e) => {
+                    tracing::info!(%peer, "avalon-dht: hole punch failed, staying on the relay: {e}");
+                    Some(e.to_string())
+                }
+            };
+            reachability.record_hole_punch(HolePunchOutcome {
+                peer_id: peer.to_string(),
+                succeeded: error.is_none(),
+                error,
+            });
+        }
+        SwarmEvent::ConnectionClosed { connection_id, .. } => {
+            if punched.remove(connection_id).is_none() {
+                return;
+            }
+        }
+        _ => return,
+    }
+    let mut peers: Vec<String> = punched.values().map(|p| p.to_string()).collect();
+    peers.sort();
+    peers.dedup();
+    reachability.set_punched_peers(peers);
+}
+
 /// Feeds relay-related events to the relay client and stats. `true` when the event was
 /// consumed by relay handling alone.
 fn handle_relay_event(
@@ -623,6 +670,7 @@ async fn run_worker(
 ) {
     let mut reconcile_tick = tokio::time::interval(relay.reconcile_interval);
     let mut known_peers: HashSet<PeerId> = HashSet::new();
+    let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // The first tick fires immediately; bootstrap from whatever the peer
     // table already knows about right away rather than waiting a full interval.
@@ -709,6 +757,7 @@ async fn run_worker(
             }
             event = swarm.select_next_some() => {
                 track_reachability(&mut swarm, &reachability, &event);
+                track_hole_punch(&mut punched, &reachability, &event);
                 if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
                     continue;
                 }
@@ -804,6 +853,83 @@ async fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libp2p::core::ConnectedPoint;
+
+    fn closed(peer: PeerId, connection: ConnectionId) -> SwarmEvent<DhtBehaviourEvent> {
+        SwarmEvent::ConnectionClosed {
+            peer_id: peer,
+            connection_id: connection,
+            endpoint: ConnectedPoint::Dialer {
+                address: "/ip4/203.0.113.7/tcp/4001".parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            },
+            num_established: 0,
+            cause: None,
+        }
+    }
+
+    #[test]
+    fn punched_connections_are_tracked_until_they_close() {
+        let handle = ReachabilityHandle::unknown();
+        let mut punched = HashMap::new();
+        let (peer, other) = (PeerId::random(), PeerId::random());
+        let direct = ConnectionId::new_unchecked(7);
+
+        track_hole_punch(
+            &mut punched,
+            &handle,
+            &SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(dcutr::Event {
+                remote_peer_id: peer,
+                result: Ok(direct),
+            })),
+        );
+        let snap = handle.snapshot();
+        assert_eq!(snap.punched_peers, vec![peer.to_string()]);
+        assert!(snap.hole_punches.last().unwrap().succeeded);
+
+        // Another connection closing changes nothing.
+        track_hole_punch(
+            &mut punched,
+            &handle,
+            &closed(other, ConnectionId::new_unchecked(8)),
+        );
+        assert_eq!(handle.snapshot().punched_peers, vec![peer.to_string()]);
+
+        track_hole_punch(&mut punched, &handle, &closed(peer, direct));
+        assert!(handle.snapshot().punched_peers.is_empty());
+        assert_eq!(
+            handle.snapshot().hole_punches.len(),
+            1,
+            "the outcome stays recorded"
+        );
+    }
+
+    #[test]
+    fn a_peer_with_two_punched_connections_stays_punched_until_both_close() {
+        let handle = ReachabilityHandle::unknown();
+        let mut punched = HashMap::new();
+        let peer = PeerId::random();
+        let (first, second) = (
+            ConnectionId::new_unchecked(1),
+            ConnectionId::new_unchecked(2),
+        );
+        for connection in [first, second] {
+            track_hole_punch(
+                &mut punched,
+                &handle,
+                &SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(dcutr::Event {
+                    remote_peer_id: peer,
+                    result: Ok(connection),
+                })),
+            );
+        }
+        assert_eq!(handle.snapshot().punched_peers, vec![peer.to_string()]);
+        track_hole_punch(&mut punched, &handle, &closed(peer, first));
+        assert_eq!(handle.snapshot().punched_peers, vec![peer.to_string()]);
+        track_hole_punch(&mut punched, &handle, &closed(peer, second));
+        assert!(handle.snapshot().punched_peers.is_empty());
+    }
 
     #[test]
     fn kad_protocol_name_differs_across_network_ids() {

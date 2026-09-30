@@ -1391,6 +1391,10 @@ pub struct NodeStatusResponse {
     pub relay_reservations: Vec<crate::reachability::RelayReservation>,
     /// Addresses peers can dial to reach this node through its relays.
     pub relayed_listen_addrs: Vec<String>,
+    /// Recent hole-punch attempts, oldest first; a failed one leaves the relayed connection in use.
+    pub hole_punches: Vec<crate::reachability::HolePunchOutcome>,
+    /// Peers this node holds a hole-punched direct connection to right now.
+    pub punched_peers: Vec<String>,
 }
 
 /// Issue #629: how many distinct peers currently confirm mirroring a
@@ -1491,6 +1495,8 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
             .map(|r| r.relayed_addr.clone())
             .collect(),
         relay_reservations: detected.relay_reservations,
+        hole_punches: detected.hole_punches,
+        punched_peers: detected.punched_peers,
     }
 }
 
@@ -2687,6 +2693,8 @@ mod tests {
             confirmed_external_addrs: vec!["/ip4/203.0.113.7/tcp/4001".to_string()],
             relay_reservations: Vec::new(),
             relayed_listen_addrs: Vec::new(),
+            hole_punches: Vec::new(),
+            punched_peers: Vec::new(),
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
         assert_eq!(json["connectivity"], "nat_traversed");

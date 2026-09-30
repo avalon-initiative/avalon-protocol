@@ -208,6 +208,7 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_RELAY_CLIENT_ENABLED` | A node that detects it is not dialable reserves a slot on a relay. Default `true`. |
 | `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` | Relay reservations to hold at once. Default `2`, at most `8`. |
 | `AVALON_RELAY_ADDRS` | Comma-separated relay addresses to use first, each ending in `/p2p/<relay peer id>`. Relays found among connected peers are used after these. |
+| `AVALON_DCUTR_ENABLED` | Try to replace a relayed connection with a direct one by hole punching. Default `true`. A failed attempt leaves the relayed connection in use. |
 | `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |
 

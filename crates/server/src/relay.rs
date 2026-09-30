@@ -115,11 +115,23 @@ impl Default for RelayClientSettings {
 }
 
 /// Relay settings resolved once at startup.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelaySettings {
     /// `Some` when this node serves as a relay (`AVALON_RELAY_SERVER_ENABLED`, default off).
     pub server: Option<RelayServerSettings>,
     pub client: RelayClientSettings,
+    /// `AVALON_DCUTR_ENABLED` (default true): upgrade relayed connections by hole punching.
+    pub hole_punching: bool,
+}
+
+impl Default for RelaySettings {
+    fn default() -> Self {
+        Self {
+            server: None,
+            client: RelayClientSettings::default(),
+            hole_punching: true,
+        }
+    }
 }
 
 fn env_flag(name: &str, default: bool) -> bool {
@@ -232,6 +244,7 @@ impl RelaySettings {
 
         Ok(Self {
             server,
+            hole_punching: env_flag("AVALON_DCUTR_ENABLED", true),
             client: RelayClientSettings {
                 enabled: env_flag("AVALON_RELAY_CLIENT_ENABLED", true),
                 max_reservations: bounded_env(
@@ -717,6 +730,7 @@ mod tests {
             "AVALON_RELAY_MAX_CIRCUIT_BYTES",
             "AVALON_RELAY_CLIENT_MAX_RESERVATIONS",
             "AVALON_RELAY_ADDRS",
+            "AVALON_DCUTR_ENABLED",
         ];
         let clear = || {
             for n in names {
@@ -729,6 +743,10 @@ mod tests {
         assert!(defaults.server.is_none());
         assert!(defaults.client.enabled);
         assert_eq!(defaults.client.max_reservations, 2);
+        assert!(defaults.hole_punching, "hole punching is on by default");
+        unsafe { std::env::set_var("AVALON_DCUTR_ENABLED", "false") };
+        assert!(!RelaySettings::from_env(policy).unwrap().hole_punching);
+        unsafe { std::env::remove_var("AVALON_DCUTR_ENABLED") };
 
         unsafe {
             std::env::set_var("AVALON_RELAY_SERVER_ENABLED", "true");
