@@ -442,8 +442,34 @@ impl PeerTable {
             .remove(base_url)
     }
 
-    /// Same expiry rule as [`Self::prune_older_than`], applied to the
-    /// unverified pool: an entry that never gets promoted ages out.
+    /// Moves the unverified entries naming `libp2p_peer_id` into the main table. The libp2p
+    /// handshake authenticates the peer id, so an outbound connection to that id is the same
+    /// kind of confirmation a successful outbound HTTP contact is. Returns the promoted URLs.
+    pub(crate) fn promote_unverified_by_libp2p_peer(
+        &self,
+        libp2p_peer_id: &str,
+        max_known_peers: usize,
+    ) -> Vec<String> {
+        let urls: Vec<String> = self
+            .unverified
+            .read()
+            .expect("unverified pool lock poisoned")
+            .values()
+            .filter(|p| p.libp2p_peer_id.as_deref() == Some(libp2p_peer_id))
+            .map(|p| p.base_url.clone())
+            .collect();
+        let mut promoted = Vec::new();
+        for url in urls {
+            if let Some(info) = self.take_unverified(&url) {
+                if self.insert_bounded(info, max_known_peers).is_ok() {
+                    promoted.push(url);
+                }
+            }
+        }
+        promoted
+    }
+
+    /// Same expiry rule as [`Self::prune_older_than`], applied to the unverified pool: an entry that never gets promoted ages out.
     pub fn prune_unverified_older_than(&self, cutoff: OffsetDateTime) {
         self.unverified
             .write()
@@ -3897,5 +3923,38 @@ mod tests {
             admitted[0].libp2p_listen_addrs,
             vec!["/ip4/203.0.113.7/tcp/4001".to_string()]
         );
+    }
+
+    #[test]
+    fn a_libp2p_confirmation_promotes_only_the_pool_entry_for_that_peer_id() {
+        let table = PeerTable::new();
+        let (a, b) = (fresh_peer_id(), fresh_peer_id());
+        let now = OffsetDateTime::now_utc();
+        table.insert_unverified(responder("http://127.0.0.1:1", &a, &[]));
+        table.insert_unverified(responder("http://127.0.0.1:2", &b, &[]));
+        table.insert_unverified(supported("http://127.0.0.1:3", now));
+
+        let promoted = table.promote_unverified_by_libp2p_peer(&a.to_string(), 10);
+        assert_eq!(promoted, vec!["http://127.0.0.1:1".to_string()]);
+        assert!(table.contains("http://127.0.0.1:1"));
+        assert_eq!(table.unverified_len(), 2, "other entries stay unverified");
+        assert!(table
+            .promote_unverified_by_libp2p_peer(&fresh_peer_id().to_string(), 10)
+            .is_empty());
+    }
+
+    #[test]
+    fn a_libp2p_promotion_respects_the_peer_table_cap() {
+        let table = PeerTable::new();
+        let protected = "http://127.0.0.1:1";
+        table.upsert(supported(protected, OffsetDateTime::now_utc()));
+        table.neighbors().set_active(&[protected.to_string()], &[]);
+        let id = fresh_peer_id();
+        table.insert_unverified(responder("http://127.0.0.1:2", &id, &[]));
+        assert!(table
+            .promote_unverified_by_libp2p_peer(&id.to_string(), 1)
+            .is_empty());
+        assert_eq!(table.len(), 1);
+        assert!(table.contains(protected));
     }
 }

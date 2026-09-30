@@ -507,11 +507,36 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
     Some((peer_id, direct_first(addrs)))
 }
 
+/// How long the higher peer id waits for the lower one to dial a relayed-only peer first.
+const RELAYED_DIAL_GRACE: Duration = Duration::from_secs(20);
+
+/// Whether to dial a peer reachable only through a relay now. Two nodes dialing each other's
+/// circuit at once open crossed relayed connections and run DCUtR twice with opposite roles,
+/// which breaks the simultaneous open; so the lower peer id dials first and the other only
+/// dials if that has not produced a connection within [`RELAYED_DIAL_GRACE`].
+fn relayed_dial_due(
+    first_seen: &mut HashMap<PeerId, Instant>,
+    local: &PeerId,
+    remote: PeerId,
+    now: Instant,
+) -> bool {
+    if local.to_bytes() < remote.to_bytes() {
+        return true;
+    }
+    let first = *first_seen.entry(remote).or_insert(now);
+    now.duration_since(first) >= RELAYED_DIAL_GRACE
+}
+
+fn is_relayed_addr(addr: &Multiaddr) -> bool {
+    addr.iter().any(|p| matches!(p, Protocol::P2pCircuit))
+}
+
+/// Unverified-pool peers dialed per bootstrap scan.
+const MAX_POOL_DIALS_PER_SCAN: usize = 4;
+
 /// Direct addresses before relayed ones, each group in its original order.
 fn direct_first(addrs: Vec<Multiaddr>) -> Vec<Multiaddr> {
-    let (relayed, direct): (Vec<_>, Vec<_>) = addrs
-        .into_iter()
-        .partition(|a| a.iter().any(|p| matches!(p, Protocol::P2pCircuit)));
+    let (relayed, direct): (Vec<_>, Vec<_>) = addrs.into_iter().partition(is_relayed_addr);
     direct.into_iter().chain(relayed).collect()
 }
 
@@ -691,6 +716,8 @@ async fn run_worker(
     let mut reconcile_tick = tokio::time::interval(relay.reconcile_interval);
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
+    let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
+    let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // The first tick fires immediately; bootstrap from whatever the peer
     // table already knows about right away rather than waiting a full interval.
@@ -750,8 +777,25 @@ async fn run_worker(
                 }
             }
             _ = scan_interval.tick() => {
-                for info in peers.list_all() {
+                // Gossip-learned peers that cannot be reached over HTTP (a relayed node has no
+                // reachable URL) sit in the unverified pool; dial a few per scan so a libp2p
+                // connection can confirm them.
+                let pooled: Vec<PeerInfo> = peers
+                    .list_unverified()
+                    .into_iter()
+                    .filter(|info| {
+                        new_dht_peer(info, &known_peers).is_some_and(|(_, a)| !a.is_empty())
+                    })
+                    .take(MAX_POOL_DIALS_PER_SCAN)
+                    .collect();
+                for info in peers.list_all().into_iter().chain(pooled) {
                     if let Some((peer_id, addrs)) = new_dht_peer(&info, &known_peers) {
+                        if !addrs.is_empty()
+                            && addrs.iter().all(is_relayed_addr)
+                            && !relayed_dial_due(&mut relayed_first_seen, &local_peer_id, peer_id, Instant::now())
+                        {
+                            continue;
+                        }
                         if addrs.is_empty() {
                             // Known to the network but not yet dialable — try
                             // again on a later scan once it reports a real
@@ -782,6 +826,19 @@ async fn run_worker(
                     continue;
                 }
                 if let SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } = event {
+                    if endpoint.is_dialer() {
+                        for url in peers.promote_unverified_by_libp2p_peer(
+                            &peer_id.to_string(),
+                            crate::peer_admission::admission().cfg.max_known_peers,
+                        ) {
+                            tracing::info!(
+                                event = "peer_promoted_from_unverified_pool",
+                                peer = %url,
+                                %peer_id,
+                                "promoted a gossip-learned peer after an authenticated libp2p connection",
+                            );
+                        }
+                    }
                     if !endpoint_ip_allowed(endpoint.get_remote_address()) {
                         tracing::warn!(%peer_id, "avalon-dht: disconnecting peer at an address the outbound policy always refuses");
                         let _ = swarm.disconnect_peer_id(peer_id);
@@ -991,6 +1048,32 @@ mod tests {
 
     fn sample_peer_id() -> PeerId {
         identity::Keypair::generate_ed25519().public().into()
+    }
+
+    #[test]
+    fn only_the_lower_peer_id_dials_a_relayed_peer_at_once() {
+        let (a, b) = (sample_peer_id(), sample_peer_id());
+        let (low, high) = if a.to_bytes() < b.to_bytes() {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let mut seen = HashMap::new();
+        let t0 = Instant::now();
+        assert!(relayed_dial_due(&mut seen, &low, high, t0));
+        assert!(!relayed_dial_due(&mut seen, &high, low, t0));
+        assert!(!relayed_dial_due(
+            &mut seen,
+            &high,
+            low,
+            t0 + RELAYED_DIAL_GRACE / 2
+        ));
+        assert!(relayed_dial_due(
+            &mut seen,
+            &high,
+            low,
+            t0 + RELAYED_DIAL_GRACE
+        ));
     }
 
     #[test]
