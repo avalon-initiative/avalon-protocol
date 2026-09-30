@@ -11,6 +11,8 @@ use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
 
+use avalon_protocol::connectivity::PathType;
+
 use crate::network_coordinates::{self, Coordinate};
 use time::OffsetDateTime;
 
@@ -26,6 +28,8 @@ pub const LOSS_WINDOW: usize = 20;
 pub struct RoundTripStats {
     /// Always `"application_round_trip"`: announce request to parsed response.
     pub measurement: &'static str,
+    /// The path the most recent successful round trip took; a relayed one includes the relay.
+    pub path: PathType,
     /// Round trip of the most recent successful announce, in milliseconds.
     pub last_ms: Option<f64>,
     /// Exponentially weighted moving average of successful round trips.
@@ -55,6 +59,7 @@ struct PeerRtt {
     samples: u64,
     attempts: VecDeque<bool>,
     last_success_at: Option<OffsetDateTime>,
+    path: Option<PathType>,
 }
 
 impl PeerRtt {
@@ -65,8 +70,9 @@ impl PeerRtt {
         self.attempts.push_back(ok);
     }
 
-    fn record_success(&mut self, ms: f64, at: OffsetDateTime) {
+    fn record_success(&mut self, ms: f64, at: OffsetDateTime, path: PathType) {
         self.push_attempt(true);
+        self.path = Some(path);
         self.last_ms = Some(ms);
         self.ewma_ms = Some(match self.ewma_ms {
             Some(prev) => EWMA_ALPHA * ms + (1.0 - EWMA_ALPHA) * prev,
@@ -91,6 +97,7 @@ impl PeerRtt {
         let failed = self.attempts.iter().filter(|ok| !**ok).count() as u32;
         RoundTripStats {
             measurement: "application_round_trip",
+            path: self.path.unwrap_or(PathType::Direct),
             last_ms: self.last_ms,
             ewma_ms: self.ewma_ms,
             min_ms,
@@ -170,15 +177,21 @@ impl NeighborTable {
             .collect()
     }
 
-    /// Records a successful round trip; ignored for peers outside the active set.
+    /// Records a successful round trip over HTTP, which is always a direct path; ignored for
+    /// peers outside the active set.
     pub fn record_success(&self, peer: &str, rtt: std::time::Duration) {
+        self.record_success_via(peer, rtt, PathType::Direct);
+    }
+
+    /// Records a successful round trip taken over `path`.
+    pub fn record_success_via(&self, peer: &str, rtt: std::time::Duration, path: PathType) {
         let mut inner = self.inner.write().expect("neighbor table lock poisoned");
         if inner.active.iter().any(|p| p == peer) {
             inner
                 .stats
                 .entry(peer.to_string())
                 .or_default()
-                .record_success(rtt.as_secs_f64() * 1000.0, OffsetDateTime::now_utc());
+                .record_success(rtt.as_secs_f64() * 1000.0, OffsetDateTime::now_utc(), path);
         }
     }
 
