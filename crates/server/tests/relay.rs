@@ -281,6 +281,38 @@ async fn two_nodes_connect_only_through_a_relay() {
     assert_eq!(r.relay_stats.counts().circuits_accepted, 1);
 }
 
+/// A relay reports its limits and what it is carrying; a node that does not relay reports none.
+#[tokio::test]
+async fn a_relay_reports_its_limits_and_usage_to_operators() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    let (r, r_addr) = relay_node(RelayServerSettings {
+        max_circuits: 3,
+        ..server_settings()
+    })
+    .await;
+    let status = r
+        .reachability
+        .relay_server_status()
+        .expect("a relay reports itself");
+    assert_eq!(status.limits.max_circuits, 3);
+    assert_eq!(status.usage.reservations_active, 0);
+
+    let a = private_node(vec![r_addr], 1, &r).await;
+    reserved_on(&a, r.peer_id).await;
+    eventually("the relay to count the reservation", || {
+        r.reachability
+            .relay_server_status()
+            .is_some_and(|s| s.usage.reservations_active == 1)
+    })
+    .await;
+    assert!(
+        a.reachability.relay_server_status().is_none(),
+        "a node that does not relay reports no relay section"
+    );
+}
+
 #[derive(NetworkBehaviour)]
 struct Punching {
     relay_client: relay::client::Behaviour,
