@@ -14,6 +14,7 @@ use libp2p::core::transport::ListenerId;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::{relay, Multiaddr, PeerId, Swarm};
+use serde::Serialize;
 
 use crate::outbound_policy::{always_forbidden, is_private, OutboundPolicy};
 use crate::reachability::{Reachability, ReachabilityHandle, RelayReservation};
@@ -274,7 +275,7 @@ pub struct RelayServerStats {
 }
 
 /// Point-in-time copy of [`RelayServerStats`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct RelayServerCounts {
     pub reservations_accepted: u64,
     pub reservations_denied: u64,
@@ -284,6 +285,72 @@ pub struct RelayServerCounts {
     pub circuits_denied: u64,
     pub circuits_closed: u64,
     pub circuits_closed_with_error: u64,
+}
+
+/// The limits a relay enforces, as reported to operators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelayServerLimits {
+    pub max_reservations: usize,
+    pub max_reservations_per_peer: usize,
+    pub reservation_secs: u64,
+    pub max_circuits: usize,
+    pub max_circuits_per_peer: usize,
+    pub max_circuit_secs: u64,
+    pub max_circuit_bytes: u64,
+}
+
+/// What the relay is doing now against those limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelayServerUsage {
+    /// Reservations held right now.
+    pub reservations_active: u64,
+    /// Circuits open right now.
+    pub circuits_active: u64,
+    /// Totals since this node started.
+    #[serde(flatten)]
+    pub totals: RelayServerCounts,
+}
+
+/// Operator view of the relay server role: its limits and its usage. Bytes carried are bounded by
+/// `max_circuit_bytes` per circuit but are not measured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RelayServerStatus {
+    pub limits: RelayServerLimits,
+    pub usage: RelayServerUsage,
+}
+
+/// The relay server's limits together with its live counters.
+#[derive(Debug, Clone)]
+pub struct RelayServerView {
+    pub settings: RelayServerSettings,
+    pub stats: Arc<RelayServerStats>,
+}
+
+impl RelayServerView {
+    pub fn status(&self) -> RelayServerStatus {
+        let totals = self.stats.counts();
+        let s = &self.settings;
+        RelayServerStatus {
+            limits: RelayServerLimits {
+                max_reservations: s.max_reservations,
+                max_reservations_per_peer: s.max_reservations_per_peer,
+                reservation_secs: s.reservation_duration.as_secs(),
+                max_circuits: s.max_circuits,
+                max_circuits_per_peer: s.max_circuits_per_peer,
+                max_circuit_secs: s.max_circuit_duration.as_secs(),
+                max_circuit_bytes: s.max_circuit_bytes,
+            },
+            usage: RelayServerUsage {
+                reservations_active: totals
+                    .reservations_accepted
+                    .saturating_sub(totals.reservations_closed + totals.reservations_timed_out),
+                circuits_active: totals
+                    .circuits_accepted
+                    .saturating_sub(totals.circuits_closed),
+                totals,
+            },
+        }
+    }
 }
 
 impl RelayServerStats {
@@ -705,6 +772,38 @@ mod tests {
         let (got, dial) = split_relay_addr(&with_peer("/ip4/127.0.0.1/tcp/1", p)).unwrap();
         assert_eq!(got, p);
         assert_eq!(dial.to_string(), "/ip4/127.0.0.1/tcp/1");
+    }
+
+    #[test]
+    fn server_status_reports_limits_and_active_counts() {
+        let stats = RelayServerStats::new();
+        let view = RelayServerView {
+            settings: RelayServerSettings::default(),
+            stats: stats.clone(),
+        };
+        let idle = view.status();
+        assert_eq!(idle.limits.max_circuits, 16);
+        assert_eq!(idle.limits.max_circuit_bytes, 512 * 1024);
+        assert_eq!(idle.limits.reservation_secs, 3600);
+        assert_eq!(idle.usage.reservations_active, 0);
+
+        for _ in 0..3 {
+            stats.reservations_accepted.fetch_add(1, Ordering::Relaxed);
+        }
+        stats.reservations_closed.fetch_add(1, Ordering::Relaxed);
+        stats.reservations_timed_out.fetch_add(1, Ordering::Relaxed);
+        stats.circuits_accepted.fetch_add(2, Ordering::Relaxed);
+        stats.circuits_closed.fetch_add(1, Ordering::Relaxed);
+        stats.circuits_denied.fetch_add(4, Ordering::Relaxed);
+        let busy = view.status();
+        assert_eq!(busy.usage.reservations_active, 1);
+        assert_eq!(busy.usage.circuits_active, 1);
+        let json = serde_json::to_value(&busy).unwrap();
+        assert_eq!(
+            json["usage"]["circuits_denied"], 4,
+            "totals sit beside the gauges"
+        );
+        assert_eq!(json["limits"]["max_reservations_per_peer"], 2);
     }
 
     #[test]

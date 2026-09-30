@@ -204,7 +204,7 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_RELAY_MAX_RESERVATIONS`, `AVALON_RELAY_MAX_RESERVATIONS_PER_PEER` | Reservations held at once, and per peer. Defaults `128` and `2`. |
 | `AVALON_RELAY_RESERVATION_SECS` | Reservation lifetime before a client must renew. Default `3600`. |
 | `AVALON_RELAY_MAX_CIRCUITS`, `AVALON_RELAY_MAX_CIRCUITS_PER_PEER` | Relayed connections open at once, and per peer. Defaults `16` and `4`. |
-| `AVALON_RELAY_MAX_CIRCUIT_SECS`, `AVALON_RELAY_MAX_CIRCUIT_BYTES` | Lifetime and byte cap of one relayed connection. Defaults `120` and `524288`. Every relay limit must be at least 1 and has a ceiling. |
+| `AVALON_RELAY_MAX_CIRCUIT_SECS`, `AVALON_RELAY_MAX_CIRCUIT_BYTES` | Lifetime and byte cap of one relayed connection. Defaults `120` and `524288`. Every relay limit must be at least 1 and has a ceiling. A relay reports its limits and current use (reservations and circuits held now, and totals accepted, denied and closed) in the `relay_server` section of `GET /nodes/status`. |
 | `AVALON_RELAY_CLIENT_ENABLED` | A node that detects it is not dialable reserves a slot on a relay. Default `true`. |
 | `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` | Relay reservations to hold at once. Default `2`, at most `8`. |
 | `AVALON_RELAY_ADDRS` | Comma-separated relay addresses to use first, each ending in `/p2p/<relay peer id>`. Relays found among connected peers are used after these. |
