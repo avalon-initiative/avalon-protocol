@@ -2,8 +2,11 @@
 //! `server`'s SDK-facing API surface (identity/auth, profile/presence,
 //! social graph, chat, devices/passkeys/recovery, guilds, integrator/
 //! achievements/registry) — deliberately excludes `/ledger/*`, `/mirror/*`,
-//! `/internal/*` and the node-infra `/nodes/*` routes (no SDK wraps these),
-//! except the public topology endpoints a client app calls (`/nodes/topology`, `/nodes/probe`, `/nodes/trace`).
+//! `/internal/*` and the node-infra `/nodes/*` routes, except the public
+//! topology endpoints a client app calls (`/nodes/topology`, `/nodes/probe`,
+//! `/nodes/trace`). The SDKs do call some excluded routes (STH and tree-head
+//! reads, `/nodes/discover`, `/nodes/status`, batch prepare/finalize); those
+//! calls are hand-written and pinned by conformance vectors, not generated.
 //!
 //! Generated from the real handler signatures/types via
 //! `#[utoipa::path]`/`#[derive(ToSchema)]` on each in-scope handler, not
@@ -28,8 +31,8 @@ use utoipa::OpenApi;
     // constant so a build can report which schema it targets.
     info(
         title = "Avalon Protocol API",
-        description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
-        version = "0.7.1"
+        description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
+        version = "0.7.2"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
