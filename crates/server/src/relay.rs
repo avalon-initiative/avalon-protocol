@@ -147,7 +147,7 @@ fn env_flag(name: &str, default: bool) -> bool {
 }
 
 /// An integer knob that must be within `1..=max`; zero and oversized values are refused.
-fn bounded_env(name: &str, default: u64, max: u64) -> Result<u64, String> {
+pub(crate) fn bounded_env(name: &str, default: u64, max: u64) -> Result<u64, String> {
     let Ok(raw) = std::env::var(name) else {
         return Ok(default);
     };

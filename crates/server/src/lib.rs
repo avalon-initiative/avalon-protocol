@@ -65,6 +65,7 @@ pub mod mirrored_shard_keys;
 pub mod name_claims;
 pub mod neighbors;
 pub mod network_coordinates;
+pub mod node_http;
 pub mod node_keys;
 pub mod nodes;
 pub mod op_trace;

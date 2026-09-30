@@ -110,9 +110,9 @@ fn advertises_realtime_relay_role(roles: &[String]) -> bool {
     })
 }
 
-fn relay_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+fn relay_client() -> &'static crate::node_http::NodeClient {
+    static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
+    CLIENT.get_or_init(crate::node_http::NodeClient::new)
 }
 
 /// Every realtime-capable peer's base URL from #362's peer table — #539's
@@ -125,7 +125,7 @@ fn full_peer_loop_targets(state: &AppState) -> Vec<String> {
         .list_all()
         .into_iter()
         .filter(|peer| advertises_realtime_relay_role(&peer.roles))
-        .map(|peer| peer.base_url)
+        .map(|peer| crate::node_http::NodeClient::url_for(&peer))
         .collect()
 }
 

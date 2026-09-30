@@ -1056,6 +1056,7 @@ mod tests {
                                 .collect();
                             let _ = respond_to.send(values);
                         }
+                        DhtCommand::HttpRequest { .. } => {}
                     }
                 }
             });

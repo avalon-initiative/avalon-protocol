@@ -59,7 +59,7 @@ pub fn witness_sources(
             })?;
             Some(WitnessSource {
                 key_id: key_id.clone(),
-                base_url: peer.base_url.clone(),
+                base_url: crate::node_http::NodeClient::url_for(peer),
             })
         })
         .collect()
@@ -125,10 +125,10 @@ async fn fetch_own_cosignature(
     sth: &SignedTreeHead,
     shard_id: &str,
 ) -> GatherOutcome {
-    let Ok(target) = policy.check_base_url(&source.base_url).await else {
+    let Ok(target) = policy.check_node_url(&source.base_url).await else {
         return GatherOutcome::Blocked;
     };
-    let client = target.client(WITNESS_FETCH_TIMEOUT);
+    let client = target.node_client(WITNESS_FETCH_TIMEOUT);
     let url = format!("{}/ledger/sth/{}", target.base_url, sth.tree_size);
     let mut response = match client
         .get(url)
@@ -694,6 +694,7 @@ mod tests {
         let (w1, w2) = (witness(1), witness(2));
         let now = OffsetDateTime::now_utc();
         let mk = |url: &str, id: &str, direct: bool| PeerInfo {
+            identity_bound: false,
             base_url: url.into(),
             roles: vec![],
             protocol_version: String::new(),

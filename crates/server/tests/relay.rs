@@ -89,6 +89,7 @@ fn client_settings(relays: Vec<Multiaddr>, max: usize) -> RelayClientSettings {
 
 fn introduce(into: &PeerTable, node: &DhtHandle) {
     into.upsert(PeerInfo {
+        identity_bound: false,
         base_url: format!("http://{}.test", node.peer_id),
         roles: vec!["combined".to_string()],
         protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),

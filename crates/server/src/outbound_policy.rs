@@ -23,7 +23,7 @@ use std::time::Duration;
 use url::{Host, Url};
 
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// HTTP client for requests to other nodes: a peer that accepts the connection but never answers
 /// costs one bounded attempt instead of stalling the caller.
@@ -75,7 +75,32 @@ pub struct CheckedTarget {
     pub addr: SocketAddr,
 }
 
+/// A node URL that passed the policy: an address-pinned http(s) target, or a `p2p://` peer that
+/// has no address to check and is only ever reached through a [`crate::node_http::NodeClient`].
+#[derive(Debug, Clone)]
+pub struct NodeTarget {
+    /// The base URL to build request URLs from.
+    pub base_url: String,
+    http: Option<CheckedTarget>,
+}
+
+impl NodeTarget {
+    pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
+        match &self.http {
+            Some(checked) => checked.node_client(timeout),
+            None => {
+                crate::node_http::NodeClient::from(reqwest::Client::new()).with_timeout(timeout)
+            }
+        }
+    }
+}
+
 impl CheckedTarget {
+    /// [`Self::client`] as a [`crate::node_http::NodeClient`].
+    pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
+        crate::node_http::NodeClient::from(self.client(timeout)).with_timeout(timeout)
+    }
+
     /// A client that talks only to the checked address, follows no redirects
     /// and gives up after `timeout`.
     pub fn client(&self, timeout: Duration) -> reqwest::Client {
@@ -216,6 +241,22 @@ impl OutboundPolicy {
                 })
             }
         }
+    }
+
+    /// Like [`Self::check_base_url`], but also accepts a `p2p://<peer id>` node URL, which is
+    /// reached over a libp2p stream and so has no address to check.
+    pub async fn check_node_url(&self, url: &str) -> Result<NodeTarget, PolicyError> {
+        if let Some(peer) = crate::node_http::parse_p2p_base(url) {
+            return Ok(NodeTarget {
+                base_url: crate::node_http::p2p_base_url(&peer),
+                http: None,
+            });
+        }
+        let checked = self.check_base_url(url).await?;
+        Ok(NodeTarget {
+            base_url: checked.base_url.clone(),
+            http: Some(checked),
+        })
     }
 
     fn literal(

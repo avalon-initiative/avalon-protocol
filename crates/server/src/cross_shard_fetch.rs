@@ -174,7 +174,7 @@ struct InclusionProofDto {
 /// function's own doc comment.
 #[allow(clippy::too_many_arguments)]
 async fn fetch_verified_sth(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     pool: &PgPool,
     this_network_id: &str,
     shard_id: &str,
@@ -188,7 +188,7 @@ async fn fetch_verified_sth(
         .query(&[("shard_id", shard_id)])
         .send()
         .await
-        .and_then(reqwest::Response::error_for_status)
+        .and_then(crate::node_http::NodeResponse::error_for_status)
         .map_err(|e| CrossShardFetchError::SthFetchFailed(base_url.to_string(), e.to_string()))?
         .json()
         .await
@@ -241,7 +241,7 @@ pub async fn fetch_verified_entries(
     known_list: &[(String, VerifyingKey)],
     sources: &[cosign_gather::WitnessSource],
 ) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
-    let client = crate::outbound_policy::peer_client();
+    let client = crate::node_http::NodeClient::peer();
 
     let sth = fetch_verified_sth(
         &client,
@@ -264,7 +264,7 @@ pub async fn fetch_verified_entries(
         ])
         .send()
         .await
-        .and_then(reqwest::Response::error_for_status)
+        .and_then(crate::node_http::NodeResponse::error_for_status)
         .map_err(|e| {
             CrossShardFetchError::EntriesFetchFailed(
                 subject.to_string(),
@@ -300,7 +300,7 @@ pub async fn fetch_verified_entries(
 /// own root against `sth`, recompute the entry's hash from content and
 /// compare, then verify the proof itself.
 async fn verify_one_entry(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     base_url: &str,
     shard_id: &str,
     sth: &SignedTreeHead,
@@ -316,7 +316,7 @@ async fn verify_one_entry(
         ])
         .send()
         .await
-        .and_then(reqwest::Response::error_for_status)
+        .and_then(crate::node_http::NodeResponse::error_for_status)
         .map_err(|e| {
             CrossShardFetchError::ProofFetchFailed(entry.seq, base_url.to_string(), e.to_string())
         })?

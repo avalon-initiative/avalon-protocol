@@ -42,7 +42,7 @@ struct Fixture {
     /// `mth` of a prefix.
     leaves: Vec<String>,
     tracker: HeadGossipTracker,
-    http: reqwest::Client,
+    http: avalon_server::node_http::NodeClient,
 }
 
 impl Fixture {
@@ -64,7 +64,7 @@ impl Fixture {
             witness_id,
             leaves,
             tracker: HeadGossipTracker::new(),
-            http: reqwest::Client::new(),
+            http: avalon_server::node_http::NodeClient::new(),
         }
     }
 

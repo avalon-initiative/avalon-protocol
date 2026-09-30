@@ -214,7 +214,7 @@ impl RemoteSubmitStatus {
 /// a per-shard map by issue #532. Bundles the `reqwest::Client` alongside
 /// the targets so `run_worker` only builds one.
 pub struct RemoteSubmitConfig {
-    client: reqwest::Client,
+    client: crate::node_http::NodeClient,
     /// `shard_id` -> base URL of that shard's remote Settlement authority
     /// (no trailing slash). A shard with no entry here is committed
     /// locally via `chain.commit` — this node is presumed authoritative
@@ -320,10 +320,13 @@ impl RemoteSubmitConfig {
             .ok()
             .filter(|s| !s.is_empty());
         Some(Self {
-            client: reqwest::Client::builder()
-                .timeout(REMOTE_SETTLEMENT_TIMEOUT)
-                .build()
-                .expect("reqwest client with only a timeout set should always build"),
+            client: crate::node_http::NodeClient::from(
+                reqwest::Client::builder()
+                    .timeout(REMOTE_SETTLEMENT_TIMEOUT)
+                    .build()
+                    .expect("reqwest client with only a timeout set should always build"),
+            )
+            .with_timeout(REMOTE_SETTLEMENT_TIMEOUT),
             targets,
             submit_key,
             status: RemoteSubmitStatus::default(),

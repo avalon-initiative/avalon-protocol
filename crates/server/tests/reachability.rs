@@ -36,6 +36,7 @@ fn config(listen: &str, autonat: AutonatSettings) -> DhtConfig {
 
 fn introduce(into: &PeerTable, node: &DhtHandle, base_url: &str) {
     into.upsert(PeerInfo {
+        identity_bound: false,
         base_url: base_url.to_string(),
         roles: vec!["combined".to_string()],
         protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),

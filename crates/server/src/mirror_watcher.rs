@@ -238,7 +238,7 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// accepted heads for equivocation needs the exact key both verified
 /// against.
 async fn discover_and_verify_shard_peers(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     pool: &PgPool,
     network_id: &str,
     shard_registry: &crate::nodes::ShardRegistry,
@@ -529,7 +529,7 @@ pub async fn run_worker(
     let directory_max = crate::witness_refresh::max_per_tick_from_env();
     let own_witness_key = witness.as_ref().map(|w| w.key_id().to_string());
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
-    let client = crate::outbound_policy::peer_client();
+    let client = crate::node_http::NodeClient::peer();
 
     if config.peers.is_empty() {
         tracing::info!(
@@ -727,7 +727,7 @@ pub async fn run_worker(
 #[derive(Debug, thiserror::Error)]
 pub enum MirrorWatcherError {
     #[error("http request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[from] crate::node_http::NodeHttpError),
     #[error("peer returned an unparseable response: {0}")]
     Decode(String),
     #[error("STH signature verification failed — refusing to trust this observation")]
@@ -878,7 +878,7 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
 /// — a caller cross-checking two accepted heads for equivocation
 /// (`run_worker`) needs the same key both were checked against.
 async fn fetch_and_verify_sth(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
     peer: &str,
     shard_id: &str,
@@ -950,7 +950,7 @@ fn verify_key_for_network(
 /// single-shard peer (or are deliberately asking for that peer's own
 /// default).
 async fn fetch_latest_sth(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer: &str,
     shard_id: Option<&str>,
 ) -> Result<(SignedTreeHeadDto, String), MirrorWatcherError> {
@@ -984,8 +984,8 @@ async fn fetch_latest_sth(
 /// than retrying forever — the existing per-tick retry (next poll
 /// interval) is still the ultimate backstop.
 async fn send_with_rate_limit_retry(
-    request: reqwest::RequestBuilder,
-) -> Result<reqwest::Response, reqwest::Error> {
+    request: crate::node_http::NodeRequestBuilder,
+) -> Result<crate::node_http::NodeResponse, crate::node_http::NodeHttpError> {
     const MAX_RATE_LIMIT_RETRIES: u32 = 5;
     const DEFAULT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -1269,7 +1269,7 @@ async fn refresh_witness_cosignatures(
 async fn record_verified_head(
     pool: &PgPool,
     chain: &PostgresSettlementProvider,
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     witness: Option<&WitnessCosignConfig>,
     head_gossip: &HeadGossipTracker,
     interest: Option<(
@@ -1496,7 +1496,7 @@ async fn check_equivocation(
 ///    list. A peer reporting a different, smaller `tree_size` is just
 ///    behind, not disagreeing, and isn't counted against the winner.
 async fn backfill_network(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     pool: &PgPool,
     indexer: &PostgresIndexer,
     network_id: &str,
@@ -1582,7 +1582,7 @@ async fn backfill_network(
 /// trusting a peer's response or (for the write side) `POST
 /// /ledger/submit`'s request body.
 async fn backfill(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     pool: &PgPool,
     indexer: &PostgresIndexer,
     shard_id: &str,
@@ -1905,7 +1905,7 @@ fn decode_proof_nodes(hex_nodes: &[String]) -> Result<Vec<[u8; 32]>, MirrorWatch
 /// so the next request in this backfill pass starts from a different one
 /// rather than always retrying the same first candidate.
 async fn fetch_entries_from_any(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     candidates: &[String],
     cursor: &mut usize,
     shard_id: &str,
@@ -1931,7 +1931,7 @@ async fn fetch_entries_from_any(
 /// Same round-robin-with-failover shape as [`fetch_entries_from_any`], for
 /// `GET /ledger/proof/inclusion`.
 async fn fetch_inclusion_proof_from_any(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     candidates: &[String],
     cursor: &mut usize,
     shard_id: &str,
@@ -1958,7 +1958,7 @@ async fn fetch_inclusion_proof_from_any(
 /// footgun as [`fetch_latest_sth`] — a peer serving more than one shard
 /// answers a bare request with whichever it treats as its own default.
 async fn fetch_entries(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer: &str,
     shard_id: &str,
     since_seq: i64,
@@ -1982,7 +1982,7 @@ async fn fetch_entries(
 /// Issue #604: `shard_id` sent as an explicit query param — same reason
 /// as [`fetch_entries`].
 async fn fetch_inclusion_proof(
-    client: &reqwest::Client,
+    client: &crate::node_http::NodeClient,
     peer: &str,
     shard_id: &str,
     seq: i64,
@@ -2391,7 +2391,7 @@ mod tests {
         let registry = crate::nodes::ShardRegistry::new();
         registry.record_own(shard_id, url, OffsetDateTime::now_utc());
         discover_and_verify_shard_peers(
-            &reqwest::Client::new(),
+            &crate::node_http::NodeClient::new(),
             pool,
             network_id,
             &registry,
@@ -2509,7 +2509,7 @@ mod tests {
             servers.push(server);
         }
         let found = discover_and_verify_shard_peers(
-            &reqwest::Client::new(),
+            &crate::node_http::NodeClient::new(),
             &pool,
             "net",
             &registry,
@@ -2940,7 +2940,7 @@ mod tests {
     async fn backfill_network_refuses_to_proceed_while_an_equivocation_is_unresolved() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         let network_id = format!("avalon-test-gate-{}", Uuid::new_v4());
 
         mirror::record_equivocation(
@@ -3006,7 +3006,7 @@ mod tests {
     async fn backfill_network_proceeds_again_once_the_finding_is_resolved() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
-        let client = reqwest::Client::new();
+        let client = crate::node_http::NodeClient::new();
         let network_id = format!("avalon-test-gate-cleared-{}", Uuid::new_v4());
 
         mirror::record_equivocation(

@@ -17,6 +17,7 @@
 # env: AVALON_ENV_FILE   .env to read DATABASE_URL from
 #      NAT_SERVER_BIN    avalon-server binary to run (default target/debug/avalon-server)
 #      NAT_LAB_KEEP=1    keep logs and schemas after the run
+#      NAT_LAB_EXTRA     extra VAR=value settings (space separated) for every node
 #      NAT_LAB_TIMEOUT   seconds any single wait may take (default 90)
 
 set -uo pipefail
@@ -91,7 +92,7 @@ node() {
     AVALON_SETTLEMENT_REMOTE_URLS= AVALON_SETTLEMENT_REMOTE_URL= AVALON_SETTLEMENT_VERIFY_KEY= \
     AVALON_SETTLEMENT_SIGNING_KEY= AVALON_SETTLEMENT_SUBMIT_KEY= AVALON_LIBP2P_EXTERNAL_ADDR= \
     RUST_LOG="${NAT_LAB_LOG:-info}" \
-    "$@" "$SERVER_BIN" >"$LOG_DIR/$name.log" 2>&1 &
+    "$@" ${NAT_LAB_EXTRA:-} "$SERVER_BIN" >"$LOG_DIR/$name.log" 2>&1 &
   LAST_PID=$!
   PIDS+=("$LAST_PID")
 }
@@ -126,19 +127,20 @@ ready() { wait_status "$1" "$2" '.protocol_version' "$2 to answer"; }
 # A public seed pair every scenario uses: the relay and a second public node, both
 # reachable directly on the lab's public segment.
 public_pair() {
-  node relay inet 10.99.0.1 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.1/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true
-  node seed inet 10.99.0.2 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.2/tcp/4001 \
-    AVALON_BOOTSTRAP_PEERS=http://10.99.0.1:8080
-  ready inet 10.99.0.1 && ready inet 10.99.0.2
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null || return 1
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080
+  ready relay 10.99.0.101 && ready seed 10.99.0.102
 }
 
-relay_addr() { echo "/ip4/10.99.0.1/tcp/4001/p2p/$(peer_id relay)"; }
+relay_addr() { echo "/ip4/10.99.0.101/tcp/4001/p2p/$(peer_id relay)"; }
 
 # --- scenarios ---------------------------------------------------------------------
 
 scenario_public() {
   public_pair || return 1
-  wait_status inet 10.99.0.2 '.reachability == "public" and .connectivity == "direct"' \
+  wait_status seed 10.99.0.102 '.reachability == "public" and .connectivity == "direct"' \
     "the public seed to report direct"
 }
 
@@ -147,7 +149,7 @@ relayed_behind() {
   local type="$1"
   "$LAB" up home1 "$type" >/dev/null || return 1
   public_pair || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
   wait_status home1 10.1.0.2 \
     '.reachability == "private" and .connectivity == "relayed" and (.relay_reservations|length) == 1' \
     "a node behind a $type NAT to report relayed with a reservation" || return 1
@@ -166,8 +168,8 @@ punch_between() {
   "$LAB" up home1 "$type_a" >/dev/null || return 1
   "$LAB" up home2 "$type_b" >/dev/null || return 1
   public_pair || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
-  node home2 home2 10.2.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
+  node home2 home2 10.2.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
   wait_status home1 10.1.0.2 '.connectivity == "relayed"' "home1 to be relayed" || return 1
   wait_status home2 10.2.0.2 '.connectivity == "relayed" or .connectivity == "nat_traversed"' "home2 to be relayed" || return 1
   if [ "$expect" = punched ]; then
@@ -191,7 +193,7 @@ scenario_punch-symmetric-fallback() { WAIT=150 punch_between symmetric symmetric
 scenario_full-cone-direct() {
   "$LAB" up home1 full-cone >/dev/null || return 1
   public_pair || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
   wait_status home1 10.1.0.2 '.reachability == "public" and .connectivity == "direct"' \
     "a node behind a full-cone NAT to report direct"
 }
@@ -202,7 +204,7 @@ scenario_full-cone-direct() {
 scenario_restricted-cone-detected-public() {
   "$LAB" up home1 restricted-cone >/dev/null || return 1
   public_pair || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
   wait_status home1 10.1.0.2 '.reachability == "public"' \
     "AutoNAT to report a restricted-cone node public"
 }
@@ -210,11 +212,12 @@ scenario_restricted-cone-detected-public() {
 # With no relay to use, a private node still participates and reports outbound_only.
 scenario_outbound-only() {
   "$LAB" up home1 no-inbound >/dev/null || return 1
-  node seed inet 10.99.0.2 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.2/tcp/4001
-  node relay inet 10.99.0.1 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.1/tcp/4001 \
-    AVALON_BOOTSTRAP_PEERS=http://10.99.0.2:8080
-  ready inet 10.99.0.1 && ready inet 10.99.0.2 || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.1:8080,http://10.99.0.2:8080
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null || return 1
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
+  ready relay 10.99.0.101 && ready seed 10.99.0.102 || return 1
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080
   wait_status home1 10.1.0.2 \
     '.reachability == "private" and .connectivity == "outbound_only" and (.relay_reservations|length) == 0' \
     "a private node with no relay to report outbound_only"
@@ -224,14 +227,14 @@ scenario_outbound-only() {
 scenario_relay-failover() {
   "$LAB" up home1 symmetric >/dev/null || return 1
   public_pair || return 1
-  ip -n avlab-inet addr add 10.99.0.3/24 dev avlbr0
-  node relay2 inet 10.99.0.3 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.3/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true \
-    AVALON_BOOTSTRAP_PEERS=http://10.99.0.1:8080
+  "$LAB" up-public relay2 10.99.0.103 >/dev/null || return 1
+  node relay2 relay2 10.99.0.103 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.103/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080
   local second="$LAST_PID"
-  ready inet 10.99.0.3 || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.1:8080,http://10.99.0.2:8080 \
+  ready relay2 10.99.0.103 || return 1
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080 \
     AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1 \
-    AVALON_RELAY_ADDRS="$(relay_addr),/ip4/10.99.0.3/tcp/4001/p2p/$(peer_id relay2)"
+    AVALON_RELAY_ADDRS="$(relay_addr),/ip4/10.99.0.103/tcp/4001/p2p/$(peer_id relay2)"
   wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) == 1' \
     "the first reservation" || return 1
   local held
