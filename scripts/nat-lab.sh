@@ -5,6 +5,8 @@
 # usage: nat-lab.sh up <name> <type>     type: full-cone | restricted-cone |
 #                                              port-restricted | symmetric | no-inbound
 #        nat-lab.sh up-inet                 (just the shared public side, no homes)
+#        nat-lab.sh up-public <name> <ip>   a public node's own namespace on the shared segment,
+#                                           <ip> in 10.99.0.0/24 (run it with: exec <name> -- cmd)
 #        nat-lab.sh down <name>
 #        nat-lab.sh down-all
 #        nat-lab.sh exec <name> -- cmd...   (<name> = a home, or "inet" for the shared public side)
@@ -177,11 +179,12 @@ cmd_down_locked() {
   idx=$(state_idx "$name")
   # explicit delete: netns teardown is asynchronous and a reused index would race it
   [ -z "$idx" ] || ip -n "$INET_NS" link del "w$idx" 2>/dev/null || true
+  [ ! -f "$STATE/$name.pub" ] || ip -n "$INET_NS" link del "pu$(cat "$STATE/$name.pub")" 2>/dev/null || true
   for ns in "${PFX}-$name" "${PFX}-$name-r"; do
     kill_ns_pids "$ns"
     ns_exists "$ns" && ip netns delete "$ns"
   done
-  rm -f "$STATE/$name.home"
+  rm -f "$STATE/$name.home" "$STATE/$name.pub"
   return 0
 }
 
@@ -215,6 +218,28 @@ cmd_exec() {
   exec ip netns exec "$ns" "$@"
 }
 
+# A public host of its own: two addresses in one namespace share a source-address choice, so
+# a node that opens a connection without binding shows up to its peer as the other address.
+cmd_up_public() {
+  [ $# -eq 2 ] || die "usage: up-public <name> <ip>"
+  local name=$1 ip=$2 oct ns
+  valid_name "$name"
+  [[ $ip =~ ^10\.99\.0\.([0-9]+)$ ]] || die "ip must be in $WAN_NET.0/24"
+  oct=${BASH_REMATCH[1]}
+  ns=${PFX}-$name
+  lock
+  ensure_inet
+  ns_exists "$ns" && { echo "$name already up"; return 0; }
+  ip netns add "$ns"
+  ip -n "$ns" link set lo up
+  ip -n "$INET_NS" link add "pu$oct" type veth peer name eth0 netns "$ns"
+  ip -n "$INET_NS" link set "pu$oct" master avlbr0 up
+  ip -n "$ns" addr add "$ip/24" dev eth0
+  ip -n "$ns" link set eth0 up
+  echo "$oct" >"$STATE/$name.pub"
+  echo "$name up: public address $ip"
+}
+
 cmd_up_inet() {
   lock
   ensure_inet
@@ -239,8 +264,8 @@ main() {
   local c=${1:-}
   [ $# -gt 0 ] && shift
   case $c in
-    up | up-inet | down | down-all | exec | status) need_root ;;
-    *) sed -n '2,18p' "$0"; exit 2 ;;
+    up | up-inet | up-public | down | down-all | exec | status) need_root ;;
+    *) sed -n '2,20p' "$0"; exit 2 ;;
   esac
   "cmd_${c//-/_}" "$@"
 }
