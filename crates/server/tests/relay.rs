@@ -17,7 +17,7 @@ use avalon_server::relay::{RelayClientSettings, RelayServerSettings, RelaySettin
 use libp2p::futures::StreamExt;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
-    identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
+    dcutr, identify, identity, noise, relay, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -278,6 +278,126 @@ async fn two_nodes_connect_only_through_a_relay() {
         .expect("B reaches A through the relay");
     assert!(b.is_connected(&a.peer_id));
     assert_eq!(r.relay_stats.counts().circuits_accepted, 1);
+}
+
+#[derive(NetworkBehaviour)]
+struct Punching {
+    relay_client: relay::client::Behaviour,
+    identify: identify::Behaviour,
+    dcutr: dcutr::Behaviour,
+}
+
+fn punching_swarm() -> Swarm<Punching> {
+    SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .unwrap()
+        .with_relay_client(noise::Config::new, yamux::Config::default)
+        .unwrap()
+        .with_behaviour(|key, relay_client| Punching {
+            relay_client,
+            identify: identify::Behaviour::new(identify::Config::new(
+                format!("/avalon/dht/1.0.0/{NETWORK}"),
+                key.public(),
+            )),
+            dcutr: dcutr::Behaviour::new(key.public().to_peer_id()),
+        })
+        .unwrap()
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(120)))
+        .build()
+}
+
+/// A peer B that has been seen by the relay at a loopback address it listens on, so DCUtR has
+/// a candidate to offer. Returns B and the id of its listener.
+async fn punching_peer(
+    relay: &Multiaddr,
+) -> (Swarm<Punching>, libp2p::core::transport::ListenerId) {
+    let mut b = punching_swarm();
+    let listener = b
+        .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .unwrap();
+    b.dial(relay.clone()).unwrap();
+    let relay_id = relay
+        .iter()
+        .find_map(|p| match p {
+            libp2p::multiaddr::Protocol::P2p(id) => Some(id),
+            _ => None,
+        })
+        .unwrap();
+    // Wait until the relay has identified B: only then does B's address become a candidate.
+    tokio::time::timeout(WAIT, async {
+        let (mut connected, mut identified) = (false, false);
+        while !(connected && identified) {
+            match b.select_next_some().await {
+                SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == relay_id => {
+                    connected = true
+                }
+                SwarmEvent::Behaviour(PunchingEvent::Identify(identify::Event::Received {
+                    peer_id,
+                    ..
+                })) if peer_id == relay_id => identified = true,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("B connects to the relay");
+    // Give the relay's identify of B time to arrive.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    (b, listener)
+}
+
+/// Runs B's swarm until `node`'s snapshot yields something. The reserved node starts the punch,
+/// so its snapshot is where the outcome shows.
+async fn drive_until<T>(
+    b: &mut Swarm<Punching>,
+    node: &DhtHandle,
+    what: &str,
+    pick: impl FnMut(&ReachabilitySnapshot) -> Option<T>,
+) -> T {
+    let watch = wait_snapshot(node, what, pick);
+    tokio::pin!(watch);
+    loop {
+        tokio::select! {
+            found = &mut watch => return found,
+            _ = b.select_next_some() => {}
+        }
+    }
+}
+
+/// A hole punch with no reachable address fails; the failure is recorded, the relayed
+/// connection keeps carrying the peer, and the node still reports `relayed`.
+#[tokio::test]
+async fn a_failed_hole_punch_leaves_the_relayed_connection_in_use() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    let (r, r_addr) = relay_node(server_settings()).await;
+    let a = private_node(vec![r_addr.clone()], 1, &r).await;
+    let relayed = reserved_on(&a, r.peer_id).await;
+    let (mut b, listener) = punching_peer(&r_addr).await;
+    // B's only candidate stops listening before the punch, so dialing it is refused.
+    assert!(b.remove_listener(listener));
+
+    b.dial(relayed).unwrap();
+    let outcome = drive_until(&mut b, &a, "a recorded hole punch", |s| {
+        s.hole_punches.first().cloned()
+    })
+    .await;
+    assert!(!outcome.succeeded);
+    assert!(outcome.error.is_some());
+    assert_eq!(outcome.peer_id, b.local_peer_id().to_string());
+    let snap = a.reachability.snapshot();
+    assert!(snap.punched_peers.is_empty());
+    assert_eq!(connectivity_for(&snap), Some(Connectivity::Relayed));
+    assert!(
+        b.is_connected(&a.peer_id),
+        "the relayed connection stays up"
+    );
 }
 
 /// AutoNAT probes only over a connection that is still open, and nothing redials a dropped
@@ -636,6 +756,7 @@ async fn only_a_dialable_node_advertises_relaying() {
         RelaySettings {
             server: Some(server_settings()),
             client: client_settings(Vec::new(), 1),
+            ..RelaySettings::default()
         },
     );
     let p = dht::start(peers.clone(), cfg).await;

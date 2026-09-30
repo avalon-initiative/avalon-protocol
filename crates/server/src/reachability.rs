@@ -39,11 +39,14 @@ impl Reachability {
 }
 
 /// `connectivity` reported for a detected reachability. `public` is `direct`; `private` is
-/// `relayed` while a relay reservation is held and `outbound_only` otherwise; `unknown` reports
-/// nothing. `nat_traversed` needs hole punching, which does not exist yet.
+/// `nat_traversed` while a hole-punched direct connection is open, else `relayed` while a relay
+/// reservation is held and `outbound_only` otherwise; `unknown` reports nothing.
 pub fn connectivity_for(snapshot: &ReachabilitySnapshot) -> Option<Connectivity> {
     match snapshot.reachability {
         Reachability::Public => Some(Connectivity::Direct),
+        Reachability::Private if !snapshot.punched_peers.is_empty() => {
+            Some(Connectivity::NatTraversed)
+        }
         Reachability::Private if !snapshot.relay_reservations.is_empty() => {
             Some(Connectivity::Relayed)
         }
@@ -62,6 +65,21 @@ pub struct RelayReservation {
     pub renewals: u64,
 }
 
+/// Most recent hole-punch outcomes kept, newest last.
+pub const MAX_HOLE_PUNCH_OUTCOMES: usize = 32;
+
+/// The result of one hole-punch attempt with a peer. A failed attempt leaves the relayed
+/// connection in place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HolePunchOutcome {
+    pub peer_id: String,
+    /// `true` when a direct connection replaced the relayed one.
+    pub succeeded: bool,
+    /// Why the attempt failed; absent on success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Point-in-time detection result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReachabilitySnapshot {
@@ -70,6 +88,10 @@ pub struct ReachabilitySnapshot {
     pub confirmed_addrs: Vec<String>,
     /// Accepted relay reservations only; a requested one is not listed until the relay accepts.
     pub relay_reservations: Vec<RelayReservation>,
+    /// Recent hole-punch attempts, oldest first, bounded by [`MAX_HOLE_PUNCH_OUTCOMES`].
+    pub hole_punches: Vec<HolePunchOutcome>,
+    /// Peers this node currently holds a hole-punched direct connection to.
+    pub punched_peers: Vec<String>,
 }
 
 impl ReachabilitySnapshot {
@@ -78,6 +100,8 @@ impl ReachabilitySnapshot {
             reachability: Reachability::Unknown,
             confirmed_addrs: Vec::new(),
             relay_reservations: Vec::new(),
+            hole_punches: Vec::new(),
+            punched_peers: Vec::new(),
         }
     }
 }
@@ -140,6 +164,22 @@ impl ReachabilityHandle {
         self.tx.send_if_modified(|s| {
             let changed = s.relay_reservations != reservations;
             s.relay_reservations = reservations;
+            changed
+        });
+    }
+
+    pub(crate) fn record_hole_punch(&self, outcome: HolePunchOutcome) {
+        self.tx.send_modify(|s| {
+            s.hole_punches.push(outcome);
+            let excess = s.hole_punches.len().saturating_sub(MAX_HOLE_PUNCH_OUTCOMES);
+            s.hole_punches.drain(..excess);
+        });
+    }
+
+    pub(crate) fn set_punched_peers(&self, peers: Vec<String>) {
+        self.tx.send_if_modified(|s| {
+            let changed = s.punched_peers != peers;
+            s.punched_peers = peers;
             changed
         });
     }
@@ -294,6 +334,8 @@ mod tests {
                 reachability,
                 confirmed_addrs: Vec::new(),
                 relay_reservations,
+                hole_punches: Vec::new(),
+                punched_peers: Vec::new(),
             }
         };
         assert_eq!(
@@ -311,6 +353,55 @@ mod tests {
         assert_eq!(connectivity_for(&at(Reachability::Unknown, false)), None);
         // A reservation never upgrades an undetected node.
         assert_eq!(connectivity_for(&at(Reachability::Unknown, true)), None);
+    }
+
+    #[test]
+    fn an_open_punched_connection_makes_a_private_node_nat_traversed() {
+        let mut snap = ReachabilitySnapshot::unknown();
+        snap.reachability = Reachability::Private;
+        snap.punched_peers = vec!["12D3KooWPeer".into()];
+        assert_eq!(connectivity_for(&snap), Some(Connectivity::NatTraversed));
+        // Even with a reservation held, the direct connection is the better path.
+        snap.relay_reservations = vec![RelayReservation {
+            relay_peer_id: "12D3KooWRelay".into(),
+            relayed_addr: "/ip4/203.0.113.7/tcp/4001/p2p-circuit".into(),
+            renewals: 0,
+        }];
+        assert_eq!(connectivity_for(&snap), Some(Connectivity::NatTraversed));
+        snap.punched_peers.clear();
+        assert_eq!(connectivity_for(&snap), Some(Connectivity::Relayed));
+        // A punched connection never upgrades an undetected or public node's report.
+        snap.punched_peers = vec!["12D3KooWPeer".into()];
+        snap.reachability = Reachability::Unknown;
+        assert_eq!(connectivity_for(&snap), None);
+        snap.reachability = Reachability::Public;
+        assert_eq!(connectivity_for(&snap), Some(Connectivity::Direct));
+    }
+
+    #[test]
+    fn hole_punch_outcomes_are_bounded_and_keep_the_newest() {
+        let handle = ReachabilityHandle::unknown();
+        for i in 0..MAX_HOLE_PUNCH_OUTCOMES + 5 {
+            handle.record_hole_punch(HolePunchOutcome {
+                peer_id: format!("peer-{i}"),
+                succeeded: i % 2 == 0,
+                error: (i % 2 != 0).then(|| "attempts exceeded".to_string()),
+            });
+        }
+        let outcomes = handle.snapshot().hole_punches;
+        assert_eq!(outcomes.len(), MAX_HOLE_PUNCH_OUTCOMES);
+        assert_eq!(outcomes[0].peer_id, "peer-5");
+        assert_eq!(
+            outcomes.last().unwrap().peer_id,
+            format!("peer-{}", MAX_HOLE_PUNCH_OUTCOMES + 4)
+        );
+        let json = serde_json::to_value(&outcomes[0]).unwrap();
+        assert_eq!(json["succeeded"], false);
+        assert_eq!(json["error"], "attempts exceeded");
+        assert!(serde_json::to_value(&outcomes[1])
+            .unwrap()
+            .get("error")
+            .is_none());
     }
 
     #[test]
