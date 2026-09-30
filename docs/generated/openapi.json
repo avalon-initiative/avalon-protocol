@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Avalon Protocol API",
-    "description": "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
+    "description": "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.7.1"
+    "version": "0.7.2"
   },
   "paths": {
     "/attestations/{id}": {
