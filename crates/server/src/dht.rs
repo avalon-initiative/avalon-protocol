@@ -312,6 +312,10 @@ pub struct DhtHandle {
     pub relay_stats: Arc<RelayServerStats>,
 }
 
+/// How long a connection with no active substream stays open. Long enough that AutoNAT probes
+/// and relay reservations find a connected server between probe intervals.
+const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn build_swarm(
     identity: identity::Keypair,
     network_id: &str,
@@ -348,6 +352,7 @@ fn build_swarm(
                 .into(),
         })
         .expect("behaviour construction from a fixed, valid config is infallible")
+        .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
         .build()
 }
 
