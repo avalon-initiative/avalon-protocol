@@ -325,6 +325,7 @@ mod tests {
 
     fn peer(url: &str, secs: i64) -> PeerInfo {
         PeerInfo {
+            identity_bound: false,
             base_url: url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: "0.1.0".to_string(),

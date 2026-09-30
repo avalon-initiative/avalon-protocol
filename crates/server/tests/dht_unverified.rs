@@ -40,6 +40,7 @@ async fn node(peers: PeerTable) -> (DhtHandle, String) {
 
 fn gossiped(url: &str, peer: &DhtHandle, addr: &str) -> PeerInfo {
     PeerInfo {
+        identity_bound: false,
         base_url: url.to_string(),
         roles: vec!["combined".to_string()],
         protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),

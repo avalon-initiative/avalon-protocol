@@ -694,6 +694,7 @@ mod tests {
         let (w1, w2) = (witness(1), witness(2));
         let now = OffsetDateTime::now_utc();
         let mk = |url: &str, id: &str, direct: bool| PeerInfo {
+            identity_bound: false,
             base_url: url.into(),
             roles: vec![],
             protocol_version: String::new(),

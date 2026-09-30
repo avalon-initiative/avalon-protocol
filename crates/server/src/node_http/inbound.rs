@@ -16,6 +16,9 @@ use libp2p::PeerId;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
+use crate::nodes::PeerTable;
+use crate::shutdown::Shutdown;
+
 use super::wire::{check_headers, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings};
 
 /// The libp2p peer a stream request came from, authenticated by the noise handshake. Present as
@@ -48,6 +51,16 @@ pub const ALLOWED_EXACT: &[&str] = &[
     "/ledger/mirror-progress",
 ];
 
+/// Routes that write or inject data without their own credential. Over a stream they are
+/// reserved for peers bound in the peer table; the rest stay open to any authenticated peer id.
+pub const BOUND_ONLY_PATHS: &[&str] = &["/nodes/relay", "/nodes/replicate-chat", "/mirror/notify"];
+
+/// Whether `path_and_query` names a route in [`BOUND_ONLY_PATHS`].
+pub fn requires_bound_peer(path_and_query: &str) -> bool {
+    let path = path_and_query.split('?').next().unwrap_or("");
+    BOUND_ONLY_PATHS.contains(&path)
+}
+
 /// `/ledger/sth/{tree_size}`.
 const ALLOWED_STH_PREFIX: &str = "/ledger/sth/";
 
@@ -65,9 +78,17 @@ pub fn path_allowed(path_and_query: &str) -> bool {
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// A stable per-peer address in the unique-local range, so each peer id gets its own per-IP
-/// rate-limit bucket and never looks like a real client or loopback.
-pub fn synthetic_addr(peer: &PeerId) -> SocketAddr {
+/// The one address every peer that is not bound in the peer table shares, so free peer ids
+/// cannot multiply per-IP budgets. Unique-local, never loopback.
+pub const SHARED_PEER_ADDR: SocketAddr =
+    SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1)), 0);
+
+/// The address handlers see for `peer`: its own stable unique-local address if it is a bound
+/// peer-table entry (so the table cap bounds the buckets), else [`SHARED_PEER_ADDR`].
+pub fn synthetic_addr(peer: &PeerId, bound: bool) -> SocketAddr {
+    if !bound {
+        return SHARED_PEER_ADDR;
+    }
     let digest = Sha256::new()
         .chain_update(b"avalon-node-http-peer")
         .chain_update(peer.to_bytes())
@@ -81,20 +102,32 @@ pub fn synthetic_addr(peer: &PeerId) -> SocketAddr {
 /// Set once the router exists, which is after the swarm starts; stream requests before that
 /// get a 503.
 #[derive(Clone, Default)]
-pub struct RouterSlot(Arc<OnceLock<Router>>);
+pub struct RouterSlot {
+    router: Arc<OnceLock<Router>>,
+    shutdown: Arc<OnceLock<Shutdown>>,
+}
 
 impl RouterSlot {
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Stream requests get a 503 once `shutdown` has been requested.
+    pub fn set_shutdown(&self, shutdown: Shutdown) {
+        let _ = self.shutdown.set(shutdown);
+    }
+
+    fn draining(&self) -> bool {
+        self.shutdown.get().is_some_and(Shutdown::is_requested)
+    }
+
     /// Publishes the router; a second call is ignored.
     pub fn set(&self, router: Router) {
-        let _ = self.0.set(router);
+        let _ = self.router.set(router);
     }
 
     pub fn get(&self) -> Option<&Router> {
-        self.0.get()
+        self.router.get()
     }
 }
 
@@ -129,6 +162,7 @@ pub struct InboundService {
     slot: RouterSlot,
     settings: NodeHttpSettings,
     counts: Arc<Mutex<Counts>>,
+    peers: PeerTable,
 }
 
 /// Headers that never cross the stream: connection framing, and anything a proxy chain would
@@ -155,16 +189,24 @@ fn dropped_request_header(name: &str) -> bool {
 }
 
 impl InboundService {
-    pub fn new(slot: RouterSlot, settings: NodeHttpSettings) -> Self {
+    pub fn new(slot: RouterSlot, settings: NodeHttpSettings, peers: PeerTable) -> Self {
         Self {
             slot,
             settings,
             counts: Arc::default(),
+            peers,
         }
     }
 
     /// Takes a slot for `peer`, or the immediate 429 to answer with.
-    pub fn admit(&self, peer: PeerId) -> Result<InboundPermit, NodeHttpResponse> {
+    pub fn admit(
+        &self,
+        peer: PeerId,
+        request: &NodeHttpRequest,
+    ) -> Result<InboundPermit, NodeHttpResponse> {
+        if request.grant.overloaded {
+            return Err(NodeHttpResponse::error(429, "buffer_budget_exhausted"));
+        }
         let mut c = self.counts.lock().unwrap_or_else(|p| p.into_inner());
         let mine = c.per_peer.get(&peer).copied().unwrap_or(0);
         if c.total >= self.settings.max_inflight || mine >= self.settings.max_inflight_per_peer {
@@ -190,10 +232,17 @@ impl InboundService {
         if !path_allowed(&request.path_and_query) {
             return NodeHttpResponse::error(403, "path_not_allowed");
         }
+        let bound = self.peers.is_bound_libp2p_peer(&peer);
+        if requires_bound_peer(&request.path_and_query) && !bound {
+            return NodeHttpResponse::error(403, "peer_not_bound");
+        }
+        if self.slot.draining() {
+            return NodeHttpResponse::error(503, "shutting_down");
+        }
         let Some(router) = self.slot.get() else {
             return NodeHttpResponse::error(503, "node_starting");
         };
-        let Ok(req) = build_request(method, peer, request) else {
+        let Ok(req) = build_request(method, peer, bound, request) else {
             return NodeHttpResponse::error(400, "bad_request");
         };
         let dispatch = async {
@@ -236,6 +285,7 @@ impl InboundService {
 fn build_request(
     method: Method,
     peer: PeerId,
+    bound: bool,
     request: NodeHttpRequest,
 ) -> Result<Request<Body>, ()> {
     let uri: Uri = request.path_and_query.parse().map_err(|_| ())?;
@@ -260,7 +310,7 @@ fn build_request(
     let mut req = builder.body(Body::from(request.body)).map_err(|_| ())?;
     req.extensions_mut().insert(RemotePeer(peer));
     req.extensions_mut()
-        .insert(ConnectInfo(synthetic_addr(&peer)));
+        .insert(ConnectInfo(synthetic_addr(&peer, bound)));
     Ok(req)
 }
 
@@ -303,15 +353,70 @@ mod tests {
         }
     }
 
+    fn bound_table(peer: &PeerId) -> PeerTable {
+        let table = PeerTable::new();
+        table.upsert(crate::nodes::PeerInfo {
+            base_url: "http://bound.test".into(),
+            roles: vec![],
+            protocol_version: "0.1.0".into(),
+            network_id: "n".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(peer.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: true,
+        });
+        table
+    }
+
     #[test]
-    fn synthetic_addresses_are_stable_distinct_and_never_loopback() {
-        let (a, b) = (PeerId::random(), PeerId::random());
-        assert_eq!(synthetic_addr(&a), synthetic_addr(&a));
-        assert_ne!(synthetic_addr(&a).ip(), synthetic_addr(&b).ip());
-        let ip = synthetic_addr(&a).ip();
-        assert!(!ip.is_loopback() && !ip.is_unspecified());
-        let IpAddr::V6(v6) = ip else { panic!("ipv6") };
-        assert_eq!(v6.octets()[0], 0xfd);
+    fn unbound_peers_share_one_address_and_a_bound_peer_has_its_own() {
+        let bound = PeerId::random();
+        let table = bound_table(&bound);
+        let addr_for = |p: &PeerId| synthetic_addr(p, table.is_bound_libp2p_peer(p));
+        let strangers: std::collections::HashSet<_> =
+            (0..50).map(|_| addr_for(&PeerId::random())).collect();
+        assert_eq!(strangers, [SHARED_PEER_ADDR].into());
+        assert_ne!(addr_for(&bound), SHARED_PEER_ADDR);
+        assert_eq!(addr_for(&bound), synthetic_addr(&bound, true));
+        for ip in [addr_for(&bound).ip(), SHARED_PEER_ADDR.ip()] {
+            assert!(!ip.is_loopback() && !ip.is_unspecified());
+            let IpAddr::V6(v6) = ip else { panic!("ipv6") };
+            assert_eq!(v6.octets()[0], 0xfd);
+        }
+    }
+
+    #[test]
+    fn write_routes_require_a_bound_peer() {
+        for p in [
+            "/nodes/relay",
+            "/nodes/replicate-chat?x=1",
+            "/mirror/notify",
+        ] {
+            assert!(requires_bound_peer(p), "{p}");
+        }
+        for p in [
+            "/nodes/announce",
+            "/nodes/status",
+            "/ledger/submit",
+            "/nodes/trace",
+        ] {
+            assert!(!requires_bound_peer(p), "{p}");
+        }
+        for p in BOUND_ONLY_PATHS {
+            assert!(path_allowed(p), "{p} must also be allowlisted");
+        }
+    }
+
+    fn req() -> NodeHttpRequest {
+        NodeHttpRequest {
+            method: "GET".into(),
+            path_and_query: "/nodes/status".into(),
+            headers: vec![],
+            body: vec![],
+            grant: Default::default(),
+        }
     }
 
     #[test]
@@ -321,27 +426,32 @@ mod tests {
             max_inflight_per_peer: 2,
             ..NodeHttpSettings::default()
         };
-        let svc = InboundService::new(RouterSlot::new(), settings);
+        let svc = InboundService::new(RouterSlot::new(), settings, PeerTable::new());
         let (a, b, c) = (PeerId::random(), PeerId::random(), PeerId::random());
-        let a1 = svc.admit(a).unwrap();
-        let _a2 = svc.admit(a).unwrap();
-        assert_eq!(svc.admit(a).err().unwrap().status, 429);
-        let _b1 = svc.admit(b).unwrap();
+        let a1 = svc.admit(a, &req()).unwrap();
+        let _a2 = svc.admit(a, &req()).unwrap();
+        assert_eq!(svc.admit(a, &req()).err().unwrap().status, 429);
+        let _b1 = svc.admit(b, &req()).unwrap();
         // Total of 3 reached: a fresh peer is refused too.
-        assert_eq!(svc.admit(c).err().unwrap().status, 429);
+        assert_eq!(svc.admit(c, &req()).err().unwrap().status, 429);
         drop(a1);
-        assert!(svc.admit(c).is_ok());
+        assert!(svc.admit(c, &req()).is_ok());
     }
 
     #[tokio::test]
     async fn requests_are_refused_before_dispatch_and_before_the_router_exists() {
-        let svc = InboundService::new(RouterSlot::new(), NodeHttpSettings::default());
+        let svc = InboundService::new(
+            RouterSlot::new(),
+            NodeHttpSettings::default(),
+            PeerTable::new(),
+        );
         let peer = PeerId::random();
         let req = |method: &str, path: &str| NodeHttpRequest {
             method: method.into(),
             path_and_query: path.into(),
             headers: vec![],
             body: vec![],
+            grant: Default::default(),
         };
         assert_eq!(
             svc.handle(peer, req("DELETE", "/nodes/status"))
@@ -357,5 +467,45 @@ mod tests {
             svc.handle(peer, req("GET", "/nodes/status")).await.status,
             503
         );
+    }
+
+    #[tokio::test]
+    async fn write_routes_are_refused_for_unbound_peers_and_everything_for_a_draining_node() {
+        let bound = PeerId::random();
+        let slot = RouterSlot::new();
+        slot.set(Router::new().route("/nodes/relay", axum::routing::post(|| async { "ok" })));
+        let svc = InboundService::new(
+            slot.clone(),
+            NodeHttpSettings::default(),
+            bound_table(&bound),
+        );
+        let post = |path: &str| NodeHttpRequest {
+            method: "POST".into(),
+            path_and_query: path.into(),
+            headers: vec![],
+            body: vec![],
+            grant: Default::default(),
+        };
+        let stranger = PeerId::random();
+        assert_eq!(svc.handle(stranger, post("/nodes/relay")).await.status, 403);
+        assert_eq!(svc.handle(bound, post("/nodes/relay")).await.status, 200);
+
+        let (tx, shutdown) = Shutdown::manual();
+        slot.set_shutdown(shutdown);
+        assert_eq!(svc.handle(bound, post("/nodes/relay")).await.status, 200);
+        tx.send(true).unwrap();
+        assert_eq!(svc.handle(bound, post("/nodes/relay")).await.status, 503);
+    }
+
+    #[test]
+    fn an_exhausted_buffer_budget_answers_429_before_taking_a_slot() {
+        let svc = InboundService::new(
+            RouterSlot::new(),
+            NodeHttpSettings::default(),
+            PeerTable::new(),
+        );
+        let mut r = req();
+        r.grant.overloaded = true;
+        assert_eq!(svc.admit(PeerId::random(), &r).err().unwrap().status, 429);
     }
 }

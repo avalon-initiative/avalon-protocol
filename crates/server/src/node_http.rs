@@ -24,12 +24,12 @@ use crate::nodes::{PeerInfo, PeerTable};
 use avalon_protocol::connectivity::Connectivity;
 
 pub use inbound::{
-    path_allowed, synthetic_addr, InboundPermit, InboundService, RemotePeer, RouterSlot,
-    ALLOWED_EXACT,
+    path_allowed, requires_bound_peer, synthetic_addr, InboundPermit, InboundService, RemotePeer,
+    RouterSlot, ALLOWED_EXACT, BOUND_ONLY_PATHS, SHARED_PEER_ADDR,
 };
 pub use wire::{
-    protocol_name, NodeHttpCodec, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings,
-    MAX_HEADER_BYTES, MAX_HEADER_COUNT,
+    protocol_name, BufferGrant, NodeHttpCodec, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings,
+    MAX_CONCURRENT_STREAMS, MAX_HEADER_BYTES, MAX_HEADER_COUNT,
 };
 
 /// URL scheme for a peer reached over a libp2p stream.
@@ -259,6 +259,9 @@ impl NodeClient {
     /// dials out or is reached through a relay, or its `base_url` is not a usable http(s) URL;
     /// otherwise its `base_url`.
     pub fn url_for(peer: &PeerInfo) -> String {
+        if !peer.identity_bound {
+            return peer.base_url.clone();
+        }
         let Some(id) = peer
             .libp2p_peer_id
             .as_ref()
@@ -389,6 +392,7 @@ impl NodeRequestBuilder {
             path_and_query,
             headers: self.headers.clone(),
             body: self.body.as_ref().map(|b| b.to_vec()).unwrap_or_default(),
+            grant: Default::default(),
         }
     }
 
@@ -546,6 +550,7 @@ mod tests {
 
     fn info(base_url: &str, peer: Option<&PeerId>, connectivity: Option<Connectivity>) -> PeerInfo {
         PeerInfo {
+            identity_bound: true,
             base_url: base_url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: "0.1.0".to_string(),
@@ -577,6 +582,12 @@ mod tests {
             assert_eq!(NodeClient::url_for(&info("", Some(&id), c)), p2p);
             assert_eq!(NodeClient::url_for(&info("not a url", Some(&id), c)), p2p);
         }
+        // An entry whose id was never vouched for by its own URL always uses the URL.
+        let mut unbound = info("http://a.test", Some(&id), Some(Connectivity::Relayed));
+        unbound.identity_bound = false;
+        assert_eq!(NodeClient::url_for(&unbound), "http://a.test");
+        unbound.base_url = String::new();
+        assert_eq!(NodeClient::url_for(&unbound), "");
         // No libp2p id: nothing to fall back to.
         assert_eq!(
             NodeClient::url_for(&info("http://a.test", None, Some(Connectivity::Relayed))),

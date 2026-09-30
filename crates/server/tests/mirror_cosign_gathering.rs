@@ -125,6 +125,7 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
             .mount(&server)
             .await;
         peers.upsert(PeerInfo {
+            identity_bound: false,
             base_url: server.uri(),
             roles: vec!["combined".to_string()],
             protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),

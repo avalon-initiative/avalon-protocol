@@ -52,6 +52,7 @@ fn test_config_for_network(network_id: &str) -> DhtConfig {
 /// that HTTP path, already covered live by #582's own verification.
 fn cross_register(a_peers: &PeerTable, a_handle: &dht::DhtHandle, b_base_url: &str) {
     a_peers.upsert(PeerInfo {
+        identity_bound: false,
         base_url: b_base_url.to_string(),
         roles: vec!["combined".to_string()],
         protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),

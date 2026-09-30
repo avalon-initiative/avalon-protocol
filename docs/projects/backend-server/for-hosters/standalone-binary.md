@@ -211,6 +211,8 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_NODE_HTTP_MAX_REQUEST_BYTES`, `AVALON_NODE_HTTP_MAX_RESPONSE_BYTES` | Largest request body this node accepts, and response body it reads, on node-to-node HTTP carried over libp2p streams. Defaults 1 MiB and 8 MiB, ceilings 16 MiB and 64 MiB. A relay's own circuit byte cap still applies to relayed streams. |
 | `AVALON_NODE_HTTP_TIMEOUT_SECS` | Time bound on one stream exchange, dial included. Default `30`, at most `300`. |
 | `AVALON_NODE_HTTP_MAX_INFLIGHT`, `AVALON_NODE_HTTP_MAX_INFLIGHT_PER_PEER` | Stream requests served at once, in total and per peer; beyond them the answer is an immediate 429. Defaults `64` and `8`. |
+| `AVALON_NODE_HTTP_BUFFER_BUDGET_BYTES` | Request-body bytes buffered at once across all stream requests; a request that cannot get its share within 2 seconds is answered 429 unread. Default 64 MiB, at most 1 GiB. |
+| `AVALON_LIBP2P_MAX_CONNECTIONS`, `AVALON_LIBP2P_MAX_CONNECTIONS_PER_PEER`, `AVALON_LIBP2P_MAX_PENDING_INCOMING` | Swarm connection limits: established in total and per peer, and incoming connections still handshaking. Defaults `512`, `4` and `64`. |
 | `AVALON_DCUTR_ENABLED` | Try to replace a relayed connection with a direct one by hole punching. Default `true`. A failed attempt leaves the relayed connection in use. |
 | `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |

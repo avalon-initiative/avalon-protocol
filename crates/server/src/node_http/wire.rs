@@ -5,11 +5,13 @@
 //! frame is refused while it is read and never buffered past its limit.
 
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::relay::bounded_env;
 
@@ -25,6 +27,18 @@ const DEFAULT_MAX_INFLIGHT: u64 = 64;
 const MAX_MAX_INFLIGHT: u64 = 1024;
 const DEFAULT_MAX_INFLIGHT_PER_PEER: u64 = 8;
 const MAX_MAX_INFLIGHT_PER_PEER: u64 = 256;
+const DEFAULT_BUFFER_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_BUFFER_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+const DEFAULT_MAX_CONNECTIONS: u64 = 512;
+const MAX_MAX_CONNECTIONS: u64 = 8192;
+const DEFAULT_MAX_CONNECTIONS_PER_PEER: u64 = 4;
+const MAX_MAX_CONNECTIONS_PER_PEER: u64 = 64;
+const DEFAULT_MAX_PENDING_INCOMING: u64 = 64;
+const MAX_MAX_PENDING_INCOMING: u64 = 1024;
+/// Most streams the behaviour runs at once, in both directions.
+pub const MAX_CONCURRENT_STREAMS: usize = 16;
+/// How long a request waits for buffer budget before it is answered 429 unread.
+const BUDGET_WAIT: Duration = Duration::from_secs(2);
 
 /// Most header lines and their total name plus value bytes in one message.
 pub const MAX_HEADER_COUNT: usize = 32;
@@ -48,6 +62,12 @@ pub struct NodeHttpSettings {
     pub timeout: Duration,
     pub max_inflight: usize,
     pub max_inflight_per_peer: usize,
+    /// Bytes of request bodies buffered at once across all streams.
+    pub buffer_budget_bytes: usize,
+    /// Swarm-wide connection limits: total established, per peer, and pending incoming.
+    pub max_connections: u32,
+    pub max_connections_per_peer: u32,
+    pub max_pending_incoming: u32,
 }
 
 impl Default for NodeHttpSettings {
@@ -58,6 +78,10 @@ impl Default for NodeHttpSettings {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             max_inflight: DEFAULT_MAX_INFLIGHT as usize,
             max_inflight_per_peer: DEFAULT_MAX_INFLIGHT_PER_PEER as usize,
+            buffer_budget_bytes: DEFAULT_BUFFER_BUDGET_BYTES as usize,
+            max_connections: DEFAULT_MAX_CONNECTIONS as u32,
+            max_connections_per_peer: DEFAULT_MAX_CONNECTIONS_PER_PEER as u32,
+            max_pending_incoming: DEFAULT_MAX_PENDING_INCOMING as u32,
         }
     }
 }
@@ -91,9 +115,46 @@ impl NodeHttpSettings {
                 DEFAULT_MAX_INFLIGHT_PER_PEER,
                 MAX_MAX_INFLIGHT_PER_PEER,
             )? as usize,
+            buffer_budget_bytes: bounded_env(
+                "AVALON_NODE_HTTP_BUFFER_BUDGET_BYTES",
+                DEFAULT_BUFFER_BUDGET_BYTES,
+                MAX_BUFFER_BUDGET_BYTES,
+            )? as usize,
+            max_connections: bounded_env(
+                "AVALON_LIBP2P_MAX_CONNECTIONS",
+                DEFAULT_MAX_CONNECTIONS,
+                MAX_MAX_CONNECTIONS,
+            )? as u32,
+            max_connections_per_peer: bounded_env(
+                "AVALON_LIBP2P_MAX_CONNECTIONS_PER_PEER",
+                DEFAULT_MAX_CONNECTIONS_PER_PEER,
+                MAX_MAX_CONNECTIONS_PER_PEER,
+            )? as u32,
+            max_pending_incoming: bounded_env(
+                "AVALON_LIBP2P_MAX_PENDING_INCOMING",
+                DEFAULT_MAX_PENDING_INCOMING,
+                MAX_MAX_PENDING_INCOMING,
+            )? as u32,
         })
     }
 }
+
+/// Buffer budget held for a received request body, released when the request is dropped, plus
+/// whether the budget could not be had in time. Ignored when comparing requests.
+#[derive(Debug, Clone, Default)]
+pub struct BufferGrant {
+    permit: Option<Arc<OwnedSemaphorePermit>>,
+    /// The body was left unread because the buffer budget stayed exhausted.
+    pub overloaded: bool,
+}
+
+impl PartialEq for BufferGrant {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for BufferGrant {}
 
 /// An HTTP request as carried over a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +163,8 @@ pub struct NodeHttpRequest {
     pub path_and_query: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Set only on requests read from a stream.
+    pub grant: BufferGrant,
 }
 
 /// An HTTP response as carried over a stream.
@@ -167,11 +230,14 @@ async fn read_len<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<usize> 
     Ok(u32::from_be_bytes(raw) as usize)
 }
 
-/// Reads `head frame | body`, refusing a body over `max_body` before reading any of it.
+/// Reads `head frame | body`, refusing a body over `max_body` before reading any of it. With a
+/// `budget`, the body length is reserved from it first; when that stays unavailable the body is
+/// left unread and the returned grant says so.
 async fn read_frame<T: AsyncRead + Unpin + Send>(
     io: &mut T,
     max_body: usize,
-) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    budget: Option<(&Arc<Semaphore>, Duration)>,
+) -> io::Result<(Vec<u8>, Vec<u8>, BufferGrant)> {
     let head_len = read_len(io).await?;
     if head_len > MAX_HEAD_FRAME_BYTES {
         return Err(invalid("header frame too large"));
@@ -181,8 +247,18 @@ async fn read_frame<T: AsyncRead + Unpin + Send>(
     if body_len > max_body {
         return Err(invalid("body too large"));
     }
+    let mut grant = BufferGrant::default();
+    if let (Some((sem, wait)), true) = (budget, body_len > 0) {
+        match tokio::time::timeout(wait, sem.clone().acquire_many_owned(body_len as u32)).await {
+            Ok(Ok(permit)) => grant.permit = Some(Arc::new(permit)),
+            _ => {
+                grant.overloaded = true;
+                return Ok((head, Vec::new(), grant));
+            }
+        }
+    }
     let body = read_bounded(io, body_len).await?;
-    Ok((head, body))
+    Ok((head, body, grant))
 }
 
 async fn write_frame<T: AsyncWrite + Unpin + Send>(
@@ -205,13 +281,19 @@ async fn write_frame<T: AsyncWrite + Unpin + Send>(
 pub struct NodeHttpCodec {
     max_request_bytes: usize,
     max_response_bytes: usize,
+    budget: Arc<Semaphore>,
+    budget_wait: Duration,
 }
 
 impl NodeHttpCodec {
     pub fn new(settings: &NodeHttpSettings) -> Self {
+        // A budget below one full request could never admit it.
+        let budget = settings.buffer_budget_bytes.max(settings.max_request_bytes);
         Self {
             max_request_bytes: settings.max_request_bytes,
             max_response_bytes: settings.max_response_bytes,
+            budget: Arc::new(Semaphore::new(budget)),
+            budget_wait: BUDGET_WAIT,
         }
     }
 }
@@ -225,7 +307,12 @@ impl libp2p::request_response::Codec for NodeHttpCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let (head, body) = read_frame(io, self.max_request_bytes).await?;
+        let (head, body, grant) = read_frame(
+            io,
+            self.max_request_bytes,
+            Some((&self.budget, self.budget_wait)),
+        )
+        .await?;
         let head: RequestHead =
             serde_json::from_slice(&head).map_err(|e| invalid(e.to_string()))?;
         if head.path_and_query.len() > MAX_PATH_BYTES || head.method.len() > MAX_METHOD_BYTES {
@@ -237,6 +324,7 @@ impl libp2p::request_response::Codec for NodeHttpCodec {
             path_and_query: head.path_and_query,
             headers: head.headers,
             body,
+            grant,
         })
     }
 
@@ -248,7 +336,7 @@ impl libp2p::request_response::Codec for NodeHttpCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let (head, body) = read_frame(io, self.max_response_bytes).await?;
+        let (head, body, _) = read_frame(io, self.max_response_bytes, None).await?;
         let head: ResponseHead =
             serde_json::from_slice(&head).map_err(|e| invalid(e.to_string()))?;
         if !(100..=599).contains(&head.status) {
@@ -319,6 +407,8 @@ mod tests {
         NodeHttpCodec {
             max_request_bytes: max_req,
             max_response_bytes: max_res,
+            budget: Arc::new(Semaphore::new(1 << 20)),
+            budget_wait: Duration::from_millis(100),
         }
     }
 
@@ -332,6 +422,7 @@ mod tests {
             path_and_query: "/nodes/announce?a=1".into(),
             headers: vec![("content-type".into(), "application/json".into())],
             body: b"{\"x\":1}".to_vec(),
+            grant: BufferGrant::default(),
         }
     }
 
@@ -541,6 +632,42 @@ mod tests {
         let mut r = sample_request();
         r.body = vec![0; 5];
         assert!(c.write_request(&proto(), &mut Vec::new(), r).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn bodies_are_reserved_from_the_buffer_budget_and_refused_unread_when_it_runs_out() {
+        let mut c = codec(1024, 1024);
+        c.budget = Arc::new(Semaphore::new(600));
+        let mut req = sample_request();
+        req.body = vec![9; 500];
+        let bytes = encode_request(&mut c, req).await;
+
+        let first = c
+            .read_request(&proto(), &mut Cursor::new(bytes.clone()))
+            .await
+            .unwrap();
+        assert!(!first.grant.overloaded);
+        assert_eq!(first.body.len(), 500);
+        assert_eq!(c.budget.available_permits(), 100);
+
+        // The budget is held while the first request lives, so the second is not read.
+        let read = std::sync::atomic::AtomicUsize::new(0);
+        let mut io = Counting {
+            data: Cursor::new(bytes.clone()),
+            read: &read,
+        };
+        let second = c.read_request(&proto(), &mut io).await.unwrap();
+        assert!(second.grant.overloaded);
+        assert!(second.body.is_empty());
+        assert!(read.load(std::sync::atomic::Ordering::SeqCst) < bytes.len());
+
+        drop(first);
+        assert_eq!(c.budget.available_permits(), 600);
+        let third = c
+            .read_request(&proto(), &mut Cursor::new(bytes))
+            .await
+            .unwrap();
+        assert!(!third.grant.overloaded);
     }
 
     #[test]

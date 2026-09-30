@@ -251,6 +251,7 @@ pub async fn run_with_tracing(
         let handle =
             crate::dht::start_with_node_http(peers.clone(), dht_config, node_http_settings).await;
         crate::node_http::install_stream_handle(handle.node_http.clone());
+        handle.router_slot.set_shutdown(shutdown.clone());
         dht_router_slot = Some(handle.router_slot.clone());
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
         dht_identity = Some(crate::nodes::DhtIdentity {

@@ -222,6 +222,7 @@ mod tests {
             });
             assert!(advert.is_some());
             table.upsert(PeerInfo {
+                identity_bound: false,
                 base_url: url.to_string(),
                 roles: vec!["combined".to_string()],
                 protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
@@ -236,6 +237,7 @@ mod tests {
         }
         // A keyless peer participates in the table but is no candidate.
         table.upsert(PeerInfo {
+            identity_bound: false,
             base_url: "http://127.0.0.1:9703".to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
@@ -303,6 +305,7 @@ mod tests {
         assert!(advert.is_some());
         let table = PeerTable::new();
         table.upsert(PeerInfo {
+            identity_bound: false,
             base_url: url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),

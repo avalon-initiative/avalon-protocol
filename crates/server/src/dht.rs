@@ -48,6 +48,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use libp2p::connection_limits;
 use libp2p::futures::StreamExt;
 use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
 use libp2p::multiaddr::Protocol;
@@ -194,6 +195,7 @@ struct DhtBehaviour {
     relay_client: relay::client::Behaviour,
     relay_server: Toggle<relay::Behaviour>,
     dcutr: Toggle<dcutr::Behaviour>,
+    limits: connection_limits::Behaviour,
     node_http: request_response::Behaviour<NodeHttpCodec>,
 }
 
@@ -388,7 +390,14 @@ fn build_swarm(
                 [(node_http_protocol(network_id), ProtocolSupport::Full)],
                 // Outlasts the handler's own bound so its 504 can still be sent.
                 request_response::Config::default()
-                    .with_request_timeout(node_http.timeout + NODE_HTTP_ANSWER_GRACE),
+                    .with_request_timeout(node_http.timeout + NODE_HTTP_ANSWER_GRACE)
+                    .with_max_concurrent_streams(crate::node_http::MAX_CONCURRENT_STREAMS),
+            ),
+            limits: connection_limits::Behaviour::new(
+                connection_limits::ConnectionLimits::default()
+                    .with_max_established(Some(node_http.max_connections))
+                    .with_max_established_per_peer(Some(node_http.max_connections_per_peer))
+                    .with_max_pending_incoming(Some(node_http.max_pending_incoming)),
             ),
         })
         .expect("behaviour construction from a fixed, valid config is infallible")
@@ -485,7 +494,7 @@ pub async fn start_with_node_http(
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
     let router_slot = RouterSlot::new();
     let inbound = NodeHttpInbound::new(
-        InboundService::new(router_slot.clone(), node_http),
+        InboundService::new(router_slot.clone(), node_http, peers.clone()),
         node_http.max_inflight,
         node_http.timeout,
     );
@@ -549,7 +558,7 @@ impl NodeHttpInbound {
         request: NodeHttpRequest,
         channel: ResponseChannel<NodeHttpResponse>,
     ) {
-        let permit: InboundPermit = match self.service.admit(peer) {
+        let permit: InboundPermit = match self.service.admit(peer, &request) {
             Ok(p) => p,
             Err(refusal) => {
                 let _ = swarm
@@ -560,10 +569,12 @@ impl NodeHttpInbound {
             }
         };
         let (service, answers) = (self.service.clone(), self.answers.clone());
+        // Keeps the body's buffer budget reserved until the answer is queued.
+        let grant = request.grant.clone();
         tokio::spawn(async move {
             let response = service.handle(peer, request).await;
             let _ = answers.send((channel, response)).await;
-            drop(permit);
+            drop((permit, grant));
         });
     }
 }
@@ -579,8 +590,12 @@ struct ParkedHttp {
 #[derive(Default)]
 struct ParkedPeer {
     waiting: Vec<ParkedHttp>,
-    own_dial: bool,
+    /// The dial this queue started, so only its failure fails the queue.
+    own_dial: Option<ConnectionId>,
 }
+
+/// Most requests parked behind one peer's dial.
+const MAX_PARKED_PER_PEER: usize = 32;
 
 type ParkedRequests = HashMap<PeerId, ParkedPeer>;
 
@@ -593,8 +608,8 @@ fn connect_failure(message: &str) -> NodeHttpError {
 
 #[derive(PartialEq, Eq)]
 enum HttpDial {
-    /// This queue started a dial.
-    Started,
+    /// This queue started a dial with this connection id.
+    Started(ConnectionId),
     /// Another dial to the peer is already in flight.
     Joined,
     Failed,
@@ -608,8 +623,9 @@ fn dial_for_http(swarm: &mut Swarm<DhtBehaviour>, peers: &PeerTable, peer: PeerI
         .extend_addresses_through_behaviour()
         .condition(PeerCondition::DisconnectedAndNotDialing)
         .build();
+    let id = opts.connection_id();
     match swarm.dial(opts) {
-        Ok(()) => HttpDial::Started,
+        Ok(()) => HttpDial::Started(id),
         Err(DialError::DialPeerConditionFalse(_)) => HttpDial::Joined,
         Err(e) => {
             tracing::debug!(%peer, "avalon-dht: node-http dial not started: {e}");
@@ -654,9 +670,15 @@ fn start_http(
         return;
     }
     let entry = parked.entry(peer).or_default();
-    if !entry.own_dial {
+    if entry.waiting.len() >= MAX_PARKED_PER_PEER {
+        let _ = parked_request.respond_to.send(Err(connect_failure(
+            "too many requests waiting for the peer",
+        )));
+        return;
+    }
+    if entry.own_dial.is_none() {
         match dial_for_http(swarm, peers, peer) {
-            HttpDial::Started => entry.own_dial = true,
+            HttpDial::Started(id) => entry.own_dial = Some(id),
             HttpDial::Joined => {}
             HttpDial::Failed => {
                 let entry = parked.remove(&peer).unwrap_or_default();
@@ -684,24 +706,25 @@ fn flush_parked(
     }
 }
 
-/// A dial to `peer` failed: try once with this queue's own addresses if the failed dial was
-/// someone else's, otherwise fail what is parked.
+/// The dial `failed` to `peer` ended in an error: if it was this queue's own, fail what is
+/// parked; if it was someone else's, try once with this queue's own addresses.
 fn parked_dial_failed(
     swarm: &mut Swarm<DhtBehaviour>,
     peers: &PeerTable,
     parked: &mut ParkedRequests,
     peer: PeerId,
+    failed: ConnectionId,
 ) {
     let Some(entry) = parked.get_mut(&peer) else {
         return;
     };
-    if swarm.is_connected(&peer) {
+    if swarm.is_connected(&peer) || entry.own_dial.is_some_and(|own| own != failed) {
         return;
     }
-    if !entry.own_dial {
+    if entry.own_dial.is_none() {
         match dial_for_http(swarm, peers, peer) {
-            HttpDial::Started => {
-                entry.own_dial = true;
+            HttpDial::Started(id) => {
+                entry.own_dial = Some(id);
                 return;
             }
             HttpDial::Joined => return,
@@ -712,6 +735,37 @@ fn parked_dial_failed(
         let _ = w
             .respond_to
             .send(Err(connect_failure("failed to dial the peer")));
+    }
+}
+
+/// The peer of a new connection at an address the policy allows: only those may carry
+/// parked requests, since the others are disconnected right away.
+fn flushable_connection(event: &SwarmEvent<DhtBehaviourEvent>) -> Option<PeerId> {
+    match event {
+        SwarmEvent::ConnectionEstablished {
+            peer_id, endpoint, ..
+        } if endpoint_ip_allowed(endpoint.get_remote_address()) => Some(*peer_id),
+        _ => None,
+    }
+}
+
+/// Dials `addr` for the bootstrap scan. `true` when the peer may be marked known: the dial
+/// started, or it is connected already; `false` when another dial is in flight, so a failure of
+/// that dial does not strand the peer.
+fn scan_dial(swarm: &mut Swarm<DhtBehaviour>, peer_id: PeerId, addr: Multiaddr) -> bool {
+    // Peer-aware, so a stream request's own dial to the same peer joins this one instead of
+    // racing it.
+    let opts = DialOpts::peer_id(peer_id)
+        .addresses(vec![addr])
+        .condition(PeerCondition::DisconnectedAndNotDialing)
+        .build();
+    match swarm.dial(opts) {
+        Ok(()) => true,
+        Err(DialError::DialPeerConditionFalse(_)) => swarm.is_connected(&peer_id),
+        Err(e) => {
+            tracing::warn!(%peer_id, "avalon-dht: dial failed: {e}");
+            true
+        }
     }
 }
 
@@ -1181,15 +1235,8 @@ async fn run_worker(
                             swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
                         }
                         if let Some(addr) = addrs.into_iter().next() {
-                            // Peer-aware, so a stream request's own dial to the same peer joins this
-                            // one instead of racing it.
-                            let opts = DialOpts::peer_id(peer_id)
-                                .addresses(vec![addr])
-                                .condition(PeerCondition::DisconnectedAndNotDialing)
-                                .build();
-                            match swarm.dial(opts) {
-                                Ok(()) | Err(DialError::DialPeerConditionFalse(_)) => {}
-                                Err(e) => tracing::warn!(%peer_id, "avalon-dht: dial failed: {e}"),
+                            if !scan_dial(&mut swarm, peer_id, addr) {
+                                continue;
                             }
                         }
                         known_peers.insert(peer_id);
@@ -1205,14 +1252,22 @@ async fn run_worker(
                 if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
                     continue;
                 }
-                match &event {
-                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                        flush_parked(&mut swarm, &mut pending_http, &mut parked_http, *peer_id);
-                    }
-                    SwarmEvent::OutgoingConnectionError { peer_id: Some(peer_id), .. } => {
-                        parked_dial_failed(&mut swarm, &peers, &mut parked_http, *peer_id);
-                    }
-                    _ => {}
+                if let Some(peer_id) = flushable_connection(&event) {
+                    flush_parked(&mut swarm, &mut pending_http, &mut parked_http, peer_id);
+                }
+                if let SwarmEvent::OutgoingConnectionError {
+                    peer_id: Some(peer_id),
+                    connection_id,
+                    ..
+                } = &event
+                {
+                    parked_dial_failed(
+                        &mut swarm,
+                        &peers,
+                        &mut parked_http,
+                        *peer_id,
+                        *connection_id,
+                    );
                 }
                 if let SwarmEvent::Behaviour(DhtBehaviourEvent::NodeHttp(http_event)) = event {
                     handle_node_http_event(&mut swarm, &inbound, &mut pending_http, http_event);
@@ -1399,6 +1454,135 @@ mod tests {
         assert!(handle.snapshot().punched_peers.is_empty());
     }
 
+    fn test_swarm() -> Swarm<DhtBehaviour> {
+        build_swarm(
+            identity::Keypair::generate_ed25519(),
+            "net",
+            &AutonatSettings::default(),
+            &RelaySettings::default(),
+            &NodeHttpSettings::default(),
+        )
+    }
+
+    fn parked_request() -> (
+        ParkedHttp,
+        oneshot::Receiver<Result<NodeHttpResponse, NodeHttpError>>,
+    ) {
+        let (respond_to, rx) = oneshot::channel();
+        let request = NodeHttpRequest {
+            method: "GET".into(),
+            path_and_query: "/nodes/status".into(),
+            headers: vec![],
+            body: vec![],
+            grant: Default::default(),
+        };
+        (
+            ParkedHttp {
+                request,
+                respond_to,
+                deadline: Instant::now() + Duration::from_secs(60),
+            },
+            rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn only_the_queues_own_dial_failing_fails_its_parked_requests() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let (own, other) = (
+            ConnectionId::new_unchecked(1),
+            ConnectionId::new_unchecked(2),
+        );
+        let (w, mut rx) = parked_request();
+        let mut parked = ParkedRequests::new();
+        parked.insert(
+            peer,
+            ParkedPeer {
+                waiting: vec![w],
+                own_dial: Some(own),
+            },
+        );
+        let peers = PeerTable::new();
+        parked_dial_failed(&mut swarm, &peers, &mut parked, peer, other);
+        assert!(parked.contains_key(&peer));
+        assert!(
+            rx.try_recv().is_err(),
+            "an unrelated dial must not fail the queue"
+        );
+        parked_dial_failed(&mut swarm, &peers, &mut parked, peer, own);
+        assert!(parked.is_empty());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Err(NodeHttpError::Stream { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_parked_queue_per_peer_is_capped() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let mut parked = ParkedRequests::new();
+        let mut keep = Vec::new();
+        let mut entry = ParkedPeer {
+            own_dial: Some(ConnectionId::new_unchecked(1)),
+            ..ParkedPeer::default()
+        };
+        for _ in 0..MAX_PARKED_PER_PEER {
+            let (w, rx) = parked_request();
+            entry.waiting.push(w);
+            keep.push(rx);
+        }
+        parked.insert(peer, entry);
+        let (extra, mut rx) = parked_request();
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            extra,
+        );
+        assert_eq!(parked[&peer].waiting.len(), MAX_PARKED_PER_PEER);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Err(NodeHttpError::Stream { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_scan_dial_skipped_for_an_inflight_dial_does_not_mark_the_peer_known() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let addr: Multiaddr = "/ip4/203.0.113.7/tcp/4001".parse().unwrap();
+        assert!(
+            scan_dial(&mut swarm, peer, addr.clone()),
+            "a started dial marks known"
+        );
+        assert!(
+            !scan_dial(&mut swarm, peer, addr),
+            "a dial already in flight must leave the peer for a later scan"
+        );
+    }
+
+    #[test]
+    fn only_connections_at_allowed_addresses_flush_parked_requests() {
+        let established = |addr: &str| SwarmEvent::ConnectionEstablished {
+            peer_id: PeerId::random(),
+            connection_id: ConnectionId::new_unchecked(1),
+            endpoint: libp2p::core::ConnectedPoint::Dialer {
+                address: addr.parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::Reuse,
+            },
+            num_established: std::num::NonZeroU32::new(1).unwrap(),
+            concurrent_dial_errors: None,
+            established_in: Duration::ZERO,
+        };
+        assert!(flushable_connection(&established("/ip4/203.0.113.7/tcp/4001")).is_some());
+        assert!(flushable_connection(&established("/ip4/169.254.169.254/tcp/4001")).is_none());
+    }
+
     #[test]
     fn kad_protocol_name_differs_across_network_ids() {
         assert_ne!(
@@ -1425,6 +1609,7 @@ mod tests {
 
     fn peer_info(base_url: &str, peer_id: Option<&str>, addrs: Vec<&str>) -> PeerInfo {
         PeerInfo {
+            identity_bound: false,
             base_url: base_url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: "0.1.0".to_string(),

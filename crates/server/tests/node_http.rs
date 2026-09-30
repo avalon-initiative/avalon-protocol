@@ -169,6 +169,7 @@ impl Node {
 
 fn info_for(node: &DhtHandle, addrs: Vec<String>, connectivity: Option<Connectivity>) -> PeerInfo {
     PeerInfo {
+        identity_bound: true,
         base_url: format!("http://{}.test", node.peer_id),
         roles: vec!["combined".to_string()],
         protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),
@@ -274,7 +275,7 @@ async fn get_and_post_round_trip_and_match_http() {
 }
 
 #[tokio::test]
-async fn the_handler_sees_the_authenticated_peer_and_a_per_peer_address() {
+async fn the_handler_sees_the_authenticated_peer_and_a_bounded_set_of_addresses() {
     let probe = Probe::default();
     let (a, b) = served(&probe, NodeHttpSettings::default()).await;
     let a2 = direct_node(NodeHttpSettings::default()).await;
@@ -287,16 +288,170 @@ async fn the_handler_sees_the_authenticated_peer_and_a_per_peer_address() {
             res.json::<serde_json::Value>().await.unwrap()
         }
     };
+    // Neither is bound on b: the handler still sees who they are, but on one shared address.
     let one = seen(a.client()).await;
     let two = seen(a2.client()).await;
     assert_eq!(one["peer"], a.handle.peer_id.to_string());
     assert_eq!(two["peer"], a2.handle.peer_id.to_string());
-    assert_eq!(one["addr"], synthetic_addr(&a.handle.peer_id).to_string());
-    assert_ne!(
-        one["addr"], two["addr"],
-        "each peer id is its own rate-limit bucket"
+    assert_eq!(
+        one["addr"],
+        avalon_server::node_http::SHARED_PEER_ADDR.to_string()
     );
-    assert!(!one["addr"].as_str().unwrap().starts_with("127."));
+    assert_eq!(one["addr"], two["addr"]);
+
+    // Once b binds a, a gets its own stable address; a2 still shares.
+    introduce(&b, &a);
+    let bound = seen(a.client()).await;
+    assert_eq!(
+        bound["addr"],
+        synthetic_addr(&a.handle.peer_id, true).to_string()
+    );
+    assert_ne!(bound["addr"], one["addr"]);
+    assert!(!bound["addr"].as_str().unwrap().starts_with("127."));
+    assert_eq!(seen(a2.client()).await["addr"], one["addr"]);
+}
+
+#[tokio::test]
+async fn write_routes_are_refused_for_unknown_peers_and_open_once_bound() {
+    let probe = Probe::default();
+    let (a, b) = served(&probe, NodeHttpSettings::default()).await;
+    let client = a.client();
+    for path in ["/nodes/relay", "/nodes/replicate-chat", "/mirror/notify"] {
+        let res = client
+            .post(format!("{}{path}", b.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(probe.hits.load(Ordering::SeqCst), 0);
+    // Open routes still work for the same unknown peer.
+    let (status, _) = get_ok(&client, format!("{}/nodes/status", b.url())).await;
+    assert_eq!(status, StatusCode::OK);
+
+    introduce(&b, &a);
+    let res = client
+        .post(format!("{}/nodes/relay", b.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_buffer_budget_answers_429_without_reading_a_body_it_cannot_hold() {
+    let probe = Probe::default();
+    let (a, b) = served(
+        &probe,
+        NodeHttpSettings {
+            max_request_bytes: 1024,
+            buffer_budget_bytes: 1024,
+            max_inflight: 10,
+            max_inflight_per_peer: 10,
+            ..NodeHttpSettings::default()
+        },
+    )
+    .await;
+    let client = a.client();
+    let parked = {
+        let (client, url) = (client.clone(), format!("{}/nodes/trace", b.url()));
+        let task = tokio::spawn(async move {
+            client
+                .post(url)
+                .body(vec![1u8; 1000])
+                .send()
+                .await
+                .unwrap()
+                .status()
+        });
+        tokio::time::timeout(WAIT, async {
+            while probe.parked.load(Ordering::SeqCst) < 1 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        task
+    };
+    // The first body holds the whole budget while its handler runs.
+    let res = client
+        .post(format!("{}/nodes/announce", b.url()))
+        .body(vec![2u8; 1000])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(probe.hits.load(Ordering::SeqCst), 0);
+
+    probe.release.notify_waiters();
+    assert_eq!(parked.await.unwrap(), StatusCode::OK);
+    let res = client
+        .post(format!("{}/nodes/announce", b.url()))
+        .body(vec![2u8; 1000])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn the_connection_limit_refuses_a_second_peer() {
+    let probe = Probe::default();
+    let (a, b) = served(
+        &probe,
+        NodeHttpSettings {
+            max_connections: 1,
+            ..NodeHttpSettings::default()
+        },
+    )
+    .await;
+    let (status, _) = get_ok(&a.client(), format!("{}/nodes/status", b.url())).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let other = direct_node(NodeHttpSettings::default()).await;
+    introduce(&other, &b);
+    let err = other
+        .client()
+        .get(format!("{}/nodes/status", b.url()))
+        .send()
+        .await
+        .err()
+        .expect("b is at its connection limit");
+    assert!(matches!(err, NodeHttpError::Stream { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn no_more_than_the_stream_limit_run_at_once() {
+    let probe = Probe::default();
+    let (a, b) = served(
+        &probe,
+        NodeHttpSettings {
+            max_inflight: 64,
+            max_inflight_per_peer: 64,
+            ..NodeHttpSettings::default()
+        },
+    )
+    .await;
+    let client = a.client();
+    let tasks: Vec<_> = (0..24)
+        .map(|_| {
+            let (client, url) = (client.clone(), format!("{}/nodes/trace", b.url()));
+            tokio::spawn(async move {
+                client
+                    .post(url)
+                    .timeout(Duration::from_secs(4))
+                    .send()
+                    .await
+            })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let running = probe.parked.load(Ordering::SeqCst);
+    assert!(running <= 16, "{running} handlers ran at once");
+    probe.release.notify_waiters();
+    for t in tasks {
+        let _ = t.await;
+    }
 }
 
 #[tokio::test]
@@ -508,6 +663,7 @@ async fn an_oversized_response_is_rejected_by_the_receiving_client() {
     let b = direct_node(NodeHttpSettings::default()).await;
     b.handle.router_slot.set(test_router(probe.clone()));
     introduce(&a, &b);
+    introduce(&b, &a);
     let client = a.client();
 
     let err = client

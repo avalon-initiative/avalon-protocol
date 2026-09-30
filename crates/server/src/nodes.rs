@@ -116,6 +116,10 @@ pub struct PeerInfo {
     /// Self-reported reachability hint; never used for trust decisions. `None` from old peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectivity: Option<avalon_protocol::connectivity::Connectivity>,
+    /// Set only when this entry's libp2p id, addresses and connectivity were vouched for by the
+    /// URL's own server, never by gossip or a third party. Only bound entries are routed by id.
+    #[serde(skip)]
+    pub identity_bound: bool,
 }
 
 /// A witness key advertisement: the hex Ed25519 verifying key a node
@@ -225,6 +229,25 @@ fn carry_witness(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
     }
 }
 
+/// Keeps a bound entry's identity when a write does not carry its own proof of binding: the
+/// same id refreshes addresses and connectivity, a different id changes nothing.
+fn carry_identity(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
+    let Some(old) = existing.filter(|e| e.identity_bound) else {
+        return;
+    };
+    if info.identity_bound {
+        return;
+    }
+    if info.libp2p_peer_id == old.libp2p_peer_id {
+        info.identity_bound = true;
+    } else {
+        info.libp2p_peer_id = old.libp2p_peer_id.clone();
+        info.libp2p_listen_addrs = old.libp2p_listen_addrs.clone();
+        info.connectivity = old.connectivity;
+        info.identity_bound = true;
+    }
+}
+
 /// The peer table is at its cap and every entry is active or a bootstrap peer.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TableFull;
@@ -265,6 +288,7 @@ impl PeerTable {
     pub fn upsert(&self, mut info: PeerInfo) {
         let mut peers = self.peers.write().expect("peer table lock poisoned");
         carry_witness(peers.get(&info.base_url), &mut info);
+        carry_identity(peers.get(&info.base_url), &mut info);
         peers.insert(info.base_url.clone(), info);
     }
 
@@ -316,6 +340,7 @@ impl PeerTable {
         let protected = self.neighbors.protected_urls();
         let mut peers = self.peers.write().expect("peer table lock poisoned");
         carry_witness(peers.get(&info.base_url), &mut info);
+        carry_identity(peers.get(&info.base_url), &mut info);
         let mut evicted = None;
         if !peers.contains_key(&info.base_url) && peers.len() >= max {
             let victim = peers
@@ -393,7 +418,18 @@ impl PeerTable {
                 url.strip_prefix(p.base_url.trim_end_matches('/'))
                     .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?']))
             })
+            .filter(|p| p.identity_bound)
             .find_map(|p| p.libp2p_peer_id.as_ref()?.parse().ok())
+    }
+
+    /// Whether `peer` is the libp2p id of a bound entry in the main table.
+    pub fn is_bound_libp2p_peer(&self, peer: &libp2p::PeerId) -> bool {
+        let id = peer.to_string();
+        self.peers
+            .read()
+            .expect("peer table lock poisoned")
+            .values()
+            .any(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
     }
 
     /// Every known peer — what `GET /nodes/peers` returns.
@@ -1076,6 +1112,7 @@ pub async fn announce(
         libp2p_peer_id: body.libp2p_peer_id,
         witness: None,
         connectivity: body.connectivity,
+        identity_bound: false,
     };
     if crate::version::is_supported(&info.protocol_version) {
         info.base_url = adm
@@ -1083,6 +1120,14 @@ pub async fn announce(
             .map_err(TopologyError::from)?;
         info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
         if state.peers.contains(&info.base_url) {
+            let info = rebind_existing(
+                &state.peers,
+                state.chain.network_id(),
+                adm,
+                client_ip(source, &headers),
+                info,
+            )
+            .await;
             state.peers.upsert(info);
         } else {
             admit_new_announcer(&state, adm, client_ip(source, &headers), info).await?;
@@ -1219,9 +1264,12 @@ async fn admit_new_announcer(
     adm.admit_new_url_from(source)?;
     let _permit = adm.enter_check()?;
     let checked = adm.check_address(&info.base_url).await?;
+    let mut info = info;
     if adm.cfg.verify_reachability {
-        adm.verify_reachable(&checked, state.chain.network_id())
+        let reported = adm
+            .verify_reachable(&checked, state.chain.network_id())
             .await?;
+        bind_or_blank(&mut info, reported);
     }
     let base_url = info.base_url.clone();
     match admit_promoted(&state.peers, info, adm.cfg.max_known_peers) {
@@ -1244,6 +1292,56 @@ async fn admit_new_announcer(
             Err(AdmitError::TableFull.into())
         }
     }
+}
+
+/// Keeps the announced libp2p identity only when the URL's own server reported the same id
+/// (and marks it bound); otherwise blanks it, since the announcer cannot vouch for another id.
+fn bind_or_blank(info: &mut PeerInfo, reported: Option<String>) {
+    if info.libp2p_peer_id.is_some() && info.libp2p_peer_id == reported {
+        info.identity_bound = true;
+        return;
+    }
+    info.identity_bound = false;
+    info.libp2p_peer_id = None;
+    info.libp2p_listen_addrs = Vec::new();
+    info.connectivity = None;
+}
+
+/// An announce for a known URL naming a libp2p id that differs from the stored one is checked
+/// against the URL's own status answer; on any failure the stored identity stays (the table
+/// keeps it when a write is unbound).
+async fn rebind_existing(
+    peers: &PeerTable,
+    network_id: &str,
+    adm: &PeerAdmission,
+    source: IpAddr,
+    mut info: PeerInfo,
+) -> PeerInfo {
+    let stored = peers
+        .list_all()
+        .into_iter()
+        .find(|p| p.base_url == info.base_url);
+    let differs = match (&stored, &info.libp2p_peer_id) {
+        (Some(s), Some(id)) => s.identity_bound && s.libp2p_peer_id.as_ref() != Some(id),
+        _ => false,
+    };
+    if !differs || !adm.cfg.verify_reachability {
+        return info;
+    }
+    let verified = async {
+        adm.admit_new_url_from(source).ok()?;
+        let _permit = adm.enter_check().ok()?;
+        let checked = adm.check_address(&info.base_url).await.ok()?;
+        adm.verify_reachable(&checked, network_id).await.ok()
+    }
+    .await;
+    match verified {
+        Some(reported) if reported.is_some() && reported == info.libp2p_peer_id => {
+            info.identity_bound = true;
+        }
+        _ => {}
+    }
+    info
 }
 
 /// Inserts `info` into the main table and, on success, clears the same base
@@ -1321,6 +1419,7 @@ fn own_peer_info(
         libp2p_listen_addrs,
         witness: None,
         connectivity: crate::reachability::connectivity_for(&reachability.snapshot()),
+        identity_bound: false,
     }
 }
 
@@ -1355,6 +1454,8 @@ fn admit_responder_node(
     );
     node.last_announced_at = OffsetDateTime::now_utc();
     node.witness = None;
+    // The entry came from the URL's own server over the connection we made to it.
+    node.identity_bound = node.libp2p_peer_id.is_some();
     match peers.insert_bounded(node, adm.cfg.max_known_peers) {
         Ok(_) => true,
         Err(TableFull) => {
@@ -1492,6 +1593,9 @@ pub async fn list_peers(State(state): State<AppState>) -> Json<Vec<PeerInfo>> {
 /// reads from.
 #[derive(Debug, Serialize)]
 pub struct NodeStatusResponse {
+    /// This node's own libp2p peer id, so a caller can bind it to this URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libp2p_peer_id: Option<String>,
     pub protocol_version: String,
     pub network_id: String,
     /// This node's own `AVALON_NODE_ROLES` ([`node_roles`]) — `combined`
@@ -1625,6 +1729,7 @@ pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
 
     let detected = state.reachability.snapshot();
     NodeStatusResponse {
+        libp2p_peer_id: state.own_libp2p_peer_id.clone(),
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
         roles: node_roles(),
@@ -2391,9 +2496,11 @@ async fn announce_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libp2p::PeerId;
 
     fn peer(base_url: &str, announced_at: OffsetDateTime) -> PeerInfo {
         PeerInfo {
+            identity_bound: false,
             base_url: base_url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: "0.1.0".to_string(),
@@ -2570,6 +2677,7 @@ mod tests {
 
     fn peer_with_version(base_url: &str, protocol_version: &str) -> PeerInfo {
         PeerInfo {
+            identity_bound: false,
             base_url: base_url.to_string(),
             roles: vec!["combined".to_string()],
             protocol_version: protocol_version.to_string(),
@@ -2830,6 +2938,7 @@ mod tests {
     #[test]
     fn node_status_response_serializes_with_stubbed_resource_metrics() {
         let response = NodeStatusResponse {
+            libp2p_peer_id: None,
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
             network_id: "avalon-dev-local".to_string(),
             roles: vec!["combined".to_string()],
@@ -3825,6 +3934,174 @@ mod tests {
             stored.libp2p_listen_addrs,
             vec!["/ip4/203.0.113.7/tcp/4001".to_string()]
         );
+    }
+
+    fn table_entry(url: &str, id: Option<&PeerId>, bound: bool) -> PeerInfo {
+        PeerInfo {
+            libp2p_peer_id: id.map(|i| i.to_string()),
+            libp2p_listen_addrs: vec!["/ip4/203.0.113.7/tcp/4001".into()],
+            connectivity: id.map(|_| avalon_protocol::connectivity::Connectivity::Relayed),
+            identity_bound: bound,
+            ..peer(url, OffsetDateTime::now_utc())
+        }
+    }
+
+    fn fresh_libp2p() -> PeerId {
+        PeerId::random()
+    }
+
+    #[test]
+    fn an_unbound_write_never_changes_a_bound_peers_identity_or_routing() {
+        let (real, attacker) = (fresh_libp2p(), fresh_libp2p());
+        let table = PeerTable::new();
+        table.upsert(table_entry("http://v.test", Some(&real), true));
+        assert_eq!(
+            crate::node_http::NodeClient::url_for(&table.list_all()[0]),
+            crate::node_http::p2p_base_url(&real)
+        );
+
+        // The announce path, the gossip path and the responder-less bounded path.
+        let hostile = table_entry("http://v.test", Some(&attacker), false);
+        table.upsert(hostile.clone());
+        table.insert_bounded(hostile, 10).unwrap();
+        let stored = &table.list_all()[0];
+        assert_eq!(stored.libp2p_peer_id, Some(real.to_string()));
+        assert!(stored.identity_bound);
+        assert_eq!(
+            crate::node_http::NodeClient::url_for(stored),
+            crate::node_http::p2p_base_url(&real)
+        );
+        assert_eq!(table.libp2p_peer_for_url("http://v.test/x"), Some(real));
+        assert!(!table.is_bound_libp2p_peer(&attacker));
+    }
+
+    #[test]
+    fn the_same_id_refreshes_a_bound_entry_and_only_bound_entries_route_by_id() {
+        let id = fresh_libp2p();
+        let table = PeerTable::new();
+        table.upsert(table_entry("http://v.test", Some(&id), true));
+        let mut refresh = table_entry("http://v.test", Some(&id), false);
+        refresh.libp2p_listen_addrs = vec!["/ip4/198.51.100.1/tcp/1".into()];
+        table.upsert(refresh);
+        let stored = &table.list_all()[0];
+        assert!(stored.identity_bound);
+        assert_eq!(stored.libp2p_listen_addrs, vec!["/ip4/198.51.100.1/tcp/1"]);
+
+        let unbound = PeerTable::new();
+        unbound.upsert(table_entry("http://u.test", Some(&id), false));
+        assert_eq!(
+            crate::node_http::NodeClient::url_for(&unbound.list_all()[0]),
+            "http://u.test"
+        );
+        assert_eq!(unbound.transport_url("http://u.test"), "http://u.test");
+        assert_eq!(unbound.libp2p_peer_for_url("http://u.test/x"), None);
+        assert!(!unbound.is_bound_libp2p_peer(&id));
+    }
+
+    #[test]
+    fn a_status_answer_must_match_the_announced_id_to_keep_it() {
+        let (a, b) = (fresh_libp2p(), fresh_libp2p());
+        let mut ok = table_entry("http://v.test", Some(&a), false);
+        bind_or_blank(&mut ok, Some(a.to_string()));
+        assert!(ok.identity_bound);
+        assert_eq!(ok.libp2p_peer_id, Some(a.to_string()));
+        for reported in [Some(b.to_string()), None] {
+            let mut bad = table_entry("http://v.test", Some(&a), false);
+            bind_or_blank(&mut bad, reported);
+            assert!(!bad.identity_bound);
+            assert_eq!(bad.libp2p_peer_id, None);
+            assert!(bad.libp2p_listen_addrs.is_empty());
+            assert_eq!(bad.connectivity, None);
+        }
+    }
+
+    async fn status_server(reported: Option<&PeerId>) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        let server = wiremock::MockServer::start().await;
+        let mut body = serde_json::json!({"network_id": "avalon-dev-local"});
+        if let Some(id) = reported {
+            body["libp2p_peer_id"] = id.to_string().into();
+        }
+        wiremock::Mock::given(method("GET"))
+            .and(path("/nodes/status"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn an_announce_naming_a_new_id_for_a_bound_url_needs_the_urls_own_confirmation() {
+        let (real, new_id, attacker) = (fresh_libp2p(), fresh_libp2p(), fresh_libp2p());
+        let adm = admission_for_tests(true, |_| {});
+        let source: IpAddr = "203.0.113.9".parse().unwrap();
+
+        // The URL's server says it is `new_id`: a legitimate re-key is accepted and bound.
+        let server = status_server(Some(&new_id)).await;
+        let url = normalized_base_url(&server.uri());
+        let table = PeerTable::new();
+        table.upsert(table_entry(&url, Some(&real), true));
+        let claim = table_entry(&url, Some(&new_id), false);
+        let info = rebind_existing(&table, "avalon-dev-local", &adm, source, claim).await;
+        assert!(info.identity_bound);
+        table.upsert(info);
+        assert_eq!(table.list_all()[0].libp2p_peer_id, Some(new_id.to_string()));
+
+        // A third party naming another id: the URL's server disagrees, the stored id stays.
+        let claim = table_entry(&url, Some(&attacker), false);
+        let info = rebind_existing(&table, "avalon-dev-local", &adm, source, claim).await;
+        assert!(!info.identity_bound);
+        table.upsert(info);
+        let stored = &table.list_all()[0];
+        assert_eq!(stored.libp2p_peer_id, Some(new_id.to_string()));
+        assert!(stored.identity_bound);
+
+        // A server that cannot be reached leaves the stored identity alone as well.
+        let dead = "http://127.0.0.1:1".to_string();
+        table.upsert(table_entry(&dead, Some(&real), true));
+        let claim = table_entry(&dead, Some(&attacker), false);
+        let info = rebind_existing(&table, "avalon-dev-local", &adm, source, claim).await;
+        table.upsert(info);
+        let stored = table
+            .list_all()
+            .into_iter()
+            .find(|p| p.base_url == dead)
+            .unwrap();
+        assert_eq!(stored.libp2p_peer_id, Some(real.to_string()));
+    }
+
+    #[tokio::test]
+    async fn responder_entries_are_bound_and_gossip_never_binds() {
+        let server = wiremock::MockServer::start().await;
+        let id = fresh_peer_id();
+        let own = responder(&server.uri(), &id, &["/ip4/203.0.113.7/tcp/4001"]);
+        let adm = admission_for_tests(true, |_| {});
+        let table = PeerTable::new();
+        assert!(admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &server.uri(),
+            own
+        ));
+        assert!(table.list_all()[0].identity_bound);
+        assert_eq!(table.list_all()[0].libp2p_peer_id, Some(id.to_string()));
+
+        let url = table.list_all()[0].base_url.clone();
+        let hostile = PeerInfo {
+            identity_bound: false,
+            ..table_entry(&url, Some(&fresh_libp2p()), true)
+        };
+        merge_gossip(&table, &adm, "avalon-dev-local", vec![hostile]).await;
+        assert_eq!(table.list_all()[0].libp2p_peer_id, Some(id.to_string()));
+
+        let pooled = PeerTable::new();
+        pooled.insert_unverified(table_entry(
+            "http://pooled.test",
+            Some(&fresh_libp2p()),
+            false,
+        ));
+        assert!(pooled.list_unverified().iter().all(|p| !p.identity_bound));
     }
 
     #[tokio::test]

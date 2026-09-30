@@ -215,12 +215,13 @@ impl PeerAdmission {
         self.checks.try_enter()
     }
 
-    /// `GET /nodes/status` on the checked address must answer with this network's id.
+    /// `GET /nodes/status` on the checked address must answer with this network's id. Returns the
+    /// libp2p peer id that server reports for itself, if any.
     pub async fn verify_reachable(
         &self,
         target: &CheckedTarget,
         network_id: &str,
-    ) -> Result<(), AdmitError> {
+    ) -> Result<Option<String>, AdmitError> {
         let client = target.client(REACHABILITY_TIMEOUT);
         let mut response = client
             .get(format!("{}/nodes/status", target.base_url))
@@ -244,7 +245,10 @@ impl PeerAdmission {
         let status: serde_json::Value =
             serde_json::from_slice(&body).map_err(|_| AdmitError::Unreachable)?;
         match status.get("network_id").and_then(|v| v.as_str()) {
-            Some(id) if id == network_id => Ok(()),
+            Some(id) if id == network_id => Ok(status
+                .get("libp2p_peer_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)),
             Some(_) => Err(AdmitError::NetworkMismatch),
             None => Err(AdmitError::Unreachable),
         }
@@ -439,7 +443,7 @@ mod tests {
             .await;
         let a = adm(true, |_| {});
         let target = a.check_address(&server.uri()).await.unwrap();
-        assert_eq!(a.verify_reachable(&target, "n1").await, Ok(()));
+        assert_eq!(a.verify_reachable(&target, "n1").await, Ok(None));
         assert_eq!(
             a.verify_reachable(&target, "n2").await,
             Err(AdmitError::NetworkMismatch)
@@ -450,6 +454,24 @@ mod tests {
         assert_eq!(
             a.verify_reachable(&target, "n1").await,
             Err(AdmitError::Unreachable)
+        );
+    }
+
+    #[tokio::test]
+    async fn reachability_returns_the_libp2p_id_the_server_reports() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/nodes/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"network_id": "n1", "libp2p_peer_id": "12D3KooWabc"}),
+            ))
+            .mount(&server)
+            .await;
+        let a = adm(true, |_| {});
+        let target = a.check_address(&server.uri()).await.unwrap();
+        assert_eq!(
+            a.verify_reachable(&target, "n1").await,
+            Ok(Some("12D3KooWabc".to_string()))
         );
     }
 
