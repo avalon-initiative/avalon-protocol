@@ -3,7 +3,9 @@
 //!
 //! The signature covers method, path, body hash, network, intended recipient,
 //! claimed peer id, timestamp and nonce, so a captured header cannot be replayed
-//! against another route, body, network or recipient.
+//! against another route, body, network or recipient. The header also carries the body hash
+//! (`bh`), so a receiver verifies the signature first, from the headers alone, and reads the
+//! body only for a valid signature, then requires its SHA-256 to equal `bh`.
 //!
 //! # What gets signed
 //! - `method` is the uppercase HTTP method string (`POST`); any non-HTTP stream
@@ -18,6 +20,9 @@
 //!
 //! # Receiver responsibilities
 //! This module checks the signature and the clock window only. The receiver must:
+//! 0. check the signature and clock window with [`verify_node_request_head`] before reading the
+//!    body, and the body with [`verify_node_request_body`] after it (the full
+//!    [`verify_node_request`] does both, head first);
 //! 1. derive the libp2p PeerId from `public_key` and compare it to `peer_id`
 //!    before granting any standing;
 //! 2. generate nonces as 16 random bytes from a CSPRNG (the signer's job; this
@@ -70,6 +75,9 @@ pub enum NodeRequestError {
     /// The signature does not verify (also covers a wrong recipient or network).
     #[error("bad signature")]
     BadSignature,
+    /// The signature is valid but the body does not hash to the signed `bh`.
+    #[error("body does not match the signed hash")]
+    BodyMismatch,
 }
 
 impl NodeRequestError {
@@ -82,6 +90,7 @@ impl NodeRequestError {
             Self::Stale => "stale",
             Self::Future => "future",
             Self::BadSignature => "bad_signature",
+            Self::BodyMismatch => "body_hash",
         }
     }
 }
@@ -98,6 +107,24 @@ pub struct NodeRequestTarget<'a> {
     pub network_id: &'a str,
 }
 
+/// [`NodeRequestTarget`] without the body: what a receiver knows before reading it.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeRequestHead<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub network_id: &'a str,
+}
+
+impl<'a> From<&NodeRequestTarget<'a>> for NodeRequestHead<'a> {
+    fn from(t: &NodeRequestTarget<'a>) -> Self {
+        Self {
+            method: t.method,
+            path: t.path,
+            network_id: t.network_id,
+        }
+    }
+}
+
 /// A parsed or freshly signed credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeRequestAuth {
@@ -107,6 +134,8 @@ pub struct NodeRequestAuth {
     /// Unix seconds.
     pub timestamp: i64,
     pub nonce: [u8; 16],
+    /// SHA-256 of the body the signature covers.
+    pub body_hash: [u8; 32],
     pub signature: [u8; 64],
 }
 
@@ -146,6 +175,10 @@ fn validate_path(path: &str) -> Result<(), NodeRequestError> {
 }
 
 fn validate_target(target: &NodeRequestTarget<'_>, peer_id: &str) -> Result<(), NodeRequestError> {
+    validate_head(&target.into(), peer_id)
+}
+
+fn validate_head(target: &NodeRequestHead<'_>, peer_id: &str) -> Result<(), NodeRequestError> {
     let method = target.method;
     let method_ok = !method.is_empty()
         && method.len() <= MAX_METHOD_LEN
@@ -162,12 +195,12 @@ fn validate_target(target: &NodeRequestTarget<'_>, peer_id: &str) -> Result<(), 
 }
 
 /// Everything up to (excluding) the recipient; hashed once for all recipients.
-fn message_prefix(target: &NodeRequestTarget<'_>) -> Vec<u8> {
+fn message_prefix(target: &NodeRequestHead<'_>, body_hash: &[u8; 32]) -> Vec<u8> {
     let mut message = Vec::new();
     message.extend_from_slice(NODE_REQUEST_DOMAIN);
     push_lp(&mut message, target.method.as_bytes());
     push_lp(&mut message, target.path.as_bytes());
-    push_lp(&mut message, &Sha256::digest(target.body));
+    push_lp(&mut message, body_hash);
     push_lp(&mut message, target.network_id.as_bytes());
     message
 }
@@ -197,7 +230,7 @@ pub fn node_request_signing_message(
 ) -> Result<Vec<u8>, NodeRequestError> {
     validate_target(target, peer_id)?;
     validate_name(recipient, "recipient")?;
-    let prefix = message_prefix(target);
+    let prefix = message_prefix(&target.into(), &Sha256::digest(target.body).into());
     Ok(message_with_recipient(
         &prefix, recipient, peer_id, timestamp, nonce,
     ))
@@ -219,18 +252,20 @@ pub fn sign_node_request(
         public_key: signing_key.verifying_key().to_bytes(),
         timestamp,
         nonce,
+        body_hash: Sha256::digest(target.body).into(),
         signature: signature.to_bytes(),
     })
 }
 
-/// Encodes `v1; peer=<id>; key=<hex>; ts=<secs>; nonce=<hex>; sig=<hex>` (lowercase hex).
+/// Encodes `v1; peer=<id>; key=<hex>; ts=<secs>; nonce=<hex>; bh=<hex>; sig=<hex>` (lowercase hex).
 pub fn encode_node_request_header(auth: &NodeRequestAuth) -> String {
     format!(
-        "v1; peer={}; key={}; ts={}; nonce={}; sig={}",
+        "v1; peer={}; key={}; ts={}; nonce={}; bh={}; sig={}",
         auth.peer_id,
         hex::encode(auth.public_key),
         auth.timestamp,
         hex::encode(auth.nonce),
+        hex::encode(auth.body_hash),
         hex::encode(auth.signature)
     )
 }
@@ -248,7 +283,7 @@ fn lower_hex<const N: usize>(value: &str, what: &'static str) -> Result<[u8; N],
     Ok(out)
 }
 
-/// Parses the header strictly: exactly the six fields in the order above, joined by `"; "`,
+/// Parses the header strictly: exactly the seven fields in the order above, joined by `"; "`,
 /// ASCII only, at most [`NODE_REQUEST_MAX_HEADER_LEN`] bytes, lowercase hex, a plain
 /// non-negative decimal timestamp without leading zeros, and no extra or repeated fields.
 pub fn parse_node_request_header(header: &str) -> Result<NodeRequestAuth, NodeRequestError> {
@@ -272,6 +307,7 @@ pub fn parse_node_request_header(header: &str) -> Result<NodeRequestAuth, NodeRe
     let key = next("key=")?;
     let ts = next("ts=")?;
     let nonce = next("nonce=")?;
+    let bh = next("bh=")?;
     let sig = next("sig=")?;
     if parts.next().is_some() {
         return Err(NodeRequestError::Malformed("extra field"));
@@ -288,21 +324,23 @@ pub fn parse_node_request_header(header: &str) -> Result<NodeRequestAuth, NodeRe
         public_key: lower_hex::<32>(key, "key")?,
         timestamp: ts.parse().map_err(|_| NodeRequestError::Malformed("ts"))?,
         nonce: lower_hex::<16>(nonce, "nonce")?,
+        body_hash: lower_hex::<32>(bh, "bh")?,
         signature: lower_hex::<64>(sig, "sig")?,
     })
 }
 
-/// Verifies a credential: request fields, clock window, key, then the signature
-/// against each accepted recipient. The receiver still owes the peer id/key check
-/// and the nonce replay check (see the module docs).
-pub fn verify_node_request(
+/// Verifies everything a receiver can check before reading the body: request fields, clock
+/// window, key, then the signature (over the header's own body hash) against each accepted
+/// recipient. Follow with [`verify_node_request_body`] once the body is read; the receiver
+/// still owes the peer id/key check and the nonce replay check (see the module docs).
+pub fn verify_node_request_head(
     auth: &NodeRequestAuth,
-    target: &NodeRequestTarget<'_>,
+    head: &NodeRequestHead<'_>,
     accepted_recipients: &[&str],
     now: i64,
     max_skew_secs: i64,
 ) -> Result<(), NodeRequestError> {
-    validate_target(target, &auth.peer_id)?;
+    validate_head(head, &auth.peer_id)?;
     if accepted_recipients.is_empty() {
         return Err(NodeRequestError::InvalidRequest("recipients"));
     }
@@ -321,7 +359,7 @@ pub fn verify_node_request(
     let key =
         VerifyingKey::from_bytes(&auth.public_key).map_err(|_| NodeRequestError::InvalidKey)?;
     let signature = Signature::from_bytes(&auth.signature);
-    let prefix = message_prefix(target);
+    let prefix = message_prefix(head, &auth.body_hash);
     let verified = accepted_recipients.iter().any(|recipient| {
         let message = message_with_recipient(
             &prefix,
@@ -337,6 +375,49 @@ pub fn verify_node_request(
     } else {
         Err(NodeRequestError::BadSignature)
     }
+}
+
+/// Requires `body` to hash to the credential's signed body hash.
+pub fn verify_node_request_body(
+    auth: &NodeRequestAuth,
+    body: &[u8],
+) -> Result<(), NodeRequestError> {
+    if Sha256::digest(body).as_slice() == auth.body_hash {
+        Ok(())
+    } else {
+        Err(NodeRequestError::BodyMismatch)
+    }
+}
+
+/// [`verify_node_request_head`] then [`verify_node_request_body`].
+pub fn verify_node_request(
+    auth: &NodeRequestAuth,
+    target: &NodeRequestTarget<'_>,
+    accepted_recipients: &[&str],
+    now: i64,
+    max_skew_secs: i64,
+) -> Result<(), NodeRequestError> {
+    verify_node_request_head(
+        auth,
+        &target.into(),
+        accepted_recipients,
+        now,
+        max_skew_secs,
+    )?;
+    verify_node_request_body(auth, target.body)
+}
+
+/// Parses `header` then [`verify_node_request_head`]; the body is still to be checked.
+pub fn verify_node_request_header_head(
+    header: &str,
+    head: &NodeRequestHead<'_>,
+    accepted_recipients: &[&str],
+    now: i64,
+    max_skew_secs: i64,
+) -> Result<NodeRequestAuth, NodeRequestError> {
+    let auth = parse_node_request_header(header)?;
+    verify_node_request_head(&auth, head, accepted_recipients, now, max_skew_secs)?;
+    Ok(auth)
 }
 
 /// Parses `header` then [`verify_node_request`]; returns the credential for the caller's own checks.
@@ -413,14 +494,17 @@ mod tests {
                 ..t
             },
         ));
-        bad(verify(
+        // The body is checked against the signed hash, after the signature.
+        let mismatch =
+            |r: Result<(), NodeRequestError>| assert_eq!(r, Err(NodeRequestError::BodyMismatch));
+        mismatch(verify(
             &auth,
             &NodeRequestTarget {
                 body: b"{\"a\":2}",
                 ..t
             },
         ));
-        bad(verify(&auth, &NodeRequestTarget { body: b"", ..t }));
+        mismatch(verify(&auth, &NodeRequestTarget { body: b"", ..t }));
         bad(verify(
             &auth,
             &NodeRequestTarget {
@@ -438,6 +522,9 @@ mod tests {
         bad(verify(&a, &t));
         let mut a = auth.clone();
         a.nonce[0] ^= 1;
+        bad(verify(&a, &t));
+        let mut a = auth.clone();
+        a.body_hash[0] ^= 1;
         bad(verify(&a, &t));
         let mut a = auth.clone();
         a.public_key = SigningKey::from_bytes(&[0x43; 32])
@@ -827,6 +914,7 @@ mod tests {
             format!("key={key_hex}"),
             format!("ts={NOW}"),
             format!("nonce={nonce_hex}"),
+            format!("bh={}", hex::encode(signed().body_hash)),
             format!("sig={sig_hex}"),
         ];
         let build = |v: &str, f: &[String]| format!("{v}; {}", f.join("; "));
@@ -987,5 +1075,69 @@ mod tests {
         codes.sort_unstable();
         codes.dedup();
         assert_eq!(codes.len(), all.len());
+    }
+
+    #[test]
+    fn the_head_verifies_without_the_body_and_the_body_is_checked_after() {
+        let auth = signed();
+        let t = target();
+        let head = NodeRequestHead::from(&t);
+        assert_eq!(
+            verify_node_request_head(&auth, &head, &["node-b"], NOW, SKEW),
+            Ok(())
+        );
+        assert_eq!(verify_node_request_body(&auth, t.body), Ok(()));
+        assert_eq!(
+            verify_node_request_body(&auth, b"other"),
+            Err(NodeRequestError::BodyMismatch)
+        );
+        // A bad signature is reported before the body is even considered.
+        let mut forged = auth.clone();
+        forged.signature[0] ^= 1;
+        let wrong = NodeRequestTarget {
+            body: b"other",
+            ..t
+        };
+        assert_eq!(verify(&forged, &wrong), Err(NodeRequestError::BadSignature));
+        assert_eq!(
+            verify_node_request_head(&forged, &head, &["node-b"], NOW, SKEW),
+            Err(NodeRequestError::BadSignature)
+        );
+        // A valid signature over another body hash does not vouch for this body.
+        let other = NodeRequestTarget {
+            body: b"other",
+            ..t
+        };
+        let resigned = sign_node_request(&key(), PEER, &other, "node-b", NOW, NONCE).unwrap();
+        assert_eq!(verify(&resigned, &t), Err(NodeRequestError::BodyMismatch));
+        let header = encode_node_request_header(&auth);
+        assert_eq!(
+            verify_node_request_header_head(&header, &head, &["node-b"], NOW, SKEW),
+            Ok(auth)
+        );
+    }
+
+    #[test]
+    fn the_body_hash_field_is_required_and_strict() {
+        let good = good_header();
+        let bh = hex::encode(signed().body_hash);
+        for (name, header) in [
+            ("missing", good.replace(&format!("; bh={bh}"), "")),
+            ("uppercase", good.replace(&bh, &bh.to_uppercase())),
+            ("short", good.replace(&bh, &bh[2..])),
+            ("long", good.replace(&bh, &format!("{bh}00"))),
+            ("after sig", {
+                let sig = good.rfind("; sig=").unwrap();
+                format!("{}{}; bh={bh}", &good[..sig - (bh.len() + 5)], &good[sig..])
+            }),
+        ] {
+            assert!(
+                matches!(
+                    parse_node_request_header(&header),
+                    Err(NodeRequestError::Malformed(_))
+                ),
+                "{name}"
+            );
+        }
     }
 }
