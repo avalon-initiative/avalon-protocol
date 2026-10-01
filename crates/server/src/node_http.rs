@@ -23,6 +23,7 @@ use tokio::sync::oneshot;
 
 use crate::dht::{DhtCommand, DhtCommandSender};
 use crate::nodes::{PeerInfo, PeerTable};
+use crate::outbound_policy::{CheckedTarget, OutboundPolicy};
 use crate::transport_stats::{Transport, TransportStats};
 use avalon_protocol::connectivity::Connectivity;
 
@@ -86,8 +87,11 @@ pub enum NodeHttpError {
 pub enum StreamErrorKind {
     /// No stream transport is running on this node.
     Unavailable,
-    /// The peer could not be dialed or the connection dropped.
+    /// The request was never sent: the peer could not be dialed or did not speak the protocol.
     Connect,
+    /// The connection closed before a response; the peer may have processed the request.
+    Dropped,
+    /// No response in time on a connection that may have carried the request.
     Timeout,
     /// The frame broke a size or format limit.
     Protocol,
@@ -107,6 +111,17 @@ impl NodeHttpError {
             Self::Stream { kind, .. } => *kind == StreamErrorKind::Timeout,
             _ => false,
         }
+    }
+
+    /// The stream closed before a response, so a write may already have been applied.
+    pub fn is_dropped(&self) -> bool {
+        matches!(
+            self,
+            Self::Stream {
+                kind: StreamErrorKind::Dropped,
+                ..
+            }
+        )
     }
 
     pub fn is_connect(&self) -> bool {
@@ -191,6 +206,8 @@ pub struct NodeClient {
     stream: Option<StreamHandle>,
     /// Timeout for stream requests, matching the wrapped client's own where it has one.
     timeout: Option<Duration>,
+    /// Policy a peer-table URL must pass before a stream failure falls over to it.
+    policy: Option<OutboundPolicy>,
 }
 
 impl Default for NodeClient {
@@ -205,6 +222,7 @@ impl From<reqwest::Client> for NodeClient {
             http,
             stream: None,
             timeout: None,
+            policy: None,
         }
     }
 }
@@ -224,6 +242,12 @@ impl NodeClient {
     /// Wraps `http`, giving stream requests the same `timeout` it enforces.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Checks stream-to-HTTP failover targets with `policy` instead of the environment's.
+    pub fn with_policy(mut self, policy: OutboundPolicy) -> Self {
+        self.policy = Some(policy);
         self
     }
 
@@ -379,8 +403,8 @@ impl NodeRequestBuilder {
         Some(self.clone())
     }
 
-    fn http_builder_to(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut rb = self.client.http.request(self.method.clone(), url);
+    fn http_builder_with(&self, client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+        let mut rb = client.request(self.method.clone(), url);
         if !self.query.is_empty() {
             rb = rb.query(&self.query);
         }
@@ -443,24 +467,36 @@ impl NodeRequestBuilder {
         }
         let mut first = route.primary;
         let other = first.other();
+        // An http target the caller did not name must pass the outbound policy before any dial.
+        let mut vetted: Option<CheckedTarget> = None;
         // Demotion only reorders; the stricter stream gate is never moved to proactively.
         if let (Some(peer), Some(stats)) = (&route.peer, &route.stats) {
             let to_gated_stream = other == Transport::Stream
                 && route.path.as_deref().is_some_and(requires_bound_peer);
             if route.has(other) && !to_gated_stream && stats.choose(peer, first, true) != first {
-                first = other;
+                if other == Transport::Http {
+                    vetted = self.vet_http(&route).await;
+                }
+                if other == Transport::Stream || vetted.is_some() {
+                    first = other;
+                }
             }
         }
-        match self.attempt(&route, first).await {
-            Err(e) if route.has(first.other()) && fails_over(&e, &self.method) => {
-                tracing::debug!(
-                    ?first,
-                    "node-http: transport failed, retrying over the other"
-                );
-                self.attempt(&route, first.other()).await
+        let err = match self.attempt(&route, first, vetted.as_ref()).await {
+            Err(e) if route.has(first.other()) && fails_over(&e, &self.method) => e,
+            result => return result,
+        };
+        if first.other() == Transport::Http && route.primary == Transport::Stream {
+            vetted = self.vet_http(&route).await;
+            if vetted.is_none() {
+                return Err(err);
             }
-            result => result,
         }
+        tracing::debug!(
+            ?first,
+            "node-http: transport failed, retrying over the other"
+        );
+        self.attempt(&route, first.other(), vetted.as_ref()).await
     }
 
     /// The transports this request may use. The URL's own kind is tried first; the other is
@@ -468,20 +504,23 @@ impl NodeRequestBuilder {
     fn route(&self) -> Result<Route, NodeHttpError> {
         let handle = self.client.stream_handle();
         let table = handle.and_then(|h| h.peers.as_ref());
-        let stats = table.map(|t| t.transport_stats().clone());
+        let stats_for = |peer: &PeerId| {
+            table
+                .filter(|t| t.libp2p_id_is_unambiguous(peer))
+                .map(|t| t.transport_stats().clone())
+        };
         if self.url.starts_with("p2p://") {
             let (peer, path) = split_p2p_url(&self.url)
                 .ok_or_else(|| NodeHttpError::Invalid("bad p2p url".into()))?;
-            let http = table
-                .and_then(|t| t.http_url_for_libp2p_peer(&peer))
-                .map(|base| format!("{}{path}", base.trim_end_matches('/')));
+            let alt_http_base = table.and_then(|t| t.http_url_for_libp2p_peer(&peer));
             return Ok(Route {
                 primary: Transport::Stream,
                 peer: Some(peer),
-                http,
+                http: None,
+                alt_http_base,
                 path: Some(path),
                 stream: true,
-                stats,
+                stats: stats_for(&peer),
             });
         }
         let peer = self.client.fallback_peer(&self.url);
@@ -491,10 +530,19 @@ impl NodeRequestBuilder {
             primary: Transport::Http,
             peer,
             http: Some(self.url.clone()),
+            alt_http_base: None,
             path,
             stream,
-            stats,
+            stats: peer.as_ref().and_then(stats_for),
         })
+    }
+
+    /// The table's http URL for a stream-first request, resolved and pinned under the policy;
+    /// `None` when there is none or it is refused.
+    async fn vet_http(&self, route: &Route) -> Option<CheckedTarget> {
+        let base = route.alt_http_base.as_deref()?;
+        let policy = self.client.policy.unwrap_or_else(OutboundPolicy::from_env);
+        policy.check_base_url(base).await.ok()
     }
 
     /// One try over `transport`, recording a transport-level outcome for the peer. Any answer,
@@ -503,13 +551,35 @@ impl NodeRequestBuilder {
         &self,
         route: &Route,
         transport: Transport,
+        vetted: Option<&CheckedTarget>,
     ) -> Result<NodeResponse, NodeHttpError> {
         let start = std::time::Instant::now();
         let result = match transport {
             Transport::Http => {
-                let url = route.http.as_deref().unwrap_or(&self.url);
-                self.http_builder_to(url)
-                    .send()
+                let rb = match (vetted, route.primary) {
+                    (Some(target), Transport::Stream) => {
+                        let timeout = self.timeout.or(self.client.timeout).unwrap_or(
+                            self.client
+                                .stream_handle()
+                                .map_or(crate::outbound_policy::PEER_REQUEST_TIMEOUT, |h| {
+                                    h.settings.timeout
+                                }),
+                        );
+                        let path = route.path.as_deref().unwrap_or("/");
+                        self.http_builder_with(
+                            &target.client(timeout),
+                            &format!("{}{path}", target.base_url),
+                        )
+                    }
+                    (None, Transport::Stream) => {
+                        return Err(NodeHttpError::Invalid("no vetted http target".into()))
+                    }
+                    _ => self.http_builder_with(
+                        &self.client.http,
+                        route.http.as_deref().unwrap_or(&self.url),
+                    ),
+                };
+                rb.send()
                     .await
                     .map(NodeResponse::from_http)
                     .map_err(NodeHttpError::from)
@@ -524,7 +594,8 @@ impl NodeRequestBuilder {
         if let (Some(peer), Some(stats)) = (route.peer, &route.stats) {
             match &result {
                 Ok(_) => stats.record_success(peer, transport, start.elapsed()),
-                Err(e) if e.is_connect() || e.is_timeout() => stats.record_failure(peer, transport),
+                // Only a request that never connected demotes; a slow answer does not.
+                Err(e) if e.is_connect() => stats.record_failure(peer, transport),
                 Err(_) => {}
             }
         }
@@ -536,11 +607,14 @@ impl NodeRequestBuilder {
 struct Route {
     primary: Transport,
     peer: Option<PeerId>,
-    /// The full http(s) URL, when the request can go over HTTP.
+    /// The full http(s) URL the caller named, for an http-first request.
     http: Option<String>,
+    /// The table's http base URL, for a stream-first request.
+    alt_http_base: Option<String>,
     /// Path and query as a stream request carries them.
     path: Option<String>,
     stream: bool,
+    /// Present only when one bound entry holds the peer id, so a failure is that URL's own.
     stats: Option<TransportStats>,
 }
 
@@ -548,21 +622,21 @@ impl Route {
     fn pin(&mut self) {
         match self.primary {
             Transport::Http => self.stream = false,
-            Transport::Stream => self.http = None,
+            Transport::Stream => self.alt_http_base = None,
         }
     }
 
     fn has(&self, transport: Transport) -> bool {
         match transport {
-            Transport::Http => self.http.is_some(),
+            Transport::Http => self.http.is_some() || self.alt_http_base.is_some(),
             Transport::Stream => self.stream && self.peer.is_some() && self.path.is_some(),
         }
     }
 }
 
-/// Whether `err` allows trying the other transport: the request never got an answer. An
-/// application status never does, since a refusal retried over a different path could be a
-/// downgrade, and a write that timed out may already have been applied.
+/// Whether `err` allows trying the other transport. A connect failure never reached the peer; a
+/// timeout may have been processed, so only a read retries. A dropped stream, which is also how a
+/// peer's connection limit shows, and an application status never fail over.
 fn fails_over(err: &NodeHttpError, method: &Method) -> bool {
     err.is_connect() || (err.is_timeout() && method == Method::GET)
 }
@@ -676,6 +750,7 @@ impl NodeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outbound_policy::OutboundPolicy;
     use libp2p::identity;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1088,31 +1163,45 @@ mod tests {
         assert_eq!(seen2.lock().unwrap().len(), 1);
     }
 
+    /// A client over `handle` that may fail over to loopback test servers.
+    fn lax_client(handle: StreamHandle) -> NodeClient {
+        NodeClient::new()
+            .with_stream(handle)
+            .with_policy(OutboundPolicy::new(true))
+    }
+
     #[tokio::test]
     async fn stream_failure_fails_over_to_http_for_a_peer_with_a_url() {
         let live = http_server(200).await;
         let id = sample_peer_id();
-        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
-        let mut table = table;
-        for kind in [StreamErrorKind::Connect, StreamErrorKind::Timeout] {
-            table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        // A never-sent failure demotes; a slow read falls over without demoting.
+        for (kind, demoted) in [
+            (StreamErrorKind::Connect, true),
+            (StreamErrorKind::Timeout, false),
+        ] {
+            let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
             let (handle, seen) = scripted_worker(table.clone(), Script::Fail(kind));
-            let client = NodeClient::new().with_stream(handle);
-            let res = client
+            let res = lax_client(handle)
                 .get(format!("{}/nodes/status", p2p_base_url(&id)))
                 .send()
                 .await
                 .unwrap();
             assert!(!res.via_stream(), "{kind:?}");
             assert_eq!(res.text().await.unwrap(), "http");
-            assert!(table.transport_stats().is_demoted(&id, Transport::Stream));
             assert_eq!(seen.lock().unwrap().len(), 1);
+            assert_eq!(
+                table.transport_stats().is_demoted(&id, Transport::Stream),
+                demoted,
+                "{kind:?}"
+            );
         }
-        assert!(table.transport_stats().is_demoted(&id, Transport::Stream));
         // Demoted: the next request does not even try the stream.
-        let (handle, seen) = scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Connect));
-        let res = NodeClient::new()
-            .with_stream(handle)
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        table
+            .transport_stats()
+            .record_failure(id, Transport::Stream);
+        let (handle, seen) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let res = lax_client(handle)
             .get(format!("{}/nodes/status", p2p_base_url(&id)))
             .send()
             .await
@@ -1121,6 +1210,198 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn a_dropped_stream_never_fails_over() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        for get in [true, false] {
+            let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+            let (handle, _) =
+                scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Dropped));
+            let url = format!("{}/nodes/status", p2p_base_url(&id));
+            let client = lax_client(handle);
+            let req = if get {
+                client.get(url)
+            } else {
+                client.post(url)
+            };
+            assert!(req.send().await.err().unwrap().is_dropped());
+            assert_eq!(http_hits(&live).await, 0);
+            assert!(!table.transport_stats().is_demoted(&id, Transport::Stream));
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_never_sent_stream_write_fails_over_to_http() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        for kind in [StreamErrorKind::Timeout, StreamErrorKind::Dropped] {
+            let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+            let (handle, _) = scripted_worker(table.clone(), Script::Fail(kind));
+            let err = lax_client(handle)
+                .post(format!("{}/nodes/announce", p2p_base_url(&id)))
+                .send()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(err, NodeHttpError::Stream { kind: k, .. } if k == kind));
+            assert_eq!(http_hits(&live).await, 0, "{kind:?}");
+            // Neither counts against the stream: the request may well have connected.
+            assert!(!table.transport_stats().is_demoted(&id, Transport::Stream));
+        }
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let res = lax_client(handle)
+            .post(format!("{}/nodes/announce", p2p_base_url(&id)))
+            .send()
+            .await
+            .unwrap();
+        assert!(!res.via_stream());
+        assert_eq!(http_hits(&live).await, 1);
+    }
+
+    #[test]
+    fn only_a_never_sent_failure_or_a_timed_out_read_fails_over() {
+        let stream = |kind| NodeHttpError::stream(kind, "x");
+        for (kind, get, post) in [
+            (StreamErrorKind::Connect, true, true),
+            (StreamErrorKind::Dropped, false, false),
+            (StreamErrorKind::Timeout, true, false),
+            (StreamErrorKind::Protocol, false, false),
+            (StreamErrorKind::Unavailable, false, false),
+        ] {
+            assert_eq!(fails_over(&stream(kind), &Method::GET), get, "{kind:?} GET");
+            assert_eq!(
+                fails_over(&stream(kind), &Method::POST),
+                post,
+                "{kind:?} POST"
+            );
+        }
+        assert!(!fails_over(
+            &NodeHttpError::Status(StatusCode::FORBIDDEN),
+            &Method::GET
+        ));
+        assert!(!fails_over(
+            &NodeHttpError::Decode("x".into()),
+            &Method::GET
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_failover_target_that_fails_the_policy_is_never_dialed() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        let strict = OutboundPolicy::new(false);
+        // A loopback literal and a name that resolves to loopback.
+        let name_url = live.uri().replace("127.0.0.1", "localhost");
+        for base in [live.uri(), name_url] {
+            let table = table_with_connectivity(&id, &base, Some(Connectivity::Relayed));
+            let (handle, seen) =
+                scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Connect));
+            let err = NodeClient::new()
+                .with_stream(handle.clone())
+                .with_policy(strict)
+                .get(format!("{}/nodes/status", p2p_base_url(&id)))
+                .send()
+                .await
+                .err()
+                .unwrap();
+            // The original stream error comes back.
+            assert!(matches!(
+                err,
+                NodeHttpError::Stream {
+                    kind: StreamErrorKind::Connect,
+                    ..
+                }
+            ));
+            assert_eq!(seen.lock().unwrap().len(), 1);
+            // A demoted stream is not swapped away from onto a refused target either.
+            let _ = NodeClient::new()
+                .with_stream(handle)
+                .with_policy(strict)
+                .get(format!("{}/nodes/status", p2p_base_url(&id)))
+                .send()
+                .await;
+            assert_eq!(seen.lock().unwrap().len(), 2);
+            assert_eq!(http_hits(&live).await, 0, "{base}");
+        }
+        // Link-local is refused even where private ranges are allowed.
+        let table =
+            table_with_connectivity(&id, "http://169.254.169.254", Some(Connectivity::Relayed));
+        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let err = lax_client(handle)
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .send()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, NodeHttpError::Stream { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_failover_to_http_does_not_follow_redirects() {
+        let elsewhere = http_server(200).await;
+        let live = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(302).insert_header("location", elsewhere.uri()))
+            .mount(&live)
+            .await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let res = lax_client(handle)
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert_eq!(http_hits(&elsewhere).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_slow_answer_does_not_demote_the_transport() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+            .mount(&server)
+            .await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &server.uri(), Some(Connectivity::Direct));
+        let (handle, seen) = fake_worker(table.clone(), ok_answer());
+        // The read times out on an established connection and falls over, undemoted.
+        let res = lax_client(handle)
+            .get(format!("{}/nodes/status", server.uri()))
+            .timeout(Duration::from_millis(200))
+            .send()
+            .await
+            .unwrap();
+        assert!(res.via_stream());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(!table.transport_stats().is_demoted(&id, Transport::Http));
+    }
+
+    #[tokio::test]
+    async fn outcomes_are_not_recorded_under_an_id_more_than_one_entry_holds() {
+        let base = dead_base();
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &base, Some(Connectivity::Direct));
+        let mut twin = info("http://twin.test", Some(&id), Some(Connectivity::Direct));
+        twin.identity_bound = true;
+        table.upsert(twin);
+        let (handle, _) = fake_worker(table.clone(), ok_answer());
+        let _ = lax_client(handle)
+            .get(format!("{base}/nodes/status"))
+            .send()
+            .await;
+        assert!(table
+            .transport_stats()
+            .outcome(&id, Transport::Http)
+            .is_none());
+        assert!(table
+            .transport_stats()
+            .outcome(&id, Transport::Stream)
+            .is_none());
+    }
     #[tokio::test]
     async fn an_application_status_never_changes_transport() {
         for status in [400u16, 401, 403, 404, 429, 500, 503] {
@@ -1177,36 +1458,6 @@ mod tests {
         }
         assert_eq!(http_hits(&live).await, 0);
         assert!(!table.transport_stats().is_demoted(&id, Transport::Stream));
-    }
-
-    #[tokio::test]
-    async fn a_timed_out_stream_write_is_not_replayed_over_http_but_a_connect_failure_is() {
-        let live = http_server(200).await;
-        let id = sample_peer_id();
-        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
-        let (handle, _) = scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Timeout));
-        let err = NodeClient::new()
-            .with_stream(handle)
-            .post(format!("{}/nodes/announce", p2p_base_url(&id)))
-            .send()
-            .await
-            .err()
-            .unwrap();
-        assert!(err.is_timeout());
-        assert_eq!(http_hits(&live).await, 0);
-        // The timeout still counts against the stream.
-        assert!(table.transport_stats().is_demoted(&id, Transport::Stream));
-
-        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
-        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
-        let res = NodeClient::new()
-            .with_stream(handle)
-            .post(format!("{}/nodes/announce", p2p_base_url(&id)))
-            .send()
-            .await
-            .unwrap();
-        assert!(!res.via_stream());
-        assert_eq!(http_hits(&live).await, 1);
     }
 
     #[tokio::test]
@@ -1368,5 +1619,54 @@ mod tests {
             .unwrap();
         assert!(err.is_connect());
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_failover_url_comes_only_from_the_one_bound_entry_with_a_usable_url() {
+        let id = sample_peer_id();
+        let table = PeerTable::new();
+        assert_eq!(table.http_url_for_libp2p_peer(&id), None);
+        // Unbound and unusable entries never name a URL.
+        let mut unbound = info("http://u.test", Some(&id), None);
+        unbound.identity_bound = false;
+        table.upsert(unbound);
+        assert_eq!(table.http_url_for_libp2p_peer(&id), None);
+        for unusable in ["p2p://x", "not a url", ""] {
+            let single = PeerTable::new();
+            single.upsert(info(unusable, Some(&id), None));
+            assert_eq!(single.http_url_for_libp2p_peer(&id), None, "{unusable}");
+        }
+        // A bound entry with a usable URL does, until a second bound entry claims the id.
+        let table = PeerTable::new();
+        table.upsert(info("http://a.test", Some(&id), None));
+        assert_eq!(
+            table.http_url_for_libp2p_peer(&id).as_deref(),
+            Some("http://a.test")
+        );
+        assert!(table.libp2p_id_is_unambiguous(&id));
+        table.upsert(info("http://evil.test", Some(&id), None));
+        assert_eq!(table.http_url_for_libp2p_peer(&id), None);
+        assert!(!table.libp2p_id_is_unambiguous(&id));
+    }
+
+    #[tokio::test]
+    async fn a_stream_first_request_for_a_duplicated_id_has_no_http_failover() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        table.upsert(info(
+            "http://evil.test",
+            Some(&id),
+            Some(Connectivity::Relayed),
+        ));
+        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let err = lax_client(handle)
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .send()
+            .await
+            .err()
+            .unwrap();
+        assert!(err.is_connect());
+        assert_eq!(http_hits(&live).await, 0);
     }
 }

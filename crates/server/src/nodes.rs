@@ -466,15 +466,30 @@ impl PeerTable {
             .unwrap_or_else(|| base_url.to_string())
     }
 
-    /// The usable http(s) base URL of the bound entry holding libp2p id `peer`, if any.
+    /// The usable http(s) base URL of the one bound entry holding libp2p id `peer`. Binding is
+    /// self-reported, so an id held by more than one entry names no URL.
     pub fn http_url_for_libp2p_peer(&self, peer: &libp2p::PeerId) -> Option<String> {
         let id = peer.to_string();
         let peers = self.peers.read().expect("peer table lock poisoned");
-        peers
+        let mut holders = peers
+            .values()
+            .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()));
+        let only = holders.next().filter(|_| holders.next().is_none())?;
+        crate::outbound_policy::OutboundPolicy::parse_base_url(&only.base_url).ok()?;
+        Some(only.base_url.clone())
+    }
+
+    /// Whether at most one bound entry holds libp2p id `peer`, so outcomes recorded under it
+    /// cannot come from another node's URL.
+    pub fn libp2p_id_is_unambiguous(&self, peer: &libp2p::PeerId) -> bool {
+        let id = peer.to_string();
+        self.peers
+            .read()
+            .expect("peer table lock poisoned")
             .values()
             .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
-            .find(|p| crate::outbound_policy::OutboundPolicy::parse_base_url(&p.base_url).is_ok())
-            .map(|p| p.base_url.clone())
+            .count()
+            <= 1
     }
 
     /// `p2p://<id>` for the known peer `base_url` when its id is bound (or the URL is already

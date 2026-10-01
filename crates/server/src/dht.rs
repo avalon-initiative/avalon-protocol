@@ -793,7 +793,7 @@ fn expire_parked(parked: &mut ParkedRequests, now: Instant) {
             }
             if now >= w.deadline {
                 let timeout = NodeHttpError::Stream {
-                    kind: StreamErrorKind::Timeout,
+                    kind: StreamErrorKind::Connect,
                     message: "timed out dialing the peer".to_string(),
                 };
                 // The responder moves out only when sent; replace with a closed one.
@@ -813,7 +813,8 @@ fn node_http_error(failure: request_response::OutboundFailure) -> NodeHttpError 
     use request_response::OutboundFailure as F;
     let kind = match &failure {
         F::Timeout => StreamErrorKind::Timeout,
-        F::DialFailure | F::ConnectionClosed | F::UnsupportedProtocols => StreamErrorKind::Connect,
+        F::ConnectionClosed => StreamErrorKind::Dropped,
+        F::DialFailure | F::UnsupportedProtocols => StreamErrorKind::Connect,
         F::Io(_) => StreamErrorKind::Protocol,
     };
     NodeHttpError::Stream {
@@ -1412,6 +1413,19 @@ async fn run_worker(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stream_failures_split_into_never_sent_and_possibly_sent() {
+        use request_response::OutboundFailure as F;
+        let kind = |f| match node_http_error(f) {
+            NodeHttpError::Stream { kind, .. } => kind,
+            other => panic!("{other}"),
+        };
+        assert_eq!(kind(F::DialFailure), StreamErrorKind::Connect);
+        assert_eq!(kind(F::UnsupportedProtocols), StreamErrorKind::Connect);
+        assert_eq!(kind(F::ConnectionClosed), StreamErrorKind::Dropped);
+        assert_eq!(kind(F::Timeout), StreamErrorKind::Timeout);
+    }
+
     use super::*;
     use libp2p::core::ConnectedPoint;
 

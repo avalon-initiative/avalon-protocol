@@ -88,9 +88,16 @@ impl NodeTarget {
     pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
         match &self.http {
             Some(checked) => checked.node_client(timeout),
-            None => {
-                crate::node_http::NodeClient::from(reqwest::Client::new()).with_timeout(timeout)
-            }
+            // Never dialed for a p2p:// target; bounded anyway so it cannot follow or proxy.
+            None => crate::node_http::NodeClient::from(
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .timeout(timeout)
+                    .build()
+                    .unwrap_or_default(),
+            )
+            .with_timeout(timeout),
         }
     }
 }

@@ -8,6 +8,7 @@ use avalon_protocol::connectivity::Connectivity;
 use avalon_server::dht::{self, DhtConfig, DhtHandle};
 use avalon_server::node_http::{p2p_base_url, NodeClient};
 use avalon_server::nodes::{PeerInfo, PeerTable};
+use avalon_server::outbound_policy::OutboundPolicy;
 use avalon_server::reachability::AutonatSettings;
 use avalon_server::relay::RelaySettings;
 use avalon_server::transport_stats::Transport;
@@ -81,7 +82,9 @@ fn entry(base_url: &str, peer: &DhtHandle, c: Connectivity) -> PeerInfo {
 async fn failover_runs_both_ways_over_real_swarms() {
     let table = PeerTable::new();
     let client_node = dht::start(table.clone(), config()).await;
-    let client = NodeClient::new().with_stream(client_node.node_http.clone());
+    let client = NodeClient::new()
+        .with_stream(client_node.node_http.clone())
+        .with_policy(OutboundPolicy::new(true));
     let stats = table.transport_stats().clone();
 
     // The server's stream side answers "stream"; its HTTP side "http".
@@ -137,7 +140,9 @@ async fn failover_runs_both_ways_over_real_swarms() {
 async fn a_refusal_over_either_transport_is_returned_not_retried_elsewhere() {
     let table = PeerTable::new();
     let client_node = dht::start(table.clone(), config()).await;
-    let client = NodeClient::new().with_stream(client_node.node_http.clone());
+    let client = NodeClient::new()
+        .with_stream(client_node.node_http.clone())
+        .with_policy(OutboundPolicy::new(true));
     let stats = table.transport_stats().clone();
 
     let server = dht::start(PeerTable::new(), config()).await;
