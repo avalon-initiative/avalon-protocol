@@ -110,6 +110,12 @@ fn advertises_realtime_relay_role(roles: &[String]) -> bool {
     })
 }
 
+/// One warning per refusing peer per interval, with the count held back.
+fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
+    static LOG: OnceLock<crate::log_throttle::LogThrottle> = OnceLock::new();
+    LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(std::time::Duration::from_secs(60)))
+}
+
 fn relay_client() -> &'static crate::node_http::NodeClient {
     static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
     CLIENT.get_or_init(crate::node_http::NodeClient::new)
@@ -196,13 +202,24 @@ pub async fn relay_to_peers(state: AppState, event: RelayEvent) {
         let event = event.clone();
         let client = client.clone();
         tokio::spawn(async move {
-            if let Err(err) = client.post(&url).json(&event).send().await {
-                // Best-effort: an unreachable peer just misses this tick's
-                // event, same tradeoff a lagging local broadcast receiver
-                // already accepts. Logged, not retried — a dropped relay
-                // is a liveness gap, never a correctness one (nothing here
-                // is durable protocol history).
-                tracing::debug!(peer = %url, error = %err, "realtime relay: peer unreachable");
+            match client.post(&url).json(&event).send().await {
+                Ok(response) if !response.status().is_success() => {
+                    let status = response.status();
+                    tracing::debug!(peer = %url, %status, "realtime relay: peer refused the event");
+                    let now = std::time::Instant::now();
+                    if let Some(held_back) = refusal_log().permit(&base_url, now) {
+                        tracing::warn!(peer = %base_url, %status, held_back, "realtime relay: peer refused events");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    // Best-effort: an unreachable peer just misses this tick's
+                    // event, same tradeoff a lagging local broadcast receiver
+                    // already accepts. Logged, not retried — a dropped relay
+                    // is a liveness gap, never a correctness one (nothing here
+                    // is durable protocol history).
+                    tracing::debug!(peer = %url, error = %err, "realtime relay: peer unreachable");
+                }
             }
         });
     }
@@ -258,11 +275,8 @@ async fn relay_traced(state: &AppState, event: &RelayEvent, scope: &crate::op_tr
 /// `POST /nodes/relay` — issue #539's receiving end. Applies `event` to
 /// this node's own local store/broadcast only; never relays it onward
 /// (see module doc comment for why that alone is sufficient to guarantee
-/// single-hop delivery). No auth: same posture `GET /nodes/peers` already
-/// takes for node-to-node discovery traffic — a relayed presence/chat
-/// event is exactly as sensitive as the live broadcast it feeds (already
-/// unauthenticated once inside `PresenceStore`/`ChatBus`), not a new
-/// privileged write.
+/// single-hop delivery). The caller is authenticated by
+/// [`crate::node_auth::require_node_auth`]; which events a given node may relay is not checked.
 pub async fn relay_handler(
     State(state): State<AppState>,
     Json(event): Json<RelayEvent>,

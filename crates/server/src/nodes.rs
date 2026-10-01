@@ -537,19 +537,16 @@ impl PeerTable {
         (bound_holders(&peers, &id.to_string()) <= 1).then_some(id)
     }
 
-    /// Whether `peer` is the libp2p id of a bound entry whose http URL answered `/nodes/status`
-    /// with that id. A self-announced `p2p://` entry only proves a key pair, so it never counts.
-    pub fn is_bound_libp2p_peer(&self, peer: &libp2p::PeerId) -> bool {
+    /// Whether `peer` is the libp2p id of a bound main-table entry: either its http URL answered
+    /// `/nodes/status` with that id, or it announced itself as `p2p://` over a stream that the
+    /// handshake authenticated as that id. Gossip-only entries never count.
+    pub fn standing(&self, peer: &libp2p::PeerId) -> bool {
         let id = peer.to_string();
         self.peers
             .read()
             .expect("peer table lock poisoned")
             .values()
-            .any(|p| {
-                p.identity_bound
-                    && !is_p2p_url(&p.base_url)
-                    && p.libp2p_peer_id.as_deref() == Some(id.as_str())
-            })
+            .any(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
     }
 
     /// Every known peer — what `GET /nodes/peers` returns.
@@ -2140,6 +2137,15 @@ const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
 /// count must stay bounded regardless of network size.
 const DEFAULT_MAX_PEERS: usize = 50;
 
+/// `AVALON_NODE_MAX_PEERS`, defaulting to [`DEFAULT_MAX_PEERS`].
+pub(crate) fn max_peers_from_env() -> usize {
+    std::env::var("AVALON_NODE_MAX_PEERS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_PEERS)
+}
+
 /// Pure resolution logic, split out for direct unit testing (same "pure
 /// function behind the env-reading wrapper" pattern `registry::coarsen`
 /// already uses in this repo) — no real `bundled_trust_anchors()` call, so
@@ -2192,11 +2198,7 @@ impl AnnounceConfig {
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty());
 
-        let max_peers = std::env::var("AVALON_NODE_MAX_PEERS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(DEFAULT_MAX_PEERS);
+        let max_peers = max_peers_from_env();
 
         Self {
             peers,
@@ -2461,6 +2463,8 @@ pub async fn run_worker(
 
     let client = crate::node_http::NodeClient::from(
         reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .timeout(ANNOUNCE_TIMEOUT)
             .build()
             .unwrap_or_default(),
@@ -4375,7 +4379,7 @@ mod tests {
             crate::node_http::p2p_base_url(&real)
         );
         assert_eq!(table.libp2p_peer_for_url("http://v.test/x"), Some(real));
-        assert!(!table.is_bound_libp2p_peer(&attacker));
+        assert!(!table.standing(&attacker));
     }
 
     #[test]
@@ -4398,7 +4402,7 @@ mod tests {
         );
         assert_eq!(unbound.transport_url("http://u.test"), "http://u.test");
         assert_eq!(unbound.libp2p_peer_for_url("http://u.test/x"), None);
-        assert!(!unbound.is_bound_libp2p_peer(&id));
+        assert!(!unbound.standing(&id));
     }
 
     #[test]
@@ -4739,8 +4743,8 @@ mod tests {
         assert_eq!(stored.base_url, crate::node_http::p2p_base_url(&id));
         assert!(stored.identity_bound);
         assert!(
-            !table.is_bound_libp2p_peer(&id),
-            "self-bound entries do not unlock write routes"
+            table.standing(&id),
+            "a stream-authenticated p2p entry has standing"
         );
         assert_eq!(
             crate::node_http::NodeClient::url_for(stored),
@@ -4885,10 +4889,8 @@ mod tests {
         assert!(by_url(&crate::node_http::p2p_base_url(&a)).identity_bound);
         assert!(!by_url("http://127.0.0.1:1").identity_bound);
         assert!(!by_url(&crate::node_http::p2p_base_url(&b)).identity_bound);
-        assert!(
-            !table.is_bound_libp2p_peer(&a),
-            "a p2p-only entry never unlocks write routes"
-        );
+        assert!(table.standing(&a), "a contact-bound p2p entry has standing");
+        assert!(!table.standing(&b), "an unbound entry has none");
         let promoted = by_url(&crate::node_http::p2p_base_url(&a));
         assert!(promoted.roles.is_empty() && promoted.libp2p_listen_addrs.is_empty());
         assert_eq!(promoted.protocol_version, "0.0.0");
@@ -5322,13 +5324,21 @@ mod tests {
     }
 
     #[test]
-    fn an_http_entry_naming_a_p2p_peers_id_is_still_bound() {
+    fn standing_needs_a_bound_main_table_entry_of_either_kind() {
         let id = fresh_peer_id();
         let table = PeerTable::new();
+        assert!(!table.standing(&id));
+        table.upsert(p2p_entry(&id, false));
+        assert!(!table.standing(&id), "an unbound entry has no standing");
+        let gossip = PeerTable::new();
+        gossip.insert_unverified(p2p_entry(&id, true));
+        assert!(!gossip.standing(&id), "the unverified pool has none");
         table.upsert(p2p_entry(&id, true));
-        assert!(!table.is_bound_libp2p_peer(&id));
-        table.upsert(table_entry("http://v.test", Some(&id), true));
-        assert!(table.is_bound_libp2p_peer(&id));
+        assert!(table.standing(&id));
+        let http = PeerTable::new();
+        http.upsert(table_entry("http://v.test", Some(&id), true));
+        assert!(http.standing(&id));
+        assert!(!http.standing(&fresh_peer_id()));
     }
 
     #[tokio::test]

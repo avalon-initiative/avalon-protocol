@@ -56,6 +56,14 @@ impl Default for AdmissionConfig {
     }
 }
 
+/// `AVALON_NODE_MAX_KNOWN_PEERS`: the peer table's size cap, which bounds the standing set.
+pub(crate) fn max_known_peers_from_env() -> usize {
+    env_usize(
+        "AVALON_NODE_MAX_KNOWN_PEERS",
+        AdmissionConfig::default().max_known_peers,
+    )
+}
+
 fn env_usize(var: &str, default: usize) -> usize {
     std::env::var(var)
         .ok()

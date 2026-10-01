@@ -211,18 +211,14 @@ pub enum IdentityLoadError {
     WrongLength(usize),
 }
 
-/// Loads this node's libp2p identity keypair from
-/// `AVALON_LIBP2P_IDENTITY_KEY` (a raw 32-byte Ed25519 seed, hex-encoded —
-/// the same convention `avalon_protocol::sth`'s `AVALON_SETTLEMENT_SIGNING_KEY`
-/// already establishes), or generates a fresh one when unset.
+/// Loads this node's identity keypair from `AVALON_LIBP2P_IDENTITY_KEY` (a raw 32-byte Ed25519
+/// seed, hex-encoded, the same convention as `AVALON_SETTLEMENT_SIGNING_KEY`), or generates a
+/// fresh one when unset. Every node has one, whether or not the DHT runs: it is the libp2p
+/// identity and the key that signs node-to-node write requests.
 ///
-/// Unlike the settlement key, an unset value is **not** an error: this is a
-/// brand-new identity domain with no existing deployment depending on it,
-/// so an ephemeral per-restart identity is a reasonable dev default — the
-/// worst case is other nodes needing to re-learn this node's `PeerId` after
-/// a restart, a reversible availability blip, never a security gate (the
-/// same posture the protocol-version floor already takes for peer
-/// admission). An operator who wants a stable `PeerId` sets the env var.
+/// An unset value is not an error: a per-restart identity is a reasonable dev default, at the
+/// cost of peers learning the new `PeerId` through the next announce before this node regains
+/// standing with them. An operator who wants a stable `PeerId` sets the env var.
 pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, IdentityLoadError> {
     match std::env::var("AVALON_LIBP2P_IDENTITY_KEY") {
         Ok(hex_value) => {
@@ -236,8 +232,8 @@ pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, Identit
         }
         Err(_) => {
             tracing::warn!(
-                "avalon-dht: AVALON_LIBP2P_IDENTITY_KEY unset — generating an ephemeral libp2p \
-                 identity for this run; this node's PeerId will change on every restart. Set \
+                "AVALON_LIBP2P_IDENTITY_KEY unset — generating an ephemeral node identity for \
+                 this run; this node's PeerId will change on every restart. Set \
                  AVALON_LIBP2P_IDENTITY_KEY for a stable identity peers don't need to relearn."
             );
             Ok(identity::Keypair::generate_ed25519())
@@ -283,8 +279,9 @@ impl DhtConfig {
     /// matching this repo's existing "sane default, explicit override"
     /// convention (e.g. `AVALON_SERVER_ADDR`). `AVALON_LIBP2P_EXTERNAL_ADDR`
     /// is unset by default (native, non-containerized deployments don't
-    /// need it — see `external_addr`'s own doc comment).
-    pub fn from_env(network_id: &str) -> Result<Option<Self>, String> {
+    /// need it — see `external_addr`'s own doc comment). `identity` is the node's key,
+    /// loaded by the caller because it is needed with the DHT off too.
+    pub fn from_env(network_id: &str, identity: identity::Keypair) -> Result<Option<Self>, String> {
         let enabled = std::env::var("AVALON_DHT_ENABLED")
             .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
             .unwrap_or(true);
@@ -292,7 +289,6 @@ impl DhtConfig {
             return Ok(None);
         }
 
-        let identity = load_or_generate_identity_from_env().map_err(|e| e.to_string())?;
         let listen_addr = std::env::var("AVALON_LIBP2P_LISTEN_ADDR")
             .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string())
             .parse::<Multiaddr>()
@@ -2149,7 +2145,11 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_DHT_ENABLED");
         }
-        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_some());
+        assert!(
+            DhtConfig::from_env("avalon-dev-local", identity::Keypair::generate_ed25519())
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -2158,15 +2158,73 @@ mod tests {
         unsafe {
             std::env::set_var("AVALON_DHT_ENABLED", "false");
         }
-        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_none());
+        assert!(
+            DhtConfig::from_env("avalon-dev-local", identity::Keypair::generate_ed25519())
+                .unwrap()
+                .is_none()
+        );
 
         unsafe {
             std::env::set_var("AVALON_DHT_ENABLED", "0");
         }
-        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_none());
+        assert!(
+            DhtConfig::from_env("avalon-dev-local", identity::Keypair::generate_ed25519())
+                .unwrap()
+                .is_none()
+        );
 
         unsafe {
             std::env::remove_var("AVALON_DHT_ENABLED");
         }
+    }
+
+    #[test]
+    fn the_identity_exists_whether_or_not_the_dht_runs_and_follows_the_env_key() {
+        let _env = crate::test_env::guard();
+        unsafe {
+            std::env::set_var("AVALON_DHT_ENABLED", "false");
+            std::env::set_var("AVALON_LIBP2P_IDENTITY_KEY", "07".repeat(32));
+        }
+        let a = load_or_generate_identity_from_env().unwrap();
+        let b = load_or_generate_identity_from_env().unwrap();
+        assert_eq!(a.public().to_peer_id(), b.public().to_peer_id());
+        // The DHT being off does not stop the key from being handed on to the signer.
+        assert!(DhtConfig::from_env("net", a.clone()).unwrap().is_none());
+        assert!(crate::node_http::NodeSigner::new(&a, "net").is_some());
+
+        unsafe {
+            std::env::set_var("AVALON_LIBP2P_IDENTITY_KEY", "07".repeat(31));
+        }
+        assert!(matches!(
+            load_or_generate_identity_from_env(),
+            Err(IdentityLoadError::WrongLength(31))
+        ));
+        unsafe {
+            std::env::set_var("AVALON_LIBP2P_IDENTITY_KEY", "zz");
+        }
+        assert!(matches!(
+            load_or_generate_identity_from_env(),
+            Err(IdentityLoadError::InvalidHex(_))
+        ));
+        unsafe {
+            std::env::remove_var("AVALON_LIBP2P_IDENTITY_KEY");
+            std::env::remove_var("AVALON_DHT_ENABLED");
+        }
+        let fresh = load_or_generate_identity_from_env().unwrap();
+        assert_ne!(fresh.public().to_peer_id(), a.public().to_peer_id());
+    }
+
+    #[test]
+    fn dht_config_uses_the_identity_it_is_given() {
+        let _env = crate::test_env::guard();
+        unsafe {
+            std::env::remove_var("AVALON_DHT_ENABLED");
+        }
+        let key = identity::Keypair::generate_ed25519();
+        let config = DhtConfig::from_env("net", key.clone()).unwrap().unwrap();
+        assert_eq!(
+            config.identity.public().to_peer_id(),
+            key.public().to_peer_id()
+        );
     }
 }

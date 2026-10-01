@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use abuse_support::*;
 use avalon_server::dht::{self, DhtHandle};
+use avalon_server::node_auth::{require_node_auth, NodeAuth};
 use avalon_server::node_http::{p2p_base_url, NodeClient, RemotePeer, SHARED_PEER_ADDR};
 use avalon_server::nodes::PeerTable;
 use avalon_server::outbound_policy::OutboundPolicy;
@@ -49,7 +50,7 @@ fn random_peer() -> PeerId {
 async fn private_server(
     relay_addr: &Multiaddr,
     relay: &DhtHandle,
-    router: Router,
+    router: impl FnOnce(&PeerTable) -> Router,
 ) -> (DhtHandle, PeerTable, Multiaddr) {
     let peers = PeerTable::new();
     let node = dht::start(
@@ -65,7 +66,7 @@ async fn private_server(
     )
     .await;
     introduce(&peers, relay);
-    node.router_slot.set(router);
+    node.router_slot.set(router(&peers));
     let relayed = reserved_on(&node, relay.peer_id).await;
     (node, peers, relayed)
 }
@@ -86,7 +87,7 @@ async fn caller(target: PeerId, addrs: Vec<String>) -> (DhtHandle, PeerTable, No
     (node, peers, client)
 }
 
-fn echo_router(hits: Arc<AtomicUsize>) -> Router {
+fn echo_router(hits: Arc<AtomicUsize>, auth: Option<NodeAuth>) -> Router {
     let seen = hits.clone();
     Router::new()
         .route(
@@ -112,13 +113,19 @@ fn echo_router(hits: Arc<AtomicUsize>) -> Router {
                 }
             }),
         )
-        .route(
-            "/nodes/relay",
-            post(move || async move {
+        .route("/nodes/relay", {
+            let relay = post(move || async move {
                 hits.fetch_add(1, Ordering::SeqCst);
                 "bound"
-            }),
-        )
+            });
+            match auth {
+                Some(auth) => relay.layer(axum::middleware::from_fn_with_state(
+                    auth.route(1024),
+                    require_node_auth,
+                )),
+                None => relay,
+            }
+        })
 }
 
 // ---- impersonation ----
@@ -154,7 +161,8 @@ async fn libp2p_a_circuit_that_ends_at_another_peer_than_the_dialed_one_is_never
     }
     let (r, r_addr) = relay_node(tight_limits()).await;
     let e_hits = Arc::new(AtomicUsize::new(0));
-    let (e, _e_peers, e_relayed) = private_server(&r_addr, &r, echo_router(e_hits.clone())).await;
+    let (e, _e_peers, e_relayed) =
+        private_server(&r_addr, &r, |_| echo_router(e_hits.clone(), None)).await;
 
     // A swarm asked to reach V over a circuit that actually ends at E.
     let victim = random_peer();
@@ -213,7 +221,11 @@ async fn the_peer_behind_a_circuit_is_identified_by_its_own_handshake() {
     }
     let (r, r_addr) = relay_node(tight_limits()).await;
     let hits = Arc::new(AtomicUsize::new(0));
-    let (a, a_peers, a_relayed) = private_server(&r_addr, &r, echo_router(hits.clone())).await;
+    let (a, a_peers, a_relayed) = private_server(&r_addr, &r, |peers| {
+        let auth = NodeAuth::new(peers.clone(), NETWORK, None, None);
+        echo_router(hits.clone(), Some(auth))
+    })
+    .await;
     let (m, _m_peers, m_client) = caller(a.peer_id, vec![a_relayed.to_string()]).await;
 
     // A bound peer V, which M will try to pass itself off as.
@@ -223,8 +235,8 @@ async fn the_peer_behind_a_circuit_is_identified_by_its_own_handshake() {
     )
     .await;
     introduce(&a_peers, &victim_node);
-    assert!(a_peers.is_bound_libp2p_peer(&victim_node.peer_id));
-    assert!(!a_peers.is_bound_libp2p_peer(&m.peer_id));
+    assert!(a_peers.standing(&victim_node.peer_id));
+    assert!(!a_peers.standing(&m.peer_id));
 
     let res = m_client
         .get(format!("{}/nodes/peers", p2p_base_url(&a.peer_id)))

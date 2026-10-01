@@ -60,9 +60,10 @@ is reachable only through a relay, then hole punching makes up to three attempts
   cannot pass an inbound HTTP fetch. A node with a URL nobody can reach is not admitted by
   default, so it is found through gossip and confirmed over libp2p. A node with no
   `AVALON_NODE_URL` announces as `p2p://<peer id>` and is admitted with the check on, see
-  `url-less-admission` and `url-less-participation`. Such a node cannot call the write routes
-  `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors; the scenarios do
-  not cover them.
+  `url-less-admission` and `url-less-participation`. Such a node can call the routes
+  `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors (its stream is its
+  credential and its `p2p://` entry gives it standing), but those routes do not check scope yet;
+  the scenarios do not cover them.
 - **The url-less probe and trace report `direct`.** The node's own outbound connection to the seed
   carries them. A `relayed` or `traversed` path to a url-less node needs a peer it has no direct
   connection with, for example a second url-less node, and is not covered.

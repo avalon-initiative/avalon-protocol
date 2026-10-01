@@ -83,7 +83,11 @@ Each file has this shape:
   `x-avalon-node-auth` header carries an Ed25519 signature over
   `avalon-node-request-v1` and u32-BE length-prefixed method, path, sha256 of
   the body, network id, recipient and signer peer id, then the timestamp as
-  big-endian i64 and the 16 nonce bytes. `method` is the uppercase HTTP method
+  big-endian i64 and the 16 nonce bytes. The header also carries that body hash
+  as `bh` (64 lowercase hex, between `nonce` and `sig`): a receiver verifies the
+  signature over the message built from the header's own `bh` first, without
+  reading the body, and only then requires sha256(body) to equal `bh`
+  (`body_hash` otherwise, last in `checkOrder`). `method` is the uppercase HTTP method
   string; `path` is the raw wire request-target path (no query or fragment, no
   decoding or normalisation, so `%2F` stays `%2F`), and a non-HTTP stream form
   must sign exactly the same method and path strings. Signable paths start with

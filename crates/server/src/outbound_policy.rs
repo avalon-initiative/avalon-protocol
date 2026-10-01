@@ -25,10 +25,13 @@ use url::{Host, Url};
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// HTTP client for requests to other nodes: a peer that accepts the connection but never answers
+/// HTTP client for requests to other nodes, which follows no redirects and uses no proxy so a
+/// signed request never reaches a host other than the one named: a peer that accepts the connection but never answers
 /// costs one bounded attempt instead of stalling the caller.
 pub fn peer_client() -> reqwest::Client {
     reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .connect_timeout(PEER_CONNECT_TIMEOUT)
         .timeout(PEER_REQUEST_TIMEOUT)
         .build()

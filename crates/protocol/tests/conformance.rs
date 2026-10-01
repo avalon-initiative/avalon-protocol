@@ -509,7 +509,8 @@ fn witness_announce_matches_shared_vectors() {
 fn node_request_matches_shared_vectors() {
     use avalon_protocol::node_request::{
         encode_node_request_header, node_request_signing_message, parse_node_request_header,
-        sign_node_request, verify_node_request_header, NodeRequestTarget,
+        sign_node_request, verify_node_request_header, verify_node_request_header_head,
+        NodeRequestTarget,
     };
     use sha2::{Digest, Sha256};
 
@@ -558,6 +559,17 @@ fn node_request_matches_shared_vectors() {
         );
         let code = result.as_ref().err().map(|e| e.code());
         assert_eq!(code, expected["error"].as_str(), "{name}");
+        // Without the body only the body_hash rejection disappears.
+        let head_only = verify_node_request_header_head(
+            header,
+            &(&target).into(),
+            &accepted,
+            input["now"].as_i64().unwrap(),
+            input["maxSkewSeconds"].as_i64().unwrap(),
+        );
+        let head_code = head_only.as_ref().err().map(|e| e.code());
+        let want_head = expected["error"].as_str().filter(|c| *c != "body_hash");
+        assert_eq!(head_code, want_head, "{name}: head only");
         let Some(recipient) = input.get("signingRecipient").and_then(|r| r.as_str()) else {
             continue;
         };

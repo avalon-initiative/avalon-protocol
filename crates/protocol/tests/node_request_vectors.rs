@@ -182,11 +182,43 @@ fn build() -> Value {
     v.push(spec("rejected: timestamp 61 s ahead", Some("future")).signed("node-b", NOW + 61));
 
     let mut s = spec(
-        "rejected: body differs from the signed body",
-        Some("bad_signature"),
+        "rejected: body differs from the signed body hash",
+        Some("body_hash"),
     );
     s.body = b"{\"amount\":6}".to_vec();
     v.push(s.header(h.clone()));
+    let mut s = spec(
+        "rejected: empty body where a body was signed",
+        Some("body_hash"),
+    );
+    s.body = vec![];
+    v.push(s.header(h.clone()));
+    // The signature is checked before the body: a bad signature wins over a wrong body.
+    let sig_at0 = h.find("sig=").unwrap() + 4;
+    let mut bad_sig = h.clone();
+    bad_sig.replace_range(
+        sig_at0..sig_at0 + 1,
+        if &h[sig_at0..sig_at0 + 1] == "0" {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    let mut s = spec(
+        "rejected: bad signature and wrong body report the signature",
+        Some("bad_signature"),
+    );
+    s.body = b"{\"amount\":6}".to_vec();
+    v.push(s.header(bad_sig));
+    // A body hash swapped in the header no longer matches what was signed.
+    let mut a = auth_of(&h);
+    a.body_hash = Sha256::digest(b"{\"amount\":6}").into();
+    let mut s = spec(
+        "rejected: body hash in the header differs from the signed hash",
+        Some("bad_signature"),
+    );
+    s.body = b"{\"amount\":6}".to_vec();
+    v.push(s.header(encode_node_request_header(&a)));
     let mut s = spec("rejected: method differs", Some("bad_signature"));
     s.method = "PUT".into();
     v.push(s.header(h.clone()));
@@ -325,6 +357,7 @@ fn build() -> Value {
     assert_eq!(padded.len(), NODE_REQUEST_MAX_HEADER_LEN + 1);
     let ts = format!("ts={NOW}");
     let sig = hex::encode(auth_of(&h).signature);
+    let bh = hex::encode(auth_of(&h).body_hash);
     let malformed: Vec<(&str, String)> = vec![
         ("empty header", String::new()),
         ("wrong version", h.replacen("v1;", "v2;", 1)),
@@ -363,6 +396,12 @@ fn build() -> Value {
             "peer id with a non-alphanumeric character",
             h.replace(PEER, "peer-id"),
         ),
+        (
+            "missing body hash field",
+            h.replacen(&format!("; bh={bh}"), "", 1),
+        ),
+        ("uppercase body hash", h.replace(&bh, &bh.to_uppercase())),
+        ("short body hash", h.replace(&bh, &bh[2..])),
         ("header one byte over 512", padded),
     ];
     for (name, header) in malformed {
@@ -385,21 +424,22 @@ fn build() -> Value {
 
     json!({
         "$schema": "./SCHEMA.md#node-request",
-        "description": "Node-to-node request credential (avalon_protocol::node_request::verify_node_request_header). A node signs one request with its Ed25519 key over avalon-node-request-v1, then u32-BE length-prefixed method, raw wire path (no query, no decoding), sha256 of the body, network id, recipient and signer peer id, then the timestamp as unix seconds big-endian i64, then the 16 nonce bytes. The credential travels in the x-avalon-node-auth header as 'v1; peer=<peer id>; key=<64 lowercase hex>; ts=<decimal unix seconds>; nonce=<32 lowercase hex>; sig=<128 lowercase hex>', parsed strictly: exactly those fields in that order separated by '; ', ASCII, at most 512 bytes, no signed or leading-zero timestamp, peer id [A-Za-z0-9]{1,128}. Signable paths start with '/', use only bytes 0x21-0x7e other than backslash, '?' and '#', and contain no '//' and no '.' or '..' segment; percent-encoding is signed as the raw characters. Method is uppercase ASCII (at most 16), network id and every recipient are non-empty (at most 256), the whole accepted-recipient list is validated before any signature check, and the skew parameter must not be negative. The recipient and network are not in the header: the verifier tries each accepted recipient, so a signature for another recipient or network is bad_signature. Signature verification is strict Ed25519 (small-order keys and S >= L are rejected). Every vector with a non-null expected.error must be rejected with exactly that code; when several apply the first in checkOrder wins. Vectors with signingRecipient carry messageHex, the exact message that header would be verified over for that target; vectors with signedBySeed true are reproduced byte for byte by signing with signingKeySeedHex, peerId and the header's own timestamp and nonce. Replay protection is the receiver's job and is not covered: key a cache on (peer id, nonce), keep entries at least twice the skew, insert only after signature, PeerId-from-key and standing checks pass; the receiver must also derive the libp2p PeerId from the key and compare it to peer. The 512-byte cap is not separately observable for valid fields (the longest valid header is under 512 bytes), so a port may enforce it as an early bound. signerPeerId is a fixed placeholder string, not a real libp2p id.",
+        "description": "Node-to-node request credential (avalon_protocol::node_request::verify_node_request_header). A node signs one request with its Ed25519 key over avalon-node-request-v1, then u32-BE length-prefixed method, raw wire path (no query, no decoding), sha256 of the body, network id, recipient and signer peer id, then the timestamp as unix seconds big-endian i64, then the 16 nonce bytes. The credential travels in the x-avalon-node-auth header as 'v1; peer=<peer id>; key=<64 lowercase hex>; ts=<decimal unix seconds>; nonce=<32 lowercase hex>; bh=<64 lowercase hex sha256 of the body>; sig=<128 lowercase hex>', parsed strictly: exactly those fields in that order separated by '; ', ASCII, at most 512 bytes, no signed or leading-zero timestamp, peer id [A-Za-z0-9]{1,128}. Signable paths start with '/', use only bytes 0x21-0x7e other than backslash, '?' and '#', and contain no '//' and no '.' or '..' segment; percent-encoding is signed as the raw characters. Method is uppercase ASCII (at most 16), network id and every recipient are non-empty (at most 256), the whole accepted-recipient list is validated before any signature check, and the skew parameter must not be negative. The recipient and network are not in the header: the verifier tries each accepted recipient, so a signature for another recipient or network is bad_signature. Signature verification is strict Ed25519 (small-order keys and S >= L are rejected). The signature is verified over the message built from the header's own bh before the body is looked at, so a receiver can verify it without reading the body; only then must it require sha256(body) to equal bh, else body_hash. Every vector with a non-null expected.error must be rejected with exactly that code; when several apply the first in checkOrder wins. Vectors with signingRecipient carry messageHex, the exact message that header would be verified over for that target; vectors with signedBySeed true are reproduced byte for byte by signing with signingKeySeedHex, peerId and the header's own timestamp and nonce. Replay protection is the receiver's job and is not covered: key a cache on (peer id, nonce), keep entries at least twice the skew, insert only after signature, PeerId-from-key and standing checks pass; the receiver must also derive the libp2p PeerId from the key and compare it to peer. The 512-byte cap is not separately observable for valid fields (the longest valid header is under 512 bytes), so a port may enforce it as an early bound. signerPeerId is a fixed placeholder string, not a real libp2p id.",
         "supportedIn": [],
         "notSupported": {
             "rust": "the Rust SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them.",
             "csharp": "the C# SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them.",
             "typescript": "the TypeScript SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them."
         },
-        "checkOrder": ["malformed", "invalid_request", "stale", "future", "invalid_key", "bad_signature"],
+        "checkOrder": ["malformed", "invalid_request", "stale", "future", "invalid_key", "bad_signature", "body_hash"],
         "rejectionCodes": {
             "malformed": "the header text is not in the exact v1 form",
             "invalid_request": "method, path, network id, recipient list, peer id or skew parameter cannot be used",
             "stale": "timestamp older than now minus the skew",
             "future": "timestamp later than now plus the skew",
             "invalid_key": "public key is not a valid Ed25519 point",
-            "bad_signature": "strict signature check failed for every accepted recipient"
+            "bad_signature": "strict signature check failed for every accepted recipient",
+            "body_hash": "the signature is valid but sha256 of the body is not the header's bh"
         },
         "signingKeySeedHex": hex::encode([0x5a; 32]),
         "signingPublicKeyHex": kh,

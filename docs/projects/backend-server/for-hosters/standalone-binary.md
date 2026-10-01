@@ -370,13 +370,84 @@ usually with `connectivity` `relayed` or `outbound_only`. The node needs one rea
 `AVALON_BOOTSTRAP_PEERS` to start from. See
 [`running-without-an-open-port.md`](running-without-an-open-port.md).
 
-Limitations: a `p2p://` peer proves only that it holds its key, so it cannot call the routes that
-inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat`,
-`/mirror/notify`); neighbors refuse its pushes there until it has real credentials, and it
+Limitations: a `p2p://` peer can call the routes that carry data (`/nodes/relay`,
+`/nodes/replicate-chat`, `/mirror/notify`) because its handshake authenticates it, but those
+routes do not yet check what a given node may push, so any node with standing can use them. It
 receives no chat or mirror pushes of its own because its URL is not advertised for interest
 lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
 evicted first. Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. A
 fronting gateway for such nodes is planned, not implemented.
+
+## Node-to-node write routes
+
+`POST /nodes/relay`, `POST /nodes/replicate-chat` and `POST /mirror/notify` require the caller to
+be a known node. Over a libp2p stream the handshake identifies the caller; over HTTP the sender
+signs each request with its node identity key (`x-avalon-node-auth`). The receiver accepts it only
+from a peer it holds a bound entry for, within 60 seconds of its own clock, once per nonce.
+
+- Every node has an identity key, with the DHT on or off. Set `AVALON_LIBP2P_IDENTITY_KEY` on a
+  long-lived node. An ephemeral identity changes on restart; peers keep the old id until the
+  node's next announce, and requests addressed to the new id are refused with 401 until then.
+- Delivery needs the sender to be in the receiver's peer table: a first contact is refused with
+  403 until the sender has announced. The mirror poll fallback still covers `/mirror/notify`.
+- Each key may make `AVALON_NODE_AUTH_RATE_PER_MINUTE` requests a minute (default 3000, the same
+  as the per-IP limit these routes were under). A busy node fanning out to many receivers needs
+  headroom, so raise it before lowering it; a 429 drops that relay event.
+- The replay cache is in process memory. A restart, replicas sharing one identity key, or the
+  clock stepping forward re-opens up to the 60 second window for a captured request.
+- The replay cache keeps a 128-bit truncated SHA-256 of (signer id, nonce) per live nonce for
+  121 seconds, and never evicts a live one; a hash collision could only reject a fresh nonce
+  as a replay (about 2^-128 per pair). It is sized for `AVALON_NODE_MAX_KNOWN_PEERS` standing
+  keys (the peer table bounds them) at the key budget plus slack, capped at 1,048,576 nonces.
+  Measured with a counting allocator at steady state: about 66 bytes per nonce, 69 MB at the
+  cap (growth transients while the tables resize can briefly reach about 1.5 times that), and
+  the memory is released once the cache empties. When it is full of live nonces a new request is
+  refused with 503 `node_auth_replay_cache_full` until entries expire. Only keys with standing
+  can cause that, and it takes about 175 of them sending 3000 requests a minute each (about 88
+  at the worst boundary burst); self-announced `p2p://` entries are capped at 64 per node, so
+  at least 24 http-bound keys are needed besides. Write-route delivery is best effort and has
+  poll fallbacks, so a refusal is a delay, not lost correctness.
+- The signature is verified before the body is read: the header carries the body's SHA-256
+  and the signature covers it. A stranger, including one who knows a standing peer's public id,
+  is refused at the signature stage after one Ed25519 verification at most and no body is read.
+- The nonce is consumed when the body read begins, so a captured, unused header is worth one
+  lost request: every later use is a cheap 401 replay that costs the real sender no budget, no
+  failure count and no read slot. A body that never arrives or does not match burns its nonce;
+  senders use a fresh nonce per request.
+- Standing is free until per-route scope checks exist (a self-announced `p2p://` entry
+  qualifies), so a key with standing can make the node read a body, bounded by: the route cap
+  (64 KiB, 64 KiB, 1 KiB); a total read timeout of 5 seconds
+  (`AVALON_NODE_AUTH_BODY_TIMEOUT_MS`, at most 30000) and an idle timeout of 1.5 seconds
+  without a byte (`AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS`, at most 10000); at most 16 reads in
+  flight per key (`AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER`, at most 64); the key's request
+  budget, which every read spends; its failure budget (30 units a minute: a wrong or oversize
+  body or a failed read costs 1, a timeout 10, so a key gets about 3 timeouts a minute before
+  429); and 64 reads at once for the whole node (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`,
+  excess answered 503 `node_auth_busy`). A quarter of those stages is reserved for keys that
+  completed a read in the last 10 minutes, so a flood of fresh slow keys cannot take them.
+  Residual: a determined set of hundreds of standing keys, each earning the reserve and then
+  timing out, can still degrade the stage, and standing is free until scope checks land. Stream
+  requests take no read stage. A connection reset mid-body is answered 400 and costs the key one
+  unit, not the source address.
+- A source address that causes more than 30 expensive failures a minute
+  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`: bad signature, wrong body hash, oversize body,
+  body timeout; IPv6 counted per /64) has further failures answered 429 without counting. It never refuses a
+  valid credential, because behind a reverse proxy not listed in `AVALON_TRUSTED_PROXIES`
+  every client shares the proxy's address; the node logs a startup warning in that setup.
+  Configure `AVALON_TRUSTED_PROXIES` so the per-IP limits see real clients. A refused-for-load
+  request is a 429 or 503 the sender retries or drops; the per-IP limit, the request timeout
+  and the per-route caps still apply. Looking up standing scans the peer table (at most
+  `AVALON_NODE_MAX_KNOWN_PEERS` entries) once per request.
+- A 403 for a claimed id means it has no bound entry, a 401 means the credential is bad; this
+  reveals whether an id is a known node, which is not secret. The budget is a fixed one-minute
+  window, so a key can burst to twice its rate across a minute boundary.
+- Peer URLs with a path prefix or a trailing path are not supported for these routes; such a
+  request is sent unsigned and refused with 401.
+- Until per-route scope checks exist, any node with standing may call these routes, and a
+  `p2p://` node gets standing by announcing over a stream with any key.
+- Redirects and system proxies are not used for node-to-node requests, so a signed request is
+  never re-sent to another host. A peer URL behind an http-to-https redirect gets the 3xx back
+  (logged as a warning naming the URL and the `Location`); configure the final https URL.
 
 ## Running under systemd
 

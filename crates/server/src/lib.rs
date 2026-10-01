@@ -58,6 +58,7 @@ pub mod interest;
 pub mod internal_role;
 pub mod issuer_registration;
 pub mod known_list;
+pub(crate) mod log_throttle;
 pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
@@ -65,6 +66,7 @@ pub mod mirrored_shard_keys;
 pub mod name_claims;
 pub mod neighbors;
 pub mod network_coordinates;
+pub mod node_auth;
 pub mod node_http;
 pub mod node_keys;
 pub mod nodes;
@@ -257,6 +259,38 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
     )
 }
 
+/// The node-credential check for this node, shared by every route that needs one.
+fn node_auth_for(state: &AppState) -> node_auth::NodeAuth {
+    node_auth::NodeAuth::new(
+        state.peers.clone(),
+        state.chain.network_id(),
+        state.own_libp2p_peer_id.as_deref(),
+        state::http_only(state.own_base_url.as_deref()),
+    )
+}
+
+/// Layer that requires a node credential on one route, bounding its body to `max_body_bytes`.
+fn node_auth_layer(
+    auth: &node_auth::NodeAuth,
+    max_body_bytes: usize,
+) -> impl tower::Layer<
+    axum::routing::Route,
+    Service = impl tower::Service<
+        axum::extract::Request,
+        Response = axum::response::Response,
+        Error = std::convert::Infallible,
+        Future = impl Send,
+    > + Clone
+                  + Send
+                  + Sync
+                  + 'static,
+> + Clone
+       + Send
+       + Sync
+       + 'static {
+    axum::middleware::from_fn_with_state(auth.route(max_body_bytes), node_auth::require_node_auth)
+}
+
 /// The route table a genuinely standalone Settlement node
 /// serves — `/ledger/*` (read+write, `crate::settlement`), `/nodes/*`
 /// (peer discovery, status, admin log-level — node-mesh plumbing, not
@@ -354,6 +388,7 @@ fn apply_common_layers(
 /// Settlement node — see [`router_settlement_only`]'s own doc comment for
 /// what's in/out and why.
 fn settlement_only_routes(state: AppState) -> Router {
+    let node_auth = node_auth_for(&state);
     Router::new()
         // Issue #211: public, unauthenticated mirror-facing transparency-log
         // reads.
@@ -402,13 +437,17 @@ fn settlement_only_routes(state: AppState) -> Router {
         // Issue #596: push-based mirror-sync notification.
         .route(
             "/mirror/notify",
-            post(mirror_push::notify).layer(node_coordination_body_limit()),
+            post(mirror_push::notify).layer(node_auth_layer(
+                &node_auth,
+                node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES,
+            )),
         )
         .merge(topology_access::mount(Router::new()))
         .with_state(state)
 }
 
 fn full_routes(state: AppState) -> Router {
+    let node_auth = node_auth_for(&state);
     Router::new()
         .route("/identities/register/start", post(handlers::register_start))
         .route(
@@ -915,21 +954,31 @@ fn full_routes(state: AppState) -> Router {
                 .layer(node_coordination_body_limit()),
         )
         // Issue #539: one-hop live realtime event relay across nodes,
-        // built on the peer table above — see `crate::realtime_relay`.
-        .route("/nodes/relay", post(realtime_relay::relay_handler))
+        // built on the peer table above — see `crate::realtime_relay`. The three
+        // node write routes carry `crate::node_auth::require_node_auth`.
+        .route(
+            "/nodes/relay",
+            post(realtime_relay::relay_handler)
+                .layer(node_auth_layer(&node_auth, node_auth::RELAY_MAX_BODY_BYTES)),
+        )
         // Issue #596: push-based mirror-sync notification — see
-        // `crate::mirror_push`. No auth, same public posture as the
-        // `/ledger/*` block above: the body is never trusted for anything
+        // `crate::mirror_push`. The body is never trusted for anything
         // beyond waking this node's own mirror-watcher loop early.
         .route(
             "/mirror/notify",
-            post(mirror_push::notify).layer(node_coordination_body_limit()),
+            post(mirror_push::notify).layer(node_auth_layer(
+                &node_auth,
+                node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES,
+            )),
         )
         // Issue #540: async at-rest chat/conversation replication — see
         // `crate::chat_replication`.
         .route(
             "/nodes/replicate-chat",
-            post(chat_replication::replicate_chat_handler),
+            post(chat_replication::replicate_chat_handler).layer(node_auth_layer(
+                &node_auth,
+                node_auth::REPLICATE_CHAT_MAX_BODY_BYTES,
+            )),
         )
         // Operator-internal, node-to-node RPC (Node Role Separation) —
         // see `crate::internal_role`'s own module
@@ -1023,5 +1072,250 @@ mod http_config_tests {
             std::env::remove_var("AVALON_HTTP_HEADER_READ_TIMEOUT_SECS");
             std::env::remove_var("AVALON_HTTP_MAX_BODY_BYTES");
         }
+    }
+}
+
+#[cfg(test)]
+mod node_auth_wiring {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn lazy_state() -> AppState {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@127.0.0.1:1/none")
+            .expect("a lazy pool never connects while it is built");
+        let webauthn = std::sync::Arc::new(
+            auth::build_webauthn("localhost", "http://localhost:8080").expect("webauthn"),
+        );
+        AppState {
+            chain: avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test"),
+            indexer: state::IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(
+                pool.clone(),
+            )),
+            pool,
+            webauthn,
+            presence: presence::PresenceStore::from_env(),
+            chat: chat::ChatBus::new(),
+            settlement_submit_key: None,
+            peers: nodes::PeerTable::new(),
+            managed_hosting_verify_key: None,
+            known_shards: None,
+            remote_submit_status: None,
+            own_shard_id: "core".to_string(),
+            shard_mirror_sources: settlement::ShardMirrorSources::default(),
+            interest: interest::InterestRegistry::new().0,
+            dht_commands: None,
+            reachability: reachability::ReachabilityHandle::unknown(),
+            own_base_url: None,
+            own_libp2p_peer_id: Some("12D3KooWTestOwnPeerId".to_string()),
+            interest_redis_fast_path: None,
+            principal_limiter: principal_limits::PrincipalLimiter::from_env(None),
+            mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+            host_metrics: resources::HostMetricsSampler::new(Vec::new()),
+            shard_registry: nodes::ShardRegistry::new(),
+            head_gossip: nodes::HeadGossipTracker::new(),
+            admin_token: None,
+            log_reload_handle: tracing_subscriber::reload::Layer::new(
+                tracing_subscriber::EnvFilter::new("info"),
+            )
+            .1,
+            internal_role_key: None,
+            mirror_confirmations: replication::MirrorConfirmationRegistry::new(),
+            replication_gate: replication::ReplicationGateConfig::from_env(),
+            realtime_remote_url: None,
+            known_list: known_list::KnownListHandle::load_or_new(
+                known_list::KnownListConfig::default(),
+                None,
+            ),
+            own_witness: None,
+        }
+    }
+
+    fn with_addr(req: &mut Request<Body>) {
+        let addr: std::net::SocketAddr = "203.0.113.5:1234".parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+    }
+
+    async fn post(app: &Router, path: &str, body: Vec<u8>) -> StatusCode {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .body(Body::from(body))
+            .unwrap();
+        with_addr(&mut req);
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    /// Without a credential every guarded route answers 401, and the per-route limits
+    /// are the real ones: a valid-looking header cannot make an oversized body get read.
+    #[tokio::test]
+    async fn the_write_routes_are_guarded_in_both_route_tables() {
+        let full = router(lazy_state(), None);
+        let settlement = router_settlement_only(lazy_state(), None);
+        for path in node_auth::CREDENTIAL_PATHS {
+            assert_eq!(
+                post(&full, path, vec![]).await,
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
+        // The settlement-only table serves only the mirror push of the three.
+        assert_eq!(
+            post(&settlement, "/mirror/notify", vec![]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        for path in ["/nodes/relay", "/nodes/replicate-chat"] {
+            assert_eq!(
+                post(&settlement, path, vec![]).await,
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+        // An ungated route in the same table is not asked for a node credential.
+        let res = full
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/nodes/peers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_real_per_route_body_limits_apply_over_a_stream() {
+        let node = libp2p::PeerId::random();
+        let limits = [
+            ("/nodes/relay", node_auth::RELAY_MAX_BODY_BYTES),
+            (
+                "/nodes/replicate-chat",
+                node_auth::REPLICATE_CHAT_MAX_BODY_BYTES,
+            ),
+            ("/mirror/notify", node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES),
+        ];
+        assert_eq!(limits.map(|(_, l)| l), [64 * 1024, 64 * 1024, 1024]);
+        for table in 0..2 {
+            let state = lazy_state();
+            state.peers.upsert(nodes::PeerInfo {
+                base_url: node_http::p2p_base_url(&node),
+                roles: vec![],
+                protocol_version: "0.1.0".into(),
+                network_id: "avalon-test".into(),
+                last_announced_at: time::OffsetDateTime::now_utc(),
+                libp2p_peer_id: Some(node.to_string()),
+                libp2p_listen_addrs: vec![],
+                witness: None,
+                connectivity: None,
+                identity_bound: true,
+            });
+            let app = if table == 0 {
+                router(state, None)
+            } else {
+                router_settlement_only(state, None)
+            };
+            for (path, limit) in limits {
+                if table == 1 && path != "/mirror/notify" {
+                    continue;
+                }
+                let over = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::from(vec![b'x'; limit + 1]));
+                let mut over = over.unwrap();
+                over.extensions_mut().insert(node_http::RemotePeer(node));
+                with_addr(&mut over);
+                let status = app.clone().oneshot(over).await.unwrap().status();
+                assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+                // At the limit the body is accepted by the guard (then it is not valid JSON).
+                let mut at = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::from(vec![b'x'; limit]))
+                    .unwrap();
+                at.extensions_mut().insert(node_http::RemotePeer(node));
+                with_addr(&mut at);
+                let status = app.clone().oneshot(at).await.unwrap().status();
+                assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+                assert_ne!(status, StatusCode::UNAUTHORIZED, "{path}");
+                assert_ne!(status, StatusCode::FORBIDDEN, "{path}");
+            }
+        }
+    }
+
+    /// A nonce used on one guarded route is refused on another: the routes share one cache.
+    #[tokio::test]
+    async fn the_guarded_routes_share_one_replay_cache() {
+        use avalon_protocol::node_request::{
+            encode_node_request_header, sign_node_request, NodeRequestTarget,
+        };
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let id = libp2p::PeerId::from(key.public());
+        let state = lazy_state();
+        state.peers.upsert(nodes::PeerInfo {
+            base_url: "http://signer.test".into(),
+            roles: vec![],
+            protocol_version: "0.1.0".into(),
+            network_id: "avalon-test".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(id.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: true,
+        });
+        let app = router(state, None);
+        let ed = key.clone().try_into_ed25519().unwrap();
+        let seed: [u8; 32] = ed.secret().as_ref().try_into().unwrap();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let send = |path: &'static str, nonce: [u8; 16]| {
+            let target = NodeRequestTarget {
+                method: "POST",
+                path,
+                body: b"{}",
+                network_id: "avalon-test",
+            };
+            let auth = sign_node_request(
+                &signing,
+                &id.to_string(),
+                &target,
+                "12D3KooWTestOwnPeerId",
+                now,
+                nonce,
+            )
+            .unwrap();
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("x-avalon-node-auth", encode_node_request_header(&auth))
+                .body(Body::from("{}"))
+                .unwrap();
+            with_addr(&mut req);
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        // The first use passes the guard (the handler then rejects the body), the second does not.
+        let first = send("/nodes/relay", [5; 16]).await;
+        assert_ne!(first, StatusCode::UNAUTHORIZED);
+        assert_ne!(first, StatusCode::FORBIDDEN);
+        assert_eq!(
+            send("/mirror/notify", [5; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send("/nodes/replicate-chat", [5; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        // A fresh nonce passes on the other route.
+        assert_ne!(
+            send("/mirror/notify", [6; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

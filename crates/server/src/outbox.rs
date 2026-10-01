@@ -322,6 +322,8 @@ impl RemoteSubmitConfig {
         Some(Self {
             client: crate::node_http::NodeClient::from(
                 reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
                     .timeout(REMOTE_SETTLEMENT_TIMEOUT)
                     .build()
                     .expect("reqwest client with only a timeout set should always build"),
