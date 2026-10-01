@@ -44,6 +44,7 @@ pub mod integrators;
 pub mod interest_claim;
 pub mod known_list;
 pub mod network_trust;
+pub mod node_request;
 pub mod permissions;
 pub mod revocation;
 pub mod shard;

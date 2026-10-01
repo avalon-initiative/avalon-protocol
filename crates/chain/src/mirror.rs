@@ -953,7 +953,9 @@ pub struct MirrorProgress {
     pub verified_count: i64,
 }
 
-fn mirrored_entry_from_row(row: sqlx::postgres::PgRow) -> Result<MirroredEntry, SettlementError> {
+pub fn mirrored_entry_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<MirroredEntry, SettlementError> {
     let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
     Ok(MirroredEntry {
         source_url: row.try_get("source_url").map_err(get)?,

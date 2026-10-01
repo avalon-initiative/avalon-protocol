@@ -163,7 +163,12 @@ pub struct Raw {
 
 /// A node with no listener that can only reach others through relays; a fresh keypair each call.
 pub fn raw_swarm() -> Swarm<Raw> {
-    SwarmBuilder::with_new_identity()
+    raw_swarm_with(identity::Keypair::generate_ed25519())
+}
+
+/// A bare client swarm with the given identity, so one keypair can hold several connections.
+pub fn raw_swarm_with(key: identity::Keypair) -> Swarm<Raw> {
+    SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),

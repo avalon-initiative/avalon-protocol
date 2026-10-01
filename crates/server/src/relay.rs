@@ -90,12 +90,14 @@ impl RelayServerSettings {
     /// The libp2p relay configuration these limits describe; libp2p's default per-peer and
     /// per-IP request rate limiters stay in place.
     pub fn libp2p_config(&self) -> relay::Config {
+        // libp2p-relay denies a peer only when its count is strictly above the per-peer limit, so
+        // the library value is one less; 0 there still allows exactly one, and a configured 0 stays 0.
         relay::Config {
             max_reservations: self.max_reservations,
-            max_reservations_per_peer: self.max_reservations_per_peer,
+            max_reservations_per_peer: self.max_reservations_per_peer.saturating_sub(1),
             reservation_duration: self.reservation_duration,
             max_circuits: self.max_circuits,
-            max_circuits_per_peer: self.max_circuits_per_peer,
+            max_circuits_per_peer: self.max_circuits_per_peer.saturating_sub(1),
             max_circuit_duration: self.max_circuit_duration,
             max_circuit_bytes: self.max_circuit_bytes,
             ..relay::Config::default()

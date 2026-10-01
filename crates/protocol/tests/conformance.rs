@@ -506,6 +506,95 @@ fn witness_announce_matches_shared_vectors() {
 }
 
 #[test]
+fn node_request_matches_shared_vectors() {
+    use avalon_protocol::node_request::{
+        encode_node_request_header, node_request_signing_message, parse_node_request_header,
+        sign_node_request, verify_node_request_header, NodeRequestTarget,
+    };
+    use sha2::{Digest, Sha256};
+
+    let doc = load("node-request.json");
+    let key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(key.verifying_key().to_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap()
+    );
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let body = hex::decode(input["bodyHex"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            hex::encode(Sha256::digest(&body)),
+            input["bodySha256Hex"].as_str().unwrap(),
+            "{name}: body hash"
+        );
+        let target = NodeRequestTarget {
+            method: input["method"].as_str().unwrap(),
+            path: input["path"].as_str().unwrap(),
+            body: &body,
+            network_id: input["networkId"].as_str().unwrap(),
+        };
+        let accepted: Vec<&str> = input["acceptedRecipients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        let header = input["header"].as_str().unwrap();
+        let result = verify_node_request_header(
+            header,
+            &target,
+            &accepted,
+            input["now"].as_i64().unwrap(),
+            input["maxSkewSeconds"].as_i64().unwrap(),
+        );
+        let expected = &v["expected"];
+        assert_eq!(
+            result.is_ok(),
+            expected["accepted"].as_bool().unwrap(),
+            "{name}"
+        );
+        let code = result.as_ref().err().map(|e| e.code());
+        assert_eq!(code, expected["error"].as_str(), "{name}");
+        let Some(recipient) = input.get("signingRecipient").and_then(|r| r.as_str()) else {
+            continue;
+        };
+        let auth = parse_node_request_header(header).unwrap();
+        let message = node_request_signing_message(
+            &target,
+            recipient,
+            &auth.peer_id,
+            auth.timestamp,
+            &auth.nonce,
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode(message),
+            input["messageHex"].as_str().unwrap(),
+            "{name}: signed message bytes"
+        );
+        if input["signedBySeed"].as_bool().unwrap() {
+            let signed = sign_node_request(
+                &key,
+                &auth.peer_id,
+                &target,
+                recipient,
+                auth.timestamp,
+                auth.nonce,
+            )
+            .unwrap();
+            assert_eq!(
+                encode_node_request_header(&signed),
+                header,
+                "{name}: header"
+            );
+        }
+    }
+}
+
+#[test]
 fn known_list_selection_matches_shared_vectors() {
     use avalon_protocol::client_known_list::{
         diversity_prefix_for_url, select_known_list, Candidate,

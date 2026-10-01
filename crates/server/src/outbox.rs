@@ -471,18 +471,28 @@ async fn drain_once(
     result
 }
 
+/// Oldest pending rows first; `seq` orders the rows of one transaction, which
+/// all share the same `enqueued_at`.
+async fn pending_rows(
+    conn: &mut sqlx::PgConnection,
+    limit: i64,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    sqlx::query(
+        "SELECT id, event FROM protocol_outbox WHERE committed_at IS NULL \
+         ORDER BY enqueued_at, seq LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(conn)
+    .await
+}
+
 async fn drain_locked(
     conn: &mut sqlx::PgConnection,
     chain: &PostgresSettlementProvider,
     remote: Option<&RemoteSubmitConfig>,
     mirror_push: Option<&crate::mirror_push::MirrorPushConfig>,
 ) -> Result<(), sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT id, event FROM protocol_outbox WHERE committed_at IS NULL ORDER BY enqueued_at LIMIT $1",
-    )
-    .bind(DRAIN_BATCH_SIZE)
-    .fetch_all(&mut *conn)
-    .await?;
+    let rows = pending_rows(&mut *conn, DRAIN_BATCH_SIZE).await?;
 
     // Grouped by shard, not one flat list — a protocol event
     // is never its own settlement action, but two different shards'
@@ -1120,5 +1130,67 @@ mod tests {
             failing[0].1.since, first_since,
             "since must track when the outage started, not this call's own timestamp"
         );
+    }
+
+    /// The rows of one transaction share `enqueued_at`; the drain must still
+    /// return them in enqueue order. Index scans are disabled and the first
+    /// row is rewritten so only the `seq` tiebreaker can keep the order.
+    #[tokio::test]
+    #[ignore]
+    async fn rows_enqueued_in_one_transaction_drain_in_enqueue_order() {
+        avalon_devenv::load();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres — is it reachable?");
+
+        let actor = Uuid::new_v4();
+        let mut ids = Vec::new();
+        let mut tx = pool.begin().await.unwrap();
+        for kind in [
+            "identity.created",
+            "identity.passkey_registered",
+            "identity.signing_key_added",
+        ] {
+            let event = ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: kind.to_string(),
+                issuer: GlobalId::new("identity", &actor.to_string(), "self", "t"),
+                subject: GlobalId::new("identity", &actor.to_string(), "self", "t"),
+                payload: serde_json::json!({}),
+                timestamp: OffsetDateTime::now_utc(),
+                version: 1,
+                identity_chain: None,
+            };
+            ids.push(event.id);
+            enqueue(&mut tx, &event).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("UPDATE protocol_outbox SET event = event || '{}'::jsonb WHERE (event->>'id')::uuid = $1")
+            .bind(ids[0])
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("SET enable_indexscan = off")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("SET enable_bitmapscan = off")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let rows = pending_rows(&mut conn, 1000).await.unwrap();
+        let drained: Vec<Uuid> = rows
+            .iter()
+            .map(|r| r.try_get::<serde_json::Value, _>("event").unwrap())
+            .filter_map(|v| v["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()))
+            .filter(|id| ids.contains(id))
+            .collect();
+        assert_eq!(drained, ids);
     }
 }
