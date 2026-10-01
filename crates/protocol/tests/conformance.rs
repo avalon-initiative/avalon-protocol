@@ -435,7 +435,7 @@ fn identity_chain_matches_shared_vectors() {
             .iter()
             .map(|e| ChainedEvent {
                 seq: e["seq"].as_u64().unwrap(),
-                prev_hash: e["prevLabel"].as_str().map(&hash_of),
+                prev_hash: e["prevLabel"].as_str().map(hash_of),
                 event_hash: hash_from_hex(e["hashHex"].as_str().unwrap()),
                 timestamp: OffsetDateTime::UNIX_EPOCH
                     + time::Duration::seconds(e["timestampSeconds"].as_i64().unwrap()),
