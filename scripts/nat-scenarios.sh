@@ -238,6 +238,7 @@ wait_json() {
     sleep 2
   done
   echo "    timed out after ${WAIT}s waiting for: $what" >&2
+  "$@" | jq -c '(.peers // .known // [])[0:6] | map({base_url, connectivity})' >&2
   return 1
 }
 

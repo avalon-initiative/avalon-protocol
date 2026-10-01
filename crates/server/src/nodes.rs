@@ -2363,9 +2363,11 @@ pub async fn run_worker(
                 match measured(
                     &neighbors,
                     peer,
-                    announce_to(
+                    announce_to_peer(
                         &client,
-                        &announce_target(&peers, peer, own_base_url),
+                        &peers,
+                        peer,
+                        own_base_url,
                         &announce_request(
                             own_base_url,
                             &roles,
@@ -2552,6 +2554,25 @@ fn announce_target(peers: &PeerTable, peer: &str, own_base_url: &str) -> String 
         }
     }
     peers.transport_url(peer)
+}
+
+/// Announces to `peer` at [`announce_target`]. A `p2p://` announcer whose stream attempt fails
+/// retries over the peer's own URL, which keeps the peer's id and addresses fresh when the
+/// stored ones no longer work.
+async fn announce_to_peer(
+    client: &crate::node_http::NodeClient,
+    peers: &PeerTable,
+    peer: &str,
+    own_base_url: &str,
+    request: &AnnounceRequest,
+) -> Result<AnnounceResponse, String> {
+    let target = announce_target(peers, peer, own_base_url);
+    let first = announce_to(client, &target, request).await;
+    let own_is_p2p = crate::node_http::parse_p2p_base(own_base_url).is_some();
+    if first.is_ok() || !own_is_p2p || target == peer {
+        return first;
+    }
+    announce_to(client, peer, request).await
 }
 
 /// Peers with only a non-direct witness advert contacted per worker tick.
@@ -4793,5 +4814,67 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].url, crate::node_http::p2p_base_url(&id));
         assert_eq!(refused, 1);
+    }
+    async fn announce_mock(server: &wiremock::MockServer, hits: u64) {
+        use wiremock::matchers::{method, path};
+        wiremock::Mock::given(method("POST"))
+            .and(path("/nodes/announce"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "peers": [],
+                    "coordinate": Coordinate::default(),
+                })),
+            )
+            .expect(hits)
+            .mount(server)
+            .await;
+    }
+
+    fn announce_body(own: &str) -> AnnounceRequest {
+        announce_request(
+            own,
+            &[],
+            "avalon-dev-local",
+            None,
+            &[],
+            &[],
+            None,
+            Coordinate::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_url_less_announcer_whose_stream_fails_retries_over_the_peers_url() {
+        let server = wiremock::MockServer::start().await;
+        announce_mock(&server, 1).await;
+        let client = crate::node_http::NodeClient::new();
+        let table = PeerTable::new();
+        let url = normalized_base_url(&server.uri());
+        table.upsert(table_entry(&url, Some(&fresh_libp2p()), true));
+        let own = crate::node_http::p2p_base_url(&fresh_libp2p());
+
+        // No stream transport runs here, so the p2p:// attempt fails first.
+        let result = announce_to_peer(&client, &table, &url, &own, &announce_body(&own)).await;
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn an_announcer_with_a_url_does_not_retry_a_failed_stream_over_http() {
+        let server = wiremock::MockServer::start().await;
+        announce_mock(&server, 0).await;
+        let client = crate::node_http::NodeClient::new();
+        let table = PeerTable::new();
+        let url = normalized_base_url(&server.uri());
+        table.upsert(table_entry(&url, Some(&fresh_libp2p()), true));
+
+        let result = announce_to_peer(
+            &client,
+            &table,
+            &url,
+            "http://me.test",
+            &announce_body("http://me.test"),
+        )
+        .await;
+        assert!(result.is_err());
     }
 }
