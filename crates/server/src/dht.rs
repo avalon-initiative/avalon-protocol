@@ -1111,7 +1111,9 @@ fn handle_relay_event(
                 ..
             },
         )) => {
-            relay.client.on_accepted(*relay_peer_id, *renewal);
+            if let Some(superseded) = relay.client.on_accepted(*relay_peer_id, *renewal, now) {
+                swarm.remove_listener(superseded);
+            }
             true
         }
         SwarmEvent::ListenerClosed { listener_id, .. } => {

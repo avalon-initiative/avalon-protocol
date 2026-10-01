@@ -12,7 +12,8 @@ use std::time::Duration;
 use avalon_protocol::connectivity::Connectivity;
 use libp2p::autonat;
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
+use tokio::time::Instant;
 
 use crate::outbound_policy::{always_forbidden, OutboundPolicy};
 
@@ -65,6 +66,28 @@ pub struct RelayReservation {
     pub renewals: u64,
 }
 
+/// Waits for the next announce round: `interval` from now, or sooner when the relayed addresses
+/// change, but never sooner than `spacing` after `round_started`. Changes arriving while it
+/// waits out the spacing are covered by the round it releases.
+pub async fn wait_for_announce_round(
+    reachability: Option<&ReachabilityHandle>,
+    interval: Duration,
+    round_started: Instant,
+    spacing: Duration,
+) {
+    let Some(handle) = reachability else {
+        tokio::time::sleep(interval).await;
+        return;
+    };
+    tokio::select! {
+        _ = tokio::time::sleep(interval) => {}
+        _ = handle.relayed_addrs_changed() => {
+            tokio::time::sleep_until(round_started + spacing.min(interval)).await;
+            let _ = tokio::time::timeout(Duration::ZERO, handle.relayed_addrs_changed()).await;
+        }
+    }
+}
+
 /// Most recent hole-punch outcomes kept, newest last.
 pub const MAX_HOLE_PUNCH_OUTCOMES: usize = 32;
 
@@ -114,7 +137,13 @@ pub struct ReachabilityHandle {
     configured_addr: Option<String>,
     /// Set once at startup when this node serves as a relay.
     relay_server: Arc<std::sync::OnceLock<crate::relay::RelayServerView>>,
+    /// Wakes the announce loop when the advertised relayed addresses change; a permit is kept
+    /// for a change that lands while no one waits, so changes coalesce into one wake.
+    relayed_addrs_changed: Arc<Notify>,
 }
+
+/// Least time between the starts of two announce rounds when a relay change brings one forward.
+pub const MIN_EARLY_ANNOUNCE_SPACING: Duration = Duration::from_secs(30);
 
 impl ReachabilityHandle {
     /// Detection is not running: reachability stays `unknown`.
@@ -128,6 +157,7 @@ impl ReachabilityHandle {
             tx: Arc::new(watch::channel(ReachabilitySnapshot::unknown()).0),
             configured_addr,
             relay_server: Arc::default(),
+            relayed_addrs_changed: Arc::default(),
         }
     }
 
@@ -173,11 +203,26 @@ impl ReachabilityHandle {
     }
 
     pub(crate) fn set_relay_reservations(&self, reservations: Vec<RelayReservation>) {
+        let mut addrs_changed = false;
         self.tx.send_if_modified(|s| {
             let changed = s.relay_reservations != reservations;
+            // A renewal changes the snapshot but not what peers can dial.
+            addrs_changed = changed
+                && s.relay_reservations
+                    .iter()
+                    .map(|r| &r.relayed_addr)
+                    .ne(reservations.iter().map(|r| &r.relayed_addr));
             s.relay_reservations = reservations;
             changed
         });
+        if addrs_changed {
+            self.relayed_addrs_changed.notify_one();
+        }
+    }
+
+    /// Resolves once the advertised relayed addresses have changed since the last wait.
+    pub async fn relayed_addrs_changed(&self) {
+        self.relayed_addrs_changed.notified().await;
     }
 
     pub(crate) fn record_hole_punch(&self, outcome: HolePunchOutcome) {
@@ -388,6 +433,130 @@ mod tests {
         assert_eq!(connectivity_for(&snap), None);
         snap.reachability = Reachability::Public;
         assert_eq!(connectivity_for(&snap), Some(Connectivity::Direct));
+    }
+
+    fn reservation(addr: &str, renewals: u64) -> RelayReservation {
+        RelayReservation {
+            relay_peer_id: "12D3KooWRelay".into(),
+            relayed_addr: addr.into(),
+            renewals,
+        }
+    }
+
+    const SPACING: Duration = MIN_EARLY_ANNOUNCE_SPACING;
+    const INTERVAL: Duration = Duration::from_secs(180);
+
+    /// Virtual time `wait_for_announce_round` takes while `change` runs 5 s into the wait.
+    async fn waited(
+        handle: &ReachabilityHandle,
+        round_age: Duration,
+        interval: Duration,
+        change: impl FnOnce(&ReachabilityHandle),
+    ) -> Duration {
+        let started = Instant::now();
+        let round_started = started - round_age;
+        let h = handle.clone();
+        let waiter = tokio::spawn(async move {
+            wait_for_announce_round(Some(&h), interval, round_started, SPACING).await;
+        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        change(handle);
+        waiter.await.unwrap();
+        started.elapsed()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_new_relayed_address_brings_the_announce_forward_to_the_spacing() {
+        let handle = ReachabilityHandle::unknown();
+        let took = waited(&handle, Duration::ZERO, INTERVAL, |h| {
+            h.set_relay_reservations(vec![reservation("/a", 0)]);
+        })
+        .await;
+        assert_eq!(
+            took, SPACING,
+            "not the full interval, not before the spacing"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_spacing_counts_from_the_start_of_the_last_round() {
+        let handle = ReachabilityHandle::unknown();
+        let took = waited(&handle, Duration::from_secs(100), INTERVAL, |h| {
+            h.set_relay_reservations(vec![reservation("/a", 0)]);
+        })
+        .await;
+        assert_eq!(
+            took,
+            Duration::from_secs(5),
+            "the round ended long enough ago"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_change_or_on_a_renewal_the_loop_keeps_its_interval() {
+        let handle = ReachabilityHandle::unknown();
+        handle.set_relay_reservations(vec![reservation("/a", 0)]);
+        // Consume the wake of that first change.
+        waited(&handle, Duration::ZERO, INTERVAL, |_| {}).await;
+        let idle = waited(&handle, Duration::ZERO, INTERVAL, |_| {}).await;
+        assert_eq!(idle, INTERVAL);
+        let renewed = waited(&handle, Duration::ZERO, INTERVAL, |h| {
+            h.set_relay_reservations(vec![reservation("/a", 1)]);
+        })
+        .await;
+        assert_eq!(renewed, INTERVAL, "a renewal is not an address change");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_burst_of_changes_is_one_early_round() {
+        let handle = ReachabilityHandle::unknown();
+        let burst = waited(&handle, Duration::ZERO, INTERVAL, |h| {
+            for i in 0..50 {
+                h.set_relay_reservations(vec![reservation(&format!("/a{i}"), 0)]);
+            }
+        })
+        .await;
+        assert_eq!(burst, SPACING);
+        let next = waited(&handle, Duration::ZERO, INTERVAL, |_| {}).await;
+        assert_eq!(
+            next, INTERVAL,
+            "the burst did not leave a second wake behind"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn changes_during_the_spacing_wait_are_covered_by_the_round_it_releases() {
+        let handle = ReachabilityHandle::unknown();
+        let h = handle.clone();
+        let started = Instant::now();
+        let waiter = tokio::spawn(async move {
+            wait_for_announce_round(Some(&h), INTERVAL, started, SPACING).await;
+        });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        handle.set_relay_reservations(vec![reservation("/a", 0)]);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        handle.set_relay_reservations(vec![reservation("/b", 0)]);
+        waiter.await.unwrap();
+        assert_eq!(started.elapsed(), SPACING);
+        let next = waited(&handle, Duration::ZERO, INTERVAL, |_| {}).await;
+        assert_eq!(next, INTERVAL);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_interval_shorter_than_the_spacing_still_wins() {
+        let handle = ReachabilityHandle::unknown();
+        let took = waited(&handle, Duration::ZERO, Duration::from_secs(10), |h| {
+            h.set_relay_reservations(vec![reservation("/a", 0)]);
+        })
+        .await;
+        assert_eq!(took, Duration::from_secs(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_reachability_handle_it_just_sleeps_the_interval() {
+        let started = Instant::now();
+        wait_for_announce_round(None, INTERVAL, started, SPACING).await;
+        assert_eq!(started.elapsed(), INTERVAL);
     }
 
     #[test]

@@ -2475,6 +2475,7 @@ pub async fn run_worker(
 
     let mut vouch_cursor = 0usize;
     loop {
+        let round_started = tokio::time::Instant::now();
         neighbors.set_active(&active_peers, &config.peers);
         // Issue #599, Layer 2: before announcing, refresh this node's own
         // authoritative claim (if it has one) so it's part of the
@@ -2690,7 +2691,13 @@ pub async fn run_worker(
         retain_reachable_active_peers(&mut active_peers, &config.peers, &known_base_urls);
         neighbors.set_active(&active_peers, &config.peers);
 
-        tokio::time::sleep(config.interval).await;
+        crate::reachability::wait_for_announce_round(
+            dht_identity.as_ref().map(|d| &d.reachability),
+            config.interval,
+            round_started,
+            crate::reachability::MIN_EARLY_ANNOUNCE_SPACING,
+        )
+        .await;
     }
 }
 
