@@ -14,14 +14,38 @@ connections it opened. Nothing on it needs to be reachable from outside.
   because the announce arrived on a libp2p stream authenticated as that peer id, and nothing is
   dialed back. An announce for a `p2p://` URL over plain HTTP, or on a stream authenticated as
   another peer, stores nothing.
-- Outbound access to the seed's HTTP port and to libp2p (TCP 4001 by default) on the nodes it
-  connects to. If a public node runs `AVALON_RELAY_SERVER_ENABLED=true` the node also reserves
-  a relay slot and reports `relayed`; without one it reports `outbound_only`.
+- Outbound access to the seed's HTTP port and to the libp2p TCP port of the nodes it connects
+  to. `AVALON_LIBP2P_LISTEN_ADDR` defaults to an ephemeral port; the node itself needs no
+  inbound rule, and neither `AVALON_LIBP2P_EXTERNAL_ADDR` nor a port forward.
+- A relay somewhere on the network for a reachable address: if a public node runs
+  `AVALON_RELAY_SERVER_ENABLED=true` (default off) the node reserves a slot and reports
+  `relayed`; without one it reports `outbound_only`.
 
 ```bash
 AVALON_BOOTSTRAP_PEERS=https://seed.example.org
 # AVALON_NODE_URL left unset
 ```
+
+## Settings that apply
+
+Defaults are what the node uses when the variable is unset; all are listed with their limits in
+[Configuration](standalone-binary.md#configuration) and `.env.example`.
+
+| Variable | Default | Effect for this node |
+| --- | --- | --- |
+| `AVALON_RELAY_CLIENT_ENABLED` | `true` | When detection finds the node not dialable, it reserves a slot on a relay. |
+| `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` | `2` (at most `8`) | Reservations held at once. |
+| `AVALON_RELAY_ADDRS` | unset | Relays to try first, each ending in `/p2p/<relay peer id>`. Otherwise relays are found among connected peers. |
+| `AVALON_RELAY_SERVER_ENABLED` | `false` | Serves other nodes as a relay. Leave off on a node with no open port. |
+| `AVALON_DCUTR_ENABLED` | `true` | Tries to replace a relayed connection with a direct one by hole punching. A failed attempt leaves the relay in use. |
+| `AVALON_AUTONAT_ENABLED` | `true` | Reachability detection; without it `reachability` stays `unknown` and no relay is reserved. |
+| `AVALON_ANNOUNCE_VERIFY_REACHABILITY` | `true` | Whether this node, as a neighbor, fetches a new peer's `/nodes/status` before admitting it. Keep on. |
+| `AVALON_NODE_HTTP_*` | see `.env.example` | Size, time and concurrency limits for node-to-node HTTP carried over libp2p streams, which is how neighbors call this node. |
+| `AVALON_ALLOW_PRIVATE_PEERS`, `AVALON_AUTONAT_ALLOW_PRIVATE_DIALBACK` | `false` | Only for a fleet on one private network; both must be `true` for private addresses to be dialed back. Not needed behind a home router. |
+
+Relay selection prefers a relay in a different /24 (IPv4) or /48 (IPv6) than those already held
+and falls back to one in the same network when no other is available, which is what happens on a
+single-/24 LAN such as the development network.
 
 ## What works
 
@@ -61,16 +85,33 @@ everywhere and the node behind a no-inbound NAT:
   it. It receives no chat or mirror pushes either, because its URL is not advertised for
   interest lookups, so it falls back to polling.
 - Each neighbor keeps at most 64 `p2p://` entries, and they are evicted first.
-- The `p2p://` URL is never given to browsers or used in signed grants, so clients cannot be
-  pointed at the node directly. Serving clients needs a fronting node.
+- Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. Serving
+  clients needs a fronting node; a fronting gateway is planned, not implemented.
 - Two nodes that both have no open port reach each other only through a relay circuit or a
   hole punch; this has not been exercised between two url-less nodes yet.
 - First contact needs a reachable HTTP seed.
 
+Planned, not implemented: a fronting gateway for clients, a credential for the write routes
+above, relay re-selection and probing when a relay degrades, and binding the `p2p://` identity
+to a key proof.
+
 ## Check that it joined
 
-On the node, `GET /nodes/status` shows `connectivity` `outbound_only` or `relayed` and
-`libp2p_peer_id`. On a neighbor:
+On the node, `GET /nodes/status` shows:
+
+- `libp2p_peer_id`: the id the node announces as.
+- `reachability`: `private` once detection concludes peers cannot dial it (`unknown` until a
+  peer has answered a dial-back; a node that stays `unknown` has detection off or no peer to ask).
+- `connectivity`: `relayed` while a relay reservation is held, `outbound_only` with none,
+  `nat_traversed` while a hole-punched connection is open. Omitted while `reachability` is
+  `unknown`.
+- `relay_reservations` and `relayed_listen_addrs`: the relay slots held (`relay_peer_id`,
+  `relayed_addr`, `renewals`) and the circuit addresses peers can dial.
+- `hole_punches` (recent attempts with `peer_id`, `succeeded` and an `error` on failure) and
+  `punched_peers` (peers with a direct hole-punched connection open now). A failed punch is
+  normal behind a symmetric NAT; the node keeps `relayed`.
+
+On a neighbor:
 
 ```bash
 curl -s https://neighbor.example.org/nodes/discover | jq '.peers[] | select(.base_url | startswith("p2p://"))'

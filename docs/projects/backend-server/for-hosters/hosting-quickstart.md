@@ -15,6 +15,10 @@ community" path. If you're contributing code to this repository itself, see
 instead — that one runs `avalon-server` natively via `cargo` for faster
 edit/rebuild cycles.
 
+This guide publishes the node's ports for other machines to reach. To run a node from a home
+or restricted network with no open port instead, see
+[`running-without-an-open-port.md`](running-without-an-open-port.md).
+
 Running this node makes you part of the Avalon Initiative's actual
 infrastructure, not a downstream consumer of someone else's — the network is
 only as real and as decentralized as the operators actually running it.
