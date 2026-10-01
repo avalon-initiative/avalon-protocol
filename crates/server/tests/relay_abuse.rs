@@ -456,7 +456,9 @@ async fn a_flood_of_fake_relay_candidates_is_bounded_and_operator_relays_survive
                     relay_peer_id,
                     renewal,
                     ..
-                })) => client.on_accepted(relay_peer_id, renewal),
+                })) => {
+                    let _ = client.on_accepted(relay_peer_id, renewal, Instant::now());
+                }
                 Ok(SwarmEvent::ListenerClosed { listener_id, .. }) => {
                     attempts_failed += 1;
                     client.on_listener_closed(listener_id, Instant::now());
