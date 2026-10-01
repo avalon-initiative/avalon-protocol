@@ -36,8 +36,8 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `full-cone-direct` | A node behind the lab's full-cone NAT, which forwards every inbound port, is detected `public`. | no |
 | `restricted-cone-detected-public` | A node behind a restricted-cone NAT is detected `public`. This is a known limitation, see below. | no |
 | `relayed-port-restricted`, `relayed-symmetric`, `relayed-no-inbound` | A node behind that NAT is detected `private`, reserves a slot on a relay it found through gossip from one HTTP seed, reports `relayed` and advertises its circuit address. | `relayed-symmetric` |
-| `punch-port-restricted` | Two nodes behind port-restricted NATs, bootstrapped from the seed only, find each other through the relay and upgrade to a direct connection: `nat_traversed`, `punched_peers` and a successful `hole_punches` entry. | `punch-port-restricted` |
-| `punch-symmetric-fallback` | The same with symmetric NATs. The punch fails, the failure is recorded, and both nodes keep reporting `relayed`. | no |
+| `punch-port-restricted` | Two nodes behind port-restricted NATs, bootstrapped from the seed only, find each other through the relay and upgrade to a direct connection: `nat_traversed`, `punched_peers` and a successful `hole_punches` entry, and `POST /nodes/probe` of the relay from the NATed node reports `path: direct`. | `punch-port-restricted` |
+| `punch-symmetric-fallback` | The same with symmetric NATs. The punch fails, the failure is recorded, and both nodes keep reporting `relayed`, and the same probe reports `path: direct`. | no |
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
 | `url-less-admission` | A node behind a no-inbound NAT with no `AVALON_NODE_URL`, and reachability verification on everywhere, announces as `p2p://<peer id>`: both neighbors list it in `/nodes/discover`, the seed's topology describes it, and a `p2p://` announce for the relay's id over plain HTTP stores nothing. | no |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
@@ -46,6 +46,11 @@ A hole punch depends on two SYNs crossing inside two NAT filters, so it can take
 is reachable only through a relay, then hole punching makes up to three attempts.
 
 ## Known limitations
+
+- **Probing a node behind a NAT is not covered here.** A stream request needs the target's
+  libp2p identity to be bound to its URL, and the suite's nodes skip the reachability check that
+  binds it, so a probe of a home node goes to its unreachable URL. The `traversed` and `relayed`
+  labels are covered by in-process libp2p tests instead.
 
 - **Address-restricted NATs look public.** AutoNAT asks a peer the node has already talked to to
   dial it back, and an address-restricted NAT lets that peer's address through. The node is
