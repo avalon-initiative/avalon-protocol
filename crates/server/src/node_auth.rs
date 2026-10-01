@@ -10,12 +10,17 @@
 //!
 //! Either way the peer must have standing ([`PeerTable::standing`]) and stays within a per-key
 //! request budget. A credential grants no authority beyond what the route itself checks.
+//!
+//! The replay cache lives in process memory: a restart, replicas sharing one identity key or a
+//! forward clock step re-open up to [`MAX_SKEW_SECS`] for a captured request. Peer URLs with a
+//! path prefix are not signed, so they are refused.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use avalon_protocol::node_request::{
-    verify_node_request_header, NodeRequestError, NodeRequestTarget, NODE_REQUEST_HEADER,
+    parse_node_request_header, verify_node_request_header, NodeRequestError, NodeRequestTarget,
+    NODE_REQUEST_HEADER,
 };
 use axum::body::Body;
 use axum::extract::{FromRequestParts, Request, State};
@@ -45,8 +50,9 @@ pub const MAX_SKEW_SECS: i64 = 60;
 const REPLAY_RETENTION_SECS: i64 = 2 * MAX_SKEW_SECS + 1;
 
 /// Requests per minute one key may make across the three routes, unless
-/// `AVALON_NODE_AUTH_RATE_PER_MINUTE` says otherwise.
-pub const DEFAULT_RATE_PER_MINUTE: u32 = 600;
+/// `AVALON_NODE_AUTH_RATE_PER_MINUTE` says otherwise. It matches the per-IP limit the same
+/// traffic passed before, so legitimate fan-out is not refused.
+pub const DEFAULT_RATE_PER_MINUTE: u32 = crate::DEFAULT_RATE_LIMIT_PER_MINUTE as u32;
 
 /// Most nonces held in total; the oldest go first when the cap is reached.
 const MAX_REPLAY_ENTRIES: usize = 262_144;
@@ -341,6 +347,26 @@ impl NodeAuth {
             .len()
     }
 
+    /// Cheap checks on an HTTP credential before the body is read: header form, clock window,
+    /// key-to-peer-id binding and standing. No signature is verified and nothing is recorded.
+    pub fn precheck(&self, headers: &HeaderMap, now: i64) -> Result<(), NodeAuthError> {
+        let auth =
+            parse_node_request_header(header_text(headers)?).map_err(NodeAuthError::Invalid)?;
+        if auth.timestamp < now.saturating_sub(MAX_SKEW_SECS) {
+            return Err(NodeAuthError::Invalid(NodeRequestError::Stale));
+        }
+        if auth.timestamp > now.saturating_add(MAX_SKEW_SECS) {
+            return Err(NodeAuthError::Invalid(NodeRequestError::Future));
+        }
+        let derived = peer_id_of_key(&auth.public_key)
+            .filter(|id| id.to_string() == auth.peer_id)
+            .ok_or(NodeAuthError::PeerMismatch)?;
+        if !self.inner.peers.standing(&derived) {
+            return Err(NodeAuthError::NoStanding);
+        }
+        Ok(())
+    }
+
     /// Resolves the caller. `remote` is the noise-authenticated peer of a stream request; when
     /// set, the header is not read at all.
     pub fn authenticate(
@@ -376,13 +402,15 @@ impl NodeAuth {
         if !inner.peers.standing(&signer) {
             return Err(NodeAuthError::NoStanding);
         }
-        if let Some(nonce) = nonce {
-            let mut replay = inner.replay.lock().unwrap_or_else(|p| p.into_inner());
-            replay.insert(signer, nonce, now)?;
-        }
+        // Charged first so a refused request records no nonce.
         let mut budget = inner.budget.lock().unwrap_or_else(|p| p.into_inner());
         if !budget.charge(signer, now) {
             return Err(NodeAuthError::RateLimited);
+        }
+        drop(budget);
+        if let Some(nonce) = nonce {
+            let mut replay = inner.replay.lock().unwrap_or_else(|p| p.into_inner());
+            replay.insert(signer, nonce, now)?;
         }
         Ok(AuthenticatedNode(signer))
     }
@@ -406,21 +434,28 @@ pub async fn require_node_auth(
     let (mut parts, body) = request.into_parts();
     let remote = parts.extensions.get::<RemotePeer>().map(|r| r.0);
     let refuse = |e: NodeAuthError| {
-        tracing::warn!(
-            reason = e.code(),
-            path = parts.uri.path(),
-            transport = if remote.is_some() { "stream" } else { "http" },
-            "node-auth: request refused"
-        );
+        let (reason, path) = (e.code(), parts.uri.path());
+        let transport = if remote.is_some() { "stream" } else { "http" };
+        // Refusals a stranger can cause at will stay at debug.
+        if matches!(
+            e,
+            NodeAuthError::Replay | NodeAuthError::NoStanding | NodeAuthError::RateLimited
+        ) {
+            tracing::warn!(reason, path, transport, "node-auth: request refused");
+        } else {
+            tracing::debug!(reason, path, transport, "node-auth: request refused");
+        }
         e.into_response()
     };
-    if remote.is_none() && !parts.headers.contains_key(NODE_REQUEST_HEADER) {
-        return refuse(NodeAuthError::Missing);
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    if remote.is_none() {
+        if let Err(e) = route.auth.precheck(&parts.headers, now) {
+            return refuse(e);
+        }
     }
     let Ok(bytes) = axum::body::to_bytes(body, route.max_body_bytes).await else {
         return refuse(NodeAuthError::BodyTooLarge);
     };
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let node = match route.auth.authenticate(
         remote,
         &parts.headers,
@@ -444,6 +479,7 @@ mod tests {
     use axum::routing::post;
     use axum::Router;
     use libp2p::identity::Keypair;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     const NET: &str = "net";
@@ -1040,5 +1076,111 @@ mod tests {
         req.headers_mut()
             .insert("forwarded", "for=127.0.0.1".parse().unwrap());
         assert_eq!(call(&app, req).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn a_request_over_budget_records_no_nonce() {
+        let f = fixture_with(1, MAX_REPLAY_ENTRIES);
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let send = |i: u8| f.http(&header_at(&n, b"{}", &me, NOW, [i; 16]), b"{}", NOW);
+        assert!(send(1).is_ok());
+        for i in 2..10 {
+            assert_eq!(send(i), Err(NodeAuthError::RateLimited));
+        }
+        assert_eq!(f.auth.replay_len(), 1);
+    }
+
+    #[test]
+    fn the_precheck_refuses_garbage_before_any_body_or_signature_work() {
+        let f = fixture();
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let check = |h: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(NODE_REQUEST_HEADER, h.parse().unwrap());
+            f.auth.precheck(&headers, NOW)
+        };
+        let good = header_at(&n, b"{}", &me, NOW, [1; 16]);
+        assert_eq!(check(&good), Ok(()));
+        assert!(matches!(
+            check("garbage"),
+            Err(NodeAuthError::Invalid(NodeRequestError::Malformed(_)))
+        ));
+        let long = format!("{good}{}", "a".repeat(600));
+        assert!(matches!(
+            check(&long),
+            Err(NodeAuthError::Invalid(NodeRequestError::Malformed(_)))
+        ));
+        let stale = header_at(&n, b"{}", &me, NOW - 1000, [2; 16]);
+        assert_eq!(
+            check(&stale),
+            Err(NodeAuthError::Invalid(NodeRequestError::Stale))
+        );
+        let future = header_at(&n, b"{}", &me, NOW + 1000, [3; 16]);
+        assert_eq!(
+            check(&future),
+            Err(NodeAuthError::Invalid(NodeRequestError::Future))
+        );
+        let stranger = node();
+        let h = header_at(&stranger, b"{}", &me, NOW, [4; 16]);
+        assert_eq!(check(&h), Err(NodeAuthError::NoStanding));
+        // A claimed id that does not belong to the key.
+        let h = good.replacen(&n.id.to_string(), &stranger.id.to_string(), 1);
+        assert_eq!(check(&h), Err(NodeAuthError::PeerMismatch));
+        assert_eq!(f.auth.replay_len(), 0);
+    }
+
+    /// A body that records whether anything polled it.
+    fn watched_body(polled: Arc<std::sync::atomic::AtomicBool>) -> Body {
+        Body::from_stream(futures_util::stream::poll_fn(move |_| {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::task::Poll::Ready(None::<Result<axum::body::Bytes, std::io::Error>>)
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_request_that_fails_the_precheck_never_has_its_body_read() {
+        let f = fixture();
+        let n = node();
+        f.grant(&n);
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let stale = header_at(&n, b"", &f.me.to_string(), now - 1000, [1; 16]);
+        let stranger = header_at(&node(), b"", &f.me.to_string(), now, [2; 16]);
+        for h in [stale.as_str(), stranger.as_str(), "garbage"] {
+            let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let req = Request::builder()
+                .method("POST")
+                .uri(PATH)
+                .header(NODE_REQUEST_HEADER, h)
+                .body(watched_body(polled.clone()))
+                .unwrap();
+            let status = call(&app, req).await.0;
+            assert!(status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN);
+            assert!(!polled.load(std::sync::atomic::Ordering::SeqCst), "{h}");
+        }
+        // A credential that passes the precheck does get its body read.
+        let ok = header_at(&n, b"", &f.me.to_string(), now, [3; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let req = Request::builder()
+            .method("POST")
+            .uri(PATH)
+            .header(NODE_REQUEST_HEADER, ok)
+            .body(watched_body(polled.clone()))
+            .unwrap();
+        assert_eq!(call(&app, req).await.0, StatusCode::OK);
+        assert!(polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_default_budget_matches_the_per_ip_limit_these_routes_were_under() {
+        assert_eq!(DEFAULT_RATE_PER_MINUTE, 3000);
+        assert_eq!(
+            DEFAULT_RATE_PER_MINUTE as u64,
+            crate::DEFAULT_RATE_LIMIT_PER_MINUTE
+        );
     }
 }

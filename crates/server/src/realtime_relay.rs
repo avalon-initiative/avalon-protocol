@@ -196,13 +196,19 @@ pub async fn relay_to_peers(state: AppState, event: RelayEvent) {
         let event = event.clone();
         let client = client.clone();
         tokio::spawn(async move {
-            if let Err(err) = client.post(&url).json(&event).send().await {
-                // Best-effort: an unreachable peer just misses this tick's
-                // event, same tradeoff a lagging local broadcast receiver
-                // already accepts. Logged, not retried — a dropped relay
-                // is a liveness gap, never a correctness one (nothing here
-                // is durable protocol history).
-                tracing::debug!(peer = %url, error = %err, "realtime relay: peer unreachable");
+            match client.post(&url).json(&event).send().await {
+                Ok(response) if !response.status().is_success() => {
+                    tracing::warn!(peer = %url, status = %response.status(), "realtime relay: peer refused the event");
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    // Best-effort: an unreachable peer just misses this tick's
+                    // event, same tradeoff a lagging local broadcast receiver
+                    // already accepts. Logged, not retried — a dropped relay
+                    // is a liveness gap, never a correctness one (nothing here
+                    // is durable protocol history).
+                    tracing::debug!(peer = %url, error = %err, "realtime relay: peer unreachable");
+                }
             }
         });
     }

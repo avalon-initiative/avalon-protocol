@@ -280,7 +280,12 @@ impl From<reqwest::Client> for NodeClient {
 impl NodeClient {
     /// A plain client with no timeout of its own (stream requests use the configured default).
     pub fn new() -> Self {
-        reqwest::Client::new().into()
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .unwrap_or_default()
+            .into()
     }
 
     /// The bounded client for requests to other nodes; see [`crate::outbound_policy::peer_client`].
@@ -2250,6 +2255,33 @@ mod tests {
                     .iter()
                     .all(|(k, _)| !k.eq_ignore_ascii_case(NODE_REQUEST_HEADER)));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_signed_post_is_returned_and_never_followed() {
+        for status in [307u16, 308] {
+            let elsewhere = http_server(200).await;
+            let live = MockServer::start().await;
+            Mock::given(wiremock::matchers::any())
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .insert_header("location", format!("{}/nodes/relay", elsewhere.uri())),
+                )
+                .mount(&live)
+                .await;
+            for client in [NodeClient::new(), NodeClient::peer()] {
+                let res = client
+                    .with_signer(signer())
+                    .post(format!("{}/nodes/relay", live.uri()))
+                    .body("payload")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(res.status().as_u16(), status);
+            }
+            assert_eq!(live.received_requests().await.unwrap().len(), 2);
+            assert_eq!(http_hits(&elsewhere).await, 0, "{status} was followed");
         }
     }
 }

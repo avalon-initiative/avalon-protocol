@@ -377,6 +377,30 @@ lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per n
 evicted first. Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. A
 fronting gateway for such nodes is planned, not implemented.
 
+## Node-to-node write routes
+
+`POST /nodes/relay`, `POST /nodes/replicate-chat` and `POST /mirror/notify` require the caller to
+be a known node. Over a libp2p stream the handshake identifies the caller; over HTTP the sender
+signs each request with its node identity key (`x-avalon-node-auth`). The receiver accepts it only
+from a peer it holds a bound entry for, within 60 seconds of its own clock, once per nonce.
+
+- Every node has an identity key, with the DHT on or off. Set `AVALON_LIBP2P_IDENTITY_KEY` on a
+  long-lived node. An ephemeral identity changes on restart; peers keep the old id until the
+  node's next announce, and requests addressed to the new id are refused with 401 until then.
+- Delivery needs the sender to be in the receiver's peer table: a first contact is refused with
+  403 until the sender has announced. The mirror poll fallback still covers `/mirror/notify`.
+- Each key may make `AVALON_NODE_AUTH_RATE_PER_MINUTE` requests a minute (default 3000, the same
+  as the per-IP limit these routes were under). A busy node fanning out to many receivers needs
+  headroom, so raise it before lowering it; a 429 drops that relay event.
+- The replay cache is in process memory. A restart, replicas sharing one identity key, or the
+  clock stepping forward re-opens up to the 60 second window for a captured request.
+- Peer URLs with a path prefix or a trailing path are not supported for these routes; such a
+  request is sent unsigned and refused with 401.
+- Until per-route scope checks exist, any node with standing may call these routes, and a
+  `p2p://` node gets standing by announcing over a stream with any key.
+- Redirects and system proxies are not used for node-to-node requests, so a signed request is
+  never re-sent to another host.
+
 ## Running under systemd
 
 Create the service account and configuration:

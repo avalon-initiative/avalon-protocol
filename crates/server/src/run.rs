@@ -252,10 +252,7 @@ pub async fn run_with_tracing(
         });
     // Announced even without a swarm, so peers can give this node standing for its signed
     // requests; the swarm's own reachability replaces the unknown one below.
-    let mut dht_identity = crate::nodes::DhtIdentity {
-        peer_id: own_peer_id.to_string(),
-        reachability: crate::reachability::ReachabilityHandle::unknown(),
-    };
+    let mut dht_identity = auth_only_identity(&own_peer_id);
     let mut dht_commands = None;
     let mut dht_router_slot = None;
     let mut reachability = crate::reachability::ReachabilityHandle::unknown();
@@ -842,4 +839,39 @@ pub async fn run_with_tracing(
     }
     shutdown.begin_final_stop();
     tracing::info!("avalon-server stopped");
+}
+
+/// The identity a node announces when no swarm runs: its id for signed requests, no addresses
+/// and no connectivity claim.
+fn auth_only_identity(peer_id: &libp2p::PeerId) -> crate::nodes::DhtIdentity {
+    crate::nodes::DhtIdentity {
+        peer_id: peer_id.to_string(),
+        reachability: crate::reachability::ReachabilityHandle::unknown(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_node_without_a_swarm_announces_its_id_with_no_addresses_or_connectivity() {
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let id = libp2p::PeerId::from(key.public());
+        let announced = auth_only_identity(&id);
+        assert_eq!(announced.peer_id, id.to_string());
+        assert!(announced.reachability.advertised_addrs().is_empty());
+        assert_eq!(
+            crate::reachability::connectivity_for(&announced.reachability.snapshot()),
+            None
+        );
+        // The same key signs, and without a swarm the node does not announce as `p2p://`.
+        let signer = crate::node_http::NodeSigner::new(&key, "net").unwrap();
+        assert_eq!(signer.peer_id(), announced.peer_id);
+        let config = crate::nodes::AnnounceConfig::from_env("net").with_p2p_fallback(None);
+        assert!(!config
+            .own_base_url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("p2p://")));
+    }
 }

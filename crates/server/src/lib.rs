@@ -1072,3 +1072,177 @@ mod http_config_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod node_auth_wiring {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn lazy_state() -> AppState {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@127.0.0.1:1/none")
+            .expect("a lazy pool never connects while it is built");
+        let webauthn = std::sync::Arc::new(
+            auth::build_webauthn("localhost", "http://localhost:8080").expect("webauthn"),
+        );
+        AppState {
+            chain: avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test"),
+            indexer: state::IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(
+                pool.clone(),
+            )),
+            pool,
+            webauthn,
+            presence: presence::PresenceStore::from_env(),
+            chat: chat::ChatBus::new(),
+            settlement_submit_key: None,
+            peers: nodes::PeerTable::new(),
+            managed_hosting_verify_key: None,
+            known_shards: None,
+            remote_submit_status: None,
+            own_shard_id: "core".to_string(),
+            shard_mirror_sources: settlement::ShardMirrorSources::default(),
+            interest: interest::InterestRegistry::new().0,
+            dht_commands: None,
+            reachability: reachability::ReachabilityHandle::unknown(),
+            own_base_url: None,
+            own_libp2p_peer_id: Some("12D3KooWTestOwnPeerId".to_string()),
+            interest_redis_fast_path: None,
+            principal_limiter: principal_limits::PrincipalLimiter::from_env(None),
+            mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+            host_metrics: resources::HostMetricsSampler::new(Vec::new()),
+            shard_registry: nodes::ShardRegistry::new(),
+            head_gossip: nodes::HeadGossipTracker::new(),
+            admin_token: None,
+            log_reload_handle: tracing_subscriber::reload::Layer::new(
+                tracing_subscriber::EnvFilter::new("info"),
+            )
+            .1,
+            internal_role_key: None,
+            mirror_confirmations: replication::MirrorConfirmationRegistry::new(),
+            replication_gate: replication::ReplicationGateConfig::from_env(),
+            realtime_remote_url: None,
+            known_list: known_list::KnownListHandle::load_or_new(
+                known_list::KnownListConfig::default(),
+                None,
+            ),
+            own_witness: None,
+        }
+    }
+
+    fn with_addr(req: &mut Request<Body>) {
+        let addr: std::net::SocketAddr = "203.0.113.5:1234".parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+    }
+
+    async fn post(app: &Router, path: &str, body: Vec<u8>) -> StatusCode {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .body(Body::from(body))
+            .unwrap();
+        with_addr(&mut req);
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    /// Without a credential every guarded route answers 401, and the per-route limits
+    /// are the real ones: a valid-looking header cannot make an oversized body get read.
+    #[tokio::test]
+    async fn the_write_routes_are_guarded_in_both_route_tables() {
+        let full = router(lazy_state(), None);
+        let settlement = router_settlement_only(lazy_state(), None);
+        for path in node_auth::CREDENTIAL_PATHS {
+            assert_eq!(
+                post(&full, path, vec![]).await,
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
+        // The settlement-only table serves only the mirror push of the three.
+        assert_eq!(
+            post(&settlement, "/mirror/notify", vec![]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        for path in ["/nodes/relay", "/nodes/replicate-chat"] {
+            assert_eq!(
+                post(&settlement, path, vec![]).await,
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+        // An ungated route in the same table is not asked for a node credential.
+        let res = full
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/nodes/peers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_real_per_route_body_limits_apply_over_a_stream() {
+        let node = libp2p::PeerId::random();
+        let limits = [
+            ("/nodes/relay", node_auth::RELAY_MAX_BODY_BYTES),
+            (
+                "/nodes/replicate-chat",
+                node_auth::REPLICATE_CHAT_MAX_BODY_BYTES,
+            ),
+            ("/mirror/notify", node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES),
+        ];
+        assert_eq!(limits.map(|(_, l)| l), [64 * 1024, 64 * 1024, 1024]);
+        for table in 0..2 {
+            let state = lazy_state();
+            state.peers.upsert(nodes::PeerInfo {
+                base_url: node_http::p2p_base_url(&node),
+                roles: vec![],
+                protocol_version: "0.1.0".into(),
+                network_id: "avalon-test".into(),
+                last_announced_at: time::OffsetDateTime::now_utc(),
+                libp2p_peer_id: Some(node.to_string()),
+                libp2p_listen_addrs: vec![],
+                witness: None,
+                connectivity: None,
+                identity_bound: true,
+            });
+            let app = if table == 0 {
+                router(state, None)
+            } else {
+                router_settlement_only(state, None)
+            };
+            for (path, limit) in limits {
+                if table == 1 && path != "/mirror/notify" {
+                    continue;
+                }
+                let over = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::from(vec![b'x'; limit + 1]));
+                let mut over = over.unwrap();
+                over.extensions_mut().insert(node_http::RemotePeer(node));
+                with_addr(&mut over);
+                let status = app.clone().oneshot(over).await.unwrap().status();
+                assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+                // At the limit the body is accepted by the guard (then it is not valid JSON).
+                let mut at = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::from(vec![b'x'; limit]))
+                    .unwrap();
+                at.extensions_mut().insert(node_http::RemotePeer(node));
+                with_addr(&mut at);
+                let status = app.clone().oneshot(at).await.unwrap().status();
+                assert_ne!(status, StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+                assert_ne!(status, StatusCode::UNAUTHORIZED, "{path}");
+                assert_ne!(status, StatusCode::FORBIDDEN, "{path}");
+            }
+        }
+    }
+}

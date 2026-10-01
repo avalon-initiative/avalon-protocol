@@ -2458,6 +2458,8 @@ pub async fn run_worker(
 
     let client = crate::node_http::NodeClient::from(
         reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .timeout(ANNOUNCE_TIMEOUT)
             .build()
             .unwrap_or_default(),

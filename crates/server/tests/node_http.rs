@@ -587,6 +587,43 @@ async fn a_node_reaches_the_write_routes_over_http_signed_and_over_the_stream_un
     assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// A DHT-off node announces an id it does not listen on: failing over to its stream must end
+/// at once as a local failure and leave the stream's record untouched.
+#[tokio::test]
+async fn failing_over_to_an_address_less_id_fails_fast_and_demotes_nothing() {
+    let a = direct_node(NodeHttpSettings::default()).await;
+    let ghost = PeerId::random();
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_base = format!("http://{}", dead.local_addr().unwrap());
+    drop(dead);
+    a.peers.upsert(PeerInfo {
+        base_url: dead_base.clone(),
+        libp2p_peer_id: Some(ghost.to_string()),
+        libp2p_listen_addrs: vec![],
+        ..info_for(&a.handle, vec![], None)
+    });
+    let client = a.client();
+    for path in CREDENTIAL_PATHS {
+        let started = Instant::now();
+        let err = client
+            .post(format!("{dead_base}{path}"))
+            .body("{}")
+            .send()
+            .await
+            .err()
+            .expect("neither transport can reach the peer");
+        // The first request ends on the stream's local failure; once HTTP is demoted the
+        // last attempt is the refused HTTP connect. Either way nothing waits on a dial.
+        assert!(err.is_local() || err.is_connect(), "{path}: {err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{path} was slow"
+        );
+    }
+    let stats = a.peers.transport_stats();
+    assert!(!stats.is_demoted(&ghost, avalon_server::transport_stats::Transport::Stream));
+}
+
 #[tokio::test]
 async fn the_buffer_budget_answers_429_without_reading_a_body_it_cannot_hold() {
     let probe = Probe::default();

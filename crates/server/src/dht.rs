@@ -229,8 +229,8 @@ pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, Identit
         }
         Err(_) => {
             tracing::warn!(
-                "avalon-dht: AVALON_LIBP2P_IDENTITY_KEY unset — generating an ephemeral libp2p \
-                 identity for this run; this node's PeerId will change on every restart. Set \
+                "AVALON_LIBP2P_IDENTITY_KEY unset — generating an ephemeral node identity for \
+                 this run; this node's PeerId will change on every restart. Set \
                  AVALON_LIBP2P_IDENTITY_KEY for a stable identity peers don't need to relearn."
             );
             Ok(identity::Keypair::generate_ed25519())
