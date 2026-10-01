@@ -130,8 +130,8 @@ pub async fn replicate_to_peers(state: AppState, event: ReplicationEvent) {
 /// this node's own `guild_messages_replica`/`conversation_messages_replica`
 /// (never the live `guild_messages`/`conversation_messages` tables — see
 /// module doc comment), `ON CONFLICT (id) DO NOTHING` so a retried or
-/// duplicate delivery is a harmless no-op. No auth — same posture
-/// `POST /nodes/relay` already takes for node-to-node realtime traffic.
+/// duplicate delivery is a harmless no-op. The caller is authenticated by
+/// [`crate::node_auth::require_node_auth`]; which messages a given node may replicate is not checked.
 pub async fn replicate_chat_handler(
     State(state): State<AppState>,
     Json(event): Json<ReplicationEvent>,

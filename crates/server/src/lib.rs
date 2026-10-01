@@ -65,6 +65,7 @@ pub mod mirrored_shard_keys;
 pub mod name_claims;
 pub mod neighbors;
 pub mod network_coordinates;
+pub mod node_auth;
 pub mod node_http;
 pub mod node_keys;
 pub mod nodes;
@@ -256,6 +257,38 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
     )
 }
 
+/// The node-credential check for this node, shared by every route that needs one.
+fn node_auth_for(state: &AppState) -> node_auth::NodeAuth {
+    node_auth::NodeAuth::new(
+        state.peers.clone(),
+        state.chain.network_id(),
+        state.own_libp2p_peer_id.as_deref(),
+        state::http_only(state.own_base_url.as_deref()),
+    )
+}
+
+/// Layer that requires a node credential on one route, bounding its body to `max_body_bytes`.
+fn node_auth_layer(
+    auth: &node_auth::NodeAuth,
+    max_body_bytes: usize,
+) -> impl tower::Layer<
+    axum::routing::Route,
+    Service = impl tower::Service<
+        axum::extract::Request,
+        Response = axum::response::Response,
+        Error = std::convert::Infallible,
+        Future = impl Send,
+    > + Clone
+                  + Send
+                  + Sync
+                  + 'static,
+> + Clone
+       + Send
+       + Sync
+       + 'static {
+    axum::middleware::from_fn_with_state(auth.route(max_body_bytes), node_auth::require_node_auth)
+}
+
 /// The route table a genuinely standalone Settlement node
 /// serves — `/ledger/*` (read+write, `crate::settlement`), `/nodes/*`
 /// (peer discovery, status, admin log-level — node-mesh plumbing, not
@@ -353,6 +386,7 @@ fn apply_common_layers(
 /// Settlement node — see [`router_settlement_only`]'s own doc comment for
 /// what's in/out and why.
 fn settlement_only_routes(state: AppState) -> Router {
+    let node_auth = node_auth_for(&state);
     Router::new()
         // Issue #211: public, unauthenticated mirror-facing transparency-log
         // reads.
@@ -401,13 +435,17 @@ fn settlement_only_routes(state: AppState) -> Router {
         // Issue #596: push-based mirror-sync notification.
         .route(
             "/mirror/notify",
-            post(mirror_push::notify).layer(node_coordination_body_limit()),
+            post(mirror_push::notify).layer(node_auth_layer(
+                &node_auth,
+                node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES,
+            )),
         )
         .merge(topology_access::mount(Router::new()))
         .with_state(state)
 }
 
 fn full_routes(state: AppState) -> Router {
+    let node_auth = node_auth_for(&state);
     Router::new()
         .route("/identities/register/start", post(handlers::register_start))
         .route(
@@ -914,21 +952,31 @@ fn full_routes(state: AppState) -> Router {
                 .layer(node_coordination_body_limit()),
         )
         // Issue #539: one-hop live realtime event relay across nodes,
-        // built on the peer table above — see `crate::realtime_relay`.
-        .route("/nodes/relay", post(realtime_relay::relay_handler))
+        // built on the peer table above — see `crate::realtime_relay`. The three
+        // node write routes carry `crate::node_auth::require_node_auth`.
+        .route(
+            "/nodes/relay",
+            post(realtime_relay::relay_handler)
+                .layer(node_auth_layer(&node_auth, node_auth::RELAY_MAX_BODY_BYTES)),
+        )
         // Issue #596: push-based mirror-sync notification — see
-        // `crate::mirror_push`. No auth, same public posture as the
-        // `/ledger/*` block above: the body is never trusted for anything
+        // `crate::mirror_push`. The body is never trusted for anything
         // beyond waking this node's own mirror-watcher loop early.
         .route(
             "/mirror/notify",
-            post(mirror_push::notify).layer(node_coordination_body_limit()),
+            post(mirror_push::notify).layer(node_auth_layer(
+                &node_auth,
+                node_auth::MIRROR_NOTIFY_MAX_BODY_BYTES,
+            )),
         )
         // Issue #540: async at-rest chat/conversation replication — see
         // `crate::chat_replication`.
         .route(
             "/nodes/replicate-chat",
-            post(chat_replication::replicate_chat_handler),
+            post(chat_replication::replicate_chat_handler).layer(node_auth_layer(
+                &node_auth,
+                node_auth::REPLICATE_CHAT_MAX_BODY_BYTES,
+            )),
         )
         // Operator-internal, node-to-node RPC (Node Role Separation) —
         // see `crate::internal_role`'s own module

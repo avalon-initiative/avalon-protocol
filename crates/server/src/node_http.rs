@@ -29,8 +29,8 @@ use crate::transport_stats::{Transport, TransportStats};
 use avalon_protocol::connectivity::Connectivity;
 
 pub use inbound::{
-    path_allowed, requires_bound_peer, synthetic_addr, InboundPermit, InboundService, RemotePeer,
-    RouterSlot, ALLOWED_EXACT, BOUND_ONLY_PATHS, SHARED_PEER_ADDR,
+    path_allowed, synthetic_addr, InboundPermit, InboundService, RemotePeer, RouterSlot,
+    ALLOWED_EXACT, SHARED_PEER_ADDR,
 };
 pub use wire::{
     protocol_name, BufferGrant, NodeHttpCodec, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings,
@@ -512,11 +512,9 @@ impl NodeRequestBuilder {
         let other = first.other();
         // An http target the caller did not name must pass the outbound policy before any dial.
         let mut vetted: Option<CheckedTarget> = None;
-        // Demotion only reorders; the stricter stream gate is never moved to proactively.
+        // Demotion only reorders; it never adds a transport the route lacks.
         if let (Some(peer), Some(stats)) = (&route.peer, &route.stats) {
-            let to_gated_stream = other == Transport::Stream
-                && route.path.as_deref().is_some_and(requires_bound_peer);
-            if route.has(other) && !to_gated_stream && stats.choose(peer, first, true) != first {
+            if route.has(other) && stats.choose(peer, first, true) != first {
                 if other == Transport::Http {
                     vetted = self.vet_http(&route).await;
                 }
@@ -543,7 +541,7 @@ impl NodeRequestBuilder {
     }
 
     /// The transports this request may use. The URL's own kind is tried first; the other is
-    /// there only when the peer table binds both to one peer and the stream gate allows the path.
+    /// there only when the peer table binds both to one peer and the stream allowlist has the path.
     fn route(&self) -> Result<Route, NodeHttpError> {
         let handle = self.client.stream_handle();
         let table = handle.and_then(|h| h.peers.as_ref());
@@ -1652,8 +1650,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_stream_gate_is_never_moved_to_proactively_and_only_allowed_paths_fail_over() {
-        // HTTP is demoted but the path needs a bound peer on the stream: stay on HTTP.
+    async fn a_demoted_http_write_route_moves_to_the_stream_and_only_allowed_paths_fail_over() {
+        // HTTP is demoted and the path is on the stream allowlist: the write goes over the stream.
         let live = http_server(200).await;
         let id = sample_peer_id();
         let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Direct));
@@ -1665,10 +1663,11 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert!(!res.via_stream());
-        assert!(seen.lock().unwrap().is_empty());
+        assert!(res.via_stream());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_eq!(http_hits(&live).await, 0);
 
-        // A path the stream gate does not allow gets the connect error, not a stream refusal.
+        // A path the stream allowlist does not have gets the connect error, not a stream refusal.
         let base = dead_base();
         let table = table_with_connectivity(&id, &base, Some(Connectivity::Direct));
         let (handle, seen) = fake_worker(table, ok_answer());

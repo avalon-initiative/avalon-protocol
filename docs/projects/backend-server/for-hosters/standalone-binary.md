@@ -369,9 +369,9 @@ usually with `connectivity` `relayed` or `outbound_only`. The node needs one rea
 `AVALON_BOOTSTRAP_PEERS` to start from. See
 [`running-without-an-open-port.md`](running-without-an-open-port.md).
 
-Limitations: a `p2p://` peer proves only that it holds its key, so it cannot call the routes that
-inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat`,
-`/mirror/notify`); neighbors refuse its pushes there until it has real credentials, and it
+Limitations: a `p2p://` peer can call the routes that carry data (`/nodes/relay`,
+`/nodes/replicate-chat`, `/mirror/notify`) because its handshake authenticates it, but those
+routes do not yet check what a given node may push, so any node with standing can use them. It
 receives no chat or mirror pushes of its own because its URL is not advertised for interest
 lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
 evicted first. Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. A

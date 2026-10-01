@@ -258,11 +258,8 @@ async fn relay_traced(state: &AppState, event: &RelayEvent, scope: &crate::op_tr
 /// `POST /nodes/relay` — issue #539's receiving end. Applies `event` to
 /// this node's own local store/broadcast only; never relays it onward
 /// (see module doc comment for why that alone is sufficient to guarantee
-/// single-hop delivery). No auth: same posture `GET /nodes/peers` already
-/// takes for node-to-node discovery traffic — a relayed presence/chat
-/// event is exactly as sensitive as the live broadcast it feeds (already
-/// unauthenticated once inside `PresenceStore`/`ChatBus`), not a new
-/// privileged write.
+/// single-hop delivery). The caller is authenticated by
+/// [`crate::node_auth::require_node_auth`]; which events a given node may relay is not checked.
 pub async fn relay_handler(
     State(state): State<AppState>,
     Json(event): Json<RelayEvent>,

@@ -80,10 +80,13 @@ everywhere and the node behind a no-inbound NAT:
 
 ## Limits
 
-- A `p2p://` peer proves only that it holds its key, so it cannot call the routes that inject
-  data (`/nodes/relay`, `/nodes/replicate-chat`, `/mirror/notify`) on its neighbors; they refuse
-  it. It receives no chat or mirror pushes either, because its URL is not advertised for
-  interest lookups, so it falls back to polling.
+- A `p2p://` peer can call the routes that carry data (`/nodes/relay`, `/nodes/replicate-chat`,
+  `/mirror/notify`) on its neighbors: its libp2p handshake authenticates it, and a self-announced
+  `p2p://` entry gives it standing with that neighbor. Those routes only check who is calling,
+  not what that node may push, so any node with standing, including one that announced a free
+  key, can still use them; per-route scope checks are not implemented yet. It receives no chat
+  or mirror pushes, because its URL is not advertised for interest lookups, so it falls back
+  to polling.
 - Each neighbor keeps at most 64 `p2p://` entries, and they are evicted first.
 - Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. Serving
   clients needs a fronting node; a fronting gateway is planned, not implemented.
@@ -91,7 +94,7 @@ everywhere and the node behind a no-inbound NAT:
   hole punch; this has not been exercised between two url-less nodes yet.
 - First contact needs a reachable HTTP seed.
 
-Planned, not implemented: a fronting gateway for clients, a credential for the write routes
+Planned, not implemented: a fronting gateway for clients, scope checks on the write routes
 above, relay re-selection and probing when a relay degrades, and binding the `p2p://` identity
 to a key proof.
 

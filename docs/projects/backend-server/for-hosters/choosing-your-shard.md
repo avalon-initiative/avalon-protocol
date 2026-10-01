@@ -235,7 +235,7 @@ independent ledger with its own tree heads:
 ## A node with no open port
 
 A node behind NAT can author a shard through a remote authority: it submits each batch over
-outbound HTTP and needs no inbound port. It cannot call `/nodes/relay`, `/nodes/replicate-chat`
-or `/mirror/notify` on its neighbors yet, so it is a poor choice for the one node that must push
-to others. Settings and limits are in
+outbound HTTP and needs no inbound port. It can call `/nodes/relay`, `/nodes/replicate-chat`
+and `/mirror/notify` on its neighbors over its libp2p stream, but it receives no pushes of its
+own, so it is a poor choice for a node that must be pushed to. Settings and limits are in
 [`running-without-an-open-port.md`](running-without-an-open-port.md).
