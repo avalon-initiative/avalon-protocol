@@ -32,6 +32,7 @@ async fn node(peers: PeerTable) -> (DhtHandle, String) {
             ..AutonatSettings::default()
         },
         relay: RelaySettings::default(),
+        relay_resilience: Default::default(),
         bootstrap_scan_interval: Duration::from_millis(200),
     };
     let handle = dht::start(peers, config).await;

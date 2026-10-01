@@ -73,6 +73,9 @@ use crate::reachability::{
     peer_ip_allowed, AutonatSettings, HolePunchOutcome, Reachability, ReachabilityHandle,
 };
 use crate::relay::{RelayClient, RelayServerStats, RelaySettings};
+use crate::relay_resilience::{
+    is_retryable_relayed_failure, DialRetry, RelayGate, RelayResilience,
+};
 
 /// Bounded so a burst of interest registrations/lookups can't grow this
 /// unboundedly if [`run_worker`] is momentarily busy — same rationale
@@ -263,6 +266,8 @@ pub struct DhtConfig {
     pub autonat: AutonatSettings,
     /// Circuit relay client and server settings.
     pub relay: RelaySettings,
+    /// Relay server grace through a `private` verdict and relayed dial retries.
+    pub relay_resilience: RelayResilience,
     /// `AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS`, defaulting to
     /// [`DEFAULT_BOOTSTRAP_SCAN_INTERVAL`] — see that constant's own doc
     /// comment.
@@ -310,6 +315,7 @@ impl DhtConfig {
         let policy = OutboundPolicy::from_env();
         let autonat = AutonatSettings::from_env(policy)?;
         let relay = RelaySettings::from_env(policy)?;
+        let relay_resilience = RelayResilience::from_env()?;
 
         Ok(Some(Self {
             identity,
@@ -318,6 +324,7 @@ impl DhtConfig {
             external_addr,
             autonat,
             relay,
+            relay_resilience,
             bootstrap_scan_interval,
         }))
     }
@@ -466,6 +473,7 @@ pub async fn start_with_node_http(
         );
     }
     let relay_stats = RelayServerStats::new();
+    let mut relay_gate = RelayGate::new(config.relay_resilience.private_grace);
     let serves_relay = config.relay.server.is_some();
     if let Some(settings) = &config.relay.server {
         reachability.set_relay_server(crate::relay::RelayServerView {
@@ -478,7 +486,12 @@ pub async fn start_with_node_http(
         if let Some(addr) = &external_addr {
             swarm.add_external_address(addr.clone());
         }
-        set_relay_server_status(&mut swarm, Reachability::Unknown, external_addr.is_some());
+        let serve = relay_gate.should_serve(
+            Reachability::Unknown,
+            external_addr.is_some(),
+            Instant::now(),
+        );
+        set_relay_server(&mut swarm, serve);
     }
     if let (Some(addr), Some(autonat)) = (
         external_addr.clone(),
@@ -494,6 +507,8 @@ pub async fn start_with_node_http(
         ),
         stats: relay_stats.clone(),
         serves: serves_relay,
+        gate: relay_gate,
+        resilience: config.relay_resilience,
         has_external_addr: external_addr.is_some(),
         reconcile_interval: config.relay.client.reconcile_interval,
     };
@@ -858,6 +873,8 @@ struct RelayRuntime {
     client: RelayClient,
     stats: Arc<RelayServerStats>,
     serves: bool,
+    gate: RelayGate,
+    resilience: RelayResilience,
     has_external_addr: bool,
     reconcile_interval: Duration,
 }
@@ -875,23 +892,29 @@ impl RelayRuntime {
                 crate::relay::neighbor_latencies(peers)
             });
         self.client.reconcile(swarm, reachability, now);
+        self.update_server(swarm, reachability, now);
+    }
+
+    /// Switches the relay server to what the gate decides for the current verdict.
+    fn update_server(
+        &mut self,
+        swarm: &mut Swarm<DhtBehaviour>,
+        reachability: Reachability,
+        now: Instant,
+    ) {
+        if self.serves {
+            let serve = self
+                .gate
+                .should_serve(reachability, self.has_external_addr, now);
+            set_relay_server(swarm, serve);
+        }
     }
 }
 
-/// Advertises the relay hop protocol only while this node is dialable: detected `public`, or
-/// undetected with an operator-stated external address. A `private` node never relays.
-fn set_relay_server_status(
-    swarm: &mut Swarm<DhtBehaviour>,
-    reachability: Reachability,
-    has_external_addr: bool,
-) {
-    let dialable = match reachability {
-        Reachability::Public => true,
-        Reachability::Unknown => has_external_addr,
-        Reachability::Private => false,
-    };
+/// Advertises the relay hop protocol only while `serve` is set; see [`RelayGate`] for when.
+fn set_relay_server(swarm: &mut Swarm<DhtBehaviour>, serve: bool) {
     if let Some(server) = swarm.behaviour_mut().relay_server.as_mut() {
-        server.set_status(Some(if dialable {
+        server.set_status(Some(if serve {
             relay::Status::Enable
         } else {
             relay::Status::Disable
@@ -1085,9 +1108,6 @@ fn handle_relay_event(
         SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::StatusChanged {
             ..
         })) => {
-            if relay.serves {
-                set_relay_server_status(swarm, detected(), relay.has_external_addr);
-            }
             relay.refresh_and_reconcile(swarm, peers, detected(), now);
             false
         }
@@ -1218,6 +1238,7 @@ async fn run_worker(
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
     let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
+    let mut relayed_retry = DialRetry::new(relay.resilience);
     let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // Parked requests expire on their own clock, not the slower scan's.
@@ -1315,6 +1336,9 @@ async fn run_worker(
                         {
                             continue;
                         }
+                        if !relayed_retry.due(&peer_id, Instant::now()) {
+                            continue;
+                        }
                         if addrs.is_empty() {
                             // Known to the network but not yet dialable — try
                             // again on a later scan once it reports a real
@@ -1393,6 +1417,7 @@ async fn run_worker(
                         .kad
                         .add_address(&peer_id, endpoint.get_remote_address().clone());
                     known_peers.insert(peer_id);
+                    relayed_retry.on_connected(&peer_id);
                 } else if let SwarmEvent::OutgoingConnectionError { peer_id, error, .. } = event {
                     // Otherwise a dial that fails asynchronously (bad
                     // multiaddr, handshake mismatch, unreachable host)
@@ -1404,6 +1429,14 @@ async fn run_worker(
                     // pruning-based recovery, not an independent retry
                     // policy here).
                     tracing::warn!(?peer_id, "avalon-dht: outgoing connection failed: {error}");
+                    // A relayed dial can fail only because the relay was briefly unavailable:
+                    // let the scan dial the peer again after a backoff.
+                    if let Some(peer_id) = peer_id.filter(|_| is_retryable_relayed_failure(&error)) {
+                        if let Some(wait) = relayed_retry.on_failure(peer_id, Instant::now()) {
+                            tracing::info!(%peer_id, ?wait, "avalon-dht: relayed dial failed, retrying");
+                            known_peers.remove(&peer_id);
+                        }
+                    }
                 } else if let SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(
                     identify::Event::Received { peer_id, info, .. },
                 )) = event

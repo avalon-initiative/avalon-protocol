@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use avalon_protocol::connectivity::Connectivity;
+use avalon_protocol::connectivity::{Connectivity, PathType};
 use avalon_server::dht::{self, DhtConfig, DhtHandle};
 use avalon_server::nodes::{PeerInfo, PeerTable};
 use avalon_server::reachability::{
@@ -62,6 +62,7 @@ fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> DhtConf
         external_addr: external.map(|e| e.parse().unwrap()),
         autonat: autonat(),
         relay,
+        relay_resilience: Default::default(),
         bootstrap_scan_interval: Duration::from_millis(300),
     }
 }
@@ -1099,4 +1100,143 @@ fn server_settings_map_to_relay_limits() {
     assert_eq!(cfg.max_circuits_per_peer, 1);
     assert_eq!(cfg.max_circuit_duration, Duration::from_secs(7));
     assert_eq!(cfg.max_circuit_bytes, 1234);
+}
+
+/// A table entry for `id` reachable only through the relay at `relay_addr`.
+fn relayed_entry(id: PeerId, relay_addr: &Multiaddr) -> PeerInfo {
+    PeerInfo {
+        identity_bound: false,
+        base_url: format!("http://{id}.test"),
+        roles: vec!["combined".to_string()],
+        protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),
+        network_id: NETWORK.to_string(),
+        last_announced_at: time::OffsetDateTime::now_utc(),
+        libp2p_peer_id: Some(id.to_string()),
+        libp2p_listen_addrs: vec![format!("{relay_addr}/p2p-circuit/p2p/{id}")],
+        connectivity: None,
+        witness: None,
+    }
+}
+
+/// Node A is told of a node only reachable through a relay before that node holds a
+/// reservation, so its first circuit dial fails. Returns whether A ends up connected to it over
+/// the relay once the reservation exists, with `retries` retries allowed.
+async fn dials_a_relayed_peer_that_reserves_late(retries: u32) -> bool {
+    let (_r, r_addr) = relay_node(server_settings()).await;
+    // A bare target dials no one, so only A's own dials can connect them. The lower peer id
+    // dials first, so A needs no crossed-dial grace.
+    let mut target = raw_swarm();
+    let t_id = *target.local_peer_id();
+    let a_key = loop {
+        let key = identity::Keypair::generate_ed25519();
+        if key.public().to_peer_id().to_bytes() < t_id.to_bytes() {
+            break key;
+        }
+    };
+    let a_peers = PeerTable::new();
+    a_peers.upsert(relayed_entry(t_id, &r_addr));
+    let mut a_config = config("/ip4/127.0.0.1/tcp/0", None, RelaySettings::default());
+    a_config.identity = a_key;
+    a_config.relay_resilience = avalon_server::relay_resilience::RelayResilience {
+        dial_retries: retries,
+        dial_retry_base: Duration::from_secs(1),
+        ..Default::default()
+    };
+    // Each failed circuit dial leaves a connection to the relay; keep the per-peer limit from
+    // denying the relay's AutoNAT dial-back and so turning it `private`.
+    let node_http = avalon_server::node_http::NodeHttpSettings {
+        max_connections_per_peer: 64,
+        ..Default::default()
+    };
+    let _a = dht::start_with_node_http(a_peers.clone(), a_config, node_http).await;
+
+    // Let the first dial fail: the relay has no reservation for the target yet.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(raw_reserve(&mut target, &r_addr).await);
+    tokio::spawn(async move {
+        loop {
+            target.select_next_some().await;
+        }
+    });
+
+    let wait = Duration::from_secs(if retries > 0 { 20 } else { 8 });
+    tokio::time::timeout(wait, async {
+        while a_peers.paths().path(&t_id) != Some(PathType::Relayed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// A circuit dial that failed because the target had no reservation yet is retried and connects
+/// once it has; with retries off it is never dialed again.
+#[tokio::test]
+async fn a_failed_relayed_dial_is_retried_until_the_peer_is_reachable() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    assert!(
+        dials_a_relayed_peer_that_reserves_late(5).await,
+        "the retried dial connects"
+    );
+    assert!(
+        !dials_a_relayed_peer_that_reserves_late(0).await,
+        "without retries the failed dial is not repeated"
+    );
+}
+
+/// A serving relay whose one AutoNAT probe fails: its only prober allows a single connection
+/// per peer, so the dial-back is denied and the relay turns `private`. Returns whether it still
+/// advertises the hop protocol then, with `grace` as the private grace.
+async fn relay_after_one_failed_probe_advertises_hop(grace: Duration) -> bool {
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let r_peers = PeerTable::new();
+    let mut r_config = config(
+        &addr,
+        Some(&addr),
+        RelaySettings {
+            server: Some(server_settings()),
+            ..RelaySettings::default()
+        },
+    );
+    r_config.relay_resilience = avalon_server::relay_resilience::RelayResilience {
+        private_grace: grace,
+        ..Default::default()
+    };
+    let r = dht::start(r_peers.clone(), r_config).await;
+    let r_addr: Multiaddr = format!("{addr}/p2p/{}", r.peer_id).parse().unwrap();
+
+    let prober = dht::start_with_node_http(
+        PeerTable::new(),
+        config("/ip4/127.0.0.1/tcp/0", None, RelaySettings::default()),
+        avalon_server::node_http::NodeHttpSettings {
+            max_connections_per_peer: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    introduce(&r_peers, &prober);
+    wait_snapshot(&r, "private", |s| {
+        (s.reachability == Reachability::Private).then_some(())
+    })
+    .await;
+    // Past the next reconcile, so the gate has seen the verdict.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    protocols_of(&r_addr, r.peer_id)
+        .await
+        .contains(&relay::HOP_PROTOCOL_NAME)
+}
+
+/// One failed probe does not take a serving relay out of service; with no grace it does.
+#[tokio::test]
+async fn a_relay_keeps_serving_through_a_brief_private_verdict() {
+    assert!(
+        relay_after_one_failed_probe_advertises_hop(Duration::from_secs(60)).await,
+        "the relay stops serving on one failed probe"
+    );
+    assert!(
+        !relay_after_one_failed_probe_advertises_hop(Duration::ZERO).await,
+        "without a grace the private verdict stops the relay"
+    );
 }
