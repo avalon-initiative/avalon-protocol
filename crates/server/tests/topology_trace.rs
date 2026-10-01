@@ -181,8 +181,10 @@ async fn trace_across_a_line_returns_ordered_hops_with_plausible_timings() {
         if i + 1 < hops.len() {
             let leg = h["to_next_ms"].as_f64().unwrap();
             assert!((0.0..=total).contains(&leg), "hop {i} leg {leg}");
+            assert_eq!(h["path_to_next"], "direct", "hop {i} dials over HTTP");
         } else {
             assert!(h["to_next_ms"].is_null());
+            assert!(h["path_to_next"].is_null());
         }
     }
     assert_eq!(t["trace_id"].as_str().unwrap().len(), 36);

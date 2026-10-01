@@ -59,6 +59,26 @@ pub enum PathType {
     Relayed,
 }
 
+impl PathType {
+    /// Higher is worse: a path through a relay outranks a punched one, which outranks a direct one.
+    pub fn severity(self) -> u8 {
+        match self {
+            PathType::Direct => 0,
+            PathType::Traversed => 1,
+            PathType::Relayed => 2,
+        }
+    }
+
+    /// The worse of two paths, so a measurement that touched a relay stays labeled relayed.
+    pub fn worse(self, other: PathType) -> PathType {
+        if other.severity() > self.severity() {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +106,15 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&path).unwrap(), format!("\"{name}\""));
         }
+    }
+
+    #[test]
+    fn the_worse_path_wins() {
+        use PathType::*;
+        assert_eq!(Direct.worse(Relayed), Relayed);
+        assert_eq!(Relayed.worse(Direct), Relayed);
+        assert_eq!(Traversed.worse(Direct), Traversed);
+        assert_eq!(Direct.worse(Direct), Direct);
     }
 
     #[test]

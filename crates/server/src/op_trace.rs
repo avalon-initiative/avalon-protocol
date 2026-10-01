@@ -99,6 +99,7 @@ impl HopIdentity {
             protocol_version: self.protocol_version.clone(),
             processing_ms: processing.as_secs_f64() * 1000.0,
             to_next_ms: to_next.map(|d| d.as_secs_f64() * 1000.0),
+            path_to_next: None,
         }
     }
 }
@@ -472,6 +473,7 @@ mod tests {
             protocol_version: "1.0.0".into(),
             processing_ms: processing,
             to_next_ms: None,
+            path_to_next: None,
         }
     }
 

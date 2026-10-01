@@ -483,6 +483,11 @@ impl NodeResponse {
         }))
     }
 
+    /// Whether this response came over a libp2p stream rather than an HTTP connection.
+    pub fn via_stream(&self) -> bool {
+        matches!(self.0, Inner::Stream { .. })
+    }
+
     pub fn status(&self) -> StatusCode {
         match &self.0 {
             Inner::Http(r) => r.status(),
