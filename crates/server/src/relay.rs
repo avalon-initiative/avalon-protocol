@@ -32,6 +32,11 @@ const DEFAULT_SERVER_CIRCUIT_SECS: u64 = 120;
 const DEFAULT_SERVER_CIRCUIT_BYTES: u64 = 512 * 1024;
 const DEFAULT_CLIENT_MAX_RESERVATIONS: u64 = 2;
 const DEFAULT_CLIENT_BACKOFF_MAX_SECS: u64 = 15 * 60;
+const DEFAULT_RESELECT_HOLD_SECS: u64 = 10 * 60;
+const DEFAULT_RESELECT_INTERVAL_SECS: u64 = 2 * 60;
+const DEFAULT_RESELECT_MARGIN_MS: u64 = 30;
+const MAX_RESELECT_SECS: u64 = 24 * 60 * 60;
+const MAX_RESELECT_MARGIN_MS: u64 = 10_000;
 
 /// Hard ceilings: a relay knob can be raised, never made effectively unbounded.
 const MAX_SERVER_RESERVATIONS: u64 = 4096;
@@ -117,6 +122,14 @@ pub struct RelayClientSettings {
     pub pending_timeout: Duration,
     /// How often reservations are reconciled with what is wanted.
     pub reconcile_interval: Duration,
+    /// How long a reservation is held, from its first acceptance, before a better relay may
+    /// replace it.
+    pub reselect_hold: Duration,
+    /// Least time between two replacements.
+    pub reselect_interval: Duration,
+    /// Milliseconds of round trip a discovered relay must save over the held one to replace
+    /// it, and at least a quarter of the held relay's round trip.
+    pub reselect_margin_ms: u32,
 }
 
 impl Default for RelayClientSettings {
@@ -130,6 +143,9 @@ impl Default for RelayClientSettings {
             retry_backoff_max: Duration::from_secs(DEFAULT_CLIENT_BACKOFF_MAX_SECS),
             pending_timeout: Duration::from_secs(30),
             reconcile_interval: Duration::from_secs(5),
+            reselect_hold: Duration::from_secs(DEFAULT_RESELECT_HOLD_SECS),
+            reselect_interval: Duration::from_secs(DEFAULT_RESELECT_INTERVAL_SECS),
+            reselect_margin_ms: DEFAULT_RESELECT_MARGIN_MS as u32,
         }
     }
 }
@@ -197,7 +213,9 @@ impl RelaySettings {
     /// (3600), `AVALON_RELAY_MAX_CIRCUITS` (16), `AVALON_RELAY_MAX_CIRCUITS_PER_PEER` (4),
     /// `AVALON_RELAY_MAX_CIRCUIT_SECS` (120), `AVALON_RELAY_MAX_CIRCUIT_BYTES` (524288).
     /// Client: `AVALON_RELAY_CLIENT_ENABLED` (true), `AVALON_RELAY_CLIENT_MAX_RESERVATIONS` (2),
-    /// `AVALON_RELAY_ADDRS` (comma-separated multiaddrs ending in `/p2p/<peer id>`).
+    /// `AVALON_RELAY_ADDRS` (comma-separated multiaddrs ending in `/p2p/<peer id>`),
+    /// `AVALON_RELAY_RESELECT_HOLD_SECS` (600), `AVALON_RELAY_RESELECT_INTERVAL_SECS` (120),
+    /// `AVALON_RELAY_RESELECT_MARGIN_MS` (30).
     /// Every limit is at least 1 and has a ceiling.
     pub fn from_env(policy: OutboundPolicy) -> Result<Self, String> {
         let server = if env_flag("AVALON_RELAY_SERVER_ENABLED", false) {
@@ -274,6 +292,21 @@ impl RelaySettings {
                 )? as usize,
                 relay_addrs,
                 allow_private: policy.allow_private,
+                reselect_hold: Duration::from_secs(bounded_env(
+                    "AVALON_RELAY_RESELECT_HOLD_SECS",
+                    DEFAULT_RESELECT_HOLD_SECS,
+                    MAX_RESELECT_SECS,
+                )?),
+                reselect_interval: Duration::from_secs(bounded_env(
+                    "AVALON_RELAY_RESELECT_INTERVAL_SECS",
+                    DEFAULT_RESELECT_INTERVAL_SECS,
+                    MAX_RESELECT_SECS,
+                )?),
+                reselect_margin_ms: bounded_env(
+                    "AVALON_RELAY_RESELECT_MARGIN_MS",
+                    DEFAULT_RESELECT_MARGIN_MS,
+                    MAX_RESELECT_MARGIN_MS,
+                )? as u32,
                 ..RelayClientSettings::default()
             },
         })
@@ -555,10 +588,21 @@ struct Slot {
     accepted: bool,
     renewals: u64,
     started: Instant,
+    /// When the relay first accepted this reservation; the hold time counts from here.
+    held_since: Option<Instant>,
+}
+
+/// A reservation being swapped: `new` is requested while `old` stays held until it is accepted.
+#[derive(Debug, Clone, Copy)]
+struct Replacement {
+    old: PeerId,
+    new: PeerId,
 }
 
 /// Chooses relays and tracks reservations for a `private` node: skip relays in backoff, prefer a
 /// new neighbourhood, then operator list order, then round trip, history, capacity, peer id.
+/// A held reservation is replaced only by a relay that is clearly better (see
+/// [`RelayClient::improves`]), after the hold time, once per interval.
 pub struct RelayClient {
     settings: RelayClientSettings,
     local_peer: PeerId,
@@ -568,6 +612,10 @@ pub struct RelayClient {
     /// than the addresses it reports for itself. Bounded.
     connected: HashMap<PeerId, Multiaddr>,
     handle: ReachabilityHandle,
+    replacing: Option<Replacement>,
+    last_replacement: Option<Instant>,
+    /// Latencies are refetched for a reselection no sooner than this.
+    next_reselect_fetch: Option<Instant>,
 }
 
 impl RelayClient {
@@ -583,6 +631,9 @@ impl RelayClient {
             slots: BTreeMap::new(),
             connected: HashMap::new(),
             handle,
+            replacing: None,
+            last_replacement: None,
+            next_reselect_fetch: None,
         };
         for (index, addr) in client.settings.relay_addrs.clone().into_iter().enumerate() {
             if let Some((peer, dial)) = split_relay_addr(&addr) {
@@ -690,7 +741,6 @@ impl RelayClient {
 
     /// Of the relays not held and not in backoff: operator-listed ones before discovered ones,
     /// and within each group the best one outside every held neighbourhood, else the best one.
-    /// A slot filled from the fallback is not rebalanced when a diverse relay recovers.
     fn next_candidate(&self, now: Instant) -> Option<PeerId> {
         let held: HashSet<Neighbourhood> = self
             .slots
@@ -724,7 +774,14 @@ impl RelayClient {
         now: Instant,
         fetch: impl FnOnce() -> Vec<(PeerId, f64)>,
     ) {
-        if self.wants_slots(reachability) && self.next_candidate(now).is_some() {
+        let fill = self.wants_slots(reachability) && self.next_candidate(now).is_some();
+        let review = reachability == Reachability::Private
+            && self.reselect_due(now)
+            && self.next_reselect_fetch.is_none_or(|t| now >= t);
+        if review {
+            self.next_reselect_fetch = Some(now + self.settings.reselect_interval);
+        }
+        if fill || review {
             self.set_latencies(fetch());
         }
     }
@@ -766,6 +823,7 @@ impl RelayClient {
             if let Some(slot) = self.slots.remove(&peer) {
                 swarm.remove_listener(slot.listener_id);
             }
+            self.forget_replacement(peer);
             self.mark_failed(peer, now, false);
         }
 
@@ -773,39 +831,171 @@ impl RelayClient {
             let Some(peer) = self.next_candidate(now) else {
                 break;
             };
-            let candidate = &self.candidates[&peer];
-            let dial = candidate.dial_addr().clone();
-            let group = self.group_of(&peer, candidate);
-            let circuit = dial
-                .clone()
-                .with(Protocol::P2p(peer))
-                .with(Protocol::P2pCircuit);
-            match swarm.listen_on(circuit) {
-                Ok(listener_id) => {
-                    let relayed_addr = dial
-                        .with(Protocol::P2p(peer))
-                        .with(Protocol::P2pCircuit)
-                        .with(Protocol::P2p(self.local_peer));
-                    tracing::info!(%peer, "avalon-relay: reserving a slot");
-                    self.slots.insert(
-                        peer,
-                        Slot {
-                            listener_id,
-                            relayed_addr,
-                            neighbourhood: group,
-                            accepted: false,
-                            renewals: 0,
-                            started: now,
-                        },
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(%peer, "avalon-relay: cannot listen through relay: {e}");
-                    self.mark_failed(peer, now, false);
-                }
+            self.open_slot(swarm, peer, now);
+        }
+        self.reselect(swarm, now);
+        self.publish();
+    }
+
+    /// Requests a reservation on `peer`; a failure to even start one backs the relay off.
+    fn open_slot<B: NetworkBehaviour>(
+        &mut self,
+        swarm: &mut Swarm<B>,
+        peer: PeerId,
+        now: Instant,
+    ) -> bool {
+        let candidate = &self.candidates[&peer];
+        let dial = candidate.dial_addr().clone();
+        let group = self.group_of(&peer, candidate);
+        let circuit = dial
+            .clone()
+            .with(Protocol::P2p(peer))
+            .with(Protocol::P2pCircuit);
+        match swarm.listen_on(circuit) {
+            Ok(listener_id) => {
+                let relayed_addr = dial
+                    .with(Protocol::P2p(peer))
+                    .with(Protocol::P2pCircuit)
+                    .with(Protocol::P2p(self.local_peer));
+                tracing::info!(%peer, "avalon-relay: reserving a slot");
+                self.slots.insert(
+                    peer,
+                    Slot {
+                        listener_id,
+                        relayed_addr,
+                        neighbourhood: group,
+                        accepted: false,
+                        renewals: 0,
+                        started: now,
+                        held_since: None,
+                    },
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(%peer, "avalon-relay: cannot listen through relay: {e}");
+                self.mark_failed(peer, now, false);
+                false
             }
         }
-        self.publish();
+    }
+
+    /// Whether a replacement could start now: every reservation accepted (so none in flight), the
+    /// interval since the last one over, a reservation past its hold time and a relay to move to.
+    fn reselect_due(&self, now: Instant) -> bool {
+        self.settings.enabled
+            && !self.slots.is_empty()
+            && self.slots.values().all(|s| s.accepted)
+            && self
+                .last_replacement
+                .is_none_or(|t| now.duration_since(t) >= self.settings.reselect_interval)
+            && self.slots.values().any(|s| self.past_hold(s, now))
+            && self
+                .candidates
+                .iter()
+                .any(|(peer, c)| self.available(peer, c, now))
+    }
+
+    fn past_hold(&self, slot: &Slot, now: Instant) -> bool {
+        slot.held_since
+            .is_some_and(|t| now.duration_since(t) >= self.settings.reselect_hold)
+    }
+
+    fn available(&self, peer: &PeerId, c: &Candidate, now: Instant) -> bool {
+        !self.slots.contains_key(peer) && c.retry_at.is_none_or(|t| now >= t)
+    }
+
+    /// Starts at most one replacement: the new relay is reserved while the old reservation stays,
+    /// and the old one is released only once the new one is accepted.
+    fn reselect<B: NetworkBehaviour>(&mut self, swarm: &mut Swarm<B>, now: Instant) {
+        if !self.reselect_due(now) {
+            return;
+        }
+        let Some((old, new)) = self.pick_replacement(now) else {
+            return;
+        };
+        self.last_replacement = Some(now);
+        tracing::info!(%old, %new, "avalon-relay: replacing a reservation with a better relay");
+        if self.open_slot(swarm, new, now) {
+            self.replacing = Some(Replacement { old, new });
+        }
+    }
+
+    /// The held reservation to give up and the relay to take instead: the worst-ranked held
+    /// reservation past its hold time that some available relay [improves](Self::improves) on.
+    fn pick_replacement(&self, now: Instant) -> Option<(PeerId, PeerId)> {
+        let mut held: Vec<PeerId> = self
+            .slots
+            .iter()
+            .filter(|(peer, s)| self.past_hold(s, now) && self.candidates.contains_key(peer))
+            .map(|(peer, _)| *peer)
+            .collect();
+        held.sort_by(|a, b| {
+            Self::rank_key(*b, &self.candidates[b]).cmp(&Self::rank_key(*a, &self.candidates[a]))
+        });
+        held.into_iter()
+            .find_map(|old| self.better_than(old, now).map(|new| (old, new)))
+    }
+
+    fn better_than(&self, old: PeerId, now: Instant) -> Option<PeerId> {
+        let others: HashSet<Neighbourhood> = self
+            .slots
+            .iter()
+            .filter(|(peer, _)| **peer != old)
+            .filter_map(|(_, s)| s.neighbourhood.clone())
+            .collect();
+        let old_shares = self.slots[&old]
+            .neighbourhood
+            .as_ref()
+            .is_some_and(|n| others.contains(n));
+        let diverse = |peer: &PeerId, c: &Candidate| {
+            self.group_of(peer, c).is_none_or(|n| !others.contains(&n))
+        };
+        self.candidates
+            .iter()
+            .filter(|(peer, c)| self.available(peer, c, now))
+            .filter(|(peer, c)| {
+                self.improves(c, &self.candidates[&old], diverse(peer, c), old_shares)
+            })
+            .min_by_key(|(peer, c)| (c.rank.0, !diverse(peer, c), Self::rank_key(**peer, c)))
+            .map(|(peer, _)| *peer)
+    }
+
+    /// Whether `new` clearly beats the held `old`: a better tier, a diverse relay for a shared
+    /// neighbourhood, a better list position or a round trip saving past the margin; mirrors
+    /// `next_candidate` so a swap is never undone.
+    fn improves(&self, new: &Candidate, old: &Candidate, diverse: bool, old_shares: bool) -> bool {
+        match new.rank.0.cmp(&old.rank.0) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+        if !diverse && !old_shares {
+            return false;
+        }
+        if old_shares && diverse {
+            return true;
+        }
+        if new.rank.0 == 0 {
+            return new.rank.1 < old.rank.1;
+        }
+        let (Some(new_ms), Some(old_ms)) = (new.latency_ms, old.latency_ms) else {
+            return false;
+        };
+        let saved = old_ms - new_ms;
+        saved >= f64::from(self.settings.reselect_margin_ms)
+            && saved >= old_ms / 4.0
+            && new.history() >= old.history().min(0)
+    }
+
+    /// Clears the swap in flight when either side of it is gone.
+    fn forget_replacement(&mut self, peer: PeerId) {
+        if self
+            .replacing
+            .is_some_and(|r| r.old == peer || r.new == peer)
+        {
+            self.replacing = None;
+        }
     }
 
     fn release_all<B: NetworkBehaviour>(&mut self, swarm: &mut Swarm<B>) {
@@ -815,6 +1005,7 @@ impl RelayClient {
         for (_, slot) in std::mem::take(&mut self.slots) {
             swarm.remove_listener(slot.listener_id);
         }
+        self.replacing = None;
         self.publish();
     }
 
@@ -831,12 +1022,22 @@ impl RelayClient {
         }
     }
 
-    /// The relay accepted or renewed a reservation.
-    pub fn on_accepted(&mut self, relay_peer: PeerId, renewal: bool) {
-        let Some(slot) = self.slots.get_mut(&relay_peer) else {
-            return;
-        };
+    /// The relay accepted or renewed a reservation. Returns the listener of the reservation this
+    /// one replaced, for the caller to release.
+    /// A swapped-in relay becomes the only reservation once accepted; that needs the best rank,
+    /// happens at most once per hold per slot and leaves no gap at two or more reservations.
+    #[must_use]
+    pub fn on_accepted(
+        &mut self,
+        relay_peer: PeerId,
+        renewal: bool,
+        now: Instant,
+    ) -> Option<ListenerId> {
+        let slot = self.slots.get_mut(&relay_peer)?;
         slot.accepted = true;
+        if !renewal {
+            slot.held_since.get_or_insert(now);
+        }
         let candidate = self.candidates.get_mut(&relay_peer);
         if renewal {
             slot.renewals += 1;
@@ -851,7 +1052,15 @@ impl RelayClient {
             c.accepts = c.accepts.saturating_add(1);
         }
         tracing::info!(%relay_peer, renewal, "avalon-relay: reservation accepted");
+        let superseded = match self.replacing {
+            Some(r) if r.new == relay_peer && !renewal => {
+                self.replacing = None;
+                self.slots.remove(&r.old).map(|s| s.listener_id)
+            }
+            _ => None,
+        };
         self.publish();
+        superseded
     }
 
     /// A reservation listener ended (refused, relay lost, or dial failed). The relay is skipped
@@ -866,6 +1075,7 @@ impl RelayClient {
             return;
         };
         let lost = self.slots.remove(&peer).is_some_and(|s| s.accepted);
+        self.forget_replacement(peer);
         tracing::warn!(relay = %peer, "avalon-relay: reservation lost");
         self.mark_failed(peer, now, lost);
         self.publish();
@@ -958,16 +1168,23 @@ mod tests {
     }
 
     fn hold(c: &mut RelayClient, peer: PeerId) {
+        hold_since(c, peer, Instant::now());
+    }
+
+    fn hold_since(c: &mut RelayClient, peer: PeerId, at: Instant) {
         let group = neighbourhood(c.candidates[&peer].dial_addr());
         c.slots.insert(
             peer,
             Slot {
                 listener_id: ListenerId::next(),
-                relayed_addr: "/ip4/127.0.0.1/tcp/1/p2p-circuit".parse().unwrap(),
+                relayed_addr: format!("/ip4/127.0.0.1/tcp/1/p2p/{peer}/p2p-circuit")
+                    .parse()
+                    .unwrap(),
                 neighbourhood: group,
                 accepted: true,
                 renewals: 0,
-                started: Instant::now(),
+                started: at,
+                held_since: Some(at),
             },
         );
     }
@@ -1116,14 +1333,14 @@ mod tests {
         for n in 1..=3 {
             hold(&mut c, p);
             c.slots.get_mut(&p).unwrap().accepted = false;
-            c.on_accepted(p, false);
+            let _ = c.on_accepted(p, false, Instant::now());
             let id = c.slots[&p].listener_id;
             c.on_listener_closed(id, now);
             let wait = c.candidates[&p].retry_at.unwrap() - now;
             assert_eq!(wait, backoff_delay(d.retry_backoff, d.retry_backoff_max, n));
         }
         hold(&mut c, p);
-        c.on_accepted(p, true);
+        let _ = c.on_accepted(p, true, Instant::now());
         let cand = &c.candidates[&p];
         assert_eq!(
             (cand.failures, cand.retry_at),
@@ -1166,9 +1383,9 @@ mod tests {
         );
         c.candidates.get_mut(&p).unwrap().drops = 8;
         hold(&mut c, p);
-        c.on_accepted(p, true);
+        let _ = c.on_accepted(p, true, Instant::now());
         assert_eq!(c.candidates[&p].drops, 4);
-        c.on_accepted(p, true);
+        let _ = c.on_accepted(p, true, Instant::now());
         assert_eq!(c.candidates[&p].drops, 2);
     }
 
@@ -1380,14 +1597,14 @@ mod tests {
         for _ in 0..10_000 {
             hold(&mut c, flapper);
             c.slots.get_mut(&flapper).unwrap().accepted = false;
-            c.on_accepted(flapper, false);
+            let _ = c.on_accepted(flapper, false, Instant::now());
             let id = c.slots[&flapper].listener_id;
             c.on_listener_closed(id, now);
         }
         hold(&mut c, stable);
         c.slots.get_mut(&stable).unwrap().accepted = false;
-        c.on_accepted(stable, false);
-        c.on_accepted(stable, true);
+        let _ = c.on_accepted(stable, false, Instant::now());
+        let _ = c.on_accepted(stable, true, Instant::now());
         c.slots.remove(&stable);
         assert!(c.candidates[&stable].history() > c.candidates[&flapper].history());
         let later = now + RelayClientSettings::default().retry_backoff_max;
@@ -1423,36 +1640,6 @@ mod tests {
         c.set_latencies([(same, 1.0), (nameless, 500.0)]);
         hold(&mut c, first);
         assert_eq!(c.next_candidate(Instant::now()), Some(nameless));
-    }
-
-    #[tokio::test]
-    async fn a_fallback_slot_is_kept_when_the_diverse_relay_recovers() {
-        let mut c = client(vec![], 2);
-        let a = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
-        let b = relay_at(&mut c, "/ip4/203.0.113.11/tcp/1");
-        let d = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
-        c.set_latencies([(a, 1.0), (b, 20.0), (d, 300.0)]);
-        let now = Instant::now();
-        c.mark_failed(d, now, false);
-        let mut swarm = test_swarm();
-        c.reconcile(&mut swarm, Reachability::Private, now);
-        assert_eq!(
-            c.slots.keys().copied().collect::<HashSet<_>>(),
-            HashSet::from([a, b])
-        );
-        c.on_accepted(a, false);
-        c.on_accepted(b, false);
-        let later = now + Duration::from_secs(3600);
-        c.reconcile(&mut swarm, Reachability::Private, later);
-        assert_eq!(c.slots.len(), 2, "no rebalancing onto the recovered relay");
-        assert!(c.slots.contains_key(&b));
-        let id = c.slots[&b].listener_id;
-        c.on_listener_closed(id, later);
-        c.reconcile(&mut swarm, Reachability::Private, later);
-        assert!(
-            c.slots.contains_key(&d),
-            "the freed slot goes to the diverse relay"
-        );
     }
 
     #[test]
@@ -1632,14 +1819,15 @@ mod tests {
                 accepted: false,
                 renewals: 0,
                 started: Instant::now(),
+                held_since: None,
             },
         );
         c.publish();
         assert!(handle.snapshot().relay_reservations.is_empty());
         assert!(handle.advertised_addrs().is_empty());
 
-        c.on_accepted(relay, false);
-        c.on_accepted(relay, true);
+        let _ = c.on_accepted(relay, false, Instant::now());
+        let _ = c.on_accepted(relay, true, Instant::now());
         let held = handle.snapshot().relay_reservations;
         assert_eq!(held.len(), 1);
         assert_eq!(held[0].renewals, 1);
@@ -1704,6 +1892,639 @@ mod tests {
         assert_eq!(cfg.reservation_duration, Duration::from_secs(3600));
     }
 
+    /// Accepts the pending replacement of `new`, as the swarm event would.
+    fn accept(c: &mut RelayClient, new: PeerId, now: Instant) -> Option<ListenerId> {
+        c.on_accepted(new, false, now)
+    }
+
+    #[tokio::test]
+    async fn a_better_relay_replaces_a_held_one_only_past_the_margin_and_the_hold_time() {
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let better = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        let hold = c.settings.reselect_hold;
+        let mut swarm = test_swarm();
+
+        c.set_latencies([(held, 100.0), (better, 71.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, t0 + hold);
+        assert!(c.replacing.is_none(), "29 ms saved is under the margin");
+
+        c.set_latencies([(held, 100.0), (better, 60.0)]);
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + hold - Duration::from_secs(1),
+        );
+        assert!(c.replacing.is_none(), "not held long enough");
+
+        c.reconcile(&mut swarm, Reachability::Private, t0 + hold);
+        assert_eq!(c.replacing.map(|r| (r.old, r.new)), Some((held, better)));
+        assert!(
+            c.slots.contains_key(&held),
+            "the old slot stays until the new one is in"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_margin_is_also_a_quarter_of_the_held_round_trip() {
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let other = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        let later = t0 + c.settings.reselect_hold;
+        let mut swarm = test_swarm();
+        // 40 ms saved passes the 30 ms margin but is only 20% of 200 ms.
+        c.set_latencies([(held, 200.0), (other, 160.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(c.replacing.is_none());
+        c.set_latencies([(held, 200.0), (other, 150.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(c.replacing.is_some());
+    }
+
+    #[tokio::test]
+    async fn jitter_around_the_margin_cannot_flap_the_reservation() {
+        let mut c = client(vec![], 1);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        let mut swarm = test_swarm();
+        let mut now = t0 + c.settings.reselect_hold;
+        // b alternates around a 30 ms advantage without ever reaching it.
+        for jitter in [71.0, 80.0, 72.0, 90.0, 71.5, 85.0] {
+            c.set_latencies([(a, 100.0), (b, jitter)]);
+            c.reconcile(&mut swarm, Reachability::Private, now);
+            assert!(c.replacing.is_none(), "b at {jitter} ms");
+            now += c.settings.reselect_interval;
+        }
+        // One real move, then the old relay's own jitter cannot bring it back.
+        c.set_latencies([(a, 100.0), (b, 60.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(accept(&mut c, b, now).is_some());
+        assert_eq!(c.slots.keys().copied().collect::<Vec<_>>(), vec![b]);
+        now += c.settings.reselect_hold;
+        for a_ms in [100.0, 80.0, 62.0, 40.0, 70.0, 59.0] {
+            c.set_latencies([(a, a_ms), (b, 60.0)]);
+            c.reconcile(&mut swarm, Reachability::Private, now);
+            assert!(
+                c.replacing.is_none(),
+                "a at {a_ms} ms is not 30 ms better than 60"
+            );
+            now += c.settings.reselect_interval;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_new_reservation_must_hold_before_it_can_be_replaced_itself() {
+        let mut c = client(vec![], 1);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        let mut swarm = test_swarm();
+        let moved = t0 + c.settings.reselect_hold;
+        c.set_latencies([(a, 100.0), (b, 60.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, moved);
+        assert!(accept(&mut c, b, moved).is_some());
+        c.set_latencies([(a, 5.0), (b, 60.0)]);
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            moved + c.settings.reselect_hold - Duration::from_secs(1),
+        );
+        assert!(
+            c.replacing.is_none(),
+            "b has not been held for the hold time"
+        );
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            moved + c.settings.reselect_hold,
+        );
+        assert_eq!(c.replacing.map(|r| r.new), Some(a));
+    }
+
+    #[tokio::test]
+    async fn at_most_one_replacement_per_interval_and_one_at_a_time() {
+        let mut c = client(vec![], 2);
+        let (a, b) = (
+            relay_at(&mut c, "/ip4/203.0.113.1/tcp/1"),
+            relay_at(&mut c, "/ip4/198.51.100.1/tcp/1"),
+        );
+        let (x, y) = (
+            relay_at(&mut c, "/ip4/192.0.2.1/tcp/1"),
+            relay_at(&mut c, "/ip4/198.18.0.1/tcp/1"),
+        );
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        hold_since(&mut c, b, t0);
+        c.set_latencies([(a, 200.0), (b, 200.0), (x, 10.0), (y, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        let first = c.replacing.unwrap().new;
+        assert_eq!(
+            c.slots.len(),
+            3,
+            "the old reservation stays while the new one is asked"
+        );
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            now + Duration::from_secs(1),
+        );
+        assert_eq!(c.slots.len(), 3, "no second swap while one is in flight");
+        assert!(accept(&mut c, first, now).is_some());
+        assert_eq!(c.slots.len(), 2);
+
+        let next = now + c.settings.reselect_interval;
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            next - Duration::from_secs(1),
+        );
+        assert!(c.replacing.is_none(), "inside the interval");
+        c.reconcile(&mut swarm, Reachability::Private, next);
+        assert!(c.replacing.is_some(), "the interval is over");
+    }
+
+    #[tokio::test]
+    async fn the_old_reservation_is_released_only_when_the_new_one_is_accepted() {
+        let handle = ReachabilityHandle::unknown();
+        let mut c = RelayClient::new(
+            RelayClientSettings {
+                allow_private: true,
+                max_reservations: 1,
+                ..Default::default()
+            },
+            peer(),
+            handle.clone(),
+        );
+        let (old, new) = (
+            relay_at(&mut c, "/ip4/203.0.113.1/tcp/1"),
+            relay_at(&mut c, "/ip4/198.51.100.1/tcp/1"),
+        );
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.publish();
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        let pending = handle.snapshot().relay_reservations;
+        assert_eq!(pending.len(), 1, "the unanswered one is not advertised");
+        assert!(pending[0].relayed_addr.contains(&old.to_string()));
+
+        let old_listener = c.slots[&old].listener_id;
+        assert_eq!(accept(&mut c, new, now), Some(old_listener));
+        let after = handle.snapshot().relay_reservations;
+        assert_eq!(after.len(), 1);
+        assert!(after[0].relayed_addr.contains(&new.to_string()));
+        assert!(!c.slots.contains_key(&old));
+    }
+
+    #[tokio::test]
+    async fn a_refused_replacement_keeps_the_old_reservation_and_backs_the_new_relay_off() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        let id = c.slots[&new].listener_id;
+        c.on_listener_closed(id, now);
+        assert!(c.replacing.is_none());
+        assert_eq!(c.slots.keys().copied().collect::<Vec<_>>(), vec![old]);
+        assert!(c.candidates[&new].retry_at.is_some());
+        assert_eq!(c.candidates[&new].drops, 0, "never accepted, so not a loss");
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            now + Duration::from_secs(1),
+        );
+        assert!(c.replacing.is_none(), "one attempt per interval");
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            now + c.settings.reselect_interval,
+        );
+        assert_eq!(
+            c.replacing.map(|r| r.new),
+            Some(new),
+            "tried again after backoff and interval"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_held_relay_that_fails_is_dropped_at_once_and_the_replacement_carries_on() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        let id = c.slots[&old].listener_id;
+        c.on_listener_closed(id, now);
+        assert!(c.replacing.is_none());
+        assert!(!c.slots.contains_key(&old));
+        assert_eq!(
+            c.candidates[&old].drops, 1,
+            "a lost accepted reservation counts"
+        );
+        assert!(
+            c.slots.contains_key(&new),
+            "the pending one is now the ordinary slot"
+        );
+        assert!(accept(&mut c, new, now).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_same_prefix_fallback_is_rebalanced_onto_a_diverse_relay_after_the_hold() {
+        let mut c = client(vec![], 2);
+        let a = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let b = relay_at(&mut c, "/ip4/203.0.113.11/tcp/1");
+        let d = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.set_latencies([(a, 1.0), (b, 20.0), (d, 300.0)]);
+        let t0 = Instant::now();
+        c.mark_failed(d, t0, false);
+        let mut swarm = test_swarm();
+        c.reconcile(&mut swarm, Reachability::Private, t0);
+        assert_eq!(
+            c.slots.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([a, b])
+        );
+        let _ = c.on_accepted(a, false, t0);
+        let _ = c.on_accepted(b, false, t0);
+
+        let backoff_over = t0 + c.settings.retry_backoff;
+        c.reconcile(&mut swarm, Reachability::Private, backoff_over);
+        assert!(
+            c.replacing.is_none(),
+            "available, but the hold time has not passed"
+        );
+        let held = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, held);
+        let r = c.replacing.unwrap();
+        assert_eq!(
+            (r.old, r.new),
+            (b, d),
+            "the worse-ranked of the pair makes room"
+        );
+        assert!(accept(&mut c, d, held).is_some());
+        assert_eq!(
+            c.slots.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([a, d])
+        );
+        // Diverse now: nothing further to rebalance.
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            held + c.settings.reselect_hold + c.settings.reselect_interval,
+        );
+        assert!(c.replacing.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_diverse_relay_still_in_backoff_does_not_rebalance_the_fallback() {
+        let mut c = client(vec![], 2);
+        let a = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let b = relay_at(&mut c, "/ip4/203.0.113.11/tcp/1");
+        let d = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        hold_since(&mut c, b, t0);
+        let now = t0 + c.settings.reselect_hold;
+        c.mark_failed(d, now, false);
+        let mut swarm = test_swarm();
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_discovered_relay_never_displaces_an_operator_relay() {
+        let listed = peer();
+        let mut c = client(vec![with_peer("/ip4/203.0.113.1/tcp/1", listed)], 1);
+        let found = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, listed, t0);
+        c.set_latencies([(listed, 900.0), (found, 1.0)]);
+        c.candidates.get_mut(&found).unwrap().accepts = 4;
+        let mut swarm = test_swarm();
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + c.settings.reselect_hold,
+        );
+        assert!(c.replacing.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_operator_relay_takes_the_place_of_a_discovered_one_after_the_hold() {
+        let listed = peer();
+        let mut c = client(vec![with_peer("/ip4/203.0.113.1/tcp/1", listed)], 1);
+        let found = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        c.mark_failed(listed, t0, false);
+        hold_since(&mut c, found, t0);
+        let mut swarm = test_swarm();
+        let ready = t0 + c.settings.retry_backoff;
+        c.reconcile(&mut swarm, Reachability::Private, ready);
+        assert!(c.replacing.is_none(), "hold time first");
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + c.settings.reselect_hold,
+        );
+        assert_eq!(c.replacing.map(|r| (r.old, r.new)), Some((found, listed)));
+    }
+
+    #[tokio::test]
+    async fn an_earlier_listed_operator_relay_replaces_a_later_one_but_not_across_a_prefix() {
+        let (first, second, third) = (peer(), peer(), peer());
+        let mut c = client(
+            vec![
+                with_peer("/ip4/203.0.113.1/tcp/1", first),
+                with_peer("/ip4/198.51.100.1/tcp/1", second),
+                with_peer("/ip4/198.51.100.2/tcp/1", third),
+            ],
+            1,
+        );
+        let t0 = Instant::now();
+        hold_since(&mut c, second, t0);
+        let mut swarm = test_swarm();
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + c.settings.reselect_hold,
+        );
+        assert_eq!(
+            c.replacing.map(|r| r.new),
+            Some(first),
+            "list order, whatever the latency"
+        );
+        let _ = accept(&mut c, first, t0);
+        // `third` is after `first`: not a better position.
+        let later =
+            t0 + c.settings.reselect_hold + c.settings.reselect_interval + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(c.replacing.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_latency_swap_never_moves_a_diverse_slot_onto_a_shared_prefix() {
+        let mut c = client(vec![], 2);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let same_as_b = relay_at(&mut c, "/ip4/198.51.100.9/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        hold_since(&mut c, b, t0);
+        c.set_latencies([(a, 200.0), (b, 10.0), (same_as_b, 1.0)]);
+        let mut swarm = test_swarm();
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + c.settings.reselect_hold,
+        );
+        assert!(c.replacing.is_none(), "1 ms would share b's /24");
+        let elsewhere = relay_at(&mut c, "/ip4/192.0.2.1/tcp/1");
+        c.set_latencies([(a, 200.0), (b, 10.0), (same_as_b, 1.0), (elsewhere, 20.0)]);
+        c.reconcile(
+            &mut swarm,
+            Reachability::Private,
+            t0 + c.settings.reselect_hold,
+        );
+        assert_eq!(c.replacing.map(|r| (r.old, r.new)), Some((a, elsewhere)));
+    }
+
+    #[tokio::test]
+    async fn unknown_latency_and_worse_history_never_justify_a_move() {
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let other = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        let now = t0 + c.settings.reselect_hold;
+        let mut swarm = test_swarm();
+        c.set_latencies([(other, 5.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_none(), "the held relay was never measured");
+        c.set_latencies([(held, 300.0)]);
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_none(), "the candidate was never measured");
+        c.set_latencies([(held, 300.0), (other, 5.0)]);
+        c.candidates.get_mut(&other).unwrap().drops = 2;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_none(), "a worse outcome history blocks it");
+    }
+
+    #[tokio::test]
+    async fn reselection_is_off_unless_private_and_never_leaves_a_pending_slot_alone() {
+        let mut c = client(vec![], 2);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let x = relay_at(&mut c, "/ip4/192.0.2.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, a, t0);
+        let now = t0 + c.settings.reselect_hold;
+        let pending = Slot {
+            accepted: false,
+            held_since: None,
+            started: now,
+            ..take_slot(&c, a)
+        };
+        c.slots.insert(b, pending);
+        c.set_latencies([(a, 300.0), (b, 100.0), (x, 1.0)]);
+        let mut swarm = test_swarm();
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_none(), "a slot is still unanswered");
+        assert_eq!(c.slots.len(), 2, "and nothing was added");
+        c.reconcile(&mut swarm, Reachability::Unknown, now);
+        assert!(c.replacing.is_none());
+    }
+
+    fn take_slot(c: &RelayClient, peer: PeerId) -> Slot {
+        let s = &c.slots[&peer];
+        Slot {
+            listener_id: ListenerId::next(),
+            relayed_addr: s.relayed_addr.clone(),
+            neighbourhood: s.neighbourhood.clone(),
+            accepted: true,
+            renewals: 0,
+            started: s.started,
+            held_since: s.held_since,
+        }
+    }
+
+    #[test]
+    fn latencies_are_fetched_for_a_reselection_only_when_one_is_due() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = || {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        };
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        c.refresh_latencies_if_needed(Reachability::Private, t0, fetch);
+        assert_eq!(calls.get(), 0, "inside the hold time");
+        let due = t0 + c.settings.reselect_hold;
+        c.refresh_latencies_if_needed(Reachability::Public, due, fetch);
+        assert_eq!(calls.get(), 0, "not private");
+        c.refresh_latencies_if_needed(Reachability::Private, due, fetch);
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn reselection_latencies_are_refetched_once_per_interval() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = || {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        };
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        let due = t0 + c.settings.reselect_hold;
+        let every = c.settings.reselect_interval;
+        c.refresh_latencies_if_needed(Reachability::Private, due, fetch);
+        for secs in [5, 30, 60] {
+            c.refresh_latencies_if_needed(
+                Reachability::Private,
+                due + Duration::from_secs(secs),
+                fetch,
+            );
+        }
+        assert_eq!(calls.get(), 1, "ticks inside the interval do not refetch");
+        c.refresh_latencies_if_needed(
+            Reachability::Private,
+            due + every - Duration::from_secs(1),
+            fetch,
+        );
+        assert_eq!(calls.get(), 1);
+        c.refresh_latencies_if_needed(Reachability::Private, due + every, fetch);
+        assert_eq!(calls.get(), 2, "a check after the interval fetches again");
+    }
+
+    #[tokio::test]
+    async fn releasing_everything_forgets_a_swap_in_flight() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_some());
+        c.reconcile(&mut swarm, Reachability::Public, now);
+        assert!(c.replacing.is_none() && c.slots.is_empty());
+        // The old relay is held again, still inside its hold: a stale swap must not supersede it.
+        hold_since(&mut c, old, now);
+        c.slots.insert(
+            new,
+            Slot {
+                accepted: false,
+                held_since: None,
+                ..take_slot(&c, old)
+            },
+        );
+        assert!(c.on_accepted(new, false, now).is_none());
+        assert!(c.slots.contains_key(&old));
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_replacement_is_forgotten_when_it_times_out() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_some());
+        let later = now + c.settings.pending_timeout;
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(c.replacing.is_none(), "the abandoned swap is cleared");
+        assert!(c.slots.contains_key(&old));
+        // A late accept of the abandoned relay must not release the old reservation.
+        let stale = Slot {
+            accepted: false,
+            held_since: None,
+            ..take_slot(&c, old)
+        };
+        c.slots.insert(new, stale);
+        assert!(c.on_accepted(new, false, later).is_none());
+        assert!(c.slots.contains_key(&old));
+    }
+
+    #[tokio::test]
+    async fn a_renewal_of_the_new_relay_never_supersedes_the_old_one() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(
+            c.on_accepted(new, true, now).is_none(),
+            "a renewal is not the first accept"
+        );
+        assert!(c.slots.contains_key(&old) && c.replacing.is_some());
+        assert!(c.on_accepted(new, false, now).is_some());
+    }
+
+    #[test]
+    fn a_change_of_reservations_wakes_the_announce_loop_but_a_renewal_does_not() {
+        let handle = ReachabilityHandle::unknown();
+        let mut c = RelayClient::new(RelayClientSettings::default(), peer(), handle.clone());
+        let relay = peer();
+        c.candidates.insert(
+            relay,
+            Candidate::new(vec!["/ip4/203.0.113.1/tcp/1".parse().unwrap()], (1, 0)),
+        );
+        hold(&mut c, relay);
+        c.publish();
+        let woke = || {
+            let h = handle.clone();
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    tokio::time::timeout(Duration::from_millis(20), h.relayed_addrs_changed())
+                        .await
+                        .is_ok()
+                })
+        };
+        assert!(woke(), "a new reservation");
+        let _ = c.on_accepted(relay, true, Instant::now());
+        assert!(!woke(), "a renewal leaves the advertised addresses alone");
+        c.slots.clear();
+        c.publish();
+        assert!(woke(), "a lost reservation");
+    }
+
     #[test]
     fn env_defaults_overrides_and_bounds() {
         let _env = crate::test_env::guard();
@@ -1715,6 +2536,9 @@ mod tests {
             "AVALON_RELAY_CLIENT_MAX_RESERVATIONS",
             "AVALON_RELAY_ADDRS",
             "AVALON_DCUTR_ENABLED",
+            "AVALON_RELAY_RESELECT_HOLD_SECS",
+            "AVALON_RELAY_RESELECT_INTERVAL_SECS",
+            "AVALON_RELAY_RESELECT_MARGIN_MS",
         ];
         let clear = || {
             for n in names {
@@ -1748,6 +2572,30 @@ mod tests {
             unsafe { std::env::set_var(name, bad) };
             assert!(RelaySettings::from_env(policy).is_err(), "{name}={bad}");
             unsafe { std::env::remove_var(name) };
+        }
+
+        assert_eq!(defaults.client.reselect_hold, Duration::from_secs(600));
+        assert_eq!(defaults.client.reselect_interval, Duration::from_secs(120));
+        assert_eq!(defaults.client.reselect_margin_ms, 30);
+        unsafe {
+            std::env::set_var("AVALON_RELAY_RESELECT_HOLD_SECS", "90");
+            std::env::set_var("AVALON_RELAY_RESELECT_MARGIN_MS", "55");
+        }
+        let tuned = RelaySettings::from_env(policy).unwrap().client;
+        assert_eq!(tuned.reselect_hold, Duration::from_secs(90));
+        assert_eq!(tuned.reselect_margin_ms, 55);
+        for (name, bad) in [
+            ("AVALON_RELAY_RESELECT_HOLD_SECS", "0"),
+            ("AVALON_RELAY_RESELECT_INTERVAL_SECS", "999999999"),
+            ("AVALON_RELAY_RESELECT_MARGIN_MS", "0"),
+        ] {
+            unsafe { std::env::set_var(name, bad) };
+            assert!(RelaySettings::from_env(policy).is_err(), "{name}={bad}");
+            unsafe { std::env::remove_var(name) };
+        }
+        unsafe {
+            std::env::remove_var("AVALON_RELAY_RESELECT_HOLD_SECS");
+            std::env::remove_var("AVALON_RELAY_RESELECT_MARGIN_MS");
         }
 
         unsafe { std::env::set_var("AVALON_RELAY_ADDRS", "/ip4/127.0.0.1/tcp/1") };
