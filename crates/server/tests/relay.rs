@@ -1079,7 +1079,8 @@ async fn a_public_node_reserves_nothing() {
     assert_eq!(r.relay_stats.counts().reservations_accepted, 0);
 }
 
-/// The settings map onto the libp2p relay limits one to one.
+/// The settings map onto the libp2p relay limits; the per-peer ones are one less because the
+/// library denies only above them.
 #[test]
 fn server_settings_map_to_relay_limits() {
     let cfg = RelayServerSettings {
@@ -1093,10 +1094,10 @@ fn server_settings_map_to_relay_limits() {
     }
     .libp2p_config();
     assert_eq!(cfg.max_reservations, 3);
-    assert_eq!(cfg.max_reservations_per_peer, 2);
+    assert_eq!(cfg.max_reservations_per_peer, 1);
     assert_eq!(cfg.reservation_duration, Duration::from_secs(9));
     assert_eq!(cfg.max_circuits, 4);
-    assert_eq!(cfg.max_circuits_per_peer, 1);
+    assert_eq!(cfg.max_circuits_per_peer, 0);
     assert_eq!(cfg.max_circuit_duration, Duration::from_secs(7));
     assert_eq!(cfg.max_circuit_bytes, 1234);
 }
