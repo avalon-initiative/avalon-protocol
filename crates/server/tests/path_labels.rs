@@ -44,6 +44,7 @@ fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> DhtConf
             ..AutonatSettings::default()
         },
         relay,
+        relay_resilience: Default::default(),
         bootstrap_scan_interval: Duration::from_millis(300),
     }
 }

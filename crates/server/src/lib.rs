@@ -88,6 +88,7 @@ pub mod recovery;
 pub mod redis_limits;
 pub mod registry;
 pub mod relay;
+pub mod relay_resilience;
 pub mod replica;
 pub mod replication;
 pub mod resources;

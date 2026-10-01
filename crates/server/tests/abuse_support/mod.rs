@@ -52,6 +52,7 @@ pub fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> Dht
         external_addr: external.map(|e| e.parse().unwrap()),
         autonat: autonat(),
         relay,
+        relay_resilience: Default::default(),
         bootstrap_scan_interval: Duration::from_millis(300),
     }
 }
