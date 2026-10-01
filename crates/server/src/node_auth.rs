@@ -586,8 +586,13 @@ mod tests {
         let r = f.auth.authenticate(None, &none, "POST", PATH, b"", NOW);
         assert_eq!(r, Err(NodeAuthError::Missing));
         let mut two = HeaderMap::new();
-        two.append(NODE_REQUEST_HEADER, "v1".parse().unwrap());
-        two.append(NODE_REQUEST_HEADER, "v1".parse().unwrap());
+        let n = node();
+        f.grant(&n);
+        let valid = header_at(&n, b"", &f.me.to_string(), NOW, [1; 16]);
+        assert!(f.http(&valid, b"", NOW).is_ok());
+        let again = header_at(&n, b"", &f.me.to_string(), NOW, [2; 16]);
+        two.append(NODE_REQUEST_HEADER, again.parse().unwrap());
+        two.append(NODE_REQUEST_HEADER, again.parse().unwrap());
         let r = f.auth.authenticate(None, &two, "POST", PATH, b"", NOW);
         assert!(matches!(
             r,
