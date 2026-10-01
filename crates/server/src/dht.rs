@@ -503,7 +503,7 @@ pub async fn start_with_node_http(
     let inbound = NodeHttpInbound::new(
         InboundService::new(router_slot.clone(), node_http, peers.clone()),
         node_http.max_inflight,
-        node_http.timeout,
+        node_http.connect_timeout,
     );
     let stream_peers = peers.clone();
     tokio::spawn(run_worker(
@@ -1168,6 +1168,8 @@ async fn run_worker(
     let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
     let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
+    // Parked requests expire on their own clock, not the slower scan's.
+    let mut parked_tick = tokio::time::interval(Duration::from_millis(250));
     // The first tick fires immediately; bootstrap from whatever the peer
     // table already knows about right away rather than waiting a full interval.
 
@@ -1239,6 +1241,7 @@ async fn run_worker(
             Some((channel, response)) = inbound.finished.recv() => {
                 let _ = swarm.behaviour_mut().node_http.send_response(channel, response);
             }
+            _ = parked_tick.tick() => expire_parked(&mut parked_http, Instant::now()),
             _ = scan_interval.tick() => {
                 expire_parked(&mut parked_http, Instant::now());
                 // Gossip-learned peers that cannot be reached over HTTP (a relayed node has no
@@ -1413,6 +1416,35 @@ async fn run_worker(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_request_parked_past_its_dial_deadline_fails_as_never_sent() {
+        let (tx, mut rx) = oneshot::channel();
+        let peer = PeerId::random();
+        let mut parked = ParkedRequests::new();
+        let now = Instant::now();
+        parked.entry(peer).or_default().waiting.push(ParkedHttp {
+            request: NodeHttpRequest {
+                method: "GET".into(),
+                path_and_query: "/nodes/status".into(),
+                headers: vec![],
+                body: vec![],
+                grant: Default::default(),
+            },
+            respond_to: tx,
+            deadline: now + Duration::from_secs(5),
+        });
+        expire_parked(&mut parked, now);
+        assert!(rx.try_recv().is_err() && parked.contains_key(&peer));
+        expire_parked(&mut parked, now + Duration::from_secs(5));
+        match rx.try_recv() {
+            Ok(Err(NodeHttpError::Stream { kind, .. })) => {
+                assert_eq!(kind, StreamErrorKind::Connect)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(parked.is_empty());
+    }
+
     #[test]
     fn stream_failures_split_into_never_sent_and_possibly_sent() {
         use request_response::OutboundFailure as F;

@@ -8,11 +8,27 @@ use std::time::{Duration, Instant};
 
 use libp2p::PeerId;
 
+use crate::outbound_policy::CheckedTarget;
+
 /// Peers tracked at once; the least recently touched is dropped past this.
 pub const MAX_TRACKED_PEERS: usize = 4096;
 /// Demotion after the first failure; doubles per consecutive failure up to [`BACKOFF_MAX`].
 pub const BACKOFF_BASE: Duration = Duration::from_secs(10);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
+
+/// How long a policy check of a peer's http URL, passed or refused, is reused.
+pub const VET_TTL: Duration = Duration::from_secs(30);
+/// Cached checks kept at once.
+pub const MAX_VET_ENTRIES: usize = 1024;
+
+/// A peer-table URL that passed the outbound policy, with the pinned client to dial it by.
+#[derive(Clone)]
+pub struct Vetted {
+    pub target: CheckedTarget,
+    pub client: reqwest::Client,
+}
+
+type VetKey = (PeerId, String, bool);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transport {
@@ -53,6 +69,8 @@ struct Record {
 struct Inner {
     peers: HashMap<PeerId, Record>,
     tick: u64,
+    /// Policy checks by peer, base URL and whether private ranges were allowed; `None` is a refusal.
+    vetted: HashMap<VetKey, (Instant, Option<Vetted>)>,
 }
 
 /// Shared by every client of one peer table; cheap to clone.
@@ -101,6 +119,48 @@ impl TransportStats {
             .peers
             .get(peer)
             .map(|r| r.outcomes[transport.index()].clone())
+    }
+
+    /// A still-fresh policy check for `base_url`: `Some(None)` is a remembered refusal.
+    pub(crate) fn cached_vet(
+        &self,
+        peer: PeerId,
+        base_url: &str,
+        allow_private: bool,
+        now: Instant,
+    ) -> Option<Option<Vetted>> {
+        let inner = self.lock();
+        let (at, v) = inner
+            .vetted
+            .get(&(peer, base_url.to_string(), allow_private))?;
+        (now.duration_since(*at) < VET_TTL).then(|| v.clone())
+    }
+
+    pub(crate) fn store_vet(
+        &self,
+        peer: PeerId,
+        base_url: &str,
+        allow_private: bool,
+        vetted: Option<Vetted>,
+        now: Instant,
+    ) {
+        let mut inner = self.lock();
+        inner
+            .vetted
+            .retain(|_, (at, _)| now.duration_since(*at) < VET_TTL);
+        if inner.vetted.len() >= MAX_VET_ENTRIES {
+            let oldest = inner
+                .vetted
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest {
+                inner.vetted.remove(&k);
+            }
+        }
+        inner
+            .vetted
+            .insert((peer, base_url.to_string(), allow_private), (now, vetted));
     }
 
     pub fn tracked(&self) -> usize {
@@ -278,5 +338,22 @@ mod tests {
             }
         }
         assert!(s.outcome(&keep, Transport::Http).is_some());
+    }
+
+    #[test]
+    fn vet_results_expire_and_stay_bounded() {
+        let (s, t0) = (TransportStats::default(), Instant::now());
+        let p = id();
+        assert!(s.cached_vet(p, "http://a", false, t0).is_none());
+        s.store_vet(p, "http://a", false, None, t0);
+        assert!(matches!(s.cached_vet(p, "http://a", false, t0), Some(None)));
+        // The policy and URL are part of the key.
+        assert!(s.cached_vet(p, "http://a", true, t0).is_none());
+        assert!(s.cached_vet(p, "http://b", false, t0).is_none());
+        assert!(s.cached_vet(p, "http://a", false, t0 + VET_TTL).is_none());
+        for i in 0..MAX_VET_ENTRIES * 2 {
+            s.store_vet(id(), &format!("http://h{i}"), false, None, t0);
+        }
+        assert!(s.lock().vetted.len() <= MAX_VET_ENTRIES);
     }
 }

@@ -177,3 +177,47 @@ async fn a_refusal_over_either_transport_is_returned_not_retried_elsewhere() {
     assert!(!res.via_stream());
     assert!(!stats.is_demoted(&other.peer_id, Transport::Http));
 }
+
+/// A dial to a peer that accepts the TCP connection and never speaks counts as never sent after
+/// the connect timeout, well before the request timeout, so a read fails over and demotes.
+#[tokio::test]
+async fn a_blackholed_dial_fails_over_at_the_connect_timeout() {
+    // Read when the node starts; the same value for every test in this file.
+    unsafe { std::env::set_var("AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS", "1") };
+    let hole = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hole_port = hole.local_addr().unwrap().port();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((s, _)) = hole.accept().await {
+            open.push(s);
+        }
+    });
+
+    let table = PeerTable::new();
+    let client_node = dht::start(table.clone(), config()).await;
+    let client = NodeClient::new()
+        .with_stream(client_node.node_http.clone())
+        .with_policy(OutboundPolicy::new(true));
+    let ghost = dht::start(PeerTable::new(), config()).await;
+    let (live_url, _live) = serve_http(router("http", StatusCode::OK)).await;
+    let mut ghost_entry = entry(&live_url, &ghost, Connectivity::Relayed);
+    ghost_entry.libp2p_listen_addrs = vec![format!("/ip4/127.0.0.1/tcp/{hole_port}")];
+    table.upsert(ghost_entry);
+
+    let started = std::time::Instant::now();
+    let res = client
+        .get(format!("{}/nodes/status", p2p_base_url(&ghost.peer_id)))
+        .send()
+        .await
+        .unwrap();
+    assert!(!res.via_stream());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(table
+        .transport_stats()
+        .is_demoted(&ghost.peer_id, Transport::Stream));
+    held.abort();
+}

@@ -23,6 +23,8 @@ const DEFAULT_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 5;
+const MAX_CONNECT_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_MAX_INFLIGHT: u64 = 64;
 const MAX_MAX_INFLIGHT: u64 = 1024;
 const DEFAULT_MAX_INFLIGHT_PER_PEER: u64 = 8;
@@ -60,6 +62,8 @@ pub struct NodeHttpSettings {
     pub max_request_bytes: usize,
     pub max_response_bytes: usize,
     pub timeout: Duration,
+    /// How long a stream request waits for a dial to the peer before it counts as never sent.
+    pub connect_timeout: Duration,
     pub max_inflight: usize,
     pub max_inflight_per_peer: usize,
     /// Bytes of request bodies buffered at once across all streams.
@@ -76,6 +80,7 @@ impl Default for NodeHttpSettings {
             max_request_bytes: DEFAULT_MAX_REQUEST_BYTES as usize,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES as usize,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
             max_inflight: DEFAULT_MAX_INFLIGHT as usize,
             max_inflight_per_peer: DEFAULT_MAX_INFLIGHT_PER_PEER as usize,
             buffer_budget_bytes: DEFAULT_BUFFER_BUDGET_BYTES as usize,
@@ -104,6 +109,11 @@ impl NodeHttpSettings {
                 "AVALON_NODE_HTTP_TIMEOUT_SECS",
                 DEFAULT_TIMEOUT_SECS,
                 MAX_TIMEOUT_SECS,
+            )?),
+            connect_timeout: Duration::from_secs(bounded_env(
+                "AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS",
+                DEFAULT_CONNECT_TIMEOUT_SECS,
+                MAX_CONNECT_TIMEOUT_SECS,
             )?),
             max_inflight: bounded_env(
                 "AVALON_NODE_HTTP_MAX_INFLIGHT",

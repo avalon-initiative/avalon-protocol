@@ -308,6 +308,14 @@ pub struct PeerTable {
     transport: crate::transport_stats::TransportStats,
 }
 
+/// Bound entries claiming libp2p id `id`.
+fn bound_holders(peers: &HashMap<String, PeerInfo>, id: &str) -> usize {
+    peers
+        .values()
+        .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id))
+        .count()
+}
+
 impl PeerTable {
     pub fn new() -> Self {
         Self::default()
@@ -462,34 +470,44 @@ impl PeerTable {
         let peers = self.peers.read().expect("peer table lock poisoned");
         peers
             .get(base_url)
-            .map(|p| crate::node_http::NodeClient::url_for_with(p, Some(&self.transport)))
+            .map(|p| {
+                // An id several entries claim is not evidence about this entry's URL.
+                let ambiguous = p
+                    .libp2p_peer_id
+                    .as_deref()
+                    .is_some_and(|id| bound_holders(&peers, id) > 1);
+                let stats = (!ambiguous).then_some(&self.transport);
+                crate::node_http::NodeClient::url_for_with(p, stats)
+            })
             .unwrap_or_else(|| base_url.to_string())
     }
 
-    /// The usable http(s) base URL of the one bound entry holding libp2p id `peer`. Binding is
-    /// self-reported, so an id held by more than one entry names no URL.
-    pub fn http_url_for_libp2p_peer(&self, peer: &libp2p::PeerId) -> Option<String> {
+    /// The usable http(s) base URL of the one bound entry holding libp2p id `peer`, and how many
+    /// bound entries hold it. Binding is self-reported, so an id held by more than one entry
+    /// names no URL and outcomes recorded under it cannot be attributed to one.
+    pub fn bound_http_url_for_libp2p_peer(&self, peer: &libp2p::PeerId) -> (usize, Option<String>) {
         let id = peer.to_string();
         let peers = self.peers.read().expect("peer table lock poisoned");
         let mut holders = peers
             .values()
             .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()));
-        let only = holders.next().filter(|_| holders.next().is_none())?;
-        crate::outbound_policy::OutboundPolicy::parse_base_url(&only.base_url).ok()?;
-        Some(only.base_url.clone())
+        let first = holders.next();
+        let count = usize::from(first.is_some()) + holders.count();
+        let url = first
+            .filter(|_| count == 1)
+            .filter(|p| crate::outbound_policy::OutboundPolicy::parse_base_url(&p.base_url).is_ok())
+            .map(|p| p.base_url.clone());
+        (count, url)
     }
 
-    /// Whether at most one bound entry holds libp2p id `peer`, so outcomes recorded under it
-    /// cannot come from another node's URL.
+    /// See [`Self::bound_http_url_for_libp2p_peer`].
+    pub fn http_url_for_libp2p_peer(&self, peer: &libp2p::PeerId) -> Option<String> {
+        self.bound_http_url_for_libp2p_peer(peer).1
+    }
+
+    /// Whether at most one bound entry holds libp2p id `peer`.
     pub fn libp2p_id_is_unambiguous(&self, peer: &libp2p::PeerId) -> bool {
-        let id = peer.to_string();
-        self.peers
-            .read()
-            .expect("peer table lock poisoned")
-            .values()
-            .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
-            .count()
-            <= 1
+        self.bound_http_url_for_libp2p_peer(peer).0 <= 1
     }
 
     /// `p2p://<id>` for the known peer `base_url` when its id is bound (or the URL is already
@@ -504,17 +522,19 @@ impl PeerTable {
         Some(crate::node_http::p2p_base_url(&id))
     }
 
-    /// The libp2p id of the known peer whose `base_url` `url` is under, for the stream fallback.
+    /// The libp2p id of the known peer whose `base_url` `url` is under, for the stream fallback;
+    /// `None` when more than one bound entry claims that id.
     pub fn libp2p_peer_for_url(&self, url: &str) -> Option<libp2p::PeerId> {
         let peers = self.peers.read().expect("peer table lock poisoned");
-        peers
+        let id: libp2p::PeerId = peers
             .values()
             .filter(|p| {
                 url.strip_prefix(p.base_url.trim_end_matches('/'))
                     .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?']))
             })
             .filter(|p| p.identity_bound)
-            .find_map(|p| p.libp2p_peer_id.as_ref()?.parse().ok())
+            .find_map(|p| p.libp2p_peer_id.as_ref()?.parse().ok())?;
+        (bound_holders(&peers, &id.to_string()) <= 1).then_some(id)
     }
 
     /// Whether `peer` is the libp2p id of a bound entry whose http URL answered `/nodes/status`
@@ -5042,6 +5062,51 @@ mod tests {
             None,
             Coordinate::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn a_url_less_announcers_http_hello_is_never_moved_onto_a_stream() {
+        use crate::dht::DhtCommand;
+        use crate::transport_stats::Transport;
+        let server = wiremock::MockServer::start().await;
+        announce_mock(&server, 1).await;
+        let id = fresh_libp2p();
+        let url = normalized_base_url(&server.uri());
+        let table = PeerTable::new();
+        table.upsert(table_entry(&url, Some(&id), true));
+        // HTTP looks demoted, so an unpinned request would move to this stream, which answers.
+        table.transport_stats().record_failure(id, Transport::Http);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let streamed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = streamed.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let DhtCommand::HttpRequest { respond_to, .. } = cmd {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = respond_to.send(Ok(crate::node_http::NodeHttpResponse {
+                        status: 200,
+                        headers: vec![],
+                        body: serde_json::to_vec(&serde_json::json!({
+                            "peers": [],
+                            "coordinate": Coordinate::default(),
+                        }))
+                        .unwrap(),
+                    }));
+                }
+            }
+        });
+        let client =
+            crate::node_http::NodeClient::new().with_stream(crate::node_http::StreamHandle {
+                commands: tx,
+                peers: Some(table),
+                settings: Default::default(),
+            });
+        let own = crate::node_http::p2p_base_url(&fresh_libp2p());
+        announce_to(&client, &url, &announce_body(&own))
+            .await
+            .unwrap();
+        assert_eq!(streamed.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

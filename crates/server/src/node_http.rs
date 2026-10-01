@@ -5,7 +5,8 @@
 //! clients `crate::outbound_policy` builds); `p2p://<libp2p peer id>` URLs are carried as one
 //! request-response exchange on a libp2p stream, so relays and hole punching apply to them.
 //! A connect error or timeout on one transport falls back to the other when the peer has both,
-//! and recent outcomes demote a failing one; see [`crate::transport_stats`].
+//! and recent outcomes demote a failing one; see [`crate::transport_stats`]. Stream-to-HTTP
+//! failover is for reads only, policy-checked, and drops credential headers.
 //! The receiving side dispatches into the normal router; see [`inbound`].
 
 mod inbound;
@@ -23,8 +24,8 @@ use tokio::sync::oneshot;
 
 use crate::dht::{DhtCommand, DhtCommandSender};
 use crate::nodes::{PeerInfo, PeerTable};
-use crate::outbound_policy::{CheckedTarget, OutboundPolicy};
-use crate::transport_stats::{Transport, TransportStats};
+use crate::outbound_policy::OutboundPolicy;
+use crate::transport_stats::{Transport, TransportStats, Vetted};
 use avalon_protocol::connectivity::Connectivity;
 
 pub use inbound::{
@@ -35,6 +36,19 @@ pub use wire::{
     protocol_name, BufferGrant, NodeHttpCodec, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings,
     MAX_CONCURRENT_STREAMS, MAX_HEADER_BYTES, MAX_HEADER_COUNT,
 };
+
+/// Longest a failover target's policy check (a DNS lookup) may take.
+const VET_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Headers that carry credentials; never sent to a peer-table URL the stream did not vouch for.
+fn is_credential_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "authorization" | "cookie" | "proxy-authorization"
+    ) || n.starts_with("x-api")
+        || n.starts_with("x-auth")
+}
 
 /// URL scheme for a peer reached over a libp2p stream.
 pub const P2P_SCHEME: &str = "p2p";
@@ -403,13 +417,21 @@ impl NodeRequestBuilder {
         Some(self.clone())
     }
 
-    fn http_builder_with(&self, client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    /// `strip_credentials` drops credential headers, for a URL the stream did not vouch for.
+    fn http_builder_with(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        strip_credentials: bool,
+    ) -> reqwest::RequestBuilder {
         let mut rb = client.request(self.method.clone(), url);
         if !self.query.is_empty() {
             rb = rb.query(&self.query);
         }
         for (k, v) in &self.headers {
-            rb = rb.header(k.as_str(), v.as_str());
+            if !(strip_credentials && is_credential_header(k)) {
+                rb = rb.header(k.as_str(), v.as_str());
+            }
         }
         if let Some(body) = &self.body {
             rb = rb.body(body.clone());
@@ -468,7 +490,7 @@ impl NodeRequestBuilder {
         let mut first = route.primary;
         let other = first.other();
         // An http target the caller did not name must pass the outbound policy before any dial.
-        let mut vetted: Option<CheckedTarget> = None;
+        let mut vetted: Option<Vetted> = None;
         // Demotion only reorders; the stricter stream gate is never moved to proactively.
         if let (Some(peer), Some(stats)) = (&route.peer, &route.stats) {
             let to_gated_stream = other == Transport::Stream
@@ -504,15 +526,16 @@ impl NodeRequestBuilder {
     fn route(&self) -> Result<Route, NodeHttpError> {
         let handle = self.client.stream_handle();
         let table = handle.and_then(|h| h.peers.as_ref());
-        let stats_for = |peer: &PeerId| {
-            table
-                .filter(|t| t.libp2p_id_is_unambiguous(peer))
-                .map(|t| t.transport_stats().clone())
-        };
+        let stats = || table.map(|t| t.transport_stats().clone());
         if self.url.starts_with("p2p://") {
             let (peer, path) = split_p2p_url(&self.url)
                 .ok_or_else(|| NodeHttpError::Invalid("bad p2p url".into()))?;
-            let alt_http_base = table.and_then(|t| t.http_url_for_libp2p_peer(&peer));
+            let (holders, url) = table
+                .map(|t| t.bound_http_url_for_libp2p_peer(&peer))
+                .unwrap_or((0, None));
+            // Binding is self-reported, so only a read may leave the authenticated stream for the
+            // table's URL: a write could hand non-public data to whoever claimed the id.
+            let alt_http_base = url.filter(|_| self.method == Method::GET);
             return Ok(Route {
                 primary: Transport::Stream,
                 peer: Some(peer),
@@ -520,7 +543,7 @@ impl NodeRequestBuilder {
                 alt_http_base,
                 path: Some(path),
                 stream: true,
-                stats: stats_for(&peer),
+                stats: if holders <= 1 { stats() } else { None },
             });
         }
         let peer = self.client.fallback_peer(&self.url);
@@ -533,16 +556,38 @@ impl NodeRequestBuilder {
             alt_http_base: None,
             path,
             stream,
-            stats: peer.as_ref().and_then(stats_for),
+            stats: peer.and_then(|_| stats()),
         })
     }
 
     /// The table's http URL for a stream-first request, resolved and pinned under the policy;
-    /// `None` when there is none or it is refused.
-    async fn vet_http(&self, route: &Route) -> Option<CheckedTarget> {
+    /// `None` when there is none or it is refused. Both answers are reused for a while, and the
+    /// resolution is bounded.
+    async fn vet_http(&self, route: &Route) -> Option<Vetted> {
         let base = route.alt_http_base.as_deref()?;
         let policy = self.client.policy.unwrap_or_else(OutboundPolicy::from_env);
-        policy.check_base_url(base).await.ok()
+        let (peer, stats) = (route.peer?, route.stats.as_ref()?);
+        let now = std::time::Instant::now();
+        if let Some(hit) = stats.cached_vet(peer, base, policy.allow_private, now) {
+            return hit;
+        }
+        let timeout = self.timeout.or(self.client.timeout).unwrap_or(
+            self.client
+                .stream_handle()
+                .map_or(crate::outbound_policy::PEER_REQUEST_TIMEOUT, |h| {
+                    h.settings.timeout
+                }),
+        );
+        let checked = tokio::time::timeout(VET_TIMEOUT, policy.check_base_url(base))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        let vetted = checked.map(|target| Vetted {
+            client: target.client(timeout),
+            target,
+        });
+        stats.store_vet(peer, base, policy.allow_private, vetted.clone(), now);
+        vetted
     }
 
     /// One try over `transport`, recording a transport-level outcome for the peer. Any answer,
@@ -551,25 +596,16 @@ impl NodeRequestBuilder {
         &self,
         route: &Route,
         transport: Transport,
-        vetted: Option<&CheckedTarget>,
+        vetted: Option<&Vetted>,
     ) -> Result<NodeResponse, NodeHttpError> {
         let start = std::time::Instant::now();
         let result = match transport {
             Transport::Http => {
                 let rb = match (vetted, route.primary) {
-                    (Some(target), Transport::Stream) => {
-                        let timeout = self.timeout.or(self.client.timeout).unwrap_or(
-                            self.client
-                                .stream_handle()
-                                .map_or(crate::outbound_policy::PEER_REQUEST_TIMEOUT, |h| {
-                                    h.settings.timeout
-                                }),
-                        );
+                    (Some(v), Transport::Stream) => {
                         let path = route.path.as_deref().unwrap_or("/");
-                        self.http_builder_with(
-                            &target.client(timeout),
-                            &format!("{}{path}", target.base_url),
-                        )
+                        let url = format!("{}{path}", v.target.base_url);
+                        self.http_builder_with(&v.client, &url, true)
                     }
                     (None, Transport::Stream) => {
                         return Err(NodeHttpError::Invalid("no vetted http target".into()))
@@ -577,6 +613,7 @@ impl NodeRequestBuilder {
                     _ => self.http_builder_with(
                         &self.client.http,
                         route.http.as_deref().unwrap_or(&self.url),
+                        false,
                     ),
                 };
                 rb.send()
@@ -1232,32 +1269,114 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_a_never_sent_stream_write_fails_over_to_http() {
+    async fn a_stream_write_never_leaves_the_stream_for_the_tables_url() {
         let live = http_server(200).await;
         let id = sample_peer_id();
-        for kind in [StreamErrorKind::Timeout, StreamErrorKind::Dropped] {
+        for kind in [
+            StreamErrorKind::Connect,
+            StreamErrorKind::Timeout,
+            StreamErrorKind::Dropped,
+        ] {
             let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
-            let (handle, _) = scripted_worker(table.clone(), Script::Fail(kind));
-            let err = lax_client(handle)
-                .post(format!("{}/nodes/announce", p2p_base_url(&id)))
-                .send()
-                .await
-                .err()
-                .unwrap();
-            assert!(matches!(err, NodeHttpError::Stream { kind: k, .. } if k == kind));
+            let (handle, seen) = scripted_worker(table.clone(), Script::Fail(kind));
+            let client = lax_client(handle);
+            for method in [Method::POST, Method::PUT, Method::DELETE] {
+                let err = client
+                    .request(method, format!("{}/nodes/announce", p2p_base_url(&id)))
+                    .body("private")
+                    .send()
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(matches!(err, NodeHttpError::Stream { kind: k, .. } if k == kind));
+            }
             assert_eq!(http_hits(&live).await, 0, "{kind:?}");
-            // Neither counts against the stream: the request may well have connected.
-            assert!(!table.transport_stats().is_demoted(&id, Transport::Stream));
+            assert_eq!(seen.lock().unwrap().len(), 3);
         }
+        // Even demoted, a write stays on the stream rather than swapping to the table's URL.
         let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
-        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        table
+            .transport_stats()
+            .record_failure(id, Transport::Stream);
+        let (handle, seen) = scripted_worker(table, Script::Answer(ok_answer()));
         let res = lax_client(handle)
             .post(format!("{}/nodes/announce", p2p_base_url(&id)))
             .send()
             .await
             .unwrap();
+        assert!(res.via_stream());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_eq!(http_hits(&live).await, 0);
+    }
+
+    #[test]
+    fn credential_headers_are_recognised() {
+        for h in [
+            "Authorization",
+            "cookie",
+            "Proxy-Authorization",
+            "x-api-key",
+            "X-Auth-Token",
+        ] {
+            assert!(is_credential_header(h), "{h}");
+        }
+        for h in [
+            "content-type",
+            "accept",
+            "x-avalon-integrator-key-id",
+            "x-trace",
+        ] {
+            assert!(!is_credential_header(h), "{h}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_failing_over_to_http_carries_no_credentials() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        // The sole bound holder of the id could be anyone: the id binding is self-reported.
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let res = lax_client(handle)
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .bearer_auth("secret")
+            .header("Cookie", "s=1")
+            .header("proxy-authorization", "x")
+            .header("x-api-key", "k")
+            .header("x-auth-token", "t")
+            .header("x-trace", "keep")
+            .send()
+            .await
+            .unwrap();
         assert!(!res.via_stream());
-        assert_eq!(http_hits(&live).await, 1);
+        let received = live.received_requests().await.unwrap();
+        let headers = &received[0].headers;
+        for h in [
+            "authorization",
+            "cookie",
+            "proxy-authorization",
+            "x-api-key",
+            "x-auth-token",
+        ] {
+            assert!(!headers.contains_key(h), "{h} leaked");
+        }
+        assert!(headers.contains_key("x-trace"));
+    }
+
+    #[tokio::test]
+    async fn an_http_first_request_keeps_its_own_credentials() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Direct));
+        let (handle, _) = fake_worker(table, ok_answer());
+        lax_client(handle)
+            .get(format!("{}/nodes/status", live.uri()))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap();
+        let received = live.received_requests().await.unwrap();
+        assert!(received[0].headers.contains_key("authorization"));
     }
 
     #[test]
@@ -1388,11 +1507,13 @@ mod tests {
         let mut twin = info("http://twin.test", Some(&id), Some(Connectivity::Direct));
         twin.identity_bound = true;
         table.upsert(twin);
-        let (handle, _) = fake_worker(table.clone(), ok_answer());
+        let (handle, seen) = fake_worker(table.clone(), ok_answer());
         let _ = lax_client(handle)
             .get(format!("{base}/nodes/status"))
             .send()
             .await;
+        // No stream failover for an id several entries claim, and nothing is recorded for it.
+        assert!(seen.lock().unwrap().is_empty());
         assert!(table
             .transport_stats()
             .outcome(&id, Transport::Http)
@@ -1659,7 +1780,7 @@ mod tests {
             Some(&id),
             Some(Connectivity::Relayed),
         ));
-        let (handle, _) = scripted_worker(table, Script::Fail(StreamErrorKind::Connect));
+        let (handle, _) = scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Connect));
         let err = lax_client(handle)
             .get(format!("{}/nodes/status", p2p_base_url(&id)))
             .send()
@@ -1668,5 +1789,66 @@ mod tests {
             .unwrap();
         assert!(err.is_connect());
         assert_eq!(http_hits(&live).await, 0);
+        assert!(table
+            .transport_stats()
+            .outcome(&id, Transport::Stream)
+            .is_none());
+    }
+
+    #[test]
+    fn the_peer_table_url_ignores_outcomes_for_an_ambiguous_id() {
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, "http://a.test", Some(Connectivity::Direct));
+        table.transport_stats().record_failure(id, Transport::Http);
+        assert_eq!(table.transport_url("http://a.test"), p2p_base_url(&id));
+        table.upsert(info(
+            "http://evil.test",
+            Some(&id),
+            Some(Connectivity::Direct),
+        ));
+        assert_eq!(table.transport_url("http://a.test"), "http://a.test");
+        assert_eq!(table.transport_url("http://evil.test"), "http://evil.test");
+    }
+
+    #[tokio::test]
+    async fn a_refused_check_is_remembered_and_a_passed_one_is_reused() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Relayed));
+        let stats = table.transport_stats().clone();
+        let now = std::time::Instant::now();
+        // A remembered refusal blocks failover although the policy would now pass.
+        stats.store_vet(id, &live.uri(), true, None, now);
+        let (handle, seen) = scripted_worker(table.clone(), Script::Fail(StreamErrorKind::Connect));
+        let err = lax_client(handle.clone())
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .send()
+            .await
+            .err()
+            .unwrap();
+        assert!(err.is_connect());
+        assert_eq!(http_hits(&live).await, 0);
+        // Once it expires the target is checked again and the answer is stored.
+        let later = now + crate::transport_stats::VET_TTL;
+        assert!(stats.cached_vet(id, &live.uri(), true, later).is_none());
+        stats.store_vet(
+            id,
+            &live.uri(),
+            true,
+            None,
+            now - crate::transport_stats::VET_TTL,
+        );
+        let res = lax_client(handle)
+            .get(format!("{}/nodes/status", p2p_base_url(&id)))
+            .send()
+            .await
+            .unwrap();
+        assert!(!res.via_stream());
+        assert!(matches!(
+            stats.cached_vet(id, &live.uri(), true, std::time::Instant::now()),
+            Some(Some(_))
+        ));
+        // The demoted stream was skipped the second time.
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }

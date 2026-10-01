@@ -832,6 +832,9 @@ async fn an_http_request_to_a_dead_url_falls_back_to_the_stream() {
         None,
     );
     info.base_url = dead_url.clone();
+    // Replace the entry `served` introduced: an id held by two entries is not failed over.
+    a.peers
+        .prune_older_than(time::OffsetDateTime::now_utc() + time::Duration::hours(1));
     a.peers.upsert(info);
 
     let (status, body) = get_ok(&a.client(), format!("{dead_url}/nodes/status")).await;
