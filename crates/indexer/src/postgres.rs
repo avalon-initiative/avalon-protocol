@@ -100,9 +100,10 @@ impl PostgresIndexer {
         // `identities` is the registry every projection row references, and
         // it is not truncated above. A ledger replayed into a database that
         // never held these identities (a promoted node) has to recreate the
-        // rows first: later events can precede their own `identity.created`
-        // in ledger order (passkey and signing-key events are committed
-        // ahead of it), so creating each row while replaying is too late.
+        // rows first: older ledgers record a registration's passkey and
+        // signing-key events ahead of its `identity.created` (new
+        // registrations no longer do), so creating each row while replaying
+        // would be too late for them.
         for event in events {
             if event.kind != "identity.created" {
                 continue;

@@ -287,3 +287,39 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
     let revoked_at: Option<time::OffsetDateTime> = revoked_row.try_get("revoked_at").unwrap();
     assert!(revoked_at.is_some(), "revoked_at must be set once revoked");
 }
+
+/// A registration's `identity.created` must be ledgered ahead of the passkey
+/// and signing-key events that reference the identity.
+#[tokio::test]
+#[ignore]
+async fn registration_ledgers_identity_created_before_its_child_events() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (identity_id, _client) = create_identity_with_one_passkey(&http, &base, 1).await;
+
+    let pattern = format!("identity:{identity_id}:%");
+    let mut kinds: Vec<String> = Vec::new();
+    for _ in 0..60 {
+        kinds = sqlx::query_scalar(
+            "SELECT kind FROM ledger_entries WHERE subject LIKE $1 ORDER BY seq",
+        )
+        .bind(&pattern)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        if kinds.len() >= 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert_eq!(
+        kinds,
+        vec![
+            "identity.created",
+            "identity.passkey_registered",
+            "identity.signing_key_added"
+        ]
+    );
+}
