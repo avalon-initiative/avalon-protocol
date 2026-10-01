@@ -59,6 +59,12 @@ impl PeerPaths {
             .reduce(PathType::worse)
     }
 
+    /// How many connections are open to `peer`.
+    pub fn connections(&self, peer: &PeerId) -> usize {
+        let inner = self.inner.read().expect("peer paths lock poisoned");
+        inner.conns.values().filter(|(p, _)| p == peer).count()
+    }
+
     /// The path a request took: an HTTP response came over a direct dial of the peer's URL,
     /// a stream response over whatever connection the peer has open.
     pub fn path_of(&self, via_stream: bool, peer: Option<&PeerId>) -> Option<PathType> {

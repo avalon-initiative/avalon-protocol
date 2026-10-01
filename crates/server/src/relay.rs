@@ -185,13 +185,23 @@ fn env_flag(name: &str, default: bool) -> bool {
 
 /// An integer knob that must be within `1..=max`; zero and oversized values are refused.
 pub(crate) fn bounded_env(name: &str, default: u64, max: u64) -> Result<u64, String> {
+    bounded_env_from(name, default, 1, max)
+}
+
+/// An integer knob that must be within `min..=max`.
+pub(crate) fn bounded_env_from(
+    name: &str,
+    default: u64,
+    min: u64,
+    max: u64,
+) -> Result<u64, String> {
     let Ok(raw) = std::env::var(name) else {
         return Ok(default);
     };
     match raw.trim().parse::<u64>() {
-        Ok(v) if (1..=max).contains(&v) => Ok(v),
+        Ok(v) if (min..=max).contains(&v) => Ok(v),
         _ => Err(format!(
-            "{name} must be an integer from 1 to {max}, got {raw:?}"
+            "{name} must be an integer from {min} to {max}, got {raw:?}"
         )),
     }
 }
