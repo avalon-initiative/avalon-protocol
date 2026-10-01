@@ -256,7 +256,7 @@ impl NodeClient {
     }
 
     /// The base URL to use for `peer`: `p2p://<id>` when it has a libp2p id and either only
-    /// dials out or is reached through a relay, or its `base_url` is not a usable http(s) URL;
+    /// dials out or is reached through a relay or hole punch, or its `base_url` is not a usable http(s) URL;
     /// otherwise its `base_url`.
     pub fn url_for(peer: &PeerInfo) -> String {
         if !peer.identity_bound {
@@ -273,7 +273,7 @@ impl NodeClient {
             crate::outbound_policy::OutboundPolicy::parse_base_url(&peer.base_url).is_ok();
         let prefer_stream = matches!(
             peer.connectivity,
-            Some(Connectivity::Relayed | Connectivity::OutboundOnly)
+            Some(Connectivity::NatTraversed | Connectivity::Relayed | Connectivity::OutboundOnly)
         );
         if prefer_stream || !url_usable {
             p2p_base_url(&id)
@@ -575,7 +575,7 @@ mod tests {
         let plain = |c| NodeClient::url_for(&info("http://a.test", Some(&id), c));
         assert_eq!(plain(None), "http://a.test");
         assert_eq!(plain(Some(Connectivity::Direct)), "http://a.test");
-        assert_eq!(plain(Some(Connectivity::NatTraversed)), "http://a.test");
+        assert_eq!(plain(Some(Connectivity::NatTraversed)), p2p);
         assert_eq!(plain(Some(Connectivity::Relayed)), p2p);
         assert_eq!(plain(Some(Connectivity::OutboundOnly)), p2p);
         // Unusable URL falls to the stream whatever the connectivity says.
