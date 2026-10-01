@@ -503,7 +503,7 @@ pub async fn start_with_node_http(
     let inbound = NodeHttpInbound::new(
         InboundService::new(router_slot.clone(), node_http, peers.clone()),
         node_http.max_inflight,
-        node_http.timeout,
+        node_http.connect_timeout,
     );
     let stream_peers = peers.clone();
     tokio::spawn(run_worker(
@@ -613,6 +613,14 @@ fn connect_failure(message: &str) -> NodeHttpError {
     }
 }
 
+/// A request this node could not even queue; says nothing about the peer.
+fn local_failure(message: &str) -> NodeHttpError {
+    NodeHttpError::Stream {
+        kind: StreamErrorKind::Local,
+        message: message.to_string(),
+    }
+}
+
 #[derive(PartialEq, Eq)]
 enum HttpDial {
     /// This queue started a dial with this connection id.
@@ -683,9 +691,9 @@ fn start_http(
     }
     let entry = parked.entry(peer).or_default();
     if entry.waiting.len() >= MAX_PARKED_PER_PEER {
-        let _ = parked_request.respond_to.send(Err(connect_failure(
-            "too many requests waiting for the peer",
-        )));
+        let _ = parked_request
+            .respond_to
+            .send(Err(local_failure("too many requests waiting for the peer")));
         return;
     }
     if entry.own_dial.is_none() {
@@ -697,7 +705,7 @@ fn start_http(
                 for w in entry.waiting.into_iter().chain([parked_request]) {
                     let _ = w
                         .respond_to
-                        .send(Err(connect_failure("no address to dial the peer")));
+                        .send(Err(local_failure("no address to dial the peer")));
                 }
                 return;
             }
@@ -713,9 +721,18 @@ fn flush_parked(
     parked: &mut ParkedRequests,
     peer: PeerId,
 ) {
-    for w in parked.remove(&peer).unwrap_or_default().waiting {
+    for w in live_waiting(parked.remove(&peer).unwrap_or_default()) {
         send_http(swarm, pending, peer, w.request, w.respond_to);
     }
+}
+
+/// What is still parked for a peer whose caller is waiting; a caller that already gave up
+/// (timed out) must not have its request delivered late.
+fn live_waiting(entry: ParkedPeer) -> impl Iterator<Item = ParkedHttp> {
+    entry
+        .waiting
+        .into_iter()
+        .filter(|w| !w.respond_to.is_closed())
 }
 
 /// The dial `failed` to `peer` ended in an error: if it was this queue's own, fail what is
@@ -793,7 +810,7 @@ fn expire_parked(parked: &mut ParkedRequests, now: Instant) {
             }
             if now >= w.deadline {
                 let timeout = NodeHttpError::Stream {
-                    kind: StreamErrorKind::Timeout,
+                    kind: StreamErrorKind::Connect,
                     message: "timed out dialing the peer".to_string(),
                 };
                 // The responder moves out only when sent; replace with a closed one.
@@ -813,7 +830,8 @@ fn node_http_error(failure: request_response::OutboundFailure) -> NodeHttpError 
     use request_response::OutboundFailure as F;
     let kind = match &failure {
         F::Timeout => StreamErrorKind::Timeout,
-        F::DialFailure | F::ConnectionClosed | F::UnsupportedProtocols => StreamErrorKind::Connect,
+        F::ConnectionClosed => StreamErrorKind::Dropped,
+        F::DialFailure | F::UnsupportedProtocols => StreamErrorKind::Connect,
         F::Io(_) => StreamErrorKind::Protocol,
     };
     NodeHttpError::Stream {
@@ -1200,6 +1218,8 @@ async fn run_worker(
     let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
     let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
+    // Parked requests expire on their own clock, not the slower scan's.
+    let mut parked_tick = tokio::time::interval(Duration::from_millis(250));
     // The first tick fires immediately; bootstrap from whatever the peer
     // table already knows about right away rather than waiting a full interval.
 
@@ -1271,6 +1291,7 @@ async fn run_worker(
             Some((channel, response)) = inbound.finished.recv() => {
                 let _ = swarm.behaviour_mut().node_http.send_response(channel, response);
             }
+            _ = parked_tick.tick() => expire_parked(&mut parked_http, Instant::now()),
             _ = scan_interval.tick() => {
                 expire_parked(&mut parked_http, Instant::now());
                 // Gossip-learned peers that cannot be reached over HTTP (a relayed node has no
@@ -1445,6 +1466,71 @@ async fn run_worker(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_request_whose_caller_gave_up_is_not_delivered_when_the_peer_connects() {
+        let parked = |tx| ParkedHttp {
+            request: NodeHttpRequest {
+                method: "POST".into(),
+                path_and_query: "/nodes/announce".into(),
+                headers: vec![],
+                body: vec![],
+                grant: Default::default(),
+            },
+            respond_to: tx,
+            deadline: Instant::now() + Duration::from_secs(5),
+        };
+        let (gone_tx, gone_rx) = oneshot::channel();
+        let (live_tx, _live_rx) = oneshot::channel();
+        drop(gone_rx);
+        let entry = ParkedPeer {
+            waiting: vec![parked(gone_tx), parked(live_tx)],
+            own_dial: None,
+        };
+        assert_eq!(live_waiting(entry).count(), 1);
+    }
+
+    #[test]
+    fn a_request_parked_past_its_dial_deadline_fails_as_never_sent() {
+        let (tx, mut rx) = oneshot::channel();
+        let peer = PeerId::random();
+        let mut parked = ParkedRequests::new();
+        let now = Instant::now();
+        parked.entry(peer).or_default().waiting.push(ParkedHttp {
+            request: NodeHttpRequest {
+                method: "GET".into(),
+                path_and_query: "/nodes/status".into(),
+                headers: vec![],
+                body: vec![],
+                grant: Default::default(),
+            },
+            respond_to: tx,
+            deadline: now + Duration::from_secs(5),
+        });
+        expire_parked(&mut parked, now);
+        assert!(rx.try_recv().is_err() && parked.contains_key(&peer));
+        expire_parked(&mut parked, now + Duration::from_secs(5));
+        match rx.try_recv() {
+            Ok(Err(NodeHttpError::Stream { kind, .. })) => {
+                assert_eq!(kind, StreamErrorKind::Connect)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(parked.is_empty());
+    }
+
+    #[test]
+    fn stream_failures_split_into_never_sent_and_possibly_sent() {
+        use request_response::OutboundFailure as F;
+        let kind = |f| match node_http_error(f) {
+            NodeHttpError::Stream { kind, .. } => kind,
+            other => panic!("{other}"),
+        };
+        assert_eq!(kind(F::DialFailure), StreamErrorKind::Connect);
+        assert_eq!(kind(F::UnsupportedProtocols), StreamErrorKind::Connect);
+        assert_eq!(kind(F::ConnectionClosed), StreamErrorKind::Dropped);
+        assert_eq!(kind(F::Timeout), StreamErrorKind::Timeout);
+    }
+
     use super::*;
     use libp2p::core::ConnectedPoint;
 

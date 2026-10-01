@@ -417,7 +417,17 @@ async fn the_connection_limit_refuses_a_second_peer() {
         .await
         .err()
         .expect("b is at its connection limit");
-    assert!(matches!(err, NodeHttpError::Stream { .. }), "{err}");
+    // A refusal by the limit looks like a dropped connection, which never fails over to HTTP.
+    assert!(
+        matches!(
+            err,
+            NodeHttpError::Stream {
+                kind: StreamErrorKind::Dropped,
+                ..
+            }
+        ),
+        "{err}"
+    );
 }
 
 #[tokio::test]
@@ -561,7 +571,8 @@ async fn a_peer_reachable_only_through_a_relay_answers_over_the_stream() {
         .await
         .err()
         .expect("no route to the private peer");
-    assert!(err.is_connect(), "{err}");
+    // Refused locally for want of an address, which says nothing about the peer.
+    assert!(err.is_local(), "{err}");
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
@@ -822,6 +833,9 @@ async fn an_http_request_to_a_dead_url_falls_back_to_the_stream() {
         None,
     );
     info.base_url = dead_url.clone();
+    // Replace the entry `served` introduced: an id held by two entries is not failed over.
+    a.peers
+        .prune_older_than(time::OffsetDateTime::now_utc() + time::Duration::hours(1));
     a.peers.upsert(info);
 
     let (status, body) = get_ok(&a.client(), format!("{dead_url}/nodes/status")).await;

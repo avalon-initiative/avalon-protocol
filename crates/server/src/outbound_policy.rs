@@ -73,6 +73,8 @@ pub struct CheckedTarget {
     /// Host name to pin, `None` when the URL host is an IP literal.
     pub pinned_host: Option<String>,
     pub addr: SocketAddr,
+    /// The policy that vetted this target; failover to a peer-table URL is held to it too.
+    pub policy: OutboundPolicy,
 }
 
 /// A node URL that passed the policy: an address-pinned http(s) target, or a `p2p://` peer that
@@ -82,15 +84,24 @@ pub struct NodeTarget {
     /// The base URL to build request URLs from.
     pub base_url: String,
     http: Option<CheckedTarget>,
+    policy: OutboundPolicy,
 }
 
 impl NodeTarget {
     pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
         match &self.http {
             Some(checked) => checked.node_client(timeout),
-            None => {
-                crate::node_http::NodeClient::from(reqwest::Client::new()).with_timeout(timeout)
-            }
+            // Never dialed for a p2p:// target; bounded anyway so it cannot follow or proxy.
+            None => crate::node_http::NodeClient::from(
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .timeout(timeout)
+                    .build()
+                    .unwrap_or_default(),
+            )
+            .with_timeout(timeout)
+            .with_policy(self.policy),
         }
     }
 }
@@ -99,6 +110,7 @@ impl From<CheckedTarget> for NodeTarget {
     fn from(checked: CheckedTarget) -> Self {
         Self {
             base_url: checked.base_url.clone(),
+            policy: checked.policy,
             http: Some(checked),
         }
     }
@@ -107,7 +119,9 @@ impl From<CheckedTarget> for NodeTarget {
 impl CheckedTarget {
     /// [`Self::client`] as a [`crate::node_http::NodeClient`].
     pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
-        crate::node_http::NodeClient::from(self.client(timeout)).with_timeout(timeout)
+        crate::node_http::NodeClient::from(self.client(timeout))
+            .with_timeout(timeout)
+            .with_policy(self.policy)
     }
 
     /// A client that talks only to the checked address, follows no redirects
@@ -247,6 +261,7 @@ impl OutboundPolicy {
                     base_url: base,
                     pinned_host: Some(name.to_string()),
                     addr,
+                    policy: *self,
                 })
             }
         }
@@ -259,6 +274,7 @@ impl OutboundPolicy {
             return Ok(NodeTarget {
                 base_url: crate::node_http::p2p_base_url(&peer),
                 http: None,
+                policy: *self,
             });
         }
         Ok(self.check_base_url(url).await?.into())
@@ -275,6 +291,7 @@ impl OutboundPolicy {
             base_url,
             pinned_host: None,
             addr: SocketAddr::new(ip, port),
+            policy: *self,
         })
     }
 }
@@ -494,5 +511,33 @@ mod peer_client_tests {
         let res = peer_client().get(format!("http://{addr}/x")).send().await;
         assert!(res.is_err());
         assert!(started.elapsed() < PEER_REQUEST_TIMEOUT + Duration::from_secs(5));
+    }
+
+    fn pinned_to(addr: SocketAddr, host: &str) -> CheckedTarget {
+        CheckedTarget {
+            base_url: format!("http://{host}:{}", addr.port()),
+            pinned_host: Some(host.to_string()),
+            addr,
+            policy: OutboundPolicy::new(true),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_client_dials_the_checked_address_not_a_fresh_resolution() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        // The name does not resolve at all: only the pinned address can answer.
+        let target = pinned_to(*server.address(), "pinned.invalid");
+        let res = target
+            .client(Duration::from_secs(5))
+            .get(&target.base_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
     }
 }
