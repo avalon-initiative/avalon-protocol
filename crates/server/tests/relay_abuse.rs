@@ -347,8 +347,7 @@ async fn a_flood_of_free_keypairs_leaves_the_honest_peer_served_within_the_limit
 }
 
 /// One keypair is held to its per-peer circuit limit, so a single peer cannot take the relay's
-/// whole circuit table. libp2p-relay compares with `>`, so the effective per-peer bound is the
-/// configured limit plus one; the test pins that bound.
+/// whole circuit table, at exactly the configured limit.
 #[tokio::test]
 async fn one_keypair_cannot_hold_more_than_its_circuits_per_peer() {
     let (r, r_addr) = relay_node(RelayServerSettings {
@@ -397,8 +396,33 @@ async fn one_keypair_cannot_hold_more_than_its_circuits_per_peer() {
     })
     .await;
     let counts = r.relay_stats.counts();
-    assert!(counts.circuits_accepted <= 3, "{counts:?}");
-    assert!(counts.circuits_denied >= 1, "{counts:?}");
+    assert_eq!(counts.circuits_accepted, 2, "{counts:?}");
+    assert_eq!(counts.circuits_denied, 2, "{counts:?}");
+}
+
+/// One keypair holding several connections to the relay is held to exactly its per-peer
+/// reservation limit, and a limit of one still allows one reservation.
+#[tokio::test]
+async fn one_keypair_cannot_hold_more_than_its_reservations_per_peer() {
+    for limit in [1usize, 2] {
+        let (r, r_addr) = relay_node(RelayServerSettings {
+            max_reservations: 10,
+            max_reservations_per_peer: limit,
+            ..RelayServerSettings::default()
+        })
+        .await;
+        // One keypair, one swarm per connection to the relay, each asking for a reservation.
+        let key = identity::Keypair::generate_ed25519();
+        let mut swarms: Vec<_> = (0..limit + 2)
+            .map(|_| raw_swarm_with(key.clone()))
+            .collect();
+        for m in &mut swarms {
+            raw_reserve(m, &r_addr).await;
+        }
+        let counts = r.relay_stats.counts();
+        assert_eq!(counts.reservations_accepted, limit as u64, "{counts:?}");
+        assert_eq!(counts.reservations_denied, 2, "{counts:?}");
+    }
 }
 
 fn client_swarm() -> Swarm<relay::client::Behaviour> {
@@ -456,7 +480,9 @@ async fn a_flood_of_fake_relay_candidates_is_bounded_and_operator_relays_survive
                     relay_peer_id,
                     renewal,
                     ..
-                })) => client.on_accepted(relay_peer_id, renewal),
+                })) => {
+                    let _ = client.on_accepted(relay_peer_id, renewal, Instant::now());
+                }
                 Ok(SwarmEvent::ListenerClosed { listener_id, .. }) => {
                     attempts_failed += 1;
                     client.on_listener_closed(listener_id, Instant::now());
