@@ -43,7 +43,7 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
 | `relay-ranking` | Three discovered relays with 150, 60 and 5 ms of added delay (`tc netem`). Once the node lists all three under their libp2p ids with a measured round trip, the relay holding its reservation is stopped and the reservation must move to the nearest of the other two. Not yet run in the lab: the added delay, the identity binding the latency attribution needs (not observable through the API), and the poll on `/nodes/topology` are unverified. The lab's public segment is one /24, so prefix diversity is covered by unit and loopback tests, not here. | no |
 
-A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt and is not yet run in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
+A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt. CI runs `punch-port-restricted` (with `public` and `relayed-symmetric`); `punch-symmetric-fallback` is not in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
 is reachable only through a relay, then hole punching makes up to three attempts.
 
 ## Known limitations

@@ -101,8 +101,9 @@ reference for what setup writes.
 - A variant that bundles its own database, `avalon-server-bundled`, is
   available as of this release — see [Bundled variant](#bundled-variant).
 - Not available yet: Windows binaries, a bundled variant on macOS, and a
-  public network entry to join (#994). NAT traversal is planned; a node still needs an inbound
-  port, see [Ports](#ports).
+  public network entry to join (#994).
+- A node with no open inbound port (home or carrier-grade NAT) can join; see
+  [Ports](#ports) and [`running-without-an-open-port.md`](running-without-an-open-port.md).
 - The Linux x86_64 steps below were run against the release tarballs built by
   the release workflow's dry run; see [Verified](#verified).
 
@@ -128,8 +129,10 @@ reference for what setup writes.
   non-root user, `libxml2` and `tzdata` (a bare `ubuntu:24.04` has neither, and
   the first start fails without them), and outbound HTTPS on the first start to
   download PostgreSQL.
-- One inbound TCP port for HTTP (`AVALON_SERVER_ADDR`, default `127.0.0.1:8080`)
-  and one for the peer-discovery swarm (`AVALON_LIBP2P_LISTEN_ADDR`).
+- To be a dialable node (a seed, a node that serves clients): one inbound TCP port for HTTP
+  (`AVALON_SERVER_ADDR`, default `127.0.0.1:8080`) and one for the peer-discovery swarm
+  (`AVALON_LIBP2P_LISTEN_ADDR`). A node with no open port needs neither reachable from outside;
+  see [Ports](#ports).
 - A TLS-terminating reverse proxy in front of the HTTP port before it is
   reachable beyond loopback: [`deployment.md`](deployment.md).
 
@@ -327,15 +330,30 @@ curl -s -X POST http://127.0.0.1:8080/identities/register/start \
 
 ## Ports
 
-Both listeners must be reachable by other nodes: the HTTP port (through your
-TLS proxy, as `AVALON_NODE_URL`) and the `AVALON_LIBP2P_LISTEN_ADDR` port. If
-the host sits behind NAT or a container network, also set
-`AVALON_LIBP2P_EXTERNAL_ADDR` to the address peers should dial; it is advertised as
-given and checked by reachability detection. Only confirmed addresses are announced
-otherwise, so a seed node must set it. `GET /nodes/status` shows the result as
-`reachability` (`unknown`, `public` or `private`) and `confirmed_external_addrs`. Nodes
-behind NAT with no forwarded port report `private` and cannot yet take part as
-dialable peers; NAT traversal is planned.
+Whether a node needs inbound ports depends on what it does.
+
+**A dialable node needs both listeners reachable by other nodes.** That means a seed node, a node
+that serves browsers or SDK clients, and any node that announces an `AVALON_NODE_URL`: the HTTP
+port (through your TLS proxy, as `AVALON_NODE_URL`) and the `AVALON_LIBP2P_LISTEN_ADDR` port. If
+the host sits behind NAT or a container network, also set `AVALON_LIBP2P_EXTERNAL_ADDR` to the
+address peers should dial; it is advertised as given and checked by reachability detection. Only
+confirmed addresses are announced otherwise, so a seed node must set it.
+
+**A node that only needs to take part in the network needs no inbound port.** With no
+`AVALON_NODE_URL` it announces as `p2p://<peer id>` and is reached over the connections it opened,
+a relay circuit or a hole-punched connection (next section). It needs outbound access to one
+reachable HTTP seed and to the libp2p port of the nodes it connects to. It does not need
+`AVALON_LIBP2P_EXTERNAL_ADDR`.
+
+A node that sets `AVALON_NODE_URL` while its URL is unreachable from outside is not admitted from
+its announce by neighbors that verify reachability (the default), so a node behind NAT should leave it unset
+rather than point it at an address nobody can reach.
+
+`GET /nodes/status` shows the result as `reachability` (`unknown`, `public` or `private`),
+`confirmed_external_addrs` and `connectivity` (`direct`, `nat_traversed`, `relayed` or
+`outbound_only`; omitted while `reachability` is `unknown`). A node behind NAT with no forwarded
+port reports `private`, reserves a relay slot when one is available and reports `relayed`, or
+reports `outbound_only` when none is.
 
 ## Running without a public URL
 
@@ -355,7 +373,8 @@ inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat
 `/mirror/notify`); neighbors refuse its pushes there until it has real credentials, and it
 receives no chat or mirror pushes of its own because its URL is not advertised for interest
 lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
-evicted first. The node's `p2p://` URL is never given to browsers or used in signed grants.
+evicted first. Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. A
+fronting gateway for such nodes is planned, not implemented.
 
 ## Running under systemd
 

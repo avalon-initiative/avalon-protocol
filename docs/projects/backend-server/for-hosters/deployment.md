@@ -7,6 +7,10 @@ anywhere other than `127.0.0.1`. Once it's live, see
 [`upgrading.md`](upgrading.md) for rolling out new versions and security
 patches without breaking it.
 
+This page applies to a node that serves HTTP to other machines. A node with no open inbound
+port needs no reverse proxy for that; see
+[`running-without-an-open-port.md`](running-without-an-open-port.md).
+
 `avalon-server` speaks plain HTTP only — there is no native TLS listener in
 the Rust app, and that's deliberate (see [Current implementation](#current-implementation)).
 On `localhost` that's a non-issue: loopback traffic never leaves the machine.
