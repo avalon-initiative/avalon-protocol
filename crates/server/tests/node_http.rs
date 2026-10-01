@@ -571,7 +571,8 @@ async fn a_peer_reachable_only_through_a_relay_answers_over_the_stream() {
         .await
         .err()
         .expect("no route to the private peer");
-    assert!(err.is_connect(), "{err}");
+    // Refused locally for want of an address, which says nothing about the peer.
+    assert!(err.is_local(), "{err}");
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 

@@ -23,7 +23,7 @@ const DEFAULT_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 300;
-const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 15;
 const MAX_CONNECT_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_MAX_INFLIGHT: u64 = 64;
 const MAX_MAX_INFLIGHT: u64 = 1024;
@@ -717,5 +717,28 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_HTTP_MAX_REQUEST_BYTES");
         }
+        // The dial bound is shorter than the exchange bound by default and capped.
+        let defaults = NodeHttpSettings::default();
+        assert!(defaults.connect_timeout < defaults.timeout);
+        for bad in ["0", &(MAX_CONNECT_TIMEOUT_SECS + 1).to_string()] {
+            unsafe {
+                std::env::set_var("AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS", bad);
+            }
+            assert!(NodeHttpSettings::from_env().is_err(), "{bad}");
+        }
+        unsafe {
+            std::env::set_var("AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS", "7");
+        }
+        assert_eq!(
+            NodeHttpSettings::from_env().unwrap().connect_timeout,
+            Duration::from_secs(7)
+        );
+        unsafe {
+            std::env::remove_var("AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS");
+        }
+        assert_eq!(
+            NodeHttpSettings::from_env().unwrap().connect_timeout,
+            defaults.connect_timeout
+        );
     }
 }

@@ -21,13 +21,6 @@ pub const VET_TTL: Duration = Duration::from_secs(30);
 /// Cached checks kept at once.
 pub const MAX_VET_ENTRIES: usize = 1024;
 
-/// A peer-table URL that passed the outbound policy, with the pinned client to dial it by.
-#[derive(Clone)]
-pub struct Vetted {
-    pub target: CheckedTarget,
-    pub client: reqwest::Client,
-}
-
 type VetKey = (PeerId, String, bool);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,7 +63,7 @@ struct Inner {
     peers: HashMap<PeerId, Record>,
     tick: u64,
     /// Policy checks by peer, base URL and whether private ranges were allowed; `None` is a refusal.
-    vetted: HashMap<VetKey, (Instant, Option<Vetted>)>,
+    vetted: HashMap<VetKey, (Instant, Option<CheckedTarget>)>,
 }
 
 /// Shared by every client of one peer table; cheap to clone.
@@ -128,7 +121,7 @@ impl TransportStats {
         base_url: &str,
         allow_private: bool,
         now: Instant,
-    ) -> Option<Option<Vetted>> {
+    ) -> Option<Option<CheckedTarget>> {
         let inner = self.lock();
         let (at, v) = inner
             .vetted
@@ -141,7 +134,7 @@ impl TransportStats {
         peer: PeerId,
         base_url: &str,
         allow_private: bool,
-        vetted: Option<Vetted>,
+        vetted: Option<CheckedTarget>,
         now: Instant,
     ) {
         let mut inner = self.lock();

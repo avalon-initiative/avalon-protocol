@@ -221,3 +221,47 @@ async fn a_blackholed_dial_fails_over_at_the_connect_timeout() {
         .is_demoted(&ghost.peer_id, Transport::Stream));
     held.abort();
 }
+
+/// More writes than a peer's dial queue holds: the overflow is refused locally, which says
+/// nothing about the peer, while the queued ones time out dialing it.
+#[tokio::test]
+async fn an_overflowing_dial_queue_is_a_local_failure() {
+    unsafe { std::env::set_var("AVALON_NODE_HTTP_CONNECT_TIMEOUT_SECS", "1") };
+    let hole = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hole_port = hole.local_addr().unwrap().port();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((s, _)) = hole.accept().await {
+            open.push(s);
+        }
+    });
+    let table = PeerTable::new();
+    let client_node = dht::start(table.clone(), config()).await;
+    let ghost = dht::start(PeerTable::new(), config()).await;
+    let mut ghost_entry = entry("p2p://unused", &ghost, Connectivity::Relayed);
+    ghost_entry.libp2p_listen_addrs = vec![format!("/ip4/127.0.0.1/tcp/{hole_port}")];
+    table.upsert(ghost_entry);
+    let url = format!("{}/nodes/announce", p2p_base_url(&ghost.peer_id));
+
+    let mut tasks = Vec::new();
+    for _ in 0..40 {
+        let client = NodeClient::new().with_stream(client_node.node_http.clone());
+        let url = url.clone();
+        tasks.push(tokio::spawn(
+            async move { client.post(url).send().await.err() },
+        ));
+    }
+    let mut local = 0;
+    let mut connect = 0;
+    for t in tasks {
+        let err = t.await.unwrap().expect("a blackholed dial never answers");
+        if err.is_local() {
+            local += 1;
+        } else if err.is_connect() {
+            connect += 1;
+        }
+    }
+    assert!(local >= 1, "overflow was not refused locally");
+    assert_eq!(local + connect, 40);
+    held.abort();
+}
