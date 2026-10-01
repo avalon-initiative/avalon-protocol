@@ -44,8 +44,13 @@ const MAX_CLIENT_RESERVATIONS: u64 = 8;
 /// Most relay candidates a client remembers.
 const MAX_CANDIDATES: usize = 64;
 
-/// Measured round trips closer than this are treated as equal so outcome history can decide.
+/// Round trips are compared on a fixed 10 ms grid so history can decide within a cell; two
+/// relays straddling a cell edge still differ.
 const LATENCY_BUCKET_MS: f64 = 10.0;
+
+/// Most accepted reservations that count towards a relay's history, so accept-drop cycles
+/// cannot outscore a relay that stays up.
+const MAX_COUNTED_ACCEPTS: u32 = 4;
 
 /// Most lost reservations that count against a relay's history.
 const MAX_PENALISED_DROPS: u32 = 4;
@@ -418,31 +423,27 @@ fn backoff_delay(base: Duration, max: Duration, failures: usize) -> Duration {
     base.saturating_mul(1u32 << doublings.min(31)).min(max)
 }
 
-/// Announce EWMAs (ms) of neighbors with a uniquely claimed, connected libp2p id; a forged
-/// duplicate claim can only drop a relay back to unknown.
+/// Announce EWMAs (ms) of neighbors with a uniquely claimed, connected libp2p id. This is the
+/// RTT to the HTTP URL, not to the relay's libp2p connection, and binding has no key proof, so
+/// a bound forger can still skew or drop a relay's latency; it never changes who may relay.
 pub fn neighbor_latencies(peers: &PeerTable) -> Vec<(PeerId, f64)> {
-    let entries: Vec<PeerInfo> = peers
-        .list_all()
-        .into_iter()
-        .chain(peers.list_unverified())
-        .collect();
+    let entries = peers.list_all();
     let ids = attributable_ids(&entries, |id| peers.paths().path(id).is_some());
     latencies_from(&peers.neighbors().snapshot(), &ids)
 }
 
-/// `base_url` to libp2p id for bound entries whose id no other entry claims and that is
-/// connected.
+/// `base_url` to libp2p id for bound entries whose id no other bound entry claims and that is
+/// connected; unbound gossip entries are ignored.
 fn attributable_ids(
     entries: &[PeerInfo],
     connected: impl Fn(&PeerId) -> bool,
 ) -> HashMap<String, PeerId> {
     let mut claims: HashMap<&str, usize> = HashMap::new();
-    for id in entries.iter().filter_map(|p| p.libp2p_peer_id.as_deref()) {
+    let bound = || entries.iter().filter(|p| p.identity_bound);
+    for id in bound().filter_map(|p| p.libp2p_peer_id.as_deref()) {
         *claims.entry(id).or_default() += 1;
     }
-    entries
-        .iter()
-        .filter(|p| p.identity_bound)
+    bound()
         .filter_map(|p| {
             let raw = p.libp2p_peer_id.as_deref()?;
             let id: PeerId = raw.parse().ok()?;
@@ -506,7 +507,7 @@ impl Candidate {
 
     /// Outcome score: accepted reservations and renewals count for the relay, drops against it.
     fn history(&self) -> i64 {
-        i64::from(self.accepts) + i64::from(self.renewals.min(16))
+        i64::from(self.accepts.min(MAX_COUNTED_ACCEPTS)) + i64::from(self.renewals.min(16))
             - 2 * i64::from(self.drops.min(MAX_PENALISED_DROPS))
     }
 }
@@ -563,6 +564,9 @@ pub struct RelayClient {
     local_peer: PeerId,
     candidates: BTreeMap<PeerId, Candidate>,
     slots: BTreeMap<PeerId, Slot>,
+    /// Remote address of each open direct connection, the better source of a relay's network
+    /// than the addresses it reports for itself. Bounded.
+    connected: HashMap<PeerId, Multiaddr>,
     handle: ReachabilityHandle,
 }
 
@@ -577,6 +581,7 @@ impl RelayClient {
             local_peer,
             candidates: BTreeMap::new(),
             slots: BTreeMap::new(),
+            connected: HashMap::new(),
             handle,
         };
         for (index, addr) in client.settings.relay_addrs.clone().into_iter().enumerate() {
@@ -633,6 +638,29 @@ impl RelayClient {
         }
     }
 
+    /// A direct connection to `peer` opened from or to `addr`.
+    pub fn note_connection_addr(&mut self, peer: PeerId, addr: &Multiaddr) {
+        if is_relayed(addr)
+            || (self.connected.len() >= 2 * MAX_CANDIDATES && !self.connected.contains_key(&peer))
+        {
+            return;
+        }
+        self.connected.insert(peer, addr.clone());
+    }
+
+    /// The last connection to `peer` closed.
+    pub fn forget_connection_addr(&mut self, peer: &PeerId) {
+        self.connected.remove(peer);
+    }
+
+    /// Where `peer` is: its connection's address when connected, else the address we would dial.
+    fn group_of(&self, peer: &PeerId, c: &Candidate) -> Option<Neighbourhood> {
+        self.connected
+            .get(peer)
+            .and_then(neighbourhood)
+            .or_else(|| neighbourhood(c.dial_addr()))
+    }
+
     /// Records the free reservation slots a relay reports for itself.
     pub fn note_claimed_capacity(&mut self, peer: PeerId, free_reservations: u32) {
         if let Some(c) = self.candidates.get_mut(&peer) {
@@ -660,28 +688,45 @@ impl RelayClient {
         )
     }
 
-    /// Of the relays not held and not in backoff, the best one outside every held
-    /// neighbourhood; when none is outside, the best one overall.
+    /// Of the relays not held and not in backoff: operator-listed ones before discovered ones,
+    /// and within each group the best one outside every held neighbourhood, else the best one.
+    /// A slot filled from the fallback is not rebalanced when a diverse relay recovers.
     fn next_candidate(&self, now: Instant) -> Option<PeerId> {
         let held: HashSet<Neighbourhood> = self
             .slots
             .values()
             .filter_map(|s| s.neighbourhood.clone())
             .collect();
-        let eligible = || {
-            self.candidates.iter().filter(|(peer, c)| {
-                !self.slots.contains_key(peer) && c.retry_at.is_none_or(|t| now >= t)
+        let eligible = |tier: u8| {
+            self.candidates.iter().filter(move |(peer, c)| {
+                c.rank.0 == tier
+                    && !self.slots.contains_key(peer)
+                    && c.retry_at.is_none_or(|t| now >= t)
             })
         };
-        let best = |diverse_only: bool| {
-            eligible()
-                .filter(|(_, c)| {
-                    !diverse_only || neighbourhood(c.dial_addr()).is_none_or(|n| !held.contains(&n))
+        let best = |tier: u8, diverse_only: bool| {
+            eligible(tier)
+                .filter(|(peer, c)| {
+                    !diverse_only || self.group_of(peer, c).is_none_or(|n| !held.contains(&n))
                 })
                 .min_by_key(|(peer, c)| Self::rank_key(**peer, c))
                 .map(|(peer, _)| *peer)
         };
-        best(true).or_else(|| best(false))
+        [0, 1]
+            .into_iter()
+            .find_map(|tier| best(tier, true).or_else(|| best(tier, false)))
+    }
+
+    /// Runs `fetch` for fresh latencies only when a reconcile could fill a slot now.
+    pub fn refresh_latencies_if_needed(
+        &mut self,
+        reachability: Reachability,
+        now: Instant,
+        fetch: impl FnOnce() -> Vec<(PeerId, f64)>,
+    ) {
+        if self.wants_slots(reachability) && self.next_candidate(now).is_some() {
+            self.set_latencies(fetch());
+        }
     }
 
     /// Whether a reconcile would try to fill a slot now.
@@ -730,7 +775,7 @@ impl RelayClient {
             };
             let candidate = &self.candidates[&peer];
             let dial = candidate.dial_addr().clone();
-            let group = neighbourhood(&dial);
+            let group = self.group_of(&peer, candidate);
             let circuit = dial
                 .clone()
                 .with(Protocol::P2p(peer))
@@ -1260,6 +1305,181 @@ mod tests {
         assert!(!c.wants_slots(Reachability::Private), "full");
     }
 
+    #[test]
+    fn an_operator_relay_in_the_held_24_beats_a_discovered_diverse_one() {
+        let (held, listed) = (peer(), peer());
+        let mut c = client(vec![with_peer("/ip4/203.0.113.77/tcp/1", listed)], 2);
+        c.note_hop_relay(held, vec!["/ip4/203.0.113.10/tcp/1".parse().unwrap()]);
+        let diverse = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.set_latencies([(diverse, 1.0)]);
+        hold(&mut c, held);
+        assert_eq!(c.next_candidate(Instant::now()), Some(listed));
+    }
+
+    #[test]
+    fn diversity_is_preferred_within_the_operator_group() {
+        let (a, b, d) = (peer(), peer(), peer());
+        let mut c = client(
+            vec![
+                with_peer("/ip4/203.0.113.10/tcp/1", a),
+                with_peer("/ip4/203.0.113.11/tcp/1", b),
+                with_peer("/ip4/198.51.100.1/tcp/1", d),
+            ],
+            2,
+        );
+        hold(&mut c, a);
+        assert_eq!(c.next_candidate(Instant::now()), Some(d));
+    }
+
+    #[test]
+    fn a_connections_address_decides_the_neighbourhood_over_the_reported_one() {
+        let mut c = client(vec![], 2);
+        let first = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let liar = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let honest = relay_at(&mut c, "/ip4/192.0.2.1/tcp/1");
+        c.set_latencies([(liar, 1.0), (honest, 200.0)]);
+        hold(&mut c, first);
+        c.note_connection_addr(liar, &"/ip4/203.0.113.99/tcp/9".parse().unwrap());
+        assert_eq!(
+            c.next_candidate(Instant::now()),
+            Some(honest),
+            "the liar is really in the held /24"
+        );
+        c.forget_connection_addr(&liar);
+        assert_eq!(
+            c.next_candidate(Instant::now()),
+            Some(liar),
+            "back to the reported one"
+        );
+        let relayed: Multiaddr = format!("/ip4/203.0.113.5/tcp/1/p2p/{}/p2p-circuit", peer())
+            .parse()
+            .unwrap();
+        c.note_connection_addr(liar, &relayed);
+        assert!(
+            c.connected.is_empty(),
+            "a relayed path says nothing about the relay"
+        );
+    }
+
+    #[test]
+    fn connection_addresses_are_bounded() {
+        let mut c = client(vec![], 1);
+        let addr: Multiaddr = "/ip4/203.0.113.1/tcp/1".parse().unwrap();
+        for _ in 0..4 * MAX_CANDIDATES {
+            c.note_connection_addr(peer(), &addr);
+        }
+        assert_eq!(c.connected.len(), 2 * MAX_CANDIDATES);
+    }
+
+    #[test]
+    fn a_flapping_relay_cannot_outscore_one_that_stays_up() {
+        let mut c = client(vec![], 1);
+        let flapper = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let stable = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let now = Instant::now();
+        for _ in 0..10_000 {
+            hold(&mut c, flapper);
+            c.slots.get_mut(&flapper).unwrap().accepted = false;
+            c.on_accepted(flapper, false);
+            let id = c.slots[&flapper].listener_id;
+            c.on_listener_closed(id, now);
+        }
+        hold(&mut c, stable);
+        c.slots.get_mut(&stable).unwrap().accepted = false;
+        c.on_accepted(stable, false);
+        c.on_accepted(stable, true);
+        c.slots.remove(&stable);
+        assert!(c.candidates[&stable].history() > c.candidates[&flapper].history());
+        let later = now + RelayClientSettings::default().retry_backoff_max;
+        assert_eq!(c.next_candidate(later), Some(stable));
+    }
+
+    #[test]
+    fn a_discovered_report_does_not_overwrite_an_operator_relays_addresses() {
+        let listed = peer();
+        let mut c = client(vec![with_peer("/ip4/203.0.113.1/tcp/1", listed)], 1);
+        c.note_hop_relay(listed, vec!["/ip4/198.51.100.99/tcp/1".parse().unwrap()]);
+        assert_eq!(
+            c.candidates[&listed].addrs[0].to_string(),
+            "/ip4/203.0.113.1/tcp/1"
+        );
+        assert_eq!(c.candidates[&listed].rank, (0, 0));
+        c.note_hop_relay(listed, vec!["/ip4/198.51.100.99/tcp/1".parse().unwrap()]);
+        let found = peer();
+        c.note_hop_relay(found, vec!["/ip4/203.0.114.1/tcp/1".parse().unwrap()]);
+        c.note_hop_relay(found, vec!["/ip4/203.0.114.2/tcp/1".parse().unwrap()]);
+        assert_eq!(
+            c.candidates[&found].addrs[0].to_string(),
+            "/ip4/203.0.114.2/tcp/1"
+        );
+    }
+
+    #[test]
+    fn an_address_with_no_ip_or_dns_counts_as_diverse() {
+        let mut c = client(vec![], 2);
+        let first = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let same = relay_at(&mut c, "/ip4/203.0.113.11/tcp/1");
+        let nameless = relay_at(&mut c, "/memory/7");
+        c.set_latencies([(same, 1.0), (nameless, 500.0)]);
+        hold(&mut c, first);
+        assert_eq!(c.next_candidate(Instant::now()), Some(nameless));
+    }
+
+    #[tokio::test]
+    async fn a_fallback_slot_is_kept_when_the_diverse_relay_recovers() {
+        let mut c = client(vec![], 2);
+        let a = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let b = relay_at(&mut c, "/ip4/203.0.113.11/tcp/1");
+        let d = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.set_latencies([(a, 1.0), (b, 20.0), (d, 300.0)]);
+        let now = Instant::now();
+        c.mark_failed(d, now, false);
+        let mut swarm = test_swarm();
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert_eq!(
+            c.slots.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([a, b])
+        );
+        c.on_accepted(a, false);
+        c.on_accepted(b, false);
+        let later = now + Duration::from_secs(3600);
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert_eq!(c.slots.len(), 2, "no rebalancing onto the recovered relay");
+        assert!(c.slots.contains_key(&b));
+        let id = c.slots[&b].listener_id;
+        c.on_listener_closed(id, later);
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(
+            c.slots.contains_key(&d),
+            "the freed slot goes to the diverse relay"
+        );
+    }
+
+    #[test]
+    fn latencies_are_fetched_only_when_a_slot_could_be_filled() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = || {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        };
+        let now = Instant::now();
+        let mut c = client(vec![], 1);
+        c.refresh_latencies_if_needed(Reachability::Private, now, fetch);
+        assert_eq!(calls.get(), 0, "no candidate");
+        let p = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        c.refresh_latencies_if_needed(Reachability::Public, now, fetch);
+        assert_eq!(calls.get(), 0, "not private");
+        c.mark_failed(p, now, false);
+        c.refresh_latencies_if_needed(Reachability::Private, now, fetch);
+        assert_eq!(calls.get(), 0, "every relay is in backoff");
+        let later = now + Duration::from_secs(3600);
+        c.refresh_latencies_if_needed(Reachability::Private, later, fetch);
+        assert_eq!(calls.get(), 1);
+        hold(&mut c, p);
+        c.refresh_latencies_if_needed(Reachability::Private, later, fetch);
+        assert_eq!(calls.get(), 1, "no free slot");
+    }
+
     fn entry(url: &str, id: Option<&PeerId>, bound: bool) -> PeerInfo {
         PeerInfo {
             identity_bound: bound,
@@ -1289,13 +1509,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unverified_duplicate_claim_also_drops_the_id() {
+    fn an_unbound_duplicate_claim_cannot_wipe_a_bound_ones_latency() {
         let id = peer();
         let entries = [
             entry("http://honest.test", Some(&id), true),
-            entry("http://pooled.test", Some(&id), false),
+            entry("http://gossip.test", Some(&id), false),
+            entry("http://gossip-2.test", Some(&id), false),
         ];
-        assert!(attributable_ids(&entries, |_| true).is_empty());
+        let ids = attributable_ids(&entries, |_| true);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids["http://honest.test"], id);
     }
 
     #[test]
@@ -1354,10 +1577,13 @@ mod tests {
                 .paths()
                 .connection_opened(id, ConnectionId::new_unchecked(n), false);
         }
-        let got = neighbor_latencies(&peers);
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].0, good);
-        assert!((got[0].1 - 40.0).abs() < 1e-6);
+        let got: HashMap<PeerId, f64> = neighbor_latencies(&peers).into_iter().collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!((got[&good] - 40.0).abs() < 1e-6);
+        assert!(
+            got.contains_key(&pooled),
+            "a pooled gossip claim does not drop a bound relay"
+        );
     }
 
     #[test]

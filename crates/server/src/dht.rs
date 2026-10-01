@@ -852,10 +852,10 @@ impl RelayRuntime {
         reachability: Reachability,
         now: Instant,
     ) {
-        if self.client.wants_slots(reachability) {
-            self.client
-                .set_latencies(crate::relay::neighbor_latencies(peers));
-        }
+        self.client
+            .refresh_latencies_if_needed(reachability, now, || {
+                crate::relay::neighbor_latencies(peers)
+            });
         self.client.reconcile(swarm, reachability, now);
     }
 }
@@ -1099,6 +1099,22 @@ fn handle_relay_event(
         SwarmEvent::ListenerClosed { listener_id, .. } => {
             relay.client.on_listener_closed(*listener_id, now);
             relay.refresh_and_reconcile(swarm, peers, detected(), now);
+            false
+        }
+        SwarmEvent::ConnectionEstablished {
+            peer_id, endpoint, ..
+        } => {
+            relay
+                .client
+                .note_connection_addr(*peer_id, endpoint.get_remote_address());
+            false
+        }
+        SwarmEvent::ConnectionClosed {
+            peer_id,
+            num_established: 0,
+            ..
+        } => {
+            relay.client.forget_connection_addr(peer_id);
             false
         }
         SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(server_event)) => {

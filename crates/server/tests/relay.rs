@@ -47,6 +47,13 @@ fn ipv6_available() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
 }
 
+/// Whether 127.0.0.2, 127.0.1.1 and 127.0.2.1 are bindable; macOS has only 127.0.0.1 by default.
+fn loopback_aliases_available() -> bool {
+    ["127.0.0.2", "127.0.1.1", "127.0.2.1"]
+        .iter()
+        .all(|ip| std::net::TcpListener::bind((*ip, 0)).is_ok())
+}
+
 fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> DhtConfig {
     DhtConfig {
         identity: identity::Keypair::generate_ed25519(),
@@ -649,8 +656,8 @@ fn held(node: &DhtHandle) -> Vec<String> {
 /// A client asked to hold two reservations holds two, on different relays in different /24s.
 #[tokio::test]
 async fn a_client_holds_up_to_its_reservation_count() {
-    if !ipv6_available() {
-        return eprintln!("skipping: no IPv6 loopback");
+    if !ipv6_available() || !loopback_aliases_available() {
+        return eprintln!("skipping: no IPv6 loopback or loopback aliases");
     }
     let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
     let (r2, r2_addr) = relay_node_at("127.0.1.1", server_settings()).await;
@@ -666,8 +673,8 @@ async fn a_client_holds_up_to_its_reservation_count() {
 /// listed before it.
 #[tokio::test]
 async fn the_second_reservation_avoids_the_first_relays_24() {
-    if !ipv6_available() {
-        return eprintln!("skipping: no IPv6 loopback");
+    if !ipv6_available() || !loopback_aliases_available() {
+        return eprintln!("skipping: no IPv6 loopback or loopback aliases");
     }
     let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
     let (twin, twin_addr) = relay_node_at("127.0.0.2", server_settings()).await;
@@ -684,8 +691,8 @@ async fn the_second_reservation_avoids_the_first_relays_24() {
 /// With every relay in one /24 the node still reaches its reservation count.
 #[tokio::test]
 async fn one_prefix_still_fills_every_reservation() {
-    if !ipv6_available() {
-        return eprintln!("skipping: no IPv6 loopback");
+    if !ipv6_available() || !loopback_aliases_available() {
+        return eprintln!("skipping: no IPv6 loopback or loopback aliases");
     }
     let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
     let (r2, r2_addr) = relay_node_at("127.0.0.2", server_settings()).await;

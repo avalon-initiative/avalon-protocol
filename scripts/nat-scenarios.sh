@@ -448,11 +448,14 @@ scenario_relay-ranking() {
     AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1
   wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) == 1' \
     "a relay reservation" || return 1
-  # Judge only once every relay has a measured round trip, so a correct build cannot fail on timing.
-  local u
-  for u in 10.99.0.101 10.99.0.103 10.99.0.104; do
-    wait_json "an announce round trip to $u" \
-      "[.neighbors[] | select(.base_url == \"http://$u:8080\") | .latency.ewma_ms] | length == 1" \
+  # Judge only once every relay has a measured round trip under its own libp2p id, so a correct
+  # build cannot fail on timing. Identity binding is not exposed by the API; the verified
+  # announces above produce it before an id is listed.
+  local u id
+  for u in far:10.99.0.101 mid:10.99.0.103 near:10.99.0.104; do
+    id=$(peer_id "${u%%:*}")
+    wait_json "a measured round trip to ${u%%:*} under its libp2p id" \
+      "[.neighbors[] | select(.base_url == \"http://${u##*:}:8080\" and .libp2p_peer_id == \"$id\" and .latency.ewma_ms != null)] | length == 1" \
       topology home1 10.1.0.2 || return 1
   done
   local held want
