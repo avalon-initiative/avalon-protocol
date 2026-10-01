@@ -1240,3 +1240,35 @@ async fn a_relay_keeps_serving_through_a_brief_private_verdict() {
         "without a grace the private verdict stops the relay"
     );
 }
+
+/// Every AutoNAT dial-back opens a connection to the probed node; the prober allows two
+/// connections per peer, so unless each is closed once answered the second probe is denied and
+/// the node is told `private`.
+#[tokio::test]
+async fn repeated_probes_do_not_exhaust_the_probers_connection_limit() {
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let r_peers = PeerTable::new();
+    let r = dht::start(
+        r_peers.clone(),
+        config(&addr, Some(&addr), RelaySettings::default()),
+    )
+    .await;
+    let prober = dht::start_with_node_http(
+        PeerTable::new(),
+        config("/ip4/127.0.0.1/tcp/0", None, RelaySettings::default()),
+        avalon_server::node_http::NodeHttpSettings {
+            max_connections_per_peer: 2,
+            ..Default::default()
+        },
+    )
+    .await;
+    introduce(&r_peers, &prober);
+    wait_snapshot(&r, "public", |s| {
+        (s.reachability == Reachability::Public).then_some(())
+    })
+    .await;
+    for _ in 0..50 {
+        assert_eq!(r.reachability.snapshot().reachability, Reachability::Public);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

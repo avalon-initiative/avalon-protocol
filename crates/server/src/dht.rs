@@ -74,7 +74,7 @@ use crate::reachability::{
 };
 use crate::relay::{RelayClient, RelayServerStats, RelaySettings};
 use crate::relay_resilience::{
-    is_retryable_relayed_failure, DialRetry, RelayGate, RelayResilience,
+    is_retryable_relayed_failure, DialRetry, DialbackConns, RelayGate, RelayResilience,
 };
 
 /// Bounded so a burst of interest registrations/lookups can't grow this
@@ -1032,6 +1032,35 @@ fn track_reachability(
     }
 }
 
+/// Closes the connection an AutoNAT dial-back opened once the probe is answered, so repeated
+/// probes do not exhaust the per-peer connection limit and get denied.
+fn close_answered_dialbacks(
+    swarm: &mut Swarm<DhtBehaviour>,
+    dialbacks: &mut DialbackConns,
+    event: &SwarmEvent<DhtBehaviourEvent>,
+) {
+    match event {
+        SwarmEvent::ConnectionEstablished {
+            peer_id,
+            connection_id,
+            endpoint: libp2p::core::ConnectedPoint::Dialer { address, .. },
+            num_established,
+            ..
+        } if num_established.get() > 1 => {
+            dialbacks.opened_extra(*connection_id, *peer_id, address.clone());
+        }
+        SwarmEvent::ConnectionClosed { connection_id, .. } => dialbacks.closed(connection_id),
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::InboundProbe(
+            autonat::InboundProbeEvent::Response { peer, address, .. },
+        ))) => {
+            if let Some(id) = dialbacks.answered(peer, address) {
+                swarm.close_connection(id);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Keeps the per-peer connection kinds current from connection and hole-punch events.
 fn track_peer_paths(paths: &PeerPaths, event: &SwarmEvent<DhtBehaviourEvent>) {
     match event {
@@ -1239,6 +1268,7 @@ async fn run_worker(
     let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
     let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
     let mut relayed_retry = DialRetry::new(relay.resilience);
+    let mut dialbacks = DialbackConns::default();
     let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // Parked requests expire on their own clock, not the slower scan's.
@@ -1366,6 +1396,7 @@ async fn run_worker(
                 track_reachability(&mut swarm, &reachability, &event);
                 track_hole_punch(&mut punched, &reachability, &event);
                 track_peer_paths(peers.paths(), &event);
+                close_answered_dialbacks(&mut swarm, &mut dialbacks, &event);
                 if handle_relay_event(&mut swarm, &peers, &mut relay, &reachability, &event) {
                     continue;
                 }

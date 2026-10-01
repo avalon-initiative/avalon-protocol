@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use libp2p::swarm::DialError;
-use libp2p::PeerId;
+use libp2p::swarm::{ConnectionId, DialError};
+use libp2p::{Multiaddr, PeerId};
 
 use crate::reachability::Reachability;
 
@@ -134,6 +134,37 @@ pub fn is_retryable_relayed_failure(error: &DialError) -> bool {
                 .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
         }),
         _ => false,
+    }
+}
+
+/// Extra outbound connections to peers that already have one, by the address they were dialed
+/// at. An AutoNAT dial-back opens one and nothing closes it before the idle timeout, so repeated
+/// probes pile connections up against the per-peer limit, which then denies further dial-backs
+/// and the prober is told `private`. The dial-back's own connection is closed once it is answered.
+#[derive(Default)]
+pub struct DialbackConns {
+    extra: HashMap<ConnectionId, (PeerId, Multiaddr)>,
+}
+
+impl DialbackConns {
+    /// An outbound connection to `peer` at `address` opened while `peer` had others.
+    pub fn opened_extra(&mut self, id: ConnectionId, peer: PeerId, address: Multiaddr) {
+        self.extra.insert(id, (peer, address));
+    }
+
+    pub fn closed(&mut self, id: &ConnectionId) {
+        self.extra.remove(id);
+    }
+
+    /// The connection a dial-back to `peer` at `address` succeeded over, to be closed now.
+    pub fn answered(&mut self, peer: &PeerId, address: &Multiaddr) -> Option<ConnectionId> {
+        let id = *self
+            .extra
+            .iter()
+            .find(|(_, (p, a))| p == peer && a == address)?
+            .0;
+        self.extra.remove(&id);
+        Some(id)
     }
 }
 
@@ -358,6 +389,27 @@ mod tests {
         )));
         assert!(!is_retryable_relayed_failure(&DialError::NoAddresses));
         assert!(!is_retryable_relayed_failure(&DialError::Aborted));
+    }
+
+    #[test]
+    fn an_answered_dialback_yields_its_own_connection_once() {
+        let mut conns = DialbackConns::default();
+        let (peer, other) = (PeerId::random(), PeerId::random());
+        let addr: Multiaddr = "/ip4/10.0.0.1/tcp/4001".parse().unwrap();
+        let (first, second) = (
+            ConnectionId::new_unchecked(1),
+            ConnectionId::new_unchecked(2),
+        );
+        conns.opened_extra(first, peer, addr.clone());
+        conns.opened_extra(second, other, addr.clone());
+        assert_eq!(
+            conns.answered(&other, &"/ip4/10.0.0.2/tcp/1".parse().unwrap()),
+            None
+        );
+        assert_eq!(conns.answered(&peer, &addr), Some(first));
+        assert_eq!(conns.answered(&peer, &addr), None);
+        conns.closed(&second);
+        assert_eq!(conns.answered(&other, &addr), None);
     }
 
     #[test]
