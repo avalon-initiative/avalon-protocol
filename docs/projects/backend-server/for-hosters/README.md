@@ -7,7 +7,9 @@ people contributing code to this repository itself (see
 game/app/service as a developer (see [developer docs](https://github.com/avalon-initiative/avalon-docs/blob/main/integrations/README.md)).
 
 The Docker route needs only [Docker](https://docs.docker.com/get-docker/); the
-standalone-binary route needs only a Postgres database.
+standalone-binary route needs only a Postgres database. A node with no open
+inbound port can join too; see
+[`running-without-an-open-port.md`](running-without-an-open-port.md).
 
 ## Start here
 
@@ -41,9 +43,10 @@ standalone-binary route needs only a Postgres database.
    changes over time.
 5. [`verifying-a-release.md`](verifying-a-release.md) — checking the checksum and
    build provenance of a prebuilt release download before running it.
-6. [`running-without-an-open-port.md`](running-without-an-open-port.md) — a node
-   with no inbound reachability: what it needs, what works over its outbound
-   connections, and the limits.
+6. [`running-without-an-open-port.md`](running-without-an-open-port.md) — a
+   node at home or behind carrier-grade NAT, with no open inbound port: a
+   supported setup. What it needs, the settings that apply, what works over
+   its outbound connections, what it cannot do yet, and how to check it joined.
 
 ## If something goes wrong
 

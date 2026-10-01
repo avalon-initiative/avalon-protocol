@@ -231,3 +231,11 @@ independent ledger with its own tree heads:
   route to `game:<slug>` without an instance. Sibling nodes receive them only when
   configured as the remote authority for that exact shard id, so route them to the
   sibling that should own that traffic.
+
+## A node with no open port
+
+A node behind NAT can author a shard through a remote authority: it submits each batch over
+outbound HTTP and needs no inbound port. It cannot call `/nodes/relay`, `/nodes/replicate-chat`
+or `/mirror/notify` on its neighbors yet, so it is a poor choice for the one node that must push
+to others. Settings and limits are in
+[`running-without-an-open-port.md`](running-without-an-open-port.md).
