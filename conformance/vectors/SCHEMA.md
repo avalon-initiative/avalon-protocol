@@ -78,6 +78,15 @@ Each file has this shape:
   one hour of the verifier's clock (inclusive, either direction). Each vector's
   `input.messageHex` is the exact signed message where the key id is hex.
   Signatures come from the same fixed seeds as the cosigned head vectors.
+- `node-request.json` — node-to-node request credential
+  (`avalon_protocol::node_request::verify_node_request_header`). The
+  `x-avalon-node-auth` header carries an Ed25519 signature over
+  `avalon-node-request-v1` and u32-BE length-prefixed method, path (no query),
+  sha256 of the body, network id, recipient and signer peer id, then the
+  timestamp as big-endian i64 and the 16 nonce bytes. Covers strict header
+  parsing, the +-skew window, the accepted-recipient list and each tamper case;
+  `expected.error` is the verifier's stable reason code. No SDK implements it
+  (node-only routes, not in OpenAPI): `supportedIn` is empty.
 - `self-certifying-tree-head.json` — verification of a tree head of a
   self-certifying `node:<sha256-of-key>` shard
   (`avalon_protocol::shard_identity`). Each vector's `input` has `shardId`, an
@@ -138,7 +147,7 @@ Each file has this shape:
 ## Both sides of the wire
 
 Unlike the four client-behavior vectors above, `attestation-signing.json`,
-`signed-tree-head.json`, `witness-cosigned-tree-head.json`, `witness-announce.json`,
+`signed-tree-head.json`, `witness-cosigned-tree-head.json`, `witness-announce.json`, `node-request.json`,
 `self-certifying-tree-head.json`, `known-list-selection.json`, `identity-chain.json`,
 `cross-node-login.json`, `session-continuation.json`, and
 `websocket-interest-claim.json` also describe something the *server*

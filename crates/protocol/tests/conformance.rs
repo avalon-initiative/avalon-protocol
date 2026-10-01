@@ -506,6 +506,71 @@ fn witness_announce_matches_shared_vectors() {
 }
 
 #[test]
+fn node_request_matches_shared_vectors() {
+    use avalon_protocol::node_request::{
+        node_request_signing_message, parse_node_request_header, verify_node_request_header,
+        NodeRequestTarget,
+    };
+
+    let doc = load("node-request.json");
+    let key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(key.verifying_key().to_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap()
+    );
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let target = NodeRequestTarget {
+            method: input["method"].as_str().unwrap(),
+            path: input["path"].as_str().unwrap(),
+            body: input["bodyUtf8"].as_str().unwrap().as_bytes(),
+            network_id: input["networkId"].as_str().unwrap(),
+        };
+        let accepted: Vec<&str> = input["acceptedRecipients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        let header = input["header"].as_str().unwrap();
+        let result = verify_node_request_header(
+            header,
+            &target,
+            &accepted,
+            input["now"].as_i64().unwrap(),
+            input["maxSkewSeconds"].as_i64().unwrap(),
+        );
+        let expected = &v["expected"];
+        assert_eq!(
+            result.is_ok(),
+            expected["accepted"].as_bool().unwrap(),
+            "{name}"
+        );
+        let code = result.as_ref().err().map(|e| e.code());
+        assert_eq!(code, expected["error"].as_str(), "{name}");
+        if let Some(message_hex) = input.get("messageHex").and_then(|m| m.as_str()) {
+            let auth = parse_node_request_header(header).unwrap();
+            let message = node_request_signing_message(
+                &target,
+                input["signingRecipient"].as_str().unwrap(),
+                &auth.peer_id,
+                auth.timestamp,
+                &auth.nonce,
+            )
+            .unwrap();
+            assert_eq!(
+                hex::encode(message),
+                message_hex,
+                "{name}: signed message bytes"
+            );
+        }
+    }
+}
+
+#[test]
 fn known_list_selection_matches_shared_vectors() {
     use avalon_protocol::client_known_list::{
         diversity_prefix_for_url, select_known_list, Candidate,

@@ -1,0 +1,485 @@
+{
+  "$schema": "./SCHEMA.md#node-request",
+  "description": "Node-to-node request credential (avalon_protocol::node_request::verify_node_request_header). A node signs one HTTP request with its Ed25519 key over avalon-node-request-v1, then u32-BE length-prefixed method, path (no query), sha256 of the body, network id, recipient and signer peer id, then timestamp as unix seconds big-endian i64, then the 16 nonce bytes. The credential travels in the x-avalon-node-auth header as 'v1; peer=<peer id>; key=<64 lowercase hex>; ts=<decimal unix seconds>; nonce=<32 lowercase hex>; sig=<128 lowercase hex>', parsed strictly: exactly those fields in that order separated by '; ', ASCII, at most 512 bytes, no leading-zero or signed timestamp, peer id [A-Za-z0-9]{1,128}. The recipient and network are not in the header: the verifier tries each of its accepted recipients, so a signature for another recipient or network is reported as bad_signature. Order of checks: header form, request field validity (uppercase method, path starting with '/' and without '?' or '#', bounded lengths), timestamp window (inclusive, either direction), public key, signature (strict Ed25519). expected.error is one of malformed, invalid_request, invalid_key, stale, future, bad_signature, or null when accepted. Vectors with signingRecipient also carry messageHex, the exact signed message. The caller still derives the peer id from the key and rejects repeated nonces; neither is covered here. signerPeerId is a fixed placeholder string, not a real libp2p id.",
+  "notSupported": {
+    "csharp": "the C# SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them.",
+    "rust": "the Rust SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them.",
+    "typescript": "the TypeScript SDK has no node-request signing or verification: the credential is for node-to-node routes that are not in the server's OpenAPI document, so no SDK client calls them."
+  },
+  "signerPeerId": "12D3KooWExampleNodeRequestSigner",
+  "signingKeySeedHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "signingPublicKeyHex": "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0",
+  "supportedIn": [],
+  "vectors": [
+    {
+      "expected": {
+        "accepted": true,
+        "error": null
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000004504f5354000000122f696e7465726e616c2f76312f72656c6179000000207e84cbf0f7a7c92c037058665d66152f8eb8580ab2534e52c877bccceb9cc7bf0000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13b800102030405060708090a0b0c0d0e0f10",
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay",
+        "signingRecipient": "node-b"
+      },
+      "name": "accepted: POST with body"
+    },
+    {
+      "expected": {
+        "accepted": true,
+        "error": null
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-a",
+          "node-b",
+          "node-c"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000004504f5354000000122f696e7465726e616c2f76312f72656c6179000000207e84cbf0f7a7c92c037058665d66152f8eb8580ab2534e52c877bccceb9cc7bf0000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13b800102030405060708090a0b0c0d0e0f10",
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay",
+        "signingRecipient": "node-b"
+      },
+      "name": "accepted: one of several accepted recipients"
+    },
+    {
+      "expected": {
+        "accepted": true,
+        "error": null
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=e0809fd15d61257d1adeba21f85a36294a1c51455b2bf8c36afac4879713771a1233dc31f1c29b99ec016969c6880b0d7f9956803c203467ef33213afd403e02",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000003474554000000132f696e7465726e616c2f76312f73746174757300000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13b800102030405060708090a0b0c0d0e0f10",
+        "method": "GET",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/status",
+        "signingRecipient": "node-b"
+      },
+      "name": "accepted: GET with empty body"
+    },
+    {
+      "expected": {
+        "accepted": true,
+        "error": null
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1789999940; nonce=0102030405060708090a0b0c0d0e0f10; sig=515d34c72a86f0300f9caa34be3e1671fbe57bc7892c1d0a2cd59478723960c858852e5f5a3a4777e0c1ea200bef67fb891086c2daece8badb321e27cbdb8a0c",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000003474554000000132f696e7465726e616c2f76312f73746174757300000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13b440102030405060708090a0b0c0d0e0f10",
+        "method": "GET",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/status",
+        "signingRecipient": "node-b"
+      },
+      "name": "accepted: timestamp exactly 60 s old"
+    },
+    {
+      "expected": {
+        "accepted": true,
+        "error": null
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000060; nonce=0102030405060708090a0b0c0d0e0f10; sig=1aedaa977e5c6adf285f310a3ea8e79229401ba2ee5fc88340d04f3ccc58756404bdca8f6514035d098523c28dbb7da043657cb8ebb2baf996df1b7b9b64160c",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000003474554000000132f696e7465726e616c2f76312f73746174757300000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13bbc0102030405060708090a0b0c0d0e0f10",
+        "method": "GET",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/status",
+        "signingRecipient": "node-b"
+      },
+      "name": "accepted: timestamp exactly 60 s ahead"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "stale"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1789999939; nonce=0102030405060708090a0b0c0d0e0f10; sig=9aa9710ce1bf07eba0124047b47d2f3592282b003324dbde1c1f3d73854a724998c91090339cc18dc467b81d57f22b431a01bacb78248ff22190a0fd22f0770b",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000003474554000000132f696e7465726e616c2f76312f73746174757300000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13b430102030405060708090a0b0c0d0e0f10",
+        "method": "GET",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/status",
+        "signingRecipient": "node-b"
+      },
+      "name": "rejected: timestamp 61 s old"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "future"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000061; nonce=0102030405060708090a0b0c0d0e0f10; sig=5fdf9f1146db7e716f5829d7b5fc9987e67a14df0809abe07d0f146e91d79eccdec7aaa8b32a91e11905dc52d058439d5764cabb8364d477d26d6877dfacaa06",
+        "maxSkewSeconds": 60,
+        "messageHex": "6176616c6f6e2d6e6f64652d726571756573742d763100000003474554000000132f696e7465726e616c2f76312f73746174757300000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550000000b6176616c6f6e2d74657374000000066e6f64652d6200000020313244334b6f6f574578616d706c654e6f6465526571756573745369676e6572000000006ab13bbd0102030405060708090a0b0c0d0e0f10",
+        "method": "GET",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/status",
+        "signingRecipient": "node-b"
+      },
+      "name": "rejected: timestamp 61 s ahead"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":6}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: body differs from the signed body"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "PUT",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: method differs"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/other"
+      },
+      "name": "rejected: path differs"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "other-net",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: network differs"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-c"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: signed recipient is not accepted"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: no accepted recipients"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "invalid_request"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay?x=1"
+      },
+      "name": "rejected: request path carries a query"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "bad_signature"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=043465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: signature bit flipped"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "invalid_key"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0200000000000000000000000000000000000000000000000000000000000000; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: public key is not a curve point"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v2; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, wrong version"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0D7550754E0800A5D237EEF5826035766B9B3E5A15868A940AB289958788E3B0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, uppercase hex key"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; nonce=00; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, duplicate nonce field"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; zzz=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, fields out of order"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=1790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b; x=1",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, extra trailing field"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=-1; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, negative timestamp"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1; peer=12D3KooWExampleNodeRequestSigner; key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0; ts=01790000000; nonce=0102030405060708090a0b0c0d0e0f10; sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, leading zero timestamp"
+    },
+    {
+      "expected": {
+        "accepted": false,
+        "error": "malformed"
+      },
+      "input": {
+        "acceptedRecipients": [
+          "node-b"
+        ],
+        "bodyUtf8": "{\"amount\":5}",
+        "header": "v1;peer=12D3KooWExampleNodeRequestSigner;key=0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0;ts=1790000000;nonce=0102030405060708090a0b0c0d0e0f10;sig=743465b2b56c0688555af1e0a00a66e9161428099d8499b603804749659d275f8b6f5e9d1e13ca7a376dd0bdf864463a68ffb8e84e9027648b5e8ac93ec40c0b",
+        "maxSkewSeconds": 60,
+        "method": "POST",
+        "networkId": "avalon-test",
+        "now": 1790000000,
+        "path": "/internal/v1/relay"
+      },
+      "name": "rejected: malformed header, compact separators"
+    }
+  ]
+}
