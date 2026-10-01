@@ -267,7 +267,8 @@ pub async fn run_with_tracing(
     // is available here too, for issue #583's interest-refresh worker
     // below — reusing the exact same `AVALON_NODE_URL` identity rather
     // than a second parse of it.
-    let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id());
+    let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id())
+        .with_p2p_fallback(dht_identity.as_ref().map(|d| d.peer_id.as_str()));
     let witness_signer =
         crate::witness_cosign::WitnessCosignConfig::from_env().and_then(|w| w.announce_signer());
     announce_config.witness = witness_signer.clone();

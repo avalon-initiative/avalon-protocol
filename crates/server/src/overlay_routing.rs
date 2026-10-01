@@ -60,7 +60,12 @@ impl From<NoRouteReason> for NextHop {
 
 /// Canonical form of a base URL used for identity, visited-set membership and key fallback.
 pub fn canonical_base_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
+    let url = url.trim().trim_end_matches('/');
+    // Peer ids are case-sensitive base58.
+    if url.starts_with("p2p://") {
+        return url.to_string();
+    }
+    url.to_ascii_lowercase()
 }
 
 fn peer_id_key(node: &OverlayNode) -> Option<[u8; 32]> {
@@ -318,6 +323,12 @@ mod tests {
             "http://host:8080"
         );
         assert_eq!(url_key(&node("http://X/")), url_key(&node("http://x")));
+    }
+
+    #[test]
+    fn a_p2p_url_keeps_the_case_of_its_peer_id() {
+        assert_eq!(canonical_base_url(" p2p://AbCd// "), "p2p://AbCd");
+        assert_ne!(url_key(&node("p2p://AbCd")), url_key(&node("p2p://abcd")));
     }
 
     #[test]

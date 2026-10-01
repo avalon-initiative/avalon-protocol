@@ -89,7 +89,7 @@ pub fn median(sorted: &[f64]) -> Option<f64> {
 /// Takes `samples` sequential timings against `target` (already resolved
 /// through the policy).
 pub async fn measure(
-    target: &crate::outbound_policy::CheckedTarget,
+    target: &crate::outbound_policy::NodeTarget,
     samples: u8,
     timeout: Duration,
 ) -> ProbeResponse {
@@ -196,7 +196,7 @@ pub async fn probe(
 
     let _permit = limits.in_flight.try_enter()?;
     let checked = OutboundPolicy::from_env()
-        .check_base_url(&known.base_url)
+        .check_node_url(&known.base_url)
         .await
         .map_err(policy_error)?;
     let result = measure(&checked, samples, SAMPLE_TIMEOUT).await;
@@ -232,11 +232,12 @@ mod tests {
         assert_eq!(median(&[1.0, 3.0]), Some(2.0));
     }
 
-    async fn target_for(server: &MockServer) -> crate::outbound_policy::CheckedTarget {
+    async fn target_for(server: &MockServer) -> crate::outbound_policy::NodeTarget {
         OutboundPolicy::new(true)
             .check_base_url(&server.uri())
             .await
             .unwrap()
+            .into()
     }
 
     #[tokio::test]
@@ -294,10 +295,11 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
-        let t = OutboundPolicy::new(true)
+        let t: crate::outbound_policy::NodeTarget = OutboundPolicy::new(true)
             .check_base_url(&format!("http://{addr}"))
             .await
-            .unwrap();
+            .unwrap()
+            .into();
         let r = measure(&t, 1, Duration::from_secs(1)).await;
         assert_eq!(r.error.as_deref(), Some("unreachable"));
     }

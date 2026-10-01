@@ -70,7 +70,8 @@ use std::time::Duration;
 
 use avalon_chain::PostgresSettlementProvider;
 use axum::extract::{ConnectInfo, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
+use axum::Extension;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -248,6 +249,17 @@ fn carry_identity(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
     }
 }
 
+/// Marks a `p2p://<id>` entry bound once a libp2p connection authenticated `peer_id`; any
+/// other entry is left as it was.
+fn bind_if_p2p_url_names_peer(info: &mut PeerInfo, peer_id: &str) {
+    let names_peer = crate::node_http::parse_p2p_base(&info.base_url)
+        .is_some_and(|id| id.to_string() == peer_id)
+        && info.libp2p_peer_id.as_deref() == Some(peer_id);
+    if names_peer {
+        info.identity_bound = true;
+    }
+}
+
 /// The peer table is at its cap and every entry is active or a bootstrap peer.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TableFull;
@@ -409,6 +421,18 @@ impl PeerTable {
             .unwrap_or_else(|| base_url.to_string())
     }
 
+    /// `p2p://<id>` for the known peer `base_url` when its id is bound (or the URL is already
+    /// `p2p://`), for callers that must reach it over an authenticated stream.
+    pub fn stream_url(&self, base_url: &str) -> Option<String> {
+        if let Some(id) = crate::node_http::parse_p2p_base(base_url) {
+            return Some(crate::node_http::p2p_base_url(&id));
+        }
+        let peers = self.peers.read().expect("peer table lock poisoned");
+        let info = peers.get(base_url).filter(|p| p.identity_bound)?;
+        let id: libp2p::PeerId = info.libp2p_peer_id.as_ref()?.parse().ok()?;
+        Some(crate::node_http::p2p_base_url(&id))
+    }
+
     /// The libp2p id of the known peer whose `base_url` `url` is under, for the stream fallback.
     pub fn libp2p_peer_for_url(&self, url: &str) -> Option<libp2p::PeerId> {
         let peers = self.peers.read().expect("peer table lock poisoned");
@@ -518,7 +542,8 @@ impl PeerTable {
             .collect();
         let mut promoted = Vec::new();
         for url in urls {
-            if let Some(info) = self.take_unverified(&url) {
+            if let Some(mut info) = self.take_unverified(&url) {
+                bind_if_p2p_url_names_peer(&mut info, libp2p_peer_id);
                 if self.insert_bounded(info, max_known_peers).is_ok() {
                     promoted.push(url);
                 }
@@ -1086,10 +1111,15 @@ pub struct AnnounceResponse {
 /// Reversible and self-correcting: the same caller re-announcing with an
 /// upgraded version on its next cycle is admitted normally, no manual
 /// unban step.
+///
+/// A caller announcing `p2p://<peer id>` (no URL of its own) is admitted only over a libp2p
+/// stream authenticated as that peer id; over plain HTTP it gets the response and nothing
+/// it sent is stored.
 pub async fn announce(
     State(state): State<AppState>,
     ConnectInfo(source): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    remote: Option<Extension<crate::node_http::RemotePeer>>,
     Json(body): Json<AnnounceRequest>,
 ) -> Result<Json<AnnounceResponse>, AnnounceError> {
     if body.network_id != state.chain.network_id() {
@@ -1098,6 +1128,15 @@ pub async fn announce(
 
     let adm = admission();
     let caller_base_url = body.base_url.clone();
+    let p2p = classify_p2p_announce(
+        &body.base_url,
+        body.libp2p_peer_id.as_deref(),
+        remote.map(|Extension(r)| r.0),
+    )?;
+    if p2p == P2pAnnounce::Unauthenticated {
+        // Nothing the caller sent is stored or gossiped: no connection proves it is that peer.
+        return Ok(Json(announce_response(&state, &caller_base_url)));
+    }
     let mut info = PeerInfo {
         base_url: body.base_url,
         roles: body.roles,
@@ -1115,22 +1154,33 @@ pub async fn announce(
         identity_bound: false,
     };
     if crate::version::is_supported(&info.protocol_version) {
-        info.base_url = adm
-            .check_shape(&info.base_url)
-            .map_err(TopologyError::from)?;
-        info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
-        if state.peers.contains(&info.base_url) {
-            let info = rebind_existing(
+        if let P2pAnnounce::Authenticated(id) = p2p {
+            info.base_url = crate::node_http::p2p_base_url(&id);
+            info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+            store_authenticated_p2p_announcer(
                 &state.peers,
-                state.chain.network_id(),
                 adm,
                 client_ip(source, &headers),
                 info,
-            )
-            .await;
-            state.peers.upsert(info);
+            )?;
         } else {
-            admit_new_announcer(&state, adm, client_ip(source, &headers), info).await?;
+            info.base_url = adm
+                .check_shape(&info.base_url)
+                .map_err(TopologyError::from)?;
+            info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+            if state.peers.contains(&info.base_url) {
+                let info = rebind_existing(
+                    &state.peers,
+                    state.chain.network_id(),
+                    adm,
+                    client_ip(source, &headers),
+                    info,
+                )
+                .await;
+                state.peers.upsert(info);
+            } else {
+                admit_new_announcer(&state, adm, client_ip(source, &headers), info).await?;
+            }
         }
     } else {
         state.peers.admit_if_supported(info);
@@ -1201,14 +1251,19 @@ pub async fn announce(
         });
     }
 
+    Ok(Json(announce_response(&state, &caller_base_url)))
+}
+
+/// This node's answer to an announce from `caller_base_url`.
+fn announce_response(state: &AppState, caller_base_url: &str) -> AnnounceResponse {
     let own_witness = state
         .own_witness
         .as_ref()
         .zip(state.own_base_url.as_deref())
         .map(|(w, url)| w.advert(url, OffsetDateTime::now_utc()));
-    Ok(Json(AnnounceResponse {
+    AnnounceResponse {
         witness: own_witness,
-        peers: state.peers.list_excluding(&caller_base_url),
+        peers: state.peers.list_excluding(caller_base_url),
         known_shards: state.shard_registry.snapshot(),
         head_summaries: state.head_gossip.snapshot(),
         coordinate: state.peers.neighbors().own_coordinate(),
@@ -1221,7 +1276,52 @@ pub async fn announce(
                 OffsetDateTime::now_utc(),
             )
         }),
-    }))
+    }
+}
+
+/// How an announce's base URL relates to the connection it arrived on.
+#[derive(Debug, PartialEq, Eq)]
+enum P2pAnnounce {
+    /// An http(s) base URL, admitted by the address and reachability checks.
+    NotP2p,
+    /// `p2p://<id>` on a stream the libp2p handshake authenticated as `<id>`.
+    Authenticated(libp2p::PeerId),
+    /// `p2p://<id>` with nothing proving the caller holds that id (plain HTTP).
+    Unauthenticated,
+}
+
+/// A `p2p://` base URL is only honoured for a caller authenticated as that peer id, and must
+/// name the same id in `libp2p_peer_id`.
+fn classify_p2p_announce(
+    base_url: &str,
+    claimed_id: Option<&str>,
+    remote: Option<libp2p::PeerId>,
+) -> Result<P2pAnnounce, TopologyError> {
+    if !base_url.trim().starts_with("p2p://") {
+        return Ok(P2pAnnounce::NotP2p);
+    }
+    let mismatch =
+        |status, message: &str| Err(TopologyError::new(status, "p2p_identity_mismatch", message));
+    let Some(id) = crate::node_http::parse_p2p_base(base_url) else {
+        return mismatch(
+            StatusCode::BAD_REQUEST,
+            "base_url is not a valid p2p:// URL",
+        );
+    };
+    if claimed_id != Some(id.to_string().as_str()) {
+        return mismatch(
+            StatusCode::BAD_REQUEST,
+            "a p2p:// base_url must name the same libp2p_peer_id",
+        );
+    }
+    match remote {
+        Some(r) if r == id => Ok(P2pAnnounce::Authenticated(id)),
+        Some(_) => mismatch(
+            StatusCode::FORBIDDEN,
+            "the connection is authenticated as a different libp2p peer",
+        ),
+        None => Ok(P2pAnnounce::Unauthenticated),
+    }
 }
 
 /// Error type of [`announce`]: the network mismatch keeps its own status and
@@ -1283,6 +1383,39 @@ async fn admit_new_announcer(
             Ok(())
         }
         Ok(None) => Ok(()),
+        Err(TableFull) => {
+            tracing::warn!(
+                event = "peer_table_full",
+                peer = %base_url,
+                "peer table full and every entry is active or bootstrap; announce refused",
+            );
+            Err(AdmitError::TableFull.into())
+        }
+    }
+}
+
+/// Stores an announcer whose `p2p://<id>` URL the stream authenticated, bound to that id. The
+/// handshake stands in for the address and reachability checks: there is no address to check
+/// and the peer id was proven by the connection. A new URL still counts against the source
+/// budget and the table cap.
+fn store_authenticated_p2p_announcer(
+    peers: &PeerTable,
+    adm: &PeerAdmission,
+    source: IpAddr,
+    mut info: PeerInfo,
+) -> Result<(), TopologyError> {
+    if info.base_url.len() > adm.cfg.max_url_len {
+        return Err(AdmitError::TooLong.into());
+    }
+    info.identity_bound = true;
+    if peers.contains(&info.base_url) {
+        peers.upsert(info);
+        return Ok(());
+    }
+    adm.admit_new_url_from(source)?;
+    let base_url = info.base_url.clone();
+    match admit_promoted(peers, info, adm.cfg.max_known_peers) {
+        Ok(_) => Ok(()),
         Err(TableFull) => {
             tracing::warn!(
                 event = "peer_table_full",
@@ -1366,9 +1499,13 @@ fn admit_promoted(
 /// confirmation. A no-op when `contacted` isn't (or is no longer) in the
 /// pool, including when it was already promoted.
 pub(crate) fn promote_on_contact(peers: &PeerTable, adm: &PeerAdmission, contacted: &str) {
-    let Some(info) = peers.take_unverified(contacted) else {
+    let Some(mut info) = peers.take_unverified(contacted) else {
         return;
     };
+    // Reaching `p2p://<id>` means the handshake authenticated that id.
+    if let Some(id) = crate::node_http::parse_p2p_base(contacted) {
+        bind_if_p2p_url_names_peer(&mut info, &id.to_string());
+    }
     match peers.insert_bounded(info, adm.cfg.max_known_peers) {
         Ok(evicted) => {
             if let Some(evicted) = evicted {
@@ -1434,9 +1571,14 @@ fn admit_responder_node(
     mut node: PeerInfo,
 ) -> bool {
     let called = normalized_base_url(called_url);
+    let shape_ok = if called.starts_with("p2p://") {
+        self_consistent_p2p_base(&node.base_url, node.libp2p_peer_id.as_deref()).as_deref()
+            == Some(called.as_str())
+    } else {
+        normalized_base_url(&node.base_url) == called && adm.check_shape(&node.base_url).is_ok()
+    };
     if node.network_id != network_id
-        || normalized_base_url(&node.base_url) != called
-        || adm.check_shape(&node.base_url).is_err()
+        || !shape_ok
         || !crate::version::is_supported(&node.protocol_version)
     {
         tracing::warn!(
@@ -1467,6 +1609,13 @@ fn admit_responder_node(
             false
         }
     }
+}
+
+/// The normalized `p2p://<id>` base URL when `base_url` is one and `libp2p_peer_id` names the
+/// same id; `None` for anything else, since an entry cannot vouch for an id other than its own.
+fn self_consistent_p2p_base(base_url: &str, libp2p_peer_id: Option<&str>) -> Option<String> {
+    let id = crate::node_http::parse_p2p_base(base_url)?;
+    (libp2p_peer_id == Some(id.to_string().as_str())).then(|| crate::node_http::p2p_base_url(&id))
 }
 
 /// Counts of gossip entries skipped by [`merge_gossip`].
@@ -1500,17 +1649,29 @@ async fn merge_gossip(
             skipped.rejected += 1;
             continue;
         }
-        let Ok(base) = adm.check_shape(&info.base_url) else {
-            skipped.rejected += 1;
-            continue;
-        };
-        info.base_url = base;
+        let is_p2p = info.base_url.trim().starts_with("p2p://");
+        if is_p2p {
+            let Some(base) =
+                self_consistent_p2p_base(&info.base_url, info.libp2p_peer_id.as_deref())
+            else {
+                skipped.rejected += 1;
+                continue;
+            };
+            info.base_url = base;
+        } else {
+            let Ok(base) = adm.check_shape(&info.base_url) else {
+                skipped.rejected += 1;
+                continue;
+            };
+            info.base_url = base;
+        }
         info.libp2p_listen_addrs = sanitize_libp2p_addrs(
             info.libp2p_peer_id.as_deref(),
             &info.libp2p_listen_addrs,
             &adm.policy,
         );
         info.last_announced_at = info.last_announced_at.min(now);
+        info.identity_bound = false;
         info.witness = verified_advert(&info.base_url, info.witness.take(), now);
         if !crate::version::is_supported(&info.protocol_version) {
             peers.admit_if_supported(info);
@@ -1526,7 +1687,8 @@ async fn merge_gossip(
             continue;
         }
         examined += 1;
-        if adm.check_address(&info.base_url).await.is_err() {
+        // A p2p:// entry has no address to check; a libp2p contact promotes and binds it.
+        if !is_p2p && adm.check_address(&info.base_url).await.is_err() {
             skipped.rejected += 1;
             continue;
         }
@@ -1565,6 +1727,11 @@ async fn validated_shards(
             continue;
         }
         examined += 1;
+        if let Some(id) = crate::node_http::parse_p2p_base(&entry.url) {
+            entry.url = crate::node_http::p2p_base_url(&id);
+            kept.push(entry);
+            continue;
+        }
         let Ok(base) = adm.check_shape(&entry.url) else {
             refused += 1;
             continue;
@@ -1800,12 +1967,9 @@ pub struct AnnounceConfig {
     /// yet) — that's an expected, not an error, configuration.
     pub peers: Vec<String>,
     pub interval: Duration,
-    /// This node's own externally-reachable base URL, from
-    /// `AVALON_NODE_URL` — required to announce meaningfully (a peer
-    /// needs a real URL to reach this node back at), but not to run the
-    /// `announce`/`list_peers` endpoints themselves, which work
-    /// regardless. `None` here means this node can still be announced TO,
-    /// it just can't announce itself anywhere.
+    /// This node's own announced identity: `AVALON_NODE_URL`, else `p2p://<peer id>` when libp2p
+    /// runs ([`Self::with_p2p_fallback`]). `None` means this node can still be announced TO, it
+    /// just can't announce itself anywhere.
     pub own_base_url: Option<String>,
     /// `AVALON_NODE_MAX_PEERS` (Layer 1) — the cap on this
     /// node's *active* announce/exchange set (bootstrap peers plus
@@ -1898,6 +2062,19 @@ impl AnnounceConfig {
             max_peers,
             witness: None,
         }
+    }
+}
+
+impl AnnounceConfig {
+    /// Without `AVALON_NODE_URL`, a node with a libp2p identity announces itself as
+    /// `p2p://<peer id>`, reachable only over an authenticated stream.
+    pub fn with_p2p_fallback(mut self, libp2p_peer_id: Option<&str>) -> Self {
+        if self.own_base_url.is_none() {
+            self.own_base_url = libp2p_peer_id
+                .and_then(|id| id.parse::<libp2p::PeerId>().ok())
+                .map(|id| crate::node_http::p2p_base_url(&id));
+        }
+        self
     }
 }
 
@@ -2117,8 +2294,8 @@ pub async fn run_worker(
         );
     } else if config.own_base_url.is_none() {
         tracing::warn!(
-            "node-announce: {} peer(s) configured but AVALON_NODE_URL is unset — cannot \
-             announce without this node's own reachable base URL",
+            "node-announce: {} peer(s) configured but neither AVALON_NODE_URL nor a libp2p \
+             identity (AVALON_DHT_ENABLED) is set — this node has nothing to announce itself as",
             config.peers.len()
         );
     } else {
@@ -2188,7 +2365,7 @@ pub async fn run_worker(
                     peer,
                     announce_to(
                         &client,
-                        &peers.transport_url(peer),
+                        &announce_target(&peers, peer, own_base_url),
                         &announce_request(
                             own_base_url,
                             &roles,
@@ -2338,7 +2515,8 @@ pub async fn run_worker(
                     neighbors.own_coordinate(),
                 );
                 for peer in &targets {
-                    vouch_contact(&client, &peers, admission(), peer, &request).await;
+                    let target = announce_target(&peers, peer, own_base_url);
+                    vouch_contact(&client, &peers, admission(), peer, &target, &request).await;
                 }
             }
         }
@@ -2362,6 +2540,18 @@ pub async fn run_worker(
 
         tokio::time::sleep(config.interval).await;
     }
+}
+
+/// Where to send `peer`'s announce. A node announcing as `p2p://<id>` must reach a peer over a
+/// stream, the only way the peer can authenticate it; until `peer`'s libp2p id is known this
+/// falls back to HTTP, where a `p2p://` announce is answered but never stored.
+fn announce_target(peers: &PeerTable, peer: &str, own_base_url: &str) -> String {
+    if crate::node_http::parse_p2p_base(own_base_url).is_some() {
+        if let Some(url) = peers.stream_url(peer) {
+            return url;
+        }
+    }
+    peers.transport_url(peer)
 }
 
 /// Peers with only a non-direct witness advert contacted per worker tick.
@@ -2401,12 +2591,13 @@ async fn vouch_contact(
     peers: &PeerTable,
     adm: &PeerAdmission,
     peer: &str,
+    target: &str,
     request: &AnnounceRequest,
 ) {
-    if adm.check_address(peer).await.is_err() {
+    if !peer.starts_with("p2p://") && adm.check_address(peer).await.is_err() {
         return;
     }
-    let Ok(response) = announce_to(client, peer, request).await else {
+    let Ok(response) = announce_to(client, target, request).await else {
         return;
     };
     if let Some(advert) = verified_advert(
@@ -3579,7 +3770,7 @@ mod tests {
             Coordinate::default(),
         );
         for t in &targets {
-            vouch_contact(&client, &table, &adm, t, &request).await;
+            vouch_contact(&client, &table, &adm, t, t, &request).await;
         }
         let direct = |u: &str| {
             table
@@ -4269,5 +4460,338 @@ mod tests {
             .is_empty());
         assert_eq!(table.len(), 1);
         assert!(table.contains(protected));
+    }
+    fn p2p_entry(id: &PeerId, bound: bool) -> PeerInfo {
+        PeerInfo {
+            base_url: crate::node_http::p2p_base_url(id),
+            libp2p_peer_id: Some(id.to_string()),
+            identity_bound: bound,
+            ..responder("", id, &["/ip4/203.0.113.7/tcp/4001"])
+        }
+    }
+
+    fn source() -> IpAddr {
+        "203.0.113.9".parse().unwrap()
+    }
+
+    #[test]
+    fn a_p2p_announce_is_classified_by_the_stream_that_carried_it() {
+        let (me, other) = (fresh_peer_id(), fresh_peer_id());
+        let url = crate::node_http::p2p_base_url(&me);
+        let id = me.to_string();
+        let classify =
+            |u: &str, claimed: Option<&str>, remote| classify_p2p_announce(u, claimed, remote);
+
+        assert_eq!(
+            classify("http://a.test", None, None).unwrap(),
+            P2pAnnounce::NotP2p
+        );
+        assert_eq!(
+            classify("http://a.test", None, Some(other)).unwrap(),
+            P2pAnnounce::NotP2p
+        );
+        assert_eq!(
+            classify(&url, Some(&id), Some(me)).unwrap(),
+            P2pAnnounce::Authenticated(me)
+        );
+        assert_eq!(
+            classify(&format!("{url}/"), Some(&id), Some(me)).unwrap(),
+            P2pAnnounce::Authenticated(me)
+        );
+        // Plain HTTP carries no proof of the id.
+        assert_eq!(
+            classify(&url, Some(&id), None).unwrap(),
+            P2pAnnounce::Unauthenticated
+        );
+        // Authenticated as someone else: refused, not downgraded.
+        let err = classify(&url, Some(&id), Some(other)).unwrap_err();
+        assert_eq!(err.status, StatusCode::FORBIDDEN);
+        // The URL and the announced libp2p id must agree.
+        for claimed in [None, Some(other.to_string())] {
+            let err = classify(&url, claimed.as_deref(), Some(me)).unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+            let err = classify(&url, claimed.as_deref(), None).unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        }
+        // Not a peer id, or a URL with a path.
+        for bad in ["p2p://nope", "p2p://", &format!("{url}/x")] {
+            let err = classify(bad, Some(&id), Some(me)).unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_authenticated_p2p_announcer_is_admitted_bound_without_a_reachability_check() {
+        // Reachability verification stays on: a p2p:// URL has nothing to dial.
+        let adm = admission_for_tests(false, |c| assert!(c.verify_reachability));
+        let id = fresh_peer_id();
+        let table = PeerTable::new();
+        store_authenticated_p2p_announcer(&table, &adm, source(), p2p_entry(&id, false)).unwrap();
+
+        let stored = &table.list_all()[0];
+        assert_eq!(stored.base_url, crate::node_http::p2p_base_url(&id));
+        assert!(stored.identity_bound);
+        assert!(table.is_bound_libp2p_peer(&id));
+        assert_eq!(
+            crate::node_http::NodeClient::url_for(stored),
+            crate::node_http::p2p_base_url(&id)
+        );
+        assert_eq!(
+            table.stream_url(&stored.base_url),
+            Some(crate::node_http::p2p_base_url(&id))
+        );
+    }
+
+    #[test]
+    fn a_p2p_announcer_still_counts_against_the_source_budget_table_cap_and_url_length() {
+        let adm = admission_for_tests(false, |c| c.new_urls_per_source = 1);
+        let table = PeerTable::new();
+        let (a, b) = (fresh_peer_id(), fresh_peer_id());
+        store_authenticated_p2p_announcer(&table, &adm, source(), p2p_entry(&a, false)).unwrap();
+        let err = store_authenticated_p2p_announcer(&table, &adm, source(), p2p_entry(&b, false))
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS);
+        // A refresh of a known URL is not a new URL.
+        store_authenticated_p2p_announcer(&table, &adm, source(), p2p_entry(&a, false)).unwrap();
+
+        let adm = admission_for_tests(false, |c| c.max_url_len = 20);
+        let err = store_authenticated_p2p_announcer(
+            &PeerTable::new(),
+            &adm,
+            source(),
+            p2p_entry(&a, false),
+        )
+        .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        let adm = admission_for_tests(false, |c| c.max_known_peers = 1);
+        let full = PeerTable::new();
+        full.upsert(supported("http://127.0.0.1:1", OffsetDateTime::now_utc()));
+        full.neighbors()
+            .set_active(&["http://127.0.0.1:1".to_string()], &[]);
+        let err = store_authenticated_p2p_announcer(&full, &adm, source(), p2p_entry(&a, false))
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn a_refresh_keeps_a_bound_p2p_entrys_identity_and_gossip_cannot_replace_it() {
+        let (real, other) = (fresh_peer_id(), fresh_peer_id());
+        let table = PeerTable::new();
+        table.upsert(p2p_entry(&real, true));
+        // An unbound write for the same URL naming another id changes nothing.
+        let mut hostile = p2p_entry(&real, false);
+        hostile.libp2p_peer_id = Some(other.to_string());
+        hostile.libp2p_listen_addrs = vec!["/ip4/198.51.100.1/tcp/1".into()];
+        table.upsert(hostile);
+        let stored = &table.list_all()[0];
+        assert_eq!(stored.libp2p_peer_id, Some(real.to_string()));
+        assert_eq!(
+            stored.libp2p_listen_addrs,
+            vec!["/ip4/203.0.113.7/tcp/4001"]
+        );
+        assert!(stored.identity_bound && table.is_bound_libp2p_peer(&real));
+        assert!(!table.is_bound_libp2p_peer(&other));
+    }
+
+    #[tokio::test]
+    async fn gossip_puts_only_self_consistent_p2p_entries_in_the_pool_unbound() {
+        // A strict policy: nothing dialable by address is allowed, yet p2p:// has no address.
+        let adm = admission_for_tests(false, |_| {});
+        let table = PeerTable::new();
+        let (good, liar, other) = (fresh_peer_id(), fresh_peer_id(), fresh_peer_id());
+        let mut wrong_id = p2p_entry(&liar, false);
+        wrong_id.libp2p_peer_id = Some(other.to_string());
+        let mut no_id = p2p_entry(&other, false);
+        no_id.libp2p_peer_id = None;
+        let mut bad_url = p2p_entry(&other, false);
+        bad_url.base_url = "p2p://not-a-peer-id".into();
+        let mut with_path = p2p_entry(&other, false);
+        with_path.base_url = format!("{}/x", with_path.base_url);
+
+        let (admitted, skipped) = merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![p2p_entry(&good, true), wrong_id, no_id, bad_url, with_path],
+        )
+        .await;
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(skipped.rejected, 4);
+        assert_eq!(table.len(), 0, "gossip never writes the main table");
+        let pooled = table.list_unverified();
+        assert_eq!(pooled.len(), 1);
+        assert_eq!(pooled[0].base_url, crate::node_http::p2p_base_url(&good));
+        assert!(!pooled[0].identity_bound, "gossip never binds");
+    }
+
+    #[test]
+    fn a_libp2p_contact_binds_a_pooled_p2p_entry_but_not_other_entries_naming_the_id() {
+        let table = PeerTable::new();
+        let (a, b) = (fresh_peer_id(), fresh_peer_id());
+        table.insert_unverified(p2p_entry(&a, false));
+        // An http entry merely claiming `a`'s id, and a p2p entry whose id field disagrees.
+        table.insert_unverified(responder("http://127.0.0.1:1", &a, &[]));
+        let mut mismatched = p2p_entry(&b, false);
+        mismatched.libp2p_peer_id = Some(a.to_string());
+        table.insert_unverified(mismatched);
+
+        let promoted = table.promote_unverified_by_libp2p_peer(&a.to_string(), 10);
+        assert_eq!(promoted.len(), 3);
+        let by_url = |u: &str| {
+            table
+                .list_all()
+                .into_iter()
+                .find(|p| p.base_url == u)
+                .unwrap()
+        };
+        assert!(by_url(&crate::node_http::p2p_base_url(&a)).identity_bound);
+        assert!(!by_url("http://127.0.0.1:1").identity_bound);
+        assert!(!by_url(&crate::node_http::p2p_base_url(&b)).identity_bound);
+        assert!(table.is_bound_libp2p_peer(&a));
+    }
+
+    #[test]
+    fn contacting_a_pooled_p2p_entry_over_its_stream_binds_it() {
+        let adm = admission_for_tests(false, |_| {});
+        let (a, b) = (fresh_peer_id(), fresh_peer_id());
+        let table = PeerTable::new();
+        table.insert_unverified(p2p_entry(&a, false));
+        let mut forged = p2p_entry(&b, false);
+        forged.libp2p_peer_id = Some(a.to_string());
+        table.insert_unverified(forged);
+        table.insert_unverified(responder("http://127.0.0.1:1", &a, &[]));
+
+        for url in [
+            crate::node_http::p2p_base_url(&a),
+            crate::node_http::p2p_base_url(&b),
+            "http://127.0.0.1:1".to_string(),
+        ] {
+            promote_on_contact(&table, &adm, &url);
+        }
+        let bound: Vec<String> = table
+            .list_all()
+            .into_iter()
+            .filter(|p| p.identity_bound)
+            .map(|p| p.base_url)
+            .collect();
+        assert_eq!(bound, vec![crate::node_http::p2p_base_url(&a)]);
+    }
+
+    #[test]
+    fn a_node_without_a_url_announces_as_its_peer_id_only_when_libp2p_runs() {
+        let config = |url: Option<&str>| AnnounceConfig {
+            peers: vec![],
+            interval: Duration::from_secs(1),
+            own_base_url: url.map(str::to_string),
+            max_peers: 1,
+            witness: None,
+        };
+        let id = fresh_peer_id();
+        let p2p = crate::node_http::p2p_base_url(&id);
+        assert_eq!(
+            config(None)
+                .with_p2p_fallback(Some(&id.to_string()))
+                .own_base_url,
+            Some(p2p)
+        );
+        // A configured URL is never replaced.
+        assert_eq!(
+            config(Some("http://a.test"))
+                .with_p2p_fallback(Some(&id.to_string()))
+                .own_base_url,
+            Some("http://a.test".to_string())
+        );
+        for id in [None, Some("not-a-peer-id")] {
+            assert_eq!(config(None).with_p2p_fallback(id).own_base_url, None);
+        }
+    }
+
+    #[test]
+    fn a_url_less_node_announces_to_a_peer_over_its_stream_once_the_peer_id_is_bound() {
+        let table = PeerTable::new();
+        let id = fresh_peer_id();
+        let own_p2p = crate::node_http::p2p_base_url(&fresh_peer_id());
+        let seed = "http://seed.test";
+        // The seed's id is not known yet: HTTP, where a p2p:// announce is never stored.
+        assert_eq!(announce_target(&table, seed, &own_p2p), seed);
+        table.upsert(table_entry(seed, Some(&id), true));
+        assert_eq!(
+            announce_target(&table, seed, &own_p2p),
+            crate::node_http::p2p_base_url(&id)
+        );
+        // A node with its own URL keeps the HTTP path for a peer it can reach.
+        let mut plain = table_entry("http://plain.test", Some(&id), true);
+        plain.connectivity = Some(avalon_protocol::connectivity::Connectivity::Direct);
+        table.upsert(plain);
+        assert_eq!(
+            announce_target(&table, "http://plain.test", "http://me.test"),
+            "http://plain.test"
+        );
+        // An unbound id is never trusted to route.
+        table.upsert(table_entry("http://unbound.test", Some(&id), false));
+        assert_eq!(
+            announce_target(&table, "http://unbound.test", &own_p2p),
+            "http://unbound.test"
+        );
+        // A p2p:// peer is always reached over its stream.
+        let peer_url = crate::node_http::p2p_base_url(&id);
+        assert_eq!(announce_target(&table, &peer_url, &own_p2p), peer_url);
+    }
+
+    #[test]
+    fn a_responder_entry_for_a_p2p_url_must_name_that_peer() {
+        let adm = admission_for_tests(false, |_| {});
+        let (a, b) = (fresh_peer_id(), fresh_peer_id());
+        let called = crate::node_http::p2p_base_url(&a);
+        let table = PeerTable::new();
+        let mut wrong = p2p_entry(&a, false);
+        wrong.libp2p_peer_id = Some(b.to_string());
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            wrong
+        ));
+        assert!(!admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            p2p_entry(&b, false)
+        ));
+        assert!(table.list_all().is_empty());
+        assert!(admit_responder_node(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            &called,
+            p2p_entry(&a, false)
+        ));
+        assert!(table.list_all()[0].identity_bound);
+    }
+
+    #[tokio::test]
+    async fn shard_gossip_accepts_a_p2p_url_without_an_address_check() {
+        let adm = admission_for_tests(false, |_| {});
+        let id = fresh_peer_id();
+        let entry = |url: String| ShardAnnouncement {
+            shard_id: "core".into(),
+            url,
+            last_seen_at: OffsetDateTime::now_utc(),
+        };
+        let (kept, refused) = validated_shards(
+            &adm,
+            &ShardRegistry::new(),
+            &[
+                entry(crate::node_http::p2p_base_url(&id)),
+                entry("http://127.0.0.1:1".into()),
+            ],
+        )
+        .await;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].url, crate::node_http::p2p_base_url(&id));
+        assert_eq!(refused, 1);
     }
 }
