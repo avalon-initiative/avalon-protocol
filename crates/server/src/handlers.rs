@@ -426,6 +426,8 @@ pub async fn register_finish(
         version: 1,
         identity_chain: None,
     };
+    // Parent first: ledger order must put `identity.created` ahead of the rows that reference it.
+    outbox::enqueue(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &passkey_event).await?;
     state.indexer.apply_in_tx(&mut tx, &passkey_event).await?;
 
@@ -484,8 +486,6 @@ pub async fn register_finish(
         .indexer
         .apply_in_tx(&mut tx, &signing_key_event)
         .await?;
-
-    outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
     state.indexer.apply_after_commit(&event).await?;
