@@ -1,16 +1,36 @@
-//! Node-to-node request credential: an Ed25519 signature over one HTTP
-//! request, carried in the [`NODE_REQUEST_HEADER`] header. Pure logic, no I/O.
+//! Node-to-node request credential: an Ed25519 signature over one request,
+//! carried in the [`NODE_REQUEST_HEADER`] header. Pure logic, no I/O.
 //!
-//! The signature covers method, path (no query), body hash, network, intended
-//! recipient, claimed peer id, timestamp and nonce, so a captured header cannot
-//! be replayed against another route, body, network or recipient. This module
-//! checks the signature and the clock window only: it knows nothing about
-//! libp2p (the caller derives the peer id from the key and compares it to the
-//! claimed one) and keeps no nonce cache (the caller rejects repeats).
+//! The signature covers method, path, body hash, network, intended recipient,
+//! claimed peer id, timestamp and nonce, so a captured header cannot be replayed
+//! against another route, body, network or recipient.
+//!
+//! # What gets signed
+//! - `method` is the uppercase HTTP method string (`POST`); any non-HTTP stream
+//!   framing of the same request must sign the identical string.
+//! - `path` is the raw request-target path exactly as it appears on the wire:
+//!   no query, no fragment, no decoding or normalisation (`%2F` stays `%2F`).
+//!   Both framings must sign the same string. Only canonical printable paths
+//!   can be signed: `/`-prefixed, bytes `0x21..=0x7e` excluding `\`, `?` and `#`,
+//!   no `//`, no `.` or `..` segment.
+//! - `network_id` and every recipient are non-empty (a node with an unset
+//!   network id must not accept credentials signed over an empty one).
+//!
+//! # Receiver responsibilities
+//! This module checks the signature and the clock window only. The receiver must:
+//! 1. derive the libp2p PeerId from `public_key` and compare it to `peer_id`
+//!    before granting any standing;
+//! 2. generate nonces as 16 random bytes from a CSPRNG (the signer's job; this
+//!    crate has no RNG dependency);
+//! 3. keep a replay cache keyed on `(peer_id, nonce)` regardless of which
+//!    recipient matched, retain entries for at least twice the skew (a
+//!    timestamp of `now + skew` stays valid until `now + 2 * skew`), and insert
+//!    only after the signature, the PeerId check and the standing checks pass.
 //!
 //! The recipient and network are not carried in the header, so a signature made
 //! for another recipient or network is indistinguishable from a forged one and
-//! reports [`NodeRequestError::BadSignature`].
+//! reports [`NodeRequestError::BadSignature`]. The matched recipient is not
+//! returned, and the public key is not part of the signed bytes.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -35,7 +55,7 @@ pub enum NodeRequestError {
     /// The header text is not in the exact v1 form.
     #[error("malformed node auth header: {0}")]
     Malformed(&'static str),
-    /// A method, path, network, recipient or peer id that cannot be signed.
+    /// A method, path, network, recipient, peer id or skew that cannot be used.
     #[error("invalid request field: {0}")]
     InvalidRequest(&'static str),
     /// The public key is not a valid Ed25519 key.
@@ -71,9 +91,10 @@ impl NodeRequestError {
 pub struct NodeRequestTarget<'a> {
     /// Uppercase ASCII HTTP method.
     pub method: &'a str,
-    /// Request path starting with `/`, without query or fragment.
+    /// Raw wire path, see the module docs.
     pub path: &'a str,
     pub body: &'a [u8],
+    /// Non-empty.
     pub network_id: &'a str,
 }
 
@@ -94,40 +115,76 @@ fn push_lp(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-fn check_len(value: &str, max: usize, what: &'static str) -> Result<(), NodeRequestError> {
-    if value.len() > max {
-        return Err(NodeRequestError::InvalidRequest(what));
-    }
-    Ok(())
-}
-
 fn valid_peer_id(peer_id: &str) -> bool {
     !peer_id.is_empty()
         && peer_id.len() <= MAX_PEER_ID_LEN
         && peer_id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-fn validate_inputs(
-    target: &NodeRequestTarget<'_>,
-    recipient: &str,
-    peer_id: &str,
-) -> Result<(), NodeRequestError> {
-    let method = target.method;
-    if method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) {
-        return Err(NodeRequestError::InvalidRequest("method"));
+fn validate_name(value: &str, what: &'static str) -> Result<(), NodeRequestError> {
+    if value.is_empty() || value.len() > MAX_NAME_LEN {
+        return Err(NodeRequestError::InvalidRequest(what));
     }
-    check_len(method, MAX_METHOD_LEN, "method")?;
-    let path = target.path;
-    if !path.starts_with('/') || path.bytes().any(|b| b == b'?' || b == b'#') {
+    Ok(())
+}
+
+fn validate_path(path: &str) -> Result<(), NodeRequestError> {
+    let printable = path
+        .bytes()
+        .all(|b| (0x21..=0x7e).contains(&b) && b != b'\\');
+    let query_free = !path.bytes().any(|b| b == b'?' || b == b'#');
+    let canonical = !path.contains("//") && !path.split('/').any(|seg| seg == "." || seg == "..");
+    if path.len() > MAX_PATH_LEN
+        || !path.starts_with('/')
+        || !printable
+        || !query_free
+        || !canonical
+    {
         return Err(NodeRequestError::InvalidRequest("path"));
     }
-    check_len(path, MAX_PATH_LEN, "path")?;
-    check_len(target.network_id, MAX_NAME_LEN, "network_id")?;
-    check_len(recipient, MAX_NAME_LEN, "recipient")?;
+    Ok(())
+}
+
+fn validate_target(target: &NodeRequestTarget<'_>, peer_id: &str) -> Result<(), NodeRequestError> {
+    let method = target.method;
+    let method_ok = !method.is_empty()
+        && method.len() <= MAX_METHOD_LEN
+        && method.bytes().all(|b| b.is_ascii_uppercase());
+    if !method_ok {
+        return Err(NodeRequestError::InvalidRequest("method"));
+    }
+    validate_path(target.path)?;
+    validate_name(target.network_id, "network_id")?;
     if !valid_peer_id(peer_id) {
         return Err(NodeRequestError::InvalidRequest("peer_id"));
     }
     Ok(())
+}
+
+/// Everything up to (excluding) the recipient; hashed once for all recipients.
+fn message_prefix(target: &NodeRequestTarget<'_>) -> Vec<u8> {
+    let mut message = Vec::new();
+    message.extend_from_slice(NODE_REQUEST_DOMAIN);
+    push_lp(&mut message, target.method.as_bytes());
+    push_lp(&mut message, target.path.as_bytes());
+    push_lp(&mut message, &Sha256::digest(target.body));
+    push_lp(&mut message, target.network_id.as_bytes());
+    message
+}
+
+fn message_with_recipient(
+    prefix: &[u8],
+    recipient: &str,
+    peer_id: &str,
+    timestamp: i64,
+    nonce: &[u8; 16],
+) -> Vec<u8> {
+    let mut message = prefix.to_vec();
+    push_lp(&mut message, recipient.as_bytes());
+    push_lp(&mut message, peer_id.as_bytes());
+    message.extend_from_slice(&timestamp.to_be_bytes());
+    message.extend_from_slice(nonce);
+    message
 }
 
 /// The exact bytes a node request signature covers.
@@ -138,21 +195,15 @@ pub fn node_request_signing_message(
     timestamp: i64,
     nonce: &[u8; 16],
 ) -> Result<Vec<u8>, NodeRequestError> {
-    validate_inputs(target, recipient, peer_id)?;
-    let mut message = Vec::new();
-    message.extend_from_slice(NODE_REQUEST_DOMAIN);
-    push_lp(&mut message, target.method.as_bytes());
-    push_lp(&mut message, target.path.as_bytes());
-    push_lp(&mut message, &Sha256::digest(target.body));
-    push_lp(&mut message, target.network_id.as_bytes());
-    push_lp(&mut message, recipient.as_bytes());
-    push_lp(&mut message, peer_id.as_bytes());
-    message.extend_from_slice(&timestamp.to_be_bytes());
-    message.extend_from_slice(nonce);
-    Ok(message)
+    validate_target(target, peer_id)?;
+    validate_name(recipient, "recipient")?;
+    let prefix = message_prefix(target);
+    Ok(message_with_recipient(
+        &prefix, recipient, peer_id, timestamp, nonce,
+    ))
 }
 
-/// Signs a request for `recipient` as `peer_id`; the caller supplies the nonce.
+/// Signs a request for `recipient` as `peer_id`; the caller supplies a fresh random nonce.
 pub fn sign_node_request(
     signing_key: &SigningKey,
     peer_id: &str,
@@ -241,9 +292,9 @@ pub fn parse_node_request_header(header: &str) -> Result<NodeRequestAuth, NodeRe
     })
 }
 
-/// Verifies a credential: clock window first, then the key, then the signature
-/// against each accepted recipient. The caller still owes the peer id/key check
-/// and the nonce replay check.
+/// Verifies a credential: request fields, clock window, key, then the signature
+/// against each accepted recipient. The receiver still owes the peer id/key check
+/// and the nonce replay check (see the module docs).
 pub fn verify_node_request(
     auth: &NodeRequestAuth,
     target: &NodeRequestTarget<'_>,
@@ -251,31 +302,36 @@ pub fn verify_node_request(
     now: i64,
     max_skew_secs: i64,
 ) -> Result<(), NodeRequestError> {
-    validate_inputs(target, "", &auth.peer_id)?;
-    let skew = max_skew_secs.max(0);
-    if auth.timestamp < now.saturating_sub(skew) {
+    validate_target(target, &auth.peer_id)?;
+    if accepted_recipients.is_empty() {
+        return Err(NodeRequestError::InvalidRequest("recipients"));
+    }
+    for recipient in accepted_recipients {
+        validate_name(recipient, "recipient")?;
+    }
+    if max_skew_secs < 0 {
+        return Err(NodeRequestError::InvalidRequest("max_skew"));
+    }
+    if auth.timestamp < now.saturating_sub(max_skew_secs) {
         return Err(NodeRequestError::Stale);
     }
-    if auth.timestamp > now.saturating_add(skew) {
+    if auth.timestamp > now.saturating_add(max_skew_secs) {
         return Err(NodeRequestError::Future);
     }
     let key =
         VerifyingKey::from_bytes(&auth.public_key).map_err(|_| NodeRequestError::InvalidKey)?;
     let signature = Signature::from_bytes(&auth.signature);
-    let mut verified = false;
-    for recipient in accepted_recipients {
-        let message = node_request_signing_message(
-            target,
+    let prefix = message_prefix(target);
+    let verified = accepted_recipients.iter().any(|recipient| {
+        let message = message_with_recipient(
+            &prefix,
             recipient,
             &auth.peer_id,
             auth.timestamp,
             &auth.nonce,
-        )?;
-        if key.verify_strict(&message, &signature).is_ok() {
-            verified = true;
-            break;
-        }
-    }
+        );
+        key.verify_strict(&message, &signature).is_ok()
+    });
     if verified {
         Ok(())
     } else {
@@ -299,6 +355,7 @@ pub fn verify_node_request_header(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::Verifier;
 
     const NOW: i64 = 1_790_000_000;
     const SKEW: i64 = 60;
@@ -372,7 +429,6 @@ mod tests {
             },
         ));
         bad(verify_node_request(&auth, &t, &["node-c"], NOW, SKEW));
-        bad(verify_node_request(&auth, &t, &[], NOW, SKEW));
 
         let mut a = auth.clone();
         a.peer_id.push('x');
@@ -394,29 +450,18 @@ mod tests {
     }
 
     #[test]
-    fn length_prefixes_stop_field_boundary_shifts() {
+    fn length_prefixes_keep_adjacent_fields_distinct() {
         let t = target();
-        let auth = signed();
-        let shifted = NodeRequestTarget {
-            method: "POS",
-            path: "T/internal/v1/things",
-            ..t
-        };
-        assert!(verify(&auth, &shifted).is_err());
-        let a = sign_node_request(&key(), PEER, &t, "node-b", NOW, NONCE).unwrap();
-        let b = sign_node_request(
-            &key(),
-            PEER,
-            &NodeRequestTarget {
-                network_id: "avalon-testnode-b",
+        let msg = |net: &'static str, rcpt: &str, peer: &str| {
+            let t = NodeRequestTarget {
+                network_id: net,
                 ..t
-            },
-            "",
-            NOW,
-            NONCE,
-        )
-        .unwrap();
-        assert_ne!(a.signature, b.signature);
+            };
+            node_request_signing_message(&t, rcpt, peer, NOW, &NONCE).unwrap()
+        };
+        // Each pair concatenates to the same bytes without length prefixes.
+        assert_ne!(msg("ab", "c", PEER), msg("a", "bc", PEER));
+        assert_ne!(msg("net", "node-b", "xy"), msg("net", "node-bx", "y"));
     }
 
     #[test]
@@ -456,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn extreme_now_and_negative_skew_do_not_overflow() {
+    fn extreme_now_does_not_overflow_and_negative_skew_is_an_error() {
         let a = signed();
         assert_eq!(
             verify_node_request(&a, &target(), &["node-b"], i64::MIN, SKEW),
@@ -468,8 +513,14 @@ mod tests {
         );
         assert_eq!(
             verify_node_request(&a, &target(), &["node-b"], NOW, -5),
+            Err(NodeRequestError::InvalidRequest("max_skew"))
+        );
+        assert_eq!(
+            verify_node_request(&a, &target(), &["node-b"], NOW, 0),
             Ok(())
         );
+        let r = verify_node_request(&a, &target(), &["node-b"], 0, i64::MAX);
+        assert_eq!(r, Ok(()));
     }
 
     #[test]
@@ -482,13 +533,164 @@ mod tests {
     }
 
     #[test]
-    fn small_order_key_is_rejected() {
-        // The identity point is a valid encoding but a weak key; strict verification refuses it.
+    fn small_order_key_is_rejected_by_strict_verify() {
+        // A and R are the identity point and S = 0: plain verification accepts for any message.
         let mut a = signed();
         a.public_key = [0; 32];
         a.public_key[0] = 1;
         a.signature = [0; 64];
+        a.signature[0] = 1;
+        let message =
+            node_request_signing_message(&target(), "node-b", PEER, a.timestamp, &a.nonce).unwrap();
+        let weak = VerifyingKey::from_bytes(&a.public_key).unwrap();
+        assert!(weak
+            .verify(&message, &Signature::from_bytes(&a.signature))
+            .is_ok());
         assert_eq!(verify(&a, &target()), Err(NodeRequestError::BadSignature));
+    }
+
+    #[test]
+    fn non_canonical_s_is_rejected() {
+        // S + L encodes the same scalar but is not canonical (S >= L).
+        const L: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+        ];
+        let mut a = signed();
+        let mut carry = 0u16;
+        for (byte, l) in a.signature[32..].iter_mut().zip(L) {
+            let sum = *byte as u16 + l as u16 + carry;
+            *byte = sum as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0);
+        assert_eq!(verify(&a, &target()), Err(NodeRequestError::BadSignature));
+    }
+
+    #[test]
+    fn invalid_peer_id_in_a_hand_built_auth_is_rejected() {
+        for peer in [
+            "",
+            "has space",
+            "semi;colon",
+            "\u{e9}",
+            &"p".repeat(MAX_PEER_ID_LEN + 1),
+        ] {
+            let mut a = signed();
+            a.peer_id = peer.to_string();
+            let r = verify(&a, &target());
+            assert_eq!(
+                r,
+                Err(NodeRequestError::InvalidRequest("peer_id")),
+                "{peer}"
+            );
+        }
+    }
+
+    #[test]
+    fn recipient_list_is_validated_whole_and_not_empty() {
+        let auth = signed();
+        let t = target();
+        let long = "n".repeat(MAX_NAME_LEN + 1);
+        let invalid = Err(NodeRequestError::InvalidRequest("recipient"));
+        // The matching recipient comes first; a bad later entry still fails the call.
+        assert_eq!(
+            verify_node_request(&auth, &t, &["node-b", ""], NOW, SKEW),
+            invalid
+        );
+        assert_eq!(
+            verify_node_request(&auth, &t, &["node-b", &long], NOW, SKEW),
+            invalid
+        );
+        assert_eq!(
+            verify_node_request(&auth, &t, &["", "node-b"], NOW, SKEW),
+            invalid
+        );
+        assert_eq!(verify_node_request(&auth, &t, &[""], NOW, SKEW), invalid);
+        assert_eq!(
+            verify_node_request(&auth, &t, &[], NOW, SKEW),
+            Err(NodeRequestError::InvalidRequest("recipients"))
+        );
+    }
+
+    #[test]
+    fn empty_recipient_and_network_cannot_be_signed_or_verified() {
+        let t = target();
+        let no_net = NodeRequestTarget {
+            network_id: "",
+            ..t
+        };
+        let r = sign_node_request(&key(), PEER, &t, "", NOW, NONCE);
+        assert_eq!(r, Err(NodeRequestError::InvalidRequest("recipient")));
+        let r = sign_node_request(&key(), PEER, &no_net, "node-b", NOW, NONCE);
+        assert_eq!(r, Err(NodeRequestError::InvalidRequest("network_id")));
+        let r = verify_node_request(&signed(), &no_net, &["node-b"], NOW, SKEW);
+        assert_eq!(r, Err(NodeRequestError::InvalidRequest("network_id")));
+    }
+
+    #[test]
+    fn percent_encoding_is_signed_raw_not_decoded() {
+        let t = NodeRequestTarget {
+            path: "/a%2Fb/%2e%2e",
+            ..target()
+        };
+        let a = sign_node_request(&key(), PEER, &t, "node-b", NOW, NONCE).unwrap();
+        assert_eq!(verify(&a, &t), Ok(()));
+        let decoded = NodeRequestTarget { path: "/a/b", ..t };
+        assert_eq!(verify(&a, &decoded), Err(NodeRequestError::BadSignature));
+    }
+
+    #[test]
+    fn exact_maximum_lengths_are_accepted() {
+        let path = format!("/{}", "a".repeat(MAX_PATH_LEN - 1));
+        let method = "M".repeat(MAX_METHOD_LEN);
+        let name = "n".repeat(MAX_NAME_LEN);
+        let peer = "p".repeat(MAX_PEER_ID_LEN);
+        let t = NodeRequestTarget {
+            method: &method,
+            path: &path,
+            body: b"",
+            network_id: &name,
+        };
+        let a = sign_node_request(&key(), &peer, &t, &name, NOW, NONCE).unwrap();
+        assert_eq!(verify_node_request(&a, &t, &[&name], NOW, SKEW), Ok(()));
+        let header = encode_node_request_header(&a);
+        assert!(header.len() <= NODE_REQUEST_MAX_HEADER_LEN);
+        assert_eq!(parse_node_request_header(&header), Ok(a));
+        // One over each bound is refused.
+        let over = |t: NodeRequestTarget<'_>, peer: &str, rcpt: &str| {
+            sign_node_request(&key(), peer, &t, rcpt, NOW, NONCE).is_err()
+        };
+        let long_path = format!("{path}a");
+        let long_method = format!("{method}M");
+        let long_name = format!("{name}n");
+        let long_peer = format!("{peer}p");
+        assert!(over(
+            NodeRequestTarget {
+                path: &long_path,
+                ..t
+            },
+            &peer,
+            &name
+        ));
+        assert!(over(
+            NodeRequestTarget {
+                method: &long_method,
+                ..t
+            },
+            &peer,
+            &name
+        ));
+        assert!(over(
+            NodeRequestTarget {
+                network_id: &long_name,
+                ..t
+            },
+            &peer,
+            &name
+        ));
+        assert!(over(t, &peer, &long_name));
+        assert!(over(t, &long_peer, &name));
     }
 
     #[test]
@@ -507,6 +709,28 @@ mod tests {
             },
             NodeRequestTarget { path: "a/b", ..t },
             NodeRequestTarget { path: "", ..t },
+            NodeRequestTarget { path: "/a//b", ..t },
+            NodeRequestTarget { path: "//a", ..t },
+            NodeRequestTarget {
+                path: "/a/./b",
+                ..t
+            },
+            NodeRequestTarget { path: "/a/..", ..t },
+            NodeRequestTarget { path: "/..", ..t },
+            NodeRequestTarget { path: "/.", ..t },
+            NodeRequestTarget { path: "/a b", ..t },
+            NodeRequestTarget { path: "/a\tb", ..t },
+            NodeRequestTarget { path: "/a\nb", ..t },
+            NodeRequestTarget { path: "/a\0b", ..t },
+            NodeRequestTarget {
+                path: "/a\u{7f}b",
+                ..t
+            },
+            NodeRequestTarget { path: "/a\\b", ..t },
+            NodeRequestTarget {
+                path: "/\u{e9}",
+                ..t
+            },
             NodeRequestTarget { path: &long, ..t },
             NodeRequestTarget {
                 method: "post",
