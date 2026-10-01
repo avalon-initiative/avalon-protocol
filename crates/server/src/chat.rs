@@ -196,7 +196,7 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
     let mut updates = state.chat.subscribe();
 
     let hello = serde_json::to_string(&ChatServerMessage::NodeInfo {
-        base_url: state.own_base_url.clone(),
+        base_url: state.own_http_base_url().map(str::to_string),
     })
     .expect("ChatServerMessage always serializes");
     if socket.send(Message::Text(hello.into())).await.is_err() {

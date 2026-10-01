@@ -330,3 +330,13 @@ pub struct AppState {
     /// possession of its witness key in announce responses.
     pub own_witness: Option<crate::nodes::WitnessSigner>,
 }
+
+impl AppState {
+    /// This node's own http(s) URL; `None` when it is absent or only the `p2p://` announce
+    /// identity, which browsers, SDKs and signed grants must never be handed.
+    pub fn own_http_base_url(&self) -> Option<&str> {
+        self.own_base_url
+            .as_deref()
+            .filter(|u| !u.starts_with("p2p://"))
+    }
+}

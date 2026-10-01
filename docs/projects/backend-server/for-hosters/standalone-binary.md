@@ -348,6 +348,13 @@ It shows in `/nodes/peers`, `/nodes/discover` and `/nodes/topology` under its `p
 usually with `connectivity` `relayed` or `outbound_only`. The node needs one reachable seed in
 `AVALON_BOOTSTRAP_PEERS` to start from.
 
+Limitations: a `p2p://` peer proves only that it holds its key, so it cannot call the routes that
+inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat`,
+`/mirror/notify`); neighbors refuse its pushes there until it has real credentials, and it
+receives no chat or mirror pushes of its own because its URL is not advertised for interest
+lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
+evicted first. The node's `p2p://` URL is never given to browsers or used in signed grants.
+
 ## Running under systemd
 
 Create the service account and configuration:

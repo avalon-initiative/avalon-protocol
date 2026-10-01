@@ -57,7 +57,8 @@ is reachable only through a relay, then hole punching makes up to three attempts
   cannot pass an inbound HTTP fetch. A node with a URL nobody can reach is not admitted by
   default, so it is found through gossip and confirmed over libp2p. A node with no
   `AVALON_NODE_URL` announces as `p2p://<peer id>` and is admitted with the check on, see
-  `url-less-admission`.
+  `url-less-admission`. Such a node cannot call the write routes `/nodes/relay`,
+  `/nodes/replicate-chat` and `/mirror/notify` on its neighbors; the scenario does not cover them.
 
 ## Live drill
 
