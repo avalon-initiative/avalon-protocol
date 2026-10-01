@@ -5,7 +5,9 @@
 //! decided without a swarm: env parsing, limit mapping, relay candidate choice and the
 //! reservation bookkeeping published into [`crate::reachability::ReachabilityHandle`].
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,6 +18,9 @@ use libp2p::swarm::NetworkBehaviour;
 use libp2p::{relay, Multiaddr, PeerId, Swarm};
 use serde::Serialize;
 
+use crate::neighbors::NeighborSnapshot;
+use crate::network_coordinates::{estimate_rtt_ms, Coordinate};
+use crate::nodes::PeerTable;
 use crate::outbound_policy::{always_forbidden, is_private, OutboundPolicy};
 use crate::reachability::{Reachability, ReachabilityHandle, RelayReservation};
 
@@ -27,6 +32,7 @@ const DEFAULT_SERVER_MAX_CIRCUITS_PER_PEER: u64 = 4;
 const DEFAULT_SERVER_CIRCUIT_SECS: u64 = 120;
 const DEFAULT_SERVER_CIRCUIT_BYTES: u64 = 512 * 1024;
 const DEFAULT_CLIENT_MAX_RESERVATIONS: u64 = 2;
+const DEFAULT_CLIENT_BACKOFF_MAX_SECS: u64 = 15 * 60;
 
 /// Hard ceilings: a relay knob can be raised, never made effectively unbounded.
 const MAX_SERVER_RESERVATIONS: u64 = 4096;
@@ -38,6 +44,9 @@ const MAX_CLIENT_RESERVATIONS: u64 = 8;
 
 /// Most relay candidates a client remembers.
 const MAX_CANDIDATES: usize = 64;
+
+/// Measured round trips closer than this are treated as equal so outcome history can decide.
+const LATENCY_BUCKET_MS: f64 = 10.0;
 
 /// Limits a relay server enforces, all finite.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +102,10 @@ pub struct RelayClientSettings {
     pub relay_addrs: Vec<Multiaddr>,
     /// Whether private and loopback relay addresses may be used.
     pub allow_private: bool,
-    /// How long a relay that failed is skipped.
+    /// How long a relay that failed once is skipped; doubles with each consecutive failure.
     pub retry_backoff: Duration,
+    /// Upper bound of the doubling backoff.
+    pub retry_backoff_max: Duration,
     /// How long a reservation may stay unanswered before it is abandoned.
     pub pending_timeout: Duration,
     /// How often reservations are reconciled with what is wanted.
@@ -109,6 +120,7 @@ impl Default for RelayClientSettings {
             relay_addrs: Vec::new(),
             allow_private: false,
             retry_backoff: Duration::from_secs(30),
+            retry_backoff_max: Duration::from_secs(DEFAULT_CLIENT_BACKOFF_MAX_SECS),
             pending_timeout: Duration::from_secs(30),
             reconcile_interval: Duration::from_secs(5),
         }
@@ -398,28 +410,138 @@ impl RelayServerStats {
     }
 }
 
+/// `base` doubled for each consecutive failure after the first, capped at `max`.
+fn backoff_delay(base: Duration, max: Duration, failures: usize) -> Duration {
+    let doublings = failures.saturating_sub(1).min(32) as u32;
+    base.saturating_mul(1u32 << doublings.min(31)).min(max)
+}
+
+/// Relay round trips (ms) for the connected neighbors that have a libp2p identity: the announce
+/// EWMA when measured, else the coordinate estimate against `own`.
+pub fn neighbor_latencies(peers: &PeerTable) -> Vec<(PeerId, f64)> {
+    let ids: HashMap<String, PeerId> = peers
+        .list_all()
+        .into_iter()
+        .filter(|p| p.identity_bound)
+        .filter_map(|p| Some((p.base_url, p.libp2p_peer_id?.parse().ok()?)))
+        .collect();
+    let table = peers.neighbors();
+    latencies_from(&table.snapshot(), &table.own_coordinate(), &ids)
+}
+
+fn latencies_from(
+    neighbors: &[NeighborSnapshot],
+    own: &Coordinate,
+    ids: &HashMap<String, PeerId>,
+) -> Vec<(PeerId, f64)> {
+    neighbors
+        .iter()
+        .filter_map(|n| {
+            let ms = n.round_trip.as_ref().and_then(|r| r.ewma_ms).or_else(|| {
+                n.coordinate
+                    .filter(Coordinate::is_valid)
+                    .map(|c| estimate_rtt_ms(own, &c))
+            })?;
+            Some((*ids.get(&n.base_url)?, ms))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 struct Candidate {
     /// Direct addresses of the relay, sorted, without the `/p2p/<id>` suffix.
     addrs: Vec<Multiaddr>,
     /// Operator-listed relays (by list position) come before discovered ones.
     rank: (u8, usize),
+    /// Consecutive failures; drives the backoff and resets on an accepted reservation.
     failures: usize,
     retry_at: Option<Instant>,
+    /// Latest measured or coordinate-estimated round trip to the relay, in milliseconds.
+    latency_ms: Option<f64>,
+    /// Lifetime outcomes: reservations accepted, renewals seen, and reservations that failed or
+    /// were lost.
+    accepts: u32,
+    renewals: u32,
+    drops: u32,
+    /// Free reservation slots the relay claims; only breaks ties between otherwise equal relays.
+    claimed_capacity: Option<u32>,
+}
+
+impl Candidate {
+    fn new(addrs: Vec<Multiaddr>, rank: (u8, usize)) -> Self {
+        Self {
+            addrs,
+            rank,
+            failures: 0,
+            retry_at: None,
+            latency_ms: None,
+            accepts: 0,
+            renewals: 0,
+            drops: 0,
+            claimed_capacity: None,
+        }
+    }
+
+    /// The address the next reservation attempt dials, rotating after failures.
+    fn dial_addr(&self) -> &Multiaddr {
+        &self.addrs[self.failures % self.addrs.len()]
+    }
+
+    /// Outcome score: accepted reservations and renewals count for the relay, drops against it.
+    fn history(&self) -> i64 {
+        i64::from(self.accepts) + i64::from(self.renewals.min(16)) - 2 * i64::from(self.drops)
+    }
+}
+
+/// Network neighbourhood of a relay address, used so two reservations never share one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Neighbourhood {
+    V4([u8; 3]),
+    V6([u8; 6]),
+    /// A relay with no IP address (DNS name) is its own group per host name.
+    Host(String),
+}
+
+/// IPv4 /24, IPv6 /48 (IPv4-mapped addresses as their IPv4 /24), or the host name when the
+/// address carries no IP.
+fn neighbourhood(addr: &Multiaddr) -> Option<Neighbourhood> {
+    addr.iter().find_map(|p| match p {
+        Protocol::Ip4(ip) => Some(ip_neighbourhood(ip.into())),
+        Protocol::Ip6(ip) => Some(ip_neighbourhood(ip.into())),
+        Protocol::Dns(h) | Protocol::Dns4(h) | Protocol::Dns6(h) | Protocol::Dnsaddr(h) => {
+            Some(Neighbourhood::Host(h.to_ascii_lowercase()))
+        }
+        _ => None,
+    })
+}
+
+fn ip_neighbourhood(ip: IpAddr) -> Neighbourhood {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            Neighbourhood::V4([o[0], o[1], o[2]])
+        }
+        IpAddr::V6(v6) => {
+            let o = v6.octets();
+            Neighbourhood::V6([o[0], o[1], o[2], o[3], o[4], o[5]])
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Slot {
     listener_id: ListenerId,
     relayed_addr: Multiaddr,
+    neighbourhood: Option<Neighbourhood>,
     accepted: bool,
     renewals: u64,
     started: Instant,
 }
 
-/// Chooses relays and tracks reservations for a `private` node. Selection is deterministic:
-/// operator-listed relays in list order, then discovered ones by peer id, skipping any that
-/// failed recently.
+/// Chooses relays and tracks reservations for a `private` node. Relays in backoff, or in the
+/// same neighbourhood as a held reservation, are skipped; the rest are ordered by round trip
+/// (10 ms buckets, unknown last), then outcome history, then claimed capacity, then operator
+/// list position, then peer id, so the choice is deterministic.
 pub struct RelayClient {
     settings: RelayClientSettings,
     local_peer: PeerId,
@@ -480,15 +602,26 @@ impl RelayClient {
         if self.candidates.len() >= MAX_CANDIDATES {
             return;
         }
-        self.candidates.insert(
-            peer,
-            Candidate {
-                addrs,
-                rank,
-                failures: 0,
-                retry_at: None,
-            },
-        );
+        self.candidates.insert(peer, Candidate::new(addrs, rank));
+    }
+
+    /// Replaces the known relay round trips (milliseconds); relays not listed become unknown.
+    pub fn set_latencies(&mut self, latencies: impl IntoIterator<Item = (PeerId, f64)>) {
+        for c in self.candidates.values_mut() {
+            c.latency_ms = None;
+        }
+        for (peer, ms) in latencies {
+            if let Some(c) = self.candidates.get_mut(&peer) {
+                c.latency_ms = Some(ms).filter(|m| m.is_finite() && *m >= 0.0);
+            }
+        }
+    }
+
+    /// Records the free reservation slots a relay reports for itself.
+    pub fn note_claimed_capacity(&mut self, peer: PeerId, free_reservations: u32) {
+        if let Some(c) = self.candidates.get_mut(&peer) {
+            c.claimed_capacity = Some(free_reservations);
+        }
     }
 
     /// A connected peer advertised the relay hop protocol; `addrs` are the addresses it reported.
@@ -496,13 +629,33 @@ impl RelayClient {
         self.add_candidate(peer, addrs, (1, 0));
     }
 
+    /// Ordering key, smallest first: latency bucket (unknown last), history, claimed capacity.
+    fn rank_key(peer: PeerId, c: &Candidate) -> impl Ord {
+        let bucket = c.latency_ms.map(|ms| (ms / LATENCY_BUCKET_MS) as u64);
+        (
+            bucket.is_none(),
+            bucket,
+            Reverse(c.history()),
+            Reverse(c.claimed_capacity),
+            c.rank,
+            peer,
+        )
+    }
+
     fn next_candidate(&self, now: Instant) -> Option<PeerId> {
+        let held: Vec<&Neighbourhood> = self
+            .slots
+            .values()
+            .filter_map(|s| s.neighbourhood.as_ref())
+            .collect();
         self.candidates
             .iter()
             .filter(|(peer, c)| {
-                !self.slots.contains_key(peer) && c.retry_at.is_none_or(|t| now >= t)
+                !self.slots.contains_key(peer)
+                    && c.retry_at.is_none_or(|t| now >= t)
+                    && neighbourhood(c.dial_addr()).is_none_or(|n| !held.contains(&&n))
             })
-            .min_by_key(|(peer, c)| (c.rank, **peer))
+            .min_by_key(|(peer, c)| Self::rank_key(**peer, c))
             .map(|(peer, _)| *peer)
     }
 
@@ -543,7 +696,8 @@ impl RelayClient {
                 break;
             };
             let candidate = &self.candidates[&peer];
-            let dial = candidate.addrs[candidate.failures % candidate.addrs.len()].clone();
+            let dial = candidate.dial_addr().clone();
+            let group = neighbourhood(&dial);
             let circuit = dial
                 .clone()
                 .with(Protocol::P2p(peer))
@@ -560,6 +714,7 @@ impl RelayClient {
                         Slot {
                             listener_id,
                             relayed_addr,
+                            neighbourhood: group,
                             accepted: false,
                             renewals: 0,
                             started: now,
@@ -586,9 +741,11 @@ impl RelayClient {
     }
 
     fn mark_failed(&mut self, peer: PeerId, now: Instant) {
+        let (base, max) = (self.settings.retry_backoff, self.settings.retry_backoff_max);
         if let Some(c) = self.candidates.get_mut(&peer) {
             c.failures += 1;
-            c.retry_at = Some(now + self.settings.retry_backoff);
+            c.drops = c.drops.saturating_add(1);
+            c.retry_at = Some(now + backoff_delay(base, max, c.failures));
         }
     }
 
@@ -598,11 +755,16 @@ impl RelayClient {
             return;
         };
         slot.accepted = true;
+        let candidate = self.candidates.get_mut(&relay_peer);
         if renewal {
             slot.renewals += 1;
-        } else if let Some(c) = self.candidates.get_mut(&relay_peer) {
+            if let Some(c) = candidate {
+                c.renewals = c.renewals.saturating_add(1);
+            }
+        } else if let Some(c) = candidate {
             c.failures = 0;
             c.retry_at = None;
+            c.accepts = c.accepts.saturating_add(1);
         }
         tracing::info!(%relay_peer, renewal, "avalon-relay: reservation accepted");
         self.publish();
@@ -699,7 +861,235 @@ mod tests {
         c.mark_failed(a, now);
         assert_eq!(c.next_candidate(now), Some(b));
         let later = now + c.settings.retry_backoff;
+        c.candidates.remove(&b);
+        assert_eq!(c.next_candidate(now), None);
         assert_eq!(c.next_candidate(later), Some(a));
+    }
+
+    fn relay_at(c: &mut RelayClient, addr: &str) -> PeerId {
+        let p = peer();
+        c.note_hop_relay(p, vec![addr.parse().unwrap()]);
+        p
+    }
+
+    fn hold(c: &mut RelayClient, peer: PeerId) {
+        let group = neighbourhood(c.candidates[&peer].dial_addr());
+        c.slots.insert(
+            peer,
+            Slot {
+                listener_id: ListenerId::next(),
+                relayed_addr: "/ip4/127.0.0.1/tcp/1/p2p-circuit".parse().unwrap(),
+                neighbourhood: group,
+                accepted: true,
+                renewals: 0,
+                started: Instant::now(),
+            },
+        );
+    }
+
+    #[test]
+    fn the_lowest_latency_relay_is_chosen_and_unknown_latency_ranks_last() {
+        let mut c = client(vec![], 1);
+        let slow = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let fast = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let unknown = relay_at(&mut c, "/ip4/192.0.2.1/tcp/1");
+        c.set_latencies([(slow, 90.0), (fast, 12.0)]);
+        let now = Instant::now();
+        assert_eq!(c.next_candidate(now), Some(fast));
+        c.candidates.remove(&fast);
+        assert_eq!(c.next_candidate(now), Some(slow));
+        c.candidates.remove(&slow);
+        assert_eq!(c.next_candidate(now), Some(unknown));
+    }
+
+    #[test]
+    fn a_measured_relay_beats_an_earlier_listed_unmeasured_operator_relay() {
+        let (listed, found) = (peer(), peer());
+        let mut c = client(vec![with_peer("/ip4/203.0.113.1/tcp/1", listed)], 1);
+        c.note_hop_relay(found, vec!["/ip4/198.51.100.1/tcp/1".parse().unwrap()]);
+        c.set_latencies([(found, 200.0)]);
+        assert_eq!(c.next_candidate(Instant::now()), Some(found));
+    }
+
+    #[test]
+    fn latencies_within_a_bucket_are_decided_by_history() {
+        let mut c = client(vec![], 1);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.set_latencies([(a, 11.0), (b, 18.0)]);
+        c.candidates.get_mut(&b).unwrap().accepts = 3;
+        assert_eq!(c.next_candidate(Instant::now()), Some(b));
+        c.set_latencies([(a, 11.0), (b, 35.0)]);
+        assert_eq!(
+            c.next_candidate(Instant::now()),
+            Some(a),
+            "a wider gap wins"
+        );
+    }
+
+    #[test]
+    fn outcome_history_overrides_claimed_capacity() {
+        let mut c = client(vec![], 1);
+        let proven = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let claims = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.note_claimed_capacity(proven, 0);
+        c.note_claimed_capacity(claims, 1000);
+        c.candidates.get_mut(&proven).unwrap().accepts = 2;
+        c.candidates.get_mut(&claims).unwrap().drops = 2;
+        assert_eq!(c.next_candidate(Instant::now()), Some(proven));
+    }
+
+    #[test]
+    fn claimed_capacity_only_breaks_ties() {
+        let mut c = client(vec![], 1);
+        let a = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let b = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        c.note_claimed_capacity(a, 1);
+        c.note_claimed_capacity(b, 50);
+        let want = b;
+        assert_eq!(c.next_candidate(Instant::now()), Some(want));
+        c.candidates.get_mut(&a).unwrap().accepts = 1;
+        assert_eq!(c.next_candidate(Instant::now()), Some(a));
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_the_cap_and_resets_on_acceptance() {
+        let base = Duration::from_secs(30);
+        let max = Duration::from_secs(300);
+        let secs = |n| backoff_delay(base, max, n).as_secs();
+        assert_eq!([secs(1), secs(2), secs(3), secs(4)], [30, 60, 120, 240]);
+        assert_eq!([secs(5), secs(1000), secs(usize::MAX)], [300, 300, 300]);
+
+        let mut c = client(vec![], 1);
+        let p = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let now = Instant::now();
+        let defaults = RelayClientSettings::default();
+        for n in 1..=3 {
+            c.mark_failed(p, now);
+            let wait = c.candidates[&p].retry_at.unwrap() - now;
+            assert_eq!(
+                wait,
+                backoff_delay(defaults.retry_backoff, defaults.retry_backoff_max, n)
+            );
+        }
+        hold(&mut c, p);
+        c.slots.get_mut(&p).unwrap().accepted = false;
+        c.on_accepted(p, false);
+        let cand = &c.candidates[&p];
+        assert_eq!((cand.failures, cand.retry_at, cand.accepts), (0, None, 1));
+        c.mark_failed(p, now);
+        assert_eq!(
+            c.candidates[&p].retry_at.unwrap() - now,
+            defaults.retry_backoff,
+            "the delay starts over after a success"
+        );
+    }
+
+    #[test]
+    fn a_lost_reservation_counts_against_the_relay() {
+        let mut c = client(vec![], 1);
+        let p = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        hold(&mut c, p);
+        let id = c.slots[&p].listener_id;
+        c.on_listener_closed(id, Instant::now());
+        assert_eq!(c.candidates[&p].drops, 1);
+        assert!(c.candidates[&p].history() < 0);
+    }
+
+    #[test]
+    fn a_second_reservation_must_leave_the_first_ones_ipv4_24() {
+        let mut c = client(vec![], 2);
+        let first = relay_at(&mut c, "/ip4/203.0.113.10/tcp/1");
+        let same = relay_at(&mut c, "/ip4/203.0.113.77/tcp/1");
+        let other = relay_at(&mut c, "/ip4/203.0.114.10/tcp/1");
+        c.set_latencies([(first, 5.0), (same, 6.0), (other, 400.0)]);
+        hold(&mut c, first);
+        assert_eq!(
+            c.next_candidate(Instant::now()),
+            Some(other),
+            "a nearer relay in the same /24 is skipped"
+        );
+        c.candidates.remove(&other);
+        assert_eq!(c.next_candidate(Instant::now()), None);
+    }
+
+    #[test]
+    fn ipv6_relays_are_grouped_by_48_and_mapped_ipv4_by_24() {
+        let mut c = client(vec![], 2);
+        let first = relay_at(&mut c, "/ip6/2001:db8:1:1::1/tcp/1");
+        let same48 = relay_at(&mut c, "/ip6/2001:db8:1:ffff::9/tcp/1");
+        let other48 = relay_at(&mut c, "/ip6/2001:db8:2:1::1/tcp/1");
+        hold(&mut c, first);
+        assert_eq!(c.next_candidate(Instant::now()), Some(other48));
+        c.candidates.remove(&other48);
+        assert_eq!(c.next_candidate(Instant::now()), None, "{same48}");
+
+        let v4: Multiaddr = "/ip4/203.0.113.9/tcp/1".parse().unwrap();
+        let mapped: Multiaddr = "/ip6/::ffff:203.0.113.200/tcp/1".parse().unwrap();
+        assert_eq!(neighbourhood(&v4), neighbourhood(&mapped));
+    }
+
+    #[test]
+    fn a_relay_without_an_ip_is_grouped_by_host_name() {
+        let dns = |h: &str| -> Multiaddr { format!("/dns4/{h}/tcp/1").parse().unwrap() };
+        assert_eq!(
+            neighbourhood(&dns("Relay.example.org")),
+            neighbourhood(&dns("relay.example.org"))
+        );
+        assert_ne!(
+            neighbourhood(&dns("a.example.org")),
+            neighbourhood(&dns("b.example.org"))
+        );
+        assert_eq!(neighbourhood(&"/memory/1".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn ranking_state_stays_within_the_candidate_cap() {
+        let mut c = client(vec![], 1);
+        for _ in 0..MAX_CANDIDATES + 10 {
+            let p = peer();
+            c.note_hop_relay(p, vec!["/ip4/203.0.113.1/tcp/1".parse().unwrap()]);
+        }
+        let strangers: Vec<(PeerId, f64)> = (0..100).map(|i| (peer(), f64::from(i))).collect();
+        c.set_latencies(strangers.clone());
+        for (p, _) in &strangers {
+            c.note_claimed_capacity(*p, 1);
+        }
+        assert_eq!(c.candidates.len(), MAX_CANDIDATES);
+        assert!(c.candidates.values().all(|k| k.latency_ms.is_none()));
+    }
+
+    #[test]
+    fn neighbor_latency_prefers_the_measured_ewma_over_the_coordinate() {
+        use crate::neighbors::NeighborTable;
+        let (measured, estimated, unmapped) = (peer(), peer(), peer());
+        let t = NeighborTable::new();
+        t.set_active(
+            &[
+                "m".to_string(),
+                "e".to_string(),
+                "u".to_string(),
+                "x".to_string(),
+            ],
+            &[],
+        );
+        t.record_success("m", Duration::from_millis(40));
+        let remote = Coordinate {
+            vector: [30.0, 0.0, 0.0],
+            ..Coordinate::default()
+        };
+        t.observe_coordinate("e", &remote, Duration::from_millis(30));
+        t.record_success("u", Duration::from_millis(5));
+        let ids: HashMap<String, PeerId> =
+            [("m".to_string(), measured), ("e".to_string(), estimated)].into();
+        let _ = unmapped;
+        let own = t.own_coordinate();
+        let got: HashMap<PeerId, f64> = latencies_from(&t.snapshot(), &own, &ids)
+            .into_iter()
+            .collect();
+        assert_eq!(got.len(), 2, "neighbors without a libp2p id are skipped");
+        assert!((got[&measured] - 40.0).abs() < 1e-6);
+        assert!((got[&estimated] - estimate_rtt_ms(&own, &remote)).abs() < 1e-6);
     }
 
     #[test]
@@ -744,6 +1134,7 @@ mod tests {
             Slot {
                 listener_id: listener,
                 relayed_addr: "/ip4/127.0.0.1/tcp/1/p2p-circuit".parse().unwrap(),
+                neighbourhood: None,
                 accepted: false,
                 renewals: 0,
                 started: Instant::now(),

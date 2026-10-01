@@ -844,6 +844,20 @@ struct RelayRuntime {
     reconcile_interval: Duration,
 }
 
+impl RelayRuntime {
+    fn refresh_and_reconcile(
+        &mut self,
+        swarm: &mut Swarm<DhtBehaviour>,
+        peers: &PeerTable,
+        reachability: Reachability,
+        now: Instant,
+    ) {
+        self.client
+            .set_latencies(crate::relay::neighbor_latencies(peers));
+        self.client.reconcile(swarm, reachability, now);
+    }
+}
+
 /// Advertises the relay hop protocol only while this node is dialable: detected `public`, or
 /// undetected with an operator-stated external address. A `private` node never relays.
 fn set_relay_server_status(
@@ -1040,6 +1054,7 @@ fn track_hole_punch(
 /// consumed by relay handling alone.
 fn handle_relay_event(
     swarm: &mut Swarm<DhtBehaviour>,
+    peers: &PeerTable,
     relay: &mut RelayRuntime,
     reachability: &ReachabilityHandle,
     event: &SwarmEvent<DhtBehaviourEvent>,
@@ -1053,7 +1068,7 @@ fn handle_relay_event(
             if relay.serves {
                 set_relay_server_status(swarm, detected(), relay.has_external_addr);
             }
-            relay.client.reconcile(swarm, detected(), now);
+            relay.refresh_and_reconcile(swarm, peers, detected(), now);
             false
         }
         SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(identify::Event::Received {
@@ -1065,7 +1080,7 @@ fn handle_relay_event(
                 relay
                     .client
                     .note_hop_relay(*peer_id, info.listen_addrs.clone());
-                relay.client.reconcile(swarm, detected(), now);
+                relay.refresh_and_reconcile(swarm, peers, detected(), now);
             }
             false
         }
@@ -1081,7 +1096,7 @@ fn handle_relay_event(
         }
         SwarmEvent::ListenerClosed { listener_id, .. } => {
             relay.client.on_listener_closed(*listener_id, now);
-            relay.client.reconcile(swarm, detected(), now);
+            relay.refresh_and_reconcile(swarm, peers, detected(), now);
             false
         }
         SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(server_event)) => {
@@ -1280,13 +1295,13 @@ async fn run_worker(
                 }
             }
             _ = reconcile_tick.tick() => {
-                relay.client.reconcile(&mut swarm, reachability.snapshot().reachability, Instant::now());
+                relay.refresh_and_reconcile(&mut swarm, &peers, reachability.snapshot().reachability, Instant::now());
             }
             event = swarm.select_next_some() => {
                 track_reachability(&mut swarm, &reachability, &event);
                 track_hole_punch(&mut punched, &reachability, &event);
                 track_peer_paths(peers.paths(), &event);
-                if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
+                if handle_relay_event(&mut swarm, &peers, &mut relay, &reachability, &event) {
                     continue;
                 }
                 if let Some(peer_id) = flushable_connection(&event) {

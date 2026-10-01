@@ -40,6 +40,7 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
 | `url-less-admission` | A node behind a no-inbound NAT with no `AVALON_NODE_URL`, and reachability verification on everywhere, announces as `p2p://<peer id>`: both neighbors list it in `/nodes/discover`, the seed's topology describes it, and a `p2p://` announce for the relay's id over plain HTTP stores nothing. | no |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
+| `relay-ranking` | Three relays with 150, 60 and 5 ms of added delay (`tc netem`), the nearest listed last. A node asking for two reservations holds exactly one, on the nearest relay: the lab's public segment is one /24, so a second reservation would share its prefix. Not yet run in the lab; the added delay, the timing of the first reservation against the first announce round trips, and the identity binding it relies on are unverified. | no |
 
 A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt and is not yet run in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
 is reachable only through a relay, then hole punching makes up to three attempts.

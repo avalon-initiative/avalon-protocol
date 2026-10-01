@@ -5,7 +5,7 @@
 # usage: sudo scripts/nat-scenarios.sh [scenario ...]     (default: all scenarios)
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
-#              outbound-only url-less-admission relay-failover
+#              outbound-only url-less-admission relay-failover relay-ranking
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -320,6 +320,36 @@ scenario_relay-failover() {
   wait_status home1 10.1.0.2 \
     ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id != \"$held\"" \
     "the reservation to move to the other relay"
+}
+
+# A private node picks the lowest-latency relay, though it is listed last, and never holds two
+# reservations in one /24 (the lab's public segment is a single /24, so exactly one).
+scenario_relay-ranking() {
+  command -v tc >/dev/null 2>&1 || { echo "relay-ranking needs tc" >&2; return 2; }
+  "$LAB" up home1 symmetric >/dev/null || return 1
+  # Relay latency is attributed by libp2p id, which needs the verified (identity-bound) entries.
+  local n ip delay verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true
+  for n in "far 10.99.0.101 150ms" "mid 10.99.0.103 60ms" "near 10.99.0.104 5ms"; do
+    read -r name ip delay <<<"$n"
+    "$LAB" up-public "$name" "$ip" >/dev/null || return 1
+    "$LAB" exec "$name" -- tc qdisc add dev eth0 root netem delay "$delay" || return 1
+    node "$name" "$name" "$ip" AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/$ip/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true \
+      AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080 "$verify"
+    ready "$name" "$ip" || return 1
+  done
+  node home1 home1 10.1.0.2 "$verify" \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.103:8080,http://10.99.0.104:8080 \
+    AVALON_RELAY_CLIENT_MAX_RESERVATIONS=2 \
+    AVALON_RELAY_ADDRS="/ip4/10.99.0.101/tcp/4001/p2p/$(peer_id far),/ip4/10.99.0.103/tcp/4001/p2p/$(peer_id mid),/ip4/10.99.0.104/tcp/4001/p2p/$(peer_id near)"
+  wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) >= 1' \
+    "a relay reservation" || return 1
+  sleep 20
+  local held
+  held=$(status home1 10.1.0.2 | jq -r '[.relay_reservations[].relay_peer_id] | join(",")')
+  if [ "$held" != "$(peer_id near)" ]; then
+    echo "    expected only the lowest-latency relay ($(peer_id near)), holding: $held" >&2
+    return 1
+  fi
 }
 
 # dump_logs: the lines of each node's log that explain a failed wait.
