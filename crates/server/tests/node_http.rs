@@ -14,8 +14,8 @@ use avalon_protocol::node_request::{
 use avalon_server::dht::{self, DhtConfig, DhtHandle};
 use avalon_server::node_auth::{require_node_auth, AuthenticatedNode, NodeAuth, CREDENTIAL_PATHS};
 use avalon_server::node_http::{
-    p2p_base_url, synthetic_addr, NodeClient, NodeHttpError, NodeHttpSettings, RemotePeer,
-    StreamErrorKind,
+    p2p_base_url, synthetic_addr, NodeClient, NodeHttpError, NodeHttpSettings, NodeSigner,
+    RemotePeer, StreamErrorKind, StreamHandle,
 };
 use avalon_server::nodes::{PeerInfo, PeerTable};
 use avalon_server::reachability::{AutonatSettings, ReachabilitySnapshot};
@@ -187,11 +187,18 @@ fn info_for(node: &DhtHandle, addrs: Vec<String>, connectivity: Option<Connectiv
 }
 
 async fn direct_node(settings: NodeHttpSettings) -> Node {
+    direct_node_with(identity::Keypair::generate_ed25519(), settings).await
+}
+
+async fn direct_node_with(key: identity::Keypair, settings: NodeHttpSettings) -> Node {
     let peers = PeerTable::new();
     let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
     let handle = dht::start_with_node_http(
         peers.clone(),
-        config(&addr, None, RelaySettings::default()),
+        DhtConfig {
+            identity: key,
+            ..config(&addr, None, RelaySettings::default())
+        },
         settings,
     )
     .await;
@@ -478,13 +485,106 @@ async fn write_routes_over_http_need_a_valid_unreplayed_credential_from_a_node_w
     let own = header_with(&stranger, NETWORK, &b_id, now, [7; 16], b"{}");
     assert_eq!(send(Some(own), "{}").await, StatusCode::FORBIDDEN);
 
-    // A valid credential goes through, by peer id and by URL, once each.
+    // The real signer's requests go through, by peer id and by URL, once each.
     let good = h(NETWORK, &b_id, now, 8, b"{}");
     assert_eq!(send(Some(good.clone()), "{}").await, StatusCode::OK);
     assert_eq!(send(Some(good), "{}").await, unauthorized);
     let by_url = h(NETWORK, &http_base, now, 9, b"{}");
     assert_eq!(send(Some(by_url), "{}").await, StatusCode::OK);
-    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    let signer = NodeSigner::new(&a_key, NETWORK).unwrap();
+    let client = NodeClient::new().with_signer(signer);
+    for _ in 0..2 {
+        let res = client.post(&url).body("{}").send().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().await.unwrap(), a_id.to_string());
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn a_node_reaches_the_write_routes_over_http_signed_and_over_the_stream_unsigned() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let a_key = identity::Keypair::generate_ed25519();
+    let a = direct_node_with(a_key.clone(), NodeHttpSettings::default()).await;
+    let b = direct_node(NodeHttpSettings::default()).await;
+    let http_base = serve_credential_routes(&b, hits.clone()).await;
+    // b gives a standing; a knows b at its live URL.
+    introduce(&b, &a);
+    a.peers.upsert(PeerInfo {
+        base_url: http_base.clone(),
+        ..info_for(
+            &b.handle,
+            b.handle
+                .listen_addrs
+                .iter()
+                .map(|x| x.to_string())
+                .collect(),
+            None,
+        )
+    });
+    let client = NodeClient::new()
+        .with_stream(a.handle.node_http.clone())
+        .with_signer(NodeSigner::new(&a_key, NETWORK).unwrap());
+
+    let res = client
+        .post(format!("{http_base}/mirror/notify"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!res.via_stream());
+
+    // A p2p:// URL goes over the stream, where the handshake is the credential.
+    let res = client
+        .post(format!("{}/nodes/replicate-chat", b.url()))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.via_stream());
+    assert_eq!(res.text().await.unwrap(), a.handle.peer_id.to_string());
+
+    // The URL goes down: the retry over the stream still authenticates.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_base = format!("http://{}", dead.local_addr().unwrap());
+    drop(dead);
+    let dead_table = PeerTable::new();
+    dead_table.upsert(PeerInfo {
+        base_url: dead_base.clone(),
+        ..info_for(
+            &b.handle,
+            b.handle
+                .listen_addrs
+                .iter()
+                .map(|x| x.to_string())
+                .collect(),
+            None,
+        )
+    });
+    let client = client.with_stream(StreamHandle {
+        peers: Some(dead_table),
+        ..a.handle.node_http.clone()
+    });
+    let res = client
+        .post(format!("{dead_base}/nodes/relay"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.via_stream());
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+
+    // Without a signer the same HTTP request is refused.
+    let unsigned = NodeClient::new()
+        .post(format!("{http_base}/mirror/notify"))
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

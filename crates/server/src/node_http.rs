@@ -10,6 +10,7 @@
 //! The receiving side dispatches into the normal router; see [`inbound`].
 
 mod inbound;
+mod signer;
 mod wire;
 
 use std::sync::OnceLock;
@@ -23,15 +24,18 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::dht::{DhtCommand, DhtCommandSender};
+use crate::node_auth::{normalized_origin, CREDENTIAL_PATHS};
 use crate::nodes::{PeerInfo, PeerTable};
 use crate::outbound_policy::{CheckedTarget, OutboundPolicy};
 use crate::transport_stats::{Transport, TransportStats};
 use avalon_protocol::connectivity::Connectivity;
+use avalon_protocol::node_request::NODE_REQUEST_HEADER;
 
 pub use inbound::{
     path_allowed, synthetic_addr, InboundPermit, InboundService, RemotePeer, RouterSlot,
     ALLOWED_EXACT, SHARED_PEER_ADDR,
 };
+pub use signer::NodeSigner;
 pub use wire::{
     protocol_name, BufferGrant, NodeHttpCodec, NodeHttpRequest, NodeHttpResponse, NodeHttpSettings,
     MAX_CONCURRENT_STREAMS, MAX_HEADER_BYTES, MAX_HEADER_COUNT,
@@ -234,11 +238,21 @@ pub fn install_stream_handle(handle: StreamHandle) {
     let _ = GLOBAL_STREAM.set(handle);
 }
 
+/// The process-wide signer for the write routes. Set once at startup; a client with its own
+/// signer ignores it, and one with neither sends those routes unsigned.
+static GLOBAL_SIGNER: OnceLock<NodeSigner> = OnceLock::new();
+
+/// Registers the signer for every [`NodeClient`] without its own.
+pub fn install_node_signer(signer: NodeSigner) {
+    let _ = GLOBAL_SIGNER.set(signer);
+}
+
 /// Cheap to clone; see the module docs.
 #[derive(Clone)]
 pub struct NodeClient {
     http: reqwest::Client,
     stream: Option<StreamHandle>,
+    signer: Option<NodeSigner>,
     /// Timeout for stream requests, matching the wrapped client's own where it has one.
     timeout: Option<Duration>,
     /// Policy a peer-table URL must pass before a stream failure falls over to it.
@@ -256,6 +270,7 @@ impl From<reqwest::Client> for NodeClient {
         Self {
             http,
             stream: None,
+            signer: None,
             timeout: None,
             policy: None,
         }
@@ -290,6 +305,16 @@ impl NodeClient {
     pub fn with_stream(mut self, handle: StreamHandle) -> Self {
         self.stream = Some(handle);
         self
+    }
+
+    /// Signs the write routes with `signer` instead of the process-wide one.
+    pub fn with_signer(mut self, signer: NodeSigner) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    fn signer(&self) -> Option<&NodeSigner> {
+        self.signer.as_ref().or_else(|| GLOBAL_SIGNER.get())
     }
 
     fn stream_handle(&self) -> Option<&StreamHandle> {
@@ -450,7 +475,8 @@ impl NodeRequestBuilder {
             rb = rb.query(&self.query);
         }
         for (k, v) in &self.headers {
-            if !unvouched || is_forwarded_header(k) {
+            let credential = k.eq_ignore_ascii_case(NODE_REQUEST_HEADER);
+            if !credential && (!unvouched || is_forwarded_header(k)) {
                 rb = rb.header(k.as_str(), v.as_str());
             }
         }
@@ -480,7 +506,13 @@ impl NodeRequestBuilder {
         NodeHttpRequest {
             method: self.method.as_str().to_string(),
             path_and_query,
-            headers: self.headers.clone(),
+            // A stream is authenticated by its handshake and never carries the credential.
+            headers: self
+                .headers
+                .iter()
+                .filter(|(k, _)| !k.eq_ignore_ascii_case(NODE_REQUEST_HEADER))
+                .cloned()
+                .collect(),
             body: self.body.as_ref().map(|b| b.to_vec()).unwrap_or_default(),
             grant: Default::default(),
         }
@@ -606,6 +638,34 @@ impl NodeRequestBuilder {
         )
     }
 
+    /// Adds a freshly signed credential to a request for one of the write routes; any other
+    /// request, and any request while no signer is installed, is returned as it is.
+    fn sign_http(
+        &self,
+        rb: reqwest::RequestBuilder,
+        route: &Route,
+        url: &str,
+    ) -> Result<reqwest::RequestBuilder, NodeHttpError> {
+        let (Some(signer), Ok(parsed)) = (self.client.signer(), url::Url::parse(url)) else {
+            return Ok(rb);
+        };
+        let path = parsed.path();
+        if !CREDENTIAL_PATHS.contains(&path) {
+            return Ok(rb);
+        }
+        // The peer's libp2p id when the table has one, else the URL it is reached at.
+        let recipient = route
+            .peer
+            .map(|p| p.to_string())
+            .or_else(|| normalized_origin(url))
+            .ok_or_else(|| NodeHttpError::Invalid("no recipient for a signed request".into()))?;
+        let body = self.body.as_deref().unwrap_or_default();
+        let header = signer
+            .header(self.method.as_str(), path, body, &recipient)
+            .map_err(|e| NodeHttpError::Invalid(format!("cannot sign node request: {e}")))?;
+        Ok(rb.header(NODE_REQUEST_HEADER, header))
+    }
+
     /// One try over `transport`, recording a transport-level outcome for the peer. Any answer,
     /// whatever its status, counts as the transport working.
     async fn attempt(
@@ -628,11 +688,11 @@ impl NodeRequestBuilder {
                     (None, Transport::Stream) => {
                         return Err(NodeHttpError::Invalid("no vetted http target".into()))
                     }
-                    _ => self.http_builder_with(
-                        &self.client.http,
-                        route.http.as_deref().unwrap_or(&self.url),
-                        false,
-                    ),
+                    _ => {
+                        let url = route.http.as_deref().unwrap_or(&self.url);
+                        let rb = self.http_builder_with(&self.client.http, url, false);
+                        self.sign_http(rb, route, url)?
+                    }
                 };
                 rb.send()
                     .await
@@ -1972,5 +2032,224 @@ mod tests {
         assert!(strict.get(&url).send().await.is_err());
         assert_eq!(http_hits(&second).await, 1);
         assert_eq!(http_hits(&first).await, 0);
+    }
+
+    /// A stream handle whose worker answers 200 and records every request it was handed.
+    fn capturing_worker(
+        peers: PeerTable,
+    ) -> (
+        StreamHandle,
+        std::sync::Arc<std::sync::Mutex<Vec<NodeHttpRequest>>>,
+    ) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if let DhtCommand::HttpRequest {
+                    request,
+                    respond_to,
+                    ..
+                } = cmd
+                {
+                    log.lock().unwrap().push(request);
+                    let _ = respond_to.send(Ok(ok_answer()));
+                }
+            }
+        });
+        let handle = StreamHandle {
+            commands: tx,
+            peers: Some(peers),
+            settings: NodeHttpSettings::default(),
+        };
+        (handle, seen)
+    }
+
+    fn signer() -> NodeSigner {
+        NodeSigner::new(&identity::Keypair::generate_ed25519(), "net").unwrap()
+    }
+
+    fn credential(headers: &wiremock::http::HeaderMap) -> String {
+        headers
+            .get(NODE_REQUEST_HEADER)
+            .expect("credential header")
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn verify_for(
+        header: &str,
+        path: &str,
+        body: &[u8],
+        recipient: &str,
+    ) -> Result<avalon_protocol::node_request::NodeRequestAuth, ()> {
+        let target = avalon_protocol::node_request::NodeRequestTarget {
+            method: "POST",
+            path,
+            body,
+            network_id: "net",
+        };
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        avalon_protocol::node_request::verify_node_request_header(
+            header,
+            &target,
+            &[recipient],
+            now,
+            60,
+        )
+        .map_err(|_| ())
+    }
+
+    #[tokio::test]
+    async fn every_http_attempt_at_a_write_route_is_signed_afresh() {
+        let live = http_server(200).await;
+        let id = sample_peer_id();
+        let table = table_with_connectivity(&id, &live.uri(), Some(Connectivity::Direct));
+        let (handle, seen) = capturing_worker(table);
+        let me = signer();
+        let client = NodeClient::new()
+            .with_stream(handle)
+            .with_signer(me.clone());
+        for path in CREDENTIAL_PATHS {
+            for _ in 0..2 {
+                client
+                    .post(format!("{}{path}?x=1", live.uri()))
+                    .body("payload")
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        }
+        let received = live.received_requests().await.unwrap();
+        assert_eq!(received.len(), 6);
+        let mut nonces = std::collections::HashSet::new();
+        for r in &received {
+            let header = credential(&r.headers);
+            // The peer table knows the libp2p id, so that is the recipient.
+            let auth = verify_for(&header, r.url.path(), b"payload", &id.to_string()).unwrap();
+            assert_eq!(auth.peer_id, me.peer_id());
+            assert!(nonces.insert(auth.nonce), "a nonce was reused");
+            // The signature binds the body and the route.
+            assert!(verify_for(&header, r.url.path(), b"other", &id.to_string()).is_err());
+            assert!(verify_for(&header, "/nodes/announce", b"payload", &id.to_string()).is_err());
+        }
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_peer_without_a_known_id_is_addressed_by_its_normalized_url() {
+        let live = http_server(200).await;
+        let me = signer();
+        let client = NodeClient::new().with_signer(me);
+        client
+            .post(format!("{}/mirror/notify", live.uri()))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        let received = live.received_requests().await.unwrap();
+        let header = credential(&received[0].headers);
+        let origin = normalized_origin(&live.uri()).unwrap();
+        assert!(verify_for(&header, "/mirror/notify", b"{}", &origin).is_ok());
+        assert!(verify_for(&header, "/mirror/notify", b"{}", "http://other.test").is_err());
+    }
+
+    #[tokio::test]
+    async fn no_other_request_carries_a_credential_and_a_callers_own_is_never_sent() {
+        let live = http_server(200).await;
+        let client = NodeClient::new().with_signer(signer());
+        client
+            .post(format!("{}/nodes/announce", live.uri()))
+            .send()
+            .await
+            .unwrap();
+        client
+            .get(format!("{}/nodes/status", live.uri()))
+            .send()
+            .await
+            .unwrap();
+        client
+            .post(format!("{}/nodes/relay/extra", live.uri()))
+            .send()
+            .await
+            .unwrap();
+        client
+            .post(format!("{}/x/nodes/relay", live.uri()))
+            .header(NODE_REQUEST_HEADER, "v1; forged")
+            .send()
+            .await
+            .unwrap();
+        for r in live.received_requests().await.unwrap() {
+            assert!(!r.headers.contains_key(NODE_REQUEST_HEADER), "{}", r.url);
+        }
+
+        // A caller-supplied header is replaced, never duplicated, on a signed route.
+        client
+            .post(format!("{}/nodes/relay", live.uri()))
+            .header(NODE_REQUEST_HEADER, "v1; forged")
+            .send()
+            .await
+            .unwrap();
+        let received = live.received_requests().await.unwrap();
+        let last = received.last().unwrap();
+        assert_eq!(last.headers.get_all(NODE_REQUEST_HEADER).iter().count(), 1);
+        assert!(!credential(&last.headers).contains("forged"));
+    }
+
+    #[tokio::test]
+    async fn without_a_signer_the_write_routes_are_sent_unsigned() {
+        let live = http_server(200).await;
+        NodeClient::new()
+            .post(format!("{}/nodes/relay", live.uri()))
+            .send()
+            .await
+            .unwrap();
+        let received = live.received_requests().await.unwrap();
+        assert!(!received[0].headers.contains_key(NODE_REQUEST_HEADER));
+    }
+
+    #[tokio::test]
+    async fn a_stream_attempt_at_a_write_route_never_carries_a_credential() {
+        let id = sample_peer_id();
+        let me = signer();
+        // Stream first: a p2p:// URL.
+        let table = table_with_connectivity(&id, &p2p_base_url(&id), None);
+        let (handle, seen) = capturing_worker(table);
+        let client = NodeClient::new()
+            .with_stream(handle)
+            .with_signer(me.clone());
+        for path in CREDENTIAL_PATHS {
+            client
+                .post(format!("{}{path}", p2p_base_url(&id)))
+                .header(NODE_REQUEST_HEADER, "v1; forged")
+                .body("x")
+                .send()
+                .await
+                .unwrap();
+        }
+        // HTTP first, URL down: the retry over the stream is unsigned too.
+        let base = dead_base();
+        let table = table_with_connectivity(&id, &base, Some(Connectivity::Direct));
+        let (handle2, seen2) = capturing_worker(table);
+        let res = NodeClient::new()
+            .with_stream(handle2)
+            .with_signer(me)
+            .post(format!("{base}/nodes/relay"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+        assert!(res.via_stream());
+        for log in [seen, seen2] {
+            let log = log.lock().unwrap();
+            assert!(!log.is_empty());
+            for req in log.iter() {
+                assert!(req
+                    .headers
+                    .iter()
+                    .all(|(k, _)| !k.eq_ignore_ascii_case(NODE_REQUEST_HEADER)));
+            }
+        }
     }
 }

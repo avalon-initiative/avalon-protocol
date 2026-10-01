@@ -229,16 +229,33 @@ pub async fn run_with_tracing(
     // constructed (no config needed), starts empty.
     let head_gossip = crate::nodes::HeadGossipTracker::new();
 
-    // This node's libp2p DHT identity — on by default
-    // (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
-    // the swarm bound and its worker spawned) before `announce_config`
-    // below so this node's very first outbound announce already carries
-    // it.
-    let dht_config = crate::dht::DhtConfig::from_env(chain.network_id()).unwrap_or_else(|e| {
+    // This node's identity key: the libp2p identity and the key that signs node-to-node write
+    // requests, so it exists with the DHT off too. The DHT (on by default,
+    // `AVALON_DHT_ENABLED=false`/`0` opts out) is resolved, and the swarm bound and its worker
+    // spawned, before `announce_config` below so the very first announce already carries it.
+    let identity = crate::dht::load_or_generate_identity_from_env().unwrap_or_else(|e| {
         tracing::error!("refusing to start: {e}");
         std::process::exit(1);
     });
-    let mut dht_identity = None;
+    let own_peer_id = libp2p::PeerId::from(identity.public());
+    match crate::node_http::NodeSigner::new(&identity, chain.network_id()) {
+        Some(signer) => crate::node_http::install_node_signer(signer),
+        None => {
+            tracing::error!("refusing to start: cannot sign node requests (empty network id)");
+            std::process::exit(1);
+        }
+    }
+    let dht_config =
+        crate::dht::DhtConfig::from_env(chain.network_id(), identity).unwrap_or_else(|e| {
+            tracing::error!("refusing to start: {e}");
+            std::process::exit(1);
+        });
+    // Announced even without a swarm, so peers can give this node standing for its signed
+    // requests; the swarm's own reachability replaces the unknown one below.
+    let mut dht_identity = crate::nodes::DhtIdentity {
+        peer_id: own_peer_id.to_string(),
+        reachability: crate::reachability::ReachabilityHandle::unknown(),
+    };
     let mut dht_commands = None;
     let mut dht_router_slot = None;
     let mut reachability = crate::reachability::ReachabilityHandle::unknown();
@@ -254,10 +271,10 @@ pub async fn run_with_tracing(
         handle.router_slot.set_shutdown(shutdown.clone());
         dht_router_slot = Some(handle.router_slot.clone());
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
-        dht_identity = Some(crate::nodes::DhtIdentity {
+        dht_identity = crate::nodes::DhtIdentity {
             peer_id: handle.peer_id.to_string(),
             reachability: handle.reachability.clone(),
-        });
+        };
         reachability = handle.reachability;
         dht_commands = Some(handle.commands);
     }
@@ -268,7 +285,7 @@ pub async fn run_with_tracing(
     // below — reusing the exact same `AVALON_NODE_URL` identity rather
     // than a second parse of it.
     let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id())
-        .with_p2p_fallback(dht_identity.as_ref().map(|d| d.peer_id.as_str()));
+        .with_p2p_fallback(dht_commands.as_ref().map(|_| dht_identity.peer_id.as_str()));
     let witness_signer =
         crate::witness_cosign::WitnessCosignConfig::from_env().and_then(|w| w.announce_signer());
     announce_config.witness = witness_signer.clone();
@@ -594,7 +611,7 @@ pub async fn run_with_tracing(
         reachability,
         own_witness: witness_signer.clone(),
         own_base_url: announce_config.own_base_url.clone(),
-        own_libp2p_peer_id: dht_identity.as_ref().map(|d| d.peer_id.clone()),
+        own_libp2p_peer_id: Some(dht_identity.peer_id.clone()),
         interest_redis_fast_path,
         principal_limiter: crate::principal_limits::PrincipalLimiter::from_env(
             redis_limiter.as_ref(),
@@ -767,7 +784,7 @@ pub async fn run_with_tracing(
         known_list_handle.clone(),
         own_shard_id.clone(),
         announce_config,
-        dht_identity,
+        Some(dht_identity),
     ));
 
     // Issue #545: per-hoster shared rate-limit/concurrency-ceiling state
