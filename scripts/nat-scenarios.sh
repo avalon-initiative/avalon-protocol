@@ -111,6 +111,20 @@ wait_status() {
   return 1
 }
 
+# wait_probe_path <ns> <ip> <target url> <path> [what]: waits until POST /nodes/probe from the
+# node to a known peer succeeds and reports that path type.
+wait_probe_path() {
+  local ns="$1" ip="$2" target="$3" want="$4" what="${5:-a $4 probe path}" i out=""
+  for i in $(seq 1 $((WAIT / 2))); do
+    out=$("$LAB" exec "$ns" -- curl -s -m 8 -H 'content-type: application/json' \
+      -d "{\"target\":\"$target\"}" "http://$ip:8080/nodes/probe")
+    if echo "$out" | jq -e ".ok == true and .path == \"$want\"" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  echo "    timed out after ${WAIT}s waiting for: $what; last probe: $out" >&2
+  return 1
+}
+
 # peer_id <node name>: the libp2p peer id a node logged at startup.
 peer_id() {
   local i id
@@ -175,13 +189,22 @@ punch_between() {
   if [ "$expect" = punched ]; then
     wait_status home1 10.1.0.2 '.connectivity == "nat_traversed" and (.punched_peers|length) == 1' \
       "home1 to hole punch to home2 ($type_a / $type_b)" || return 1
-    wait_status home1 10.1.0.2 '[.hole_punches[]|select(.succeeded)]|length >= 1' "a successful punch to be recorded"
+    wait_status home1 10.1.0.2 '[.hole_punches[]|select(.succeeded)]|length >= 1' "a successful punch to be recorded" || return 1
+    wait_probe_path home1 10.1.0.2 http://10.99.0.101:8080 direct "a probe of the relay to report a direct path"
   else
-    # A punch that cannot work fails, is recorded, and leaves the relayed path in use.
-    wait_status home1 10.1.0.2 '[.hole_punches[]|select(.succeeded|not)]|length >= 1' \
-      "a failed punch ($type_a / $type_b) to be recorded" || return 1
+    # A punch that cannot work fails, is recorded, and leaves the relayed path in use. The node
+    # with the lower peer id starts the punch, so either one may record it.
+    local i failed=""
+    for i in $(seq 1 $((WAIT / 2))); do
+      status home1 10.1.0.2 | jq -e '[.hole_punches[]|select(.succeeded|not)]|length >= 1' >/dev/null 2>&1 && failed=1
+      status home2 10.2.0.2 | jq -e '[.hole_punches[]|select(.succeeded|not)]|length >= 1' >/dev/null 2>&1 && failed=1
+      [ -n "$failed" ] && break
+      sleep 2
+    done
+    [ -n "$failed" ] || { echo "    timed out after ${WAIT}s waiting for: a failed punch ($type_a / $type_b) to be recorded" >&2; return 1; }
     wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.punched_peers|length) == 0' \
-      "home1 to stay on the relay"
+      "home1 to stay on the relay" || return 1
+    wait_probe_path home1 10.1.0.2 http://10.99.0.101:8080 direct "a probe of the relay to report a direct path"
   fi
 }
 

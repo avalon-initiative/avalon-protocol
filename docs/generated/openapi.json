@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.8.1"
+    "version": "0.9.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -9125,6 +9125,17 @@
             "type": "boolean",
             "description": "True when every requested sample completed."
           },
+          "path": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PathType",
+                "description": "Kind of path the samples were taken over: `direct`, `traversed` (hole-punched) or\n`relayed`. The worst path across samples; absent when none completed or the\nconnection kind was not known."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "samples_ms": {
             "type": "array",
             "items": {
@@ -10689,6 +10700,17 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "path_to_next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PathType",
+                "description": "Kind of path this node's request to the next hop took: `direct`, `traversed`\n(hole-punched) or `relayed`. A leg that touched a relay is always `relayed`, and its\n`to_next_ms` includes the relay's hop. Absent at the last hop, or when the\nconnection kind was not known."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "processing_ms": {
             "type": "number",

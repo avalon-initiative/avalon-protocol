@@ -272,11 +272,17 @@ pub struct PeerTable {
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
     unverified: Arc<RwLock<HashMap<String, PeerInfo>>>,
     neighbors: crate::neighbors::NeighborTable,
+    paths: crate::peer_paths::PeerPaths,
 }
 
 impl PeerTable {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The kind of libp2p connection held to each peer, written by the DHT worker.
+    pub fn paths(&self) -> &crate::peer_paths::PeerPaths {
+        &self.paths
     }
 
     /// The announce worker's active set and per-neighbor round-trip stats.
@@ -2186,6 +2192,7 @@ pub async fn run_worker(
                 match measured(
                     &neighbors,
                     peer,
+                    || crate::peer_paths::round_trip_path(&peers, peer),
                     announce_to(
                         &client,
                         &peers.transport_url(peer),
@@ -2429,6 +2436,7 @@ async fn vouch_contact(
 async fn measured<T>(
     neighbors: &crate::neighbors::NeighborTable,
     peer: &str,
+    path: impl FnOnce() -> avalon_protocol::connectivity::PathType,
     announce: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<(T, Duration), String> {
     let started = std::time::Instant::now();
@@ -2436,7 +2444,7 @@ async fn measured<T>(
     let rtt = started.elapsed();
     match result {
         Ok(value) => {
-            neighbors.record_success(peer, rtt);
+            neighbors.record_success_via(peer, rtt, path());
             Ok((value, rtt))
         }
         Err(err) => {
@@ -2544,6 +2552,7 @@ mod tests {
             let _ = measured(
                 &neighbors,
                 peer,
+                || avalon_protocol::connectivity::PathType::Direct,
                 announce_to(
                     &client,
                     peer,
@@ -2601,6 +2610,7 @@ mod tests {
             let (response, rtt) = measured(
                 &neighbors,
                 &peer,
+                || avalon_protocol::connectivity::PathType::Direct,
                 announce_to(
                     &client,
                     &peer,

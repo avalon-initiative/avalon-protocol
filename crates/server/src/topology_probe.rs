@@ -3,8 +3,10 @@
 //!
 //! The target must be in this node's peer table or its unverified gossip
 //! pool, on this node's network, and every address it resolves to must pass
-//! [`crate::outbound_policy`]. The endpoint sends at most [`MAX_SAMPLES`]
-//! sequential `GET /nodes/status` requests, follows no redirects, and never
+//! [`crate::outbound_policy`]. A peer with no reachable URL is probed over a
+//! libp2p stream, and the result's `path` says which kind of path carried it;
+//! a measurement that may have crossed a relay is always `relayed`. The
+//! endpoint sends at most [`MAX_SAMPLES`] sequential `GET /nodes/status` requests, follows no redirects, and never
 //! returns anything the target sent back. Timings are this node's own
 //! observations. A successful probe of an unverified-pool target promotes it
 //! into the peer table — see `crate::nodes::promote_on_contact`.
@@ -16,11 +18,16 @@ use std::time::{Duration, Instant};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use avalon_protocol::connectivity::PathType;
+
+use crate::node_http::NodeClient;
 use crate::outbound_policy::{OutboundPolicy, PolicyError};
 use crate::overlay_routing::canonical_base_url;
+use crate::peer_paths::PeerPaths;
 use crate::state::AppState;
 use crate::topology_limits::{client_ip, EndpointLimits, TopologyError};
 
@@ -48,6 +55,11 @@ pub struct ProbeResponse {
     pub samples_ms: Vec<f64>,
     pub min_ms: Option<f64>,
     pub median_ms: Option<f64>,
+    /// Kind of path the samples were taken over: `direct`, `traversed` (hole-punched) or
+    /// `relayed`. The worst path across samples; absent when none completed or the
+    /// connection kind was not known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathType>,
     /// `timeout`, `unreachable` or `bad_status` when a sample failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -86,22 +98,31 @@ pub fn median(sorted: &[f64]) -> Option<f64> {
     }
 }
 
-/// Takes `samples` sequential timings against `target` (already resolved
-/// through the policy).
+/// Takes `samples` sequential timings against `base_url` (already resolved through the
+/// policy), over HTTP or, for a `p2p://` URL, a libp2p stream. `peer` is the target's libp2p
+/// id, used to name the stream's path.
 pub async fn measure(
-    target: &crate::outbound_policy::CheckedTarget,
+    client: &NodeClient,
+    base_url: &str,
+    peer: Option<PeerId>,
+    paths: &PeerPaths,
     samples: u8,
-    timeout: Duration,
 ) -> ProbeResponse {
-    let client = target.node_client(timeout);
-    let url = format!("{}/nodes/status", target.base_url);
+    let url = format!("{base_url}/nodes/status");
     let mut samples_ms = Vec::new();
+    let mut path: Option<PathType> = None;
     let mut error = None;
     for _ in 0..samples {
         let started = Instant::now();
         match client.get(&url).send().await {
             Ok(r) if r.status().is_success() => {
                 samples_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+                // A stream response can come from a fallback after a failed HTTP dial.
+                let seen = paths.path_of(r.via_stream(), peer.as_ref());
+                path = match (path, seen) {
+                    (Some(a), Some(b)) => Some(a.worse(b)),
+                    (a, b) => a.or(b),
+                };
             }
             Ok(_) => {
                 error = Some("bad_status");
@@ -120,11 +141,12 @@ pub async fn measure(
     let mut sorted = samples_ms.clone();
     sorted.sort_by(|a, b| a.total_cmp(b));
     ProbeResponse {
-        target: target.base_url.clone(),
+        target: base_url.to_string(),
         ok: error.is_none(),
         min_ms: sorted.first().copied(),
         median_ms: median(&sorted),
         samples_ms,
+        path,
         error: error.map(str::to_string),
     }
 }
@@ -195,11 +217,24 @@ pub async fn probe(
     }
 
     let _permit = limits.in_flight.try_enter()?;
+    let libp2p_peer = known
+        .libp2p_peer_id
+        .as_deref()
+        .and_then(|id| id.parse::<PeerId>().ok());
     let checked = OutboundPolicy::from_env()
-        .check_base_url(&known.base_url)
+        .check_node_url(&NodeClient::url_for(&known))
         .await
         .map_err(policy_error)?;
-    let result = measure(&checked, samples, SAMPLE_TIMEOUT).await;
+    let peer = crate::node_http::parse_p2p_base(&checked.base_url).or(libp2p_peer);
+    let mut result = measure(
+        &checked.node_client(SAMPLE_TIMEOUT),
+        &checked.base_url,
+        peer,
+        state.peers.paths(),
+        samples,
+    )
+    .await;
+    result.target = known.base_url.trim_end_matches('/').to_string();
     if result.ok {
         crate::nodes::promote_on_contact(
             &state.peers,
@@ -232,11 +267,19 @@ mod tests {
         assert_eq!(median(&[1.0, 3.0]), Some(2.0));
     }
 
-    async fn target_for(server: &MockServer) -> crate::outbound_policy::CheckedTarget {
-        OutboundPolicy::new(true)
-            .check_base_url(&server.uri())
+    async fn run(base_url: &str, samples: u8, timeout: Duration) -> ProbeResponse {
+        let t = OutboundPolicy::new(true)
+            .check_base_url(base_url)
             .await
-            .unwrap()
+            .unwrap();
+        measure(
+            &t.node_client(timeout),
+            &t.base_url,
+            None,
+            &PeerPaths::default(),
+            samples,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -252,8 +295,13 @@ mod tests {
             .expect(3)
             .mount(&server)
             .await;
-        let r = measure(&target_for(&server).await, 3, Duration::from_secs(2)).await;
+        let r = run(&server.uri(), 3, Duration::from_secs(2)).await;
         assert!(r.ok);
+        assert_eq!(
+            r.path,
+            Some(PathType::Direct),
+            "an HTTP dial is a direct path"
+        );
         assert_eq!(r.samples_ms.len(), 3);
         assert!(r.samples_ms.iter().all(|ms| *ms >= 20.0));
         assert!(r.min_ms.unwrap() <= r.median_ms.unwrap());
@@ -271,10 +319,11 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let r = measure(&target_for(&server).await, 1, Duration::from_secs(2)).await;
+        let r = run(&server.uri(), 1, Duration::from_secs(2)).await;
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("bad_status"));
         assert!(r.samples_ms.is_empty());
+        assert_eq!(r.path, None, "no completed sample, no path");
     }
 
     #[tokio::test]
@@ -284,7 +333,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(500)))
             .mount(&server)
             .await;
-        let r = measure(&target_for(&server).await, 2, Duration::from_millis(100)).await;
+        let r = run(&server.uri(), 2, Duration::from_millis(100)).await;
         assert!(!r.ok);
         assert_eq!(r.error.as_deref(), Some("timeout"));
     }
@@ -294,11 +343,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
-        let t = OutboundPolicy::new(true)
-            .check_base_url(&format!("http://{addr}"))
-            .await
-            .unwrap();
-        let r = measure(&t, 1, Duration::from_secs(1)).await;
+        let r = run(&format!("http://{addr}"), 1, Duration::from_secs(1)).await;
         assert_eq!(r.error.as_deref(), Some("unreachable"));
     }
 

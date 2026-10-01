@@ -50,16 +50,23 @@ async fn probe_returns_timings_for_a_known_peer() {
     assert_eq!(r.status(), 200);
     let body: Value = r.json().await.unwrap();
     assert_eq!(body["ok"], true, "{body}");
+    assert_eq!(body["path"], "direct", "{body}");
     let samples = body["samples_ms"].as_array().unwrap();
     assert_eq!(samples.len(), 3);
     assert!(samples.iter().all(|v| v.as_f64().unwrap() > 0.0));
     assert!(body["min_ms"].as_f64().unwrap() <= body["median_ms"].as_f64().unwrap());
     let keys: Vec<&String> = body.as_object().unwrap().keys().collect();
     assert!(
-        keys.iter().all(
-            |k| ["target", "ok", "samples_ms", "min_ms", "median_ms", "error"]
-                .contains(&k.as_str())
-        ),
+        keys.iter().all(|k| [
+            "target",
+            "ok",
+            "samples_ms",
+            "min_ms",
+            "median_ms",
+            "path",
+            "error"
+        ]
+        .contains(&k.as_str())),
         "only timing fields may be returned: {keys:?}"
     );
 }
