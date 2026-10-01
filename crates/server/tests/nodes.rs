@@ -209,6 +209,70 @@ async fn the_response_names_the_responder_and_announced_libp2p_addrs_are_sanitiz
     assert_eq!(stored["libp2p_listen_addrs"], serde_json::json!([good]));
 }
 
+/// A fresh libp2p peer id in its base58 form.
+fn fresh_peer_id() -> String {
+    libp2p::PeerId::random().to_string()
+}
+
+async fn announce_as(
+    http: &reqwest::Client,
+    target_base: &str,
+    base_url: &str,
+    libp2p_peer_id: Option<&str>,
+) -> reqwest::Response {
+    require_isolated_target(target_base);
+    http.post(format!("{target_base}/nodes/announce"))
+        .json(&serde_json::json!({
+            "base_url": base_url,
+            "roles": ["combined"],
+            "protocol_version": avalon_server::version::PROTOCOL_VERSION,
+            "network_id": network_id(),
+            "libp2p_peer_id": libp2p_peer_id,
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
+        }))
+        .send()
+        .await
+        .expect("POST /nodes/announce failed — is `make start` running?")
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_p2p_announce_over_plain_http_is_answered_but_never_stored() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let id = fresh_peer_id();
+    let url = format!("p2p://{id}");
+
+    // No stream authenticated the caller as `id`, so nothing about it may land in the table.
+    let response = announce_as(&http, &base, &url, Some(&id)).await;
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body["coordinate"].is_object());
+    assert!(!list_peers(&http, &base)
+        .await
+        .iter()
+        .any(|p| p["base_url"] == url));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_p2p_announce_naming_another_or_no_libp2p_id_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let id = fresh_peer_id();
+    let url = format!("p2p://{id}");
+    for claimed in [None, Some(fresh_peer_id())] {
+        let response = announce_as(&http, &base, &url, claimed.as_deref()).await;
+        assert_eq!(response.status(), 400, "{claimed:?}");
+    }
+    let response = announce_as(&http, &base, "p2p://not-a-peer-id", Some(&id)).await;
+    assert_eq!(response.status(), 400);
+    assert!(!list_peers(&http, &base)
+        .await
+        .iter()
+        .any(|p| p["base_url"] == url));
+}
+
 #[tokio::test]
 #[ignore]
 async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {

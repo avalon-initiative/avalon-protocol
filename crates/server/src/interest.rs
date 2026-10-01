@@ -699,7 +699,7 @@ pub async fn verify_claim(
     if claim.identity_id != expected_identity {
         return None;
     }
-    if state.own_base_url.as_deref() != Some(claim.base_url.as_str()) {
+    if state.own_http_base_url() != Some(claim.base_url.as_str()) {
         return None;
     }
     Some(claim)

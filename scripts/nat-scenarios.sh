@@ -5,7 +5,7 @@
 # usage: sudo scripts/nat-scenarios.sh [scenario ...]     (default: all scenarios)
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
-#              outbound-only relay-failover
+#              outbound-only url-less-admission relay-failover
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -111,6 +111,20 @@ wait_status() {
   return 1
 }
 
+# wait_probe_path <ns> <ip> <target url> <path> [what]: waits until POST /nodes/probe from the
+# node to a known peer succeeds and reports that path type.
+wait_probe_path() {
+  local ns="$1" ip="$2" target="$3" want="$4" what="${5:-a $4 probe path}" i out=""
+  for i in $(seq 1 $((WAIT / 2))); do
+    out=$("$LAB" exec "$ns" -- curl -s -m 8 -H 'content-type: application/json' \
+      -d "{\"target\":\"$target\"}" "http://$ip:8080/nodes/probe")
+    if echo "$out" | jq -e ".ok == true and .path == \"$want\"" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  echo "    timed out after ${WAIT}s waiting for: $what; last probe: $out" >&2
+  return 1
+}
+
 # peer_id <node name>: the libp2p peer id a node logged at startup.
 peer_id() {
   local i id
@@ -176,7 +190,8 @@ punch_between() {
   if [ "$expect" = punched ]; then
     wait_status home1 10.1.0.2 '.connectivity == "nat_traversed" and (.punched_peers|length) == 1' \
       "home1 to hole punch to home2 ($type_a / $type_b)" || return 1
-    wait_status home1 10.1.0.2 '[.hole_punches[]|select(.succeeded)]|length >= 1' "a successful punch to be recorded"
+    wait_status home1 10.1.0.2 '[.hole_punches[]|select(.succeeded)]|length >= 1' "a successful punch to be recorded" || return 1
+    wait_probe_path home1 10.1.0.2 http://10.99.0.101:8080 direct "a probe of the relay to report a direct path"
   else
     # A punch that cannot work fails, is recorded, and leaves the relayed path in use. The node
     # with the lower peer id starts the punch, so either one may record it.
@@ -189,7 +204,8 @@ punch_between() {
     done
     [ -n "$failed" ] || { echo "    timed out after ${WAIT}s waiting for: a failed punch ($type_a / $type_b) to be recorded" >&2; return 1; }
     wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.punched_peers|length) == 0' \
-      "home1 to stay on the relay"
+      "home1 to stay on the relay" || return 1
+    wait_probe_path home1 10.1.0.2 http://10.99.0.101:8080 direct "a probe of the relay to report a direct path"
   fi
 }
 
@@ -218,6 +234,69 @@ scenario_outbound-only() {
   wait_status home1 10.1.0.2 \
     '.reachability == "private" and .connectivity == "outbound_only" and (.relay_reservations|length) == 0' \
     "a private node with no relay to report outbound_only"
+}
+
+# discover <ns> <ip>: that node's /nodes/discover.
+discover() { "$LAB" exec "$1" -- curl -s -m 5 "http://$2:8080/nodes/discover"; }
+
+# topology <ns> <ip>: that node's /nodes/topology.
+topology() { "$LAB" exec "$1" -- curl -s -m 5 "http://$2:8080/nodes/topology"; }
+
+# wait_json <what> <jq filter> <cmd...>: waits until the filter is true on the command's output.
+wait_json() {
+  local what="$1" filter="$2" i
+  shift 2
+  for i in $(seq 1 $((WAIT / 2))); do
+    if "$@" | jq -e "$filter" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  echo "    timed out after ${WAIT}s waiting for: $what" >&2
+  "$@" | jq -c '(.peers // .known // [])[0:6] | map({base_url, connectivity})' >&2
+  return 1
+}
+
+# A node behind a no-inbound NAT with no AVALON_NODE_URL announces as p2p://<peer id>. With
+# reachability verification on, its neighbors admit it from the authenticated stream and
+# describe it; an announce for the same id over plain HTTP stores nothing.
+scenario_url-less-admission() {
+  "$LAB" up home1 no-inbound >/dev/null || return 1
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null || return 1
+  local verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001 "$verify"
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080 "$verify"
+  ready relay 10.99.0.101 && ready seed 10.99.0.102 || return 1
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080
+  local id url
+  wait_status home1 10.1.0.2 '.connectivity == "outbound_only"' "home1 to report outbound_only" || return 1
+  id=$(status home1 10.1.0.2 | jq -r .libp2p_peer_id)
+  url="p2p://$id"
+
+  local entry=".peers[] | select(.base_url == \"$url\" and .libp2p_peer_id == \"$id\" and .connectivity == \"outbound_only\")"
+  wait_json "the seed to list home1 in /nodes/discover" "[$entry] | length == 1" discover seed 10.99.0.102 || return 1
+  wait_json "the relay to list home1 in /nodes/discover" "[$entry] | length == 1" discover relay 10.99.0.101 || return 1
+  wait_json "the seed's topology to describe home1" \
+    "[(.known + .neighbors)[] | select(.base_url == \"$url\" and .connectivity == \"outbound_only\")] | length == 1" \
+    topology seed 10.99.0.102 || return 1
+  wait_json "home1's topology to name itself and both neighbors" \
+    ".self.base_url == \"$url\" and (.neighbors | length) >= 2" topology home1 10.1.0.2 || return 1
+
+  echo "    $url listed by seed: $(discover seed 10.99.0.102 | jq "[$entry] | length")," \
+    "relay: $(discover relay 10.99.0.101 | jq "[$entry] | length")," \
+    "home1 neighbors: $(topology home1 10.1.0.2 | jq '.neighbors | length')"
+
+  # Claiming the relay's id over plain HTTP proves nothing, so nothing is stored for it.
+  local other
+  other=$(status relay 10.99.0.101 | jq -r .libp2p_peer_id)
+  "$LAB" exec seed -- curl -s -m 5 -o /dev/null -X POST "http://10.99.0.102:8080/nodes/announce" \
+    -H 'content-type: application/json' \
+    -d "{\"base_url\":\"p2p://$other\",\"libp2p_peer_id\":\"$other\",\"roles\":[\"combined\"],\"protocol_version\":\"$(status seed 10.99.0.102 | jq -r .protocol_version)\",\"network_id\":\"avalon-dev-lan\",\"coordinate\":{\"vector\":[0,0,0],\"height\":0.01,\"error\":1.0}}"
+  sleep 2
+  if discover seed 10.99.0.102 | jq -e "[.peers[] | select(.base_url == \"p2p://$other\")] | length > 0" >/dev/null; then
+    echo "    an unauthenticated p2p:// announce was stored" >&2
+    return 1
+  fi
 }
 
 # Losing the relay a node reserved on moves it to a second relay.
@@ -256,7 +335,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only relay-failover"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission relay-failover"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 

@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use avalon_protocol::connectivity::PathType;
+
 use crate::outbound_policy::OutboundPolicy;
 use crate::overlay_routing::{canonical_base_url, next_hop, NextHop, NoRouteReason, OverlayNode};
 use crate::state::AppState;
@@ -90,6 +92,12 @@ pub struct TraceHop {
     /// last hop.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub to_next_ms: Option<f64>,
+    /// Kind of path this node's request to the next hop took: `direct`, `traversed`
+    /// (hole-punched) or `relayed`. A leg that touched a relay is always `relayed`, and its
+    /// `to_next_ms` includes the relay's hop. Absent at the last hop, or when the
+    /// connection kind was not known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path_to_next: Option<PathType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -152,7 +160,8 @@ pub fn normalize(req: TraceRequest) -> Result<NormalizedTrace, TopologyError> {
 /// What one forward attempt produced.
 #[derive(Debug)]
 pub enum ForwardOutcome {
-    Response(TraceResponse),
+    /// The downstream answer and the path type that carried it, when known.
+    Response(TraceResponse, Option<PathType>),
     Timeout,
     Unreachable(&'static str),
 }
@@ -198,13 +207,16 @@ pub async fn run_trace<F: Forwarder>(
     started: Instant,
 ) -> TraceResponse {
     let my_url = canonical_base_url(&ctx.me.base_url);
-    let hop = |processing: Duration, to_next: Option<Duration>| TraceHop {
-        index: 0,
-        base_url: ctx.me.base_url.clone(),
-        roles: ctx.roles.clone(),
-        protocol_version: ctx.protocol_version.clone(),
-        processing_ms: ms(processing),
-        to_next_ms: to_next.map(ms),
+    let hop = |processing: Duration, to_next: Option<Duration>, path_to_next: Option<PathType>| {
+        TraceHop {
+            index: 0,
+            base_url: ctx.me.base_url.clone(),
+            roles: ctx.roles.clone(),
+            protocol_version: ctx.protocol_version.clone(),
+            processing_ms: ms(processing),
+            to_next_ms: to_next.map(ms),
+            path_to_next,
+        }
     };
     let finish = |reached: bool,
                   reason: Option<StopReason>,
@@ -229,18 +241,18 @@ pub async fn run_trace<F: Forwarder>(
             false,
             Some(StopReason::Loop),
             None,
-            vec![hop(started.elapsed(), None)],
+            vec![hop(started.elapsed(), None, None)],
         );
     }
     if canonical_base_url(&ctx.target.base_url) == my_url {
-        return finish(true, None, None, vec![hop(started.elapsed(), None)]);
+        return finish(true, None, None, vec![hop(started.elapsed(), None, None)]);
     }
     if req.ttl == 0 {
         return finish(
             false,
             Some(StopReason::Ttl),
             None,
-            vec![hop(started.elapsed(), None)],
+            vec![hop(started.elapsed(), None, None)],
         );
     }
 
@@ -253,7 +265,7 @@ pub async fn run_trace<F: Forwarder>(
                 false,
                 Some(StopReason::NoRoute),
                 Some(no_route_detail(&reason).to_string()),
-                vec![hop(started.elapsed(), None)],
+                vec![hop(started.elapsed(), None, None)],
             );
         }
     };
@@ -265,7 +277,7 @@ pub async fn run_trace<F: Forwarder>(
             false,
             Some(StopReason::Timeout),
             None,
-            vec![hop(started.elapsed(), None)],
+            vec![hop(started.elapsed(), None, None)],
         );
     }
     let mut visited_out: Vec<String> = visited.into_iter().collect();
@@ -283,9 +295,9 @@ pub async fn run_trace<F: Forwarder>(
     let outcome = forwarder.forward(&next, &forward_request, remaining).await;
     let waited = sent.elapsed();
     match outcome {
-        ForwardOutcome::Response(down) => {
+        ForwardOutcome::Response(down, path) => {
             let leg = waited.saturating_sub(Duration::from_secs_f64(down.total_ms / 1000.0));
-            let mut hops = vec![hop(processing, Some(leg))];
+            let mut hops = vec![hop(processing, Some(leg), path)];
             hops.extend(down.hops);
             finish(down.reached, down.stopped_reason, down.detail, hops)
         }
@@ -293,13 +305,13 @@ pub async fn run_trace<F: Forwarder>(
             false,
             Some(StopReason::Timeout),
             None,
-            vec![hop(processing, Some(waited))],
+            vec![hop(processing, Some(waited), None)],
         ),
         ForwardOutcome::Unreachable(why) => finish(
             false,
             Some(StopReason::TargetUnreachable),
             Some(why.to_string()),
-            vec![hop(processing, Some(waited))],
+            vec![hop(processing, Some(waited), None)],
         ),
     }
 }
@@ -355,6 +367,13 @@ impl Forwarder for HttpForwarder {
             Some(peers) => peers.transport_url(&neighbor.base_url),
             None => neighbor.base_url.clone(),
         };
+        let paths = self.peers.as_ref().map(|p| p.paths().clone());
+        let libp2p_peer = crate::node_http::parse_p2p_base(&url).or_else(|| {
+            neighbor
+                .libp2p_peer_id
+                .as_deref()
+                .and_then(|id| id.parse().ok())
+        });
         let body = serde_json::to_vec(request).unwrap_or_default();
         let trace_id = request.trace_id.unwrap_or_default();
         let max_hops = request.ttl.unwrap_or(0) as usize + 1;
@@ -376,6 +395,9 @@ impl Forwarder for HttpForwarder {
                     Err(e) if e.is_timeout() => return ForwardOutcome::Timeout,
                     Err(_) => return ForwardOutcome::Unreachable("connect"),
                 };
+                let path = paths
+                    .unwrap_or_default()
+                    .path_of(response.via_stream(), libp2p_peer.as_ref());
                 match response.status() {
                     s if s.is_success() => {}
                     StatusCode::TOO_MANY_REQUESTS => {
@@ -401,7 +423,7 @@ impl Forwarder for HttpForwarder {
                     .ok()
                     .and_then(|r| sanitize(r, trace_id, max_hops))
                 {
-                    Some(r) => ForwardOutcome::Response(r),
+                    Some(r) => ForwardOutcome::Response(r, path),
                     None => ForwardOutcome::Unreachable("bad_response"),
                 }
             };
@@ -455,7 +477,7 @@ pub async fn trace(
         TopologyError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "node_url_not_configured",
-            "this node has no AVALON_NODE_URL and cannot identify itself in a trace",
+            "this node has neither AVALON_NODE_URL nor a libp2p identity and cannot identify itself in a trace",
         )
     })?;
     let _permit = limits.in_flight.try_enter()?;
@@ -546,6 +568,7 @@ mod tests {
             protocol_version: "1.0.0".into(),
             processing_ms: 1.0,
             to_next_ms: to_next,
+            path_to_next: None,
         }
     }
 
@@ -589,7 +612,7 @@ mod tests {
                 .remove(&canonical_base_url(&neighbor.base_url))
                 .unwrap_or(ForwardOutcome::Unreachable("connect"));
             async move {
-                if let ForwardOutcome::Response(_) = &out {
+                if let ForwardOutcome::Response(..) = &out {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
                 out
@@ -598,15 +621,79 @@ mod tests {
     }
 
     fn down(hops: Vec<TraceHop>, reached: bool, reason: Option<StopReason>) -> ForwardOutcome {
-        ForwardOutcome::Response(TraceResponse {
-            trace_id: Uuid::nil(),
-            target: "http://c".into(),
-            reached,
-            stopped_reason: reason,
-            detail: None,
-            total_ms: 2.0,
-            hops,
+        down_via(hops, reached, reason, None)
+    }
+
+    fn down_via(
+        hops: Vec<TraceHop>,
+        reached: bool,
+        reason: Option<StopReason>,
+        path: Option<PathType>,
+    ) -> ForwardOutcome {
+        ForwardOutcome::Response(
+            TraceResponse {
+                trace_id: Uuid::nil(),
+                target: "http://c".into(),
+                reached,
+                stopped_reason: reason,
+                detail: None,
+                total_ms: 2.0,
+                hops,
+            },
+            path,
+        )
+    }
+
+    #[tokio::test]
+    async fn each_leg_carries_the_path_its_forward_took() {
+        for path in [PathType::Direct, PathType::Traversed, PathType::Relayed] {
+            let mid = forwarding_neighbor("http://a", "http://c");
+            let c = ctx("http://a", "http://c", &[&mid]);
+            let downstream = vec![hop_of(&mid, None)];
+            let f = Fake::with(&mid, down_via(downstream, true, None, Some(path)));
+            let r = run_trace(
+                &c,
+                &f,
+                &req("http://c", 5, &[], DEFAULT_BUDGET),
+                Instant::now(),
+            )
+            .await;
+            assert_eq!(r.hops[0].path_to_next, Some(path));
+            assert_eq!(r.hops[1].path_to_next, None, "the last hop has no leg");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_leg_claims_no_path() {
+        let mid = forwarding_neighbor("http://a", "http://c");
+        let c = ctx("http://a", "http://c", &[&mid]);
+        let f = Fake::with(&mid, ForwardOutcome::Timeout);
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://c", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert_eq!(r.hops.len(), 1);
+        assert_eq!(r.hops[0].path_to_next, None);
+    }
+
+    #[test]
+    fn path_to_next_is_additive_on_the_wire() {
+        let old: TraceHop = serde_json::from_str(
+            r#"{"index":0,"base_url":"http://a","roles":[],"protocol_version":"1","processing_ms":1.0}"#,
+        )
+        .unwrap();
+        assert_eq!(old.path_to_next, None);
+        let json = serde_json::to_value(TraceHop {
+            path_to_next: Some(PathType::Relayed),
+            ..hop_of("http://a", Some(1.0))
         })
+        .unwrap();
+        assert_eq!(json["path_to_next"], "relayed");
+        let none = serde_json::to_value(hop_of("http://a", None)).unwrap();
+        assert!(none.get("path_to_next").is_none());
     }
 
     #[tokio::test]
@@ -922,7 +1009,7 @@ mod tests {
                 .await;
             assert!(matches!(
                 outcome(&server, true).await,
-                ForwardOutcome::Response(r) if r.reached && r.hops.len() == 1
+                ForwardOutcome::Response(r, _) if r.reached && r.hops.len() == 1
             ));
         }
 

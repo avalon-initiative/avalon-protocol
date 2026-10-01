@@ -68,6 +68,7 @@ use crate::node_http::{
 };
 use crate::nodes::{PeerInfo, PeerTable};
 use crate::outbound_policy::OutboundPolicy;
+use crate::peer_paths::PeerPaths;
 use crate::reachability::{
     peer_ip_allowed, AutonatSettings, HolePunchOutcome, Reachability, ReachabilityHandle,
 };
@@ -974,6 +975,27 @@ fn track_reachability(
     }
 }
 
+/// Keeps the per-peer connection kinds current from connection and hole-punch events.
+fn track_peer_paths(paths: &PeerPaths, event: &SwarmEvent<DhtBehaviourEvent>) {
+    match event {
+        SwarmEvent::ConnectionEstablished {
+            peer_id,
+            connection_id,
+            endpoint,
+            ..
+        } => paths.connection_opened(*peer_id, *connection_id, endpoint.is_relayed()),
+        SwarmEvent::ConnectionClosed { connection_id, .. } => {
+            paths.connection_closed(*connection_id)
+        }
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(outcome)) => {
+            if let Ok(connection) = &outcome.result {
+                paths.hole_punched(*connection);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Records each hole-punch outcome and which punched connections are still open. A failed
 /// punch changes nothing: the relayed connection it started from stays in use.
 fn track_hole_punch(
@@ -1263,6 +1285,7 @@ async fn run_worker(
             event = swarm.select_next_some() => {
                 track_reachability(&mut swarm, &reachability, &event);
                 track_hole_punch(&mut punched, &reachability, &event);
+                track_peer_paths(peers.paths(), &event);
                 if handle_relay_event(&mut swarm, &mut relay, &reachability, &event) {
                     continue;
                 }
@@ -1595,6 +1618,59 @@ mod tests {
         };
         assert!(flushable_connection(&established("/ip4/203.0.113.7/tcp/4001")).is_some());
         assert!(flushable_connection(&established("/ip4/169.254.169.254/tcp/4001")).is_none());
+    }
+
+    fn path_event_endpoint(addr: &str) -> libp2p::core::ConnectedPoint {
+        libp2p::core::ConnectedPoint::Dialer {
+            address: addr.parse().unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::Reuse,
+        }
+    }
+
+    fn opened(peer: PeerId, id: usize, addr: &str) -> SwarmEvent<DhtBehaviourEvent> {
+        SwarmEvent::ConnectionEstablished {
+            peer_id: peer,
+            connection_id: ConnectionId::new_unchecked(id),
+            endpoint: path_event_endpoint(addr),
+            num_established: std::num::NonZeroU32::new(1).unwrap(),
+            concurrent_dial_errors: None,
+            established_in: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn worker_events_classify_direct_relayed_and_punched_connections() {
+        use avalon_protocol::connectivity::PathType;
+        let paths = PeerPaths::default();
+        let (direct, relayed, punched) = (sample_peer_id(), sample_peer_id(), sample_peer_id());
+        let relay = sample_peer_id();
+        track_peer_paths(&paths, &opened(direct, 1, "/ip4/203.0.113.7/tcp/4001"));
+        let circuit = format!("/ip4/198.51.100.9/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{relayed}");
+        track_peer_paths(&paths, &opened(relayed, 2, &circuit));
+        track_peer_paths(&paths, &opened(punched, 3, "/ip4/203.0.113.8/tcp/4001"));
+        track_peer_paths(
+            &paths,
+            &SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(dcutr::Event {
+                remote_peer_id: punched,
+                result: Ok(ConnectionId::new_unchecked(3)),
+            })),
+        );
+        assert_eq!(paths.path(&direct), Some(PathType::Direct));
+        assert_eq!(paths.path(&relayed), Some(PathType::Relayed));
+        assert_eq!(paths.path(&punched), Some(PathType::Traversed));
+
+        track_peer_paths(
+            &paths,
+            &SwarmEvent::ConnectionClosed {
+                peer_id: relayed,
+                connection_id: ConnectionId::new_unchecked(2),
+                endpoint: path_event_endpoint(&circuit),
+                num_established: 0,
+                cause: None,
+            },
+        );
+        assert_eq!(paths.path(&relayed), None);
     }
 
     #[test]

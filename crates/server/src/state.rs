@@ -330,3 +330,28 @@ pub struct AppState {
     /// possession of its witness key in announce responses.
     pub own_witness: Option<crate::nodes::WitnessSigner>,
 }
+
+impl AppState {
+    /// This node's own http(s) URL; `None` when it is absent or only the `p2p://` announce
+    /// identity, which browsers, SDKs and signed grants must never be handed.
+    pub fn own_http_base_url(&self) -> Option<&str> {
+        http_only(self.own_base_url.as_deref())
+    }
+}
+
+/// `url` unless it is a `p2p://` identity.
+pub fn http_only(url: Option<&str>) -> Option<&str> {
+    url.filter(|u| !u.starts_with("p2p://"))
+}
+
+#[cfg(test)]
+mod own_url_tests {
+    use super::http_only;
+
+    #[test]
+    fn a_p2p_only_node_has_no_http_url_to_hand_out() {
+        assert_eq!(http_only(Some("p2p://12D3KooWabc")), None);
+        assert_eq!(http_only(None), None);
+        assert_eq!(http_only(Some("https://a.test")), Some("https://a.test"));
+    }
+}

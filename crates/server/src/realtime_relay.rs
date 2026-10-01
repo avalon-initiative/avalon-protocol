@@ -120,10 +120,14 @@ fn relay_client() -> &'static crate::node_http::NodeClient {
 /// [`RelayEvent::Presence`] and as the fallback for every event type on a
 /// node with no DHT identity — see [`relay_targets`].
 fn full_peer_loop_targets(state: &AppState) -> Vec<String> {
-    state
-        .peers
-        .list_all()
+    realtime_targets(state.peers.list_all())
+}
+
+/// Realtime-capable peers by their roles; a `p2p://` entry's self-reported roles prove nothing.
+fn realtime_targets(peers: Vec<crate::nodes::PeerInfo>) -> Vec<String> {
+    peers
         .into_iter()
+        .filter(|peer| !crate::nodes::is_p2p_url(&peer.base_url))
         .filter(|peer| advertises_realtime_relay_role(&peer.roles))
         .map(|peer| crate::node_http::NodeClient::url_for(&peer))
         .collect()
@@ -375,5 +379,26 @@ mod tests {
             interest_scope_for(&event),
             Some(InterestScope::Conversation(conversation_id))
         );
+    }
+    #[test]
+    fn a_p2p_entry_claiming_a_realtime_role_gets_no_relay_traffic() {
+        let id = libp2p::PeerId::random();
+        let entry = |url: String| crate::nodes::PeerInfo {
+            base_url: url,
+            roles: vec!["combined".into()],
+            protocol_version: "0.1.0".into(),
+            network_id: "n".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(id.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: true,
+        };
+        let targets = realtime_targets(vec![
+            entry(crate::node_http::p2p_base_url(&id)),
+            entry("http://real.test".into()),
+        ]);
+        assert_eq!(targets, vec!["http://real.test".to_string()]);
     }
 }
