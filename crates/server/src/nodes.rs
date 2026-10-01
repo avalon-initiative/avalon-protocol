@@ -305,6 +305,7 @@ pub struct PeerTable {
     unverified: Arc<RwLock<HashMap<String, PeerInfo>>>,
     neighbors: crate::neighbors::NeighborTable,
     paths: crate::peer_paths::PeerPaths,
+    transport: crate::transport_stats::TransportStats,
 }
 
 impl PeerTable {
@@ -315,6 +316,11 @@ impl PeerTable {
     /// The kind of libp2p connection held to each peer, written by the DHT worker.
     pub fn paths(&self) -> &crate::peer_paths::PeerPaths {
         &self.paths
+    }
+
+    /// Recent http/stream outcomes per peer, written by [`crate::node_http::NodeClient`].
+    pub fn transport_stats(&self) -> &crate::transport_stats::TransportStats {
+        &self.transport
     }
 
     /// The announce worker's active set and per-neighbor round-trip stats.
@@ -456,8 +462,19 @@ impl PeerTable {
         let peers = self.peers.read().expect("peer table lock poisoned");
         peers
             .get(base_url)
-            .map(crate::node_http::NodeClient::url_for)
+            .map(|p| crate::node_http::NodeClient::url_for_with(p, Some(&self.transport)))
             .unwrap_or_else(|| base_url.to_string())
+    }
+
+    /// The usable http(s) base URL of the bound entry holding libp2p id `peer`, if any.
+    pub fn http_url_for_libp2p_peer(&self, peer: &libp2p::PeerId) -> Option<String> {
+        let id = peer.to_string();
+        let peers = self.peers.read().expect("peer table lock poisoned");
+        peers
+            .values()
+            .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
+            .find(|p| crate::outbound_policy::OutboundPolicy::parse_base_url(&p.base_url).is_ok())
+            .map(|p| p.base_url.clone())
     }
 
     /// `p2p://<id>` for the known peer `base_url` when its id is bound (or the URL is already
@@ -2815,12 +2832,14 @@ async fn announce_to(
     peer_base_url: &str,
     request: &AnnounceRequest,
 ) -> Result<AnnounceResponse, String> {
-    let response = client
+    let mut post = client
         .post(format!("{peer_base_url}/nodes/announce"))
-        .json(request)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .json(request);
+    // A `p2p://` announcer is only admitted over a stream, so it never changes transport here.
+    if request.base_url.starts_with("p2p://") {
+        post = post.pinned();
+    }
+    let response = post.send().await.map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));

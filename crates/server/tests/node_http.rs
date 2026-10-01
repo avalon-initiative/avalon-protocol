@@ -417,7 +417,8 @@ async fn the_connection_limit_refuses_a_second_peer() {
         .await
         .err()
         .expect("b is at its connection limit");
-    assert!(matches!(err, NodeHttpError::Stream { .. }), "{err}");
+    // The refused stream falls over to b's URL, which does not resolve either.
+    assert!(err.is_connect(), "{err}");
 }
 
 #[tokio::test]
