@@ -477,7 +477,7 @@ pub async fn trace(
         TopologyError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "node_url_not_configured",
-            "this node has no AVALON_NODE_URL and cannot identify itself in a trace",
+            "this node has neither AVALON_NODE_URL nor a libp2p identity and cannot identify itself in a trace",
         )
     })?;
     let _permit = limits.in_flight.try_enter()?;

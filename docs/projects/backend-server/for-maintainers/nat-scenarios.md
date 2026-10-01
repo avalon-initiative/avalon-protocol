@@ -39,6 +39,7 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `punch-port-restricted` | Two nodes behind port-restricted NATs, bootstrapped from the seed only, find each other through the relay and upgrade to a direct connection: `nat_traversed`, `punched_peers` and a successful `hole_punches` entry, and `POST /nodes/probe` of the relay from the NATed node reports `path: direct`. | `punch-port-restricted` |
 | `punch-symmetric-fallback` | The same with symmetric NATs. The punch fails, the failure is recorded, and both nodes keep reporting `relayed`, and the same probe reports `path: direct`. | no |
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
+| `url-less-admission` | A node behind a no-inbound NAT with no `AVALON_NODE_URL`, and reachability verification on everywhere, announces as `p2p://<peer id>`: both neighbors list it in `/nodes/discover`, the seed's topology describes it, and a `p2p://` announce for the relay's id over plain HTTP stores nothing. | no |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
 
 A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt and is not yet run in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
@@ -57,9 +58,12 @@ is reachable only through a relay, then hole punching makes up to three attempts
   dial-back from an address the node has never contacted.
 - **The lab's full-cone NAT forwards every inbound port**, so it is reachable by any peer. It is
   more permissive than a real full-cone NAT, see the [NAT lab](./nat-lab.md) notes.
-- The suite runs nodes that skip the announce reachability check, because a node behind a NAT
-  cannot pass an inbound HTTP fetch. A node with no reachable URL is not yet admitted by
-  default, so nodes behind a NAT are found through gossip and confirmed over libp2p.
+- Most scenarios run nodes that skip the announce reachability check, because a node behind a NAT
+  cannot pass an inbound HTTP fetch. A node with a URL nobody can reach is not admitted by
+  default, so it is found through gossip and confirmed over libp2p. A node with no
+  `AVALON_NODE_URL` announces as `p2p://<peer id>` and is admitted with the check on, see
+  `url-less-admission`. Such a node cannot call the write routes `/nodes/relay`,
+  `/nodes/replicate-chat` and `/mirror/notify` on its neighbors; the scenario does not cover them.
 
 ## Live drill
 

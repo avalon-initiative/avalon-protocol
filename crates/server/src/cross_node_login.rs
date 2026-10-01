@@ -89,7 +89,7 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
 /// `own_base_url` can't participate in cross-node login at all (there'd be
 /// nothing for a remote approver to bind their approval to).
 fn own_base_url(state: &AppState) -> Result<&str, AppError> {
-    state.own_base_url.as_deref().ok_or(AppError::Unauthorized)
+    state.own_http_base_url().ok_or(AppError::Unauthorized)
 }
 
 #[derive(Serialize, ToSchema)]
@@ -241,7 +241,7 @@ async fn resolve_requester_verification(state: &AppState) -> (bool, Option<Strin
         return (false, None);
     }
 
-    let Some(base_url) = state.own_base_url.as_deref() else {
+    let Some(base_url) = state.own_http_base_url() else {
         return (false, None);
     };
     let is_anchor = is_verified_seed_node(

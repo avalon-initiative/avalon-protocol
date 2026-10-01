@@ -214,7 +214,7 @@ every setting. The minimum, with the defaults for everything else:
 | `AVALON_NODE_HTTP_BUFFER_BUDGET_BYTES` | Request-body bytes buffered at once across all stream requests; a request that cannot get its share within 2 seconds is answered 429 unread. Default 64 MiB, at most 1 GiB. |
 | `AVALON_LIBP2P_MAX_CONNECTIONS`, `AVALON_LIBP2P_MAX_CONNECTIONS_PER_PEER`, `AVALON_LIBP2P_MAX_PENDING_INCOMING` | Swarm connection limits: established in total and per peer, and incoming connections still handshaking. Defaults `512`, `4` and `64`. |
 | `AVALON_DCUTR_ENABLED` | Try to replace a relayed connection with a direct one by hole punching. Default `true`. A failed attempt leaves the relayed connection in use. |
-| `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it the node does not announce itself. |
+| `AVALON_NODE_URL` | The public base URL other nodes use to reach this one. Without it a node running libp2p announces itself as `p2p://<its peer id>` and is reached only over libp2p streams (see "Running without a public URL" below); with neither it does not announce itself. |
 | `AVALON_WEBAUTHN_RP_ID`, `AVALON_WEBAUTHN_ORIGIN` | Relying-party id and origin for passkey login. Required unless the node is a replica. |
 
 Keys are generated on first start and stored under `AVALON_DATA_DIR/keys/`;
@@ -335,6 +335,25 @@ otherwise, so a seed node must set it. `GET /nodes/status` shows the result as
 `reachability` (`unknown`, `public` or `private`) and `confirmed_external_addrs`. Nodes
 behind NAT with no forwarded port report `private` and cannot yet take part as
 dialable peers; NAT traversal is planned.
+
+## Running without a public URL
+
+A node with no `AVALON_NODE_URL` and libp2p enabled announces itself as `p2p://<its libp2p peer id>`.
+Its neighbors admit it only when the announce arrives on a libp2p stream authenticated as that same
+peer id, so `AVALON_ANNOUNCE_VERIFY_REACHABILITY` stays on and nothing is dialed back. An announce
+that names a `p2p://` URL over plain HTTP, or on a stream authenticated as another peer, stores
+nothing. Peers reach the node over the connection it opened, a relay circuit or a hole-punched
+connection; the node's own outbound requests (mirror polling, settlement submit) are unchanged.
+It shows in `/nodes/peers`, `/nodes/discover` and `/nodes/topology` under its `p2p://` URL,
+usually with `connectivity` `relayed` or `outbound_only`. The node needs one reachable seed in
+`AVALON_BOOTSTRAP_PEERS` to start from.
+
+Limitations: a `p2p://` peer proves only that it holds its key, so it cannot call the routes that
+inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat`,
+`/mirror/notify`); neighbors refuse its pushes there until it has real credentials, and it
+receives no chat or mirror pushes of its own because its URL is not advertised for interest
+lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
+evicted first. The node's `p2p://` URL is never given to browsers or used in signed grants.
 
 ## Running under systemd
 

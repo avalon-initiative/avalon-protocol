@@ -72,10 +72,14 @@ fn advertises_storage_role(roles: &[String]) -> bool {
 /// single-node-deployment invariant (nothing to replicate to yet is not
 /// an error).
 fn replication_target(state: &AppState) -> Option<String> {
-    state
-        .peers
-        .list_all()
+    replication_target_from(state.peers.list_all())
+}
+
+/// A `p2p://` entry's self-reported roles prove nothing, so it is never a target.
+fn replication_target_from(peers: Vec<crate::nodes::PeerInfo>) -> Option<String> {
+    peers
         .into_iter()
+        .filter(|peer| !crate::nodes::is_p2p_url(&peer.base_url))
         .filter(|peer| advertises_storage_role(&peer.roles))
         .min_by(|a, b| a.base_url.cmp(&b.base_url))
         .map(|peer| crate::node_http::NodeClient::url_for(&peer))
@@ -199,5 +203,28 @@ mod tests {
     #[test]
     fn empty_roles_is_not_eligible() {
         assert!(!advertises_storage_role(&[]));
+    }
+    #[test]
+    fn a_p2p_entry_claiming_a_storage_role_is_never_the_replication_target() {
+        let id = libp2p::PeerId::random();
+        let entry = |url: String| crate::nodes::PeerInfo {
+            base_url: url,
+            roles: vec!["combined".into()],
+            protocol_version: "0.1.0".into(),
+            network_id: "n".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: false,
+        };
+        // "http://z" sorts after "p2p://": the p2p entry would win without the filter.
+        let p2p = entry(crate::node_http::p2p_base_url(&id));
+        assert_eq!(replication_target_from(vec![p2p.clone()]), None);
+        assert_eq!(
+            replication_target_from(vec![p2p, entry("http://z.test".into())]),
+            Some("http://z.test".to_string())
+        );
     }
 }

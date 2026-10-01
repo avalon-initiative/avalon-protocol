@@ -52,7 +52,8 @@ pub const ALLOWED_EXACT: &[&str] = &[
 ];
 
 /// Routes that write or inject data without their own credential. Over a stream they are
-/// reserved for peers bound in the peer table; the rest stay open to any authenticated peer id.
+/// reserved for peers whose http URL answered `/nodes/status` with their id (not `p2p://`
+/// self-announcers); the rest stay open to any authenticated peer id.
 pub const BOUND_ONLY_PATHS: &[&str] = &["/nodes/relay", "/nodes/replicate-chat", "/mirror/notify"];
 
 /// Whether `path_and_query` names a route in [`BOUND_ONLY_PATHS`].
@@ -83,8 +84,9 @@ pub fn path_allowed(path_and_query: &str) -> bool {
 pub const SHARED_PEER_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1)), 0);
 
-/// The address handlers see for `peer`: its own stable unique-local address if it is a bound
-/// peer-table entry (so the table cap bounds the buckets), else [`SHARED_PEER_ADDR`].
+/// The address handlers see for `peer`: its own stable unique-local address if an http-verified
+/// peer-table entry names it (the table cap bounds the buckets), else [`SHARED_PEER_ADDR`]; a
+/// self-announced `p2p://` entry is free to create, so it stays in the shared bucket.
 pub fn synthetic_addr(peer: &PeerId, bound: bool) -> SocketAddr {
     if !bound {
         return SHARED_PEER_ADDR;
@@ -507,5 +509,56 @@ mod tests {
         let mut r = req();
         r.grant.overloaded = true;
         assert_eq!(svc.admit(PeerId::random(), &r).err().unwrap().status, 429);
+    }
+    fn p2p_only_table(peer: &PeerId) -> PeerTable {
+        let table = PeerTable::new();
+        table.upsert(crate::nodes::PeerInfo {
+            base_url: crate::node_http::p2p_base_url(peer),
+            ..bound_table(peer).list_all().remove(0)
+        });
+        table
+    }
+
+    #[tokio::test]
+    async fn a_self_announced_p2p_peer_cannot_call_any_write_route_over_a_stream() {
+        let stranger = PeerId::random();
+        let slot = RouterSlot::new();
+        let mut router = Router::new();
+        for p in BOUND_ONLY_PATHS {
+            router = router.route(p, axum::routing::post(|| async { "ok" }));
+        }
+        slot.set(router);
+        let post = |path: &str| NodeHttpRequest {
+            method: "POST".into(),
+            path_and_query: path.into(),
+            headers: vec![],
+            body: vec![],
+            grant: Default::default(),
+        };
+        // Admitted by its own announce, or bound on contact after gossip.
+        let announced = p2p_only_table(&stranger);
+        let gossiped = PeerTable::new();
+        let mut pooled = announced.list_all().remove(0);
+        pooled.identity_bound = false;
+        gossiped.insert_unverified(pooled);
+        gossiped.promote_unverified_by_libp2p_peer(&stranger.to_string(), 10);
+        assert!(gossiped.list_all()[0].identity_bound);
+
+        for table in [announced, gossiped] {
+            let svc = InboundService::new(slot.clone(), NodeHttpSettings::default(), table.clone());
+            for path in BOUND_ONLY_PATHS {
+                assert_eq!(svc.handle(stranger, post(path)).await.status, 403, "{path}");
+            }
+            assert_eq!(
+                synthetic_addr(&stranger, table.is_bound_libp2p_peer(&stranger)),
+                SHARED_PEER_ADDR
+            );
+        }
+        // An http-verified bound peer still gets through.
+        let verified = PeerId::random();
+        let svc = InboundService::new(slot, NodeHttpSettings::default(), bound_table(&verified));
+        for path in BOUND_ONLY_PATHS {
+            assert_eq!(svc.handle(verified, post(path)).await.status, 200, "{path}");
+        }
     }
 }

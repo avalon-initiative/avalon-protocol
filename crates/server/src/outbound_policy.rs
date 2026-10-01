@@ -95,6 +95,15 @@ impl NodeTarget {
     }
 }
 
+impl From<CheckedTarget> for NodeTarget {
+    fn from(checked: CheckedTarget) -> Self {
+        Self {
+            base_url: checked.base_url.clone(),
+            http: Some(checked),
+        }
+    }
+}
+
 impl CheckedTarget {
     /// [`Self::client`] as a [`crate::node_http::NodeClient`].
     pub fn node_client(&self, timeout: Duration) -> crate::node_http::NodeClient {
@@ -252,11 +261,7 @@ impl OutboundPolicy {
                 http: None,
             });
         }
-        let checked = self.check_base_url(url).await?;
-        Ok(NodeTarget {
-            base_url: checked.base_url.clone(),
-            http: Some(checked),
-        })
+        Ok(self.check_base_url(url).await?.into())
     }
 
     fn literal(

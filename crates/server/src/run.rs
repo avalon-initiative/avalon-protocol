@@ -267,7 +267,8 @@ pub async fn run_with_tracing(
     // is available here too, for issue #583's interest-refresh worker
     // below — reusing the exact same `AVALON_NODE_URL` identity rather
     // than a second parse of it.
-    let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id());
+    let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id())
+        .with_p2p_fallback(dht_identity.as_ref().map(|d| d.peer_id.as_str()));
     let witness_signer =
         crate::witness_cosign::WitnessCosignConfig::from_env().and_then(|w| w.announce_signer());
     announce_config.witness = witness_signer.clone();
@@ -302,7 +303,7 @@ pub async fn run_with_tracing(
             interest.clone(),
             interest_newly_active,
             dht_commands,
-            announce_config.own_base_url.clone(),
+            announce_config.own_http_base_url(),
             interest_redis_fast_path.clone(),
         ));
         // Epic #623, issue #635: identity locator — registers DHT interest
@@ -331,7 +332,7 @@ pub async fn run_with_tracing(
         mirror_push::MirrorPushConfig::new(
             dht_commands,
             interest_redis_fast_path.clone(),
-            announce_config.own_base_url.clone(),
+            announce_config.own_http_base_url(),
         )
     });
     // Issue #596: shared between `mirror_watcher::run_worker` (if spawned)
