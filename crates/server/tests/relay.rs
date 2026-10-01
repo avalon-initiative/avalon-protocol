@@ -65,7 +65,12 @@ fn server_settings() -> RelayServerSettings {
 
 /// A dialable relay serving with `limits`, and its direct address ending in `/p2p/<id>`.
 async fn relay_node(limits: RelayServerSettings) -> (DhtHandle, Multiaddr) {
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    relay_node_at("127.0.0.1", limits).await
+}
+
+/// [`relay_node`] on another loopback address, so relays can sit in different /24s.
+async fn relay_node_at(ip: &str, limits: RelayServerSettings) -> (DhtHandle, Multiaddr) {
+    let addr = format!("/ip4/{ip}/tcp/{}", free_port());
     let relay = RelaySettings {
         server: Some(limits),
         ..RelaySettings::default()
@@ -631,20 +636,63 @@ async fn reservations_beyond_the_limit_are_refused() {
     assert!(counts.reservations_denied >= 1);
 }
 
-/// A client asked to hold two reservations holds two, on different relays.
+/// Relay peer ids the node currently holds reservations on.
+fn held(node: &DhtHandle) -> Vec<String> {
+    node.reachability
+        .snapshot()
+        .relay_reservations
+        .into_iter()
+        .map(|r| r.relay_peer_id)
+        .collect()
+}
+
+/// A client asked to hold two reservations holds two, on different relays in different /24s.
 #[tokio::test]
 async fn a_client_holds_up_to_its_reservation_count() {
     if !ipv6_available() {
         return eprintln!("skipping: no IPv6 loopback");
     }
-    let (r1, r1_addr) = relay_node(server_settings()).await;
-    let (r2, r2_addr) = relay_node(server_settings()).await;
-    let (_r3, r3_addr) = relay_node(server_settings()).await;
+    let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
+    let (r2, r2_addr) = relay_node_at("127.0.1.1", server_settings()).await;
+    let (_r3, r3_addr) = relay_node_at("127.0.2.1", server_settings()).await;
     let a = private_node(vec![r1_addr, r2_addr, r3_addr], 2, &r1).await;
     reserved_on(&a, r1.peer_id).await;
     reserved_on(&a, r2.peer_id).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(a.reachability.snapshot().relay_reservations.len(), 2);
+    assert_eq!(held(&a).len(), 2);
+}
+
+/// A relay in another /24 is used for the second reservation even when a same-/24 relay is
+/// listed before it.
+#[tokio::test]
+async fn the_second_reservation_avoids_the_first_relays_24() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
+    let (twin, twin_addr) = relay_node_at("127.0.0.2", server_settings()).await;
+    let (r3, r3_addr) = relay_node_at("127.0.1.1", server_settings()).await;
+    let a = private_node(vec![r1_addr, twin_addr, r3_addr], 2, &r1).await;
+    reserved_on(&a, r1.peer_id).await;
+    reserved_on(&a, r3.peer_id).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let held = held(&a);
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert!(!held.contains(&twin.peer_id.to_string()), "{held:?}");
+}
+
+/// With every relay in one /24 the node still reaches its reservation count.
+#[tokio::test]
+async fn one_prefix_still_fills_every_reservation() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
+    let (r2, r2_addr) = relay_node_at("127.0.0.2", server_settings()).await;
+    let a = private_node(vec![r1_addr, r2_addr], 2, &r1).await;
+    reserved_on(&a, r1.peer_id).await;
+    reserved_on(&a, r2.peer_id).await;
+    assert_eq!(held(&a).len(), 2);
 }
 
 /// With `max_circuits` of 1 a second concurrent circuit is refused.

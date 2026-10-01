@@ -852,8 +852,10 @@ impl RelayRuntime {
         reachability: Reachability,
         now: Instant,
     ) {
-        self.client
-            .set_latencies(crate::relay::neighbor_latencies(peers));
+        if self.client.wants_slots(reachability) {
+            self.client
+                .set_latencies(crate::relay::neighbor_latencies(peers));
+        }
         self.client.reconcile(swarm, reachability, now);
     }
 }

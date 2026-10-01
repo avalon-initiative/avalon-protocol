@@ -322,34 +322,52 @@ scenario_relay-failover() {
     "the reservation to move to the other relay"
 }
 
-# A private node picks the lowest-latency relay, though it is listed last, and never holds two
-# reservations in one /24 (the lab's public segment is a single /24, so exactly one).
+# A private node that has measured three discovered relays (150, 60 and 5 ms of added delay) picks
+# the nearest one for its next reservation, whichever of them it lost. The lab's public segment
+# is a single /24, so prefix diversity is covered by the unit and loopback tests instead.
 scenario_relay-ranking() {
   command -v tc >/dev/null 2>&1 || { echo "relay-ranking needs tc" >&2; return 2; }
   "$LAB" up home1 symmetric >/dev/null || return 1
   # Relay latency is attributed by libp2p id, which needs the verified (identity-bound) entries.
-  local n ip delay verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true
-  for n in "far 10.99.0.101 150ms" "mid 10.99.0.103 60ms" "near 10.99.0.104 5ms"; do
-    read -r name ip delay <<<"$n"
+  local verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true
+  local spec name ip delay far_pid mid_pid near_pid
+  for spec in "far 10.99.0.101 150ms" "mid 10.99.0.103 60ms" "near 10.99.0.104 5ms"; do
+    read -r name ip delay <<<"$spec"
     "$LAB" up-public "$name" "$ip" >/dev/null || return 1
     "$LAB" exec "$name" -- tc qdisc add dev eth0 root netem delay "$delay" || return 1
-    node "$name" "$name" "$ip" AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/$ip/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true \
-      AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080 "$verify"
+    if [ "$name" = far ]; then
+      node "$name" "$name" "$ip" AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/$ip/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true "$verify"
+    else
+      node "$name" "$name" "$ip" AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/$ip/tcp/4001 AVALON_RELAY_SERVER_ENABLED=true \
+        AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080 "$verify"
+    fi
+    case $name in far) far_pid=$LAST_PID ;; mid) mid_pid=$LAST_PID ;; near) near_pid=$LAST_PID ;; esac
     ready "$name" "$ip" || return 1
   done
   node home1 home1 10.1.0.2 "$verify" \
     AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.103:8080,http://10.99.0.104:8080 \
-    AVALON_RELAY_CLIENT_MAX_RESERVATIONS=2 \
-    AVALON_RELAY_ADDRS="/ip4/10.99.0.101/tcp/4001/p2p/$(peer_id far),/ip4/10.99.0.103/tcp/4001/p2p/$(peer_id mid),/ip4/10.99.0.104/tcp/4001/p2p/$(peer_id near)"
-  wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) >= 1' \
+    AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1
+  wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) == 1' \
     "a relay reservation" || return 1
-  sleep 20
-  local held
-  held=$(status home1 10.1.0.2 | jq -r '[.relay_reservations[].relay_peer_id] | join(",")')
-  if [ "$held" != "$(peer_id near)" ]; then
-    echo "    expected only the lowest-latency relay ($(peer_id near)), holding: $held" >&2
-    return 1
-  fi
+  # Judge only once every relay has a measured round trip, so a correct build cannot fail on timing.
+  local u
+  for u in 10.99.0.101 10.99.0.103 10.99.0.104; do
+    wait_json "an announce round trip to $u" \
+      "[.neighbors[] | select(.base_url == \"http://$u:8080\") | .latency.ewma_ms] | length == 1" \
+      topology home1 10.1.0.2 || return 1
+  done
+  local held want
+  held=$(status home1 10.1.0.2 | jq -r '.relay_reservations[0].relay_peer_id')
+  # Stop the relay holding the reservation; the next one must be the nearest of the rest.
+  case $held in
+    "$(peer_id far)") kill "$far_pid"; want=$(peer_id near) ;;
+    "$(peer_id mid)") kill "$mid_pid"; want=$(peer_id near) ;;
+    "$(peer_id near)") kill "$near_pid"; want=$(peer_id mid) ;;
+    *) echo "    reservation on an unknown relay: $held" >&2; return 1 ;;
+  esac
+  wait_status home1 10.1.0.2 \
+    ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id == \"$want\"" \
+    "the reservation to move to the nearest remaining relay ($want)"
 }
 
 # dump_logs: the lines of each node's log that explain a failed wait.
