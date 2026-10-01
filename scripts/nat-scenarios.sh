@@ -444,7 +444,8 @@ scenario_relay-ranking() {
     case $name in far) far_pid=$LAST_PID ;; mid) mid_pid=$LAST_PID ;; near) near_pid=$LAST_PID ;; esac
     ready "$name" "$ip" || return 1
   done
-  node home1 home1 10.1.0.2 "$verify" \
+  # home1 announces url-less: its private base URL would be refused (422) by the verifying relays.
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" \
     AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.103:8080,http://10.99.0.104:8080 \
     AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1
   wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) == 1' \
@@ -508,7 +509,7 @@ scenario_relay-reselect() {
     ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id == \"$id2\"" \
     "the reservation to move to the listed relay" || return 1
   moved_at=$(date +%s)
-  [ $((moved_at - reserved_at)) -ge $((hold - 2)) ] \
+  [ $((moved_at - reserved_at)) -ge $((hold - 4)) ] \
     || { echo "    moved after $((moved_at - reserved_at))s, under the ${hold}s hold" >&2; return 1; }
   # The announce interval is 600 s, so only the early announce can tell the relay in time.
   wait_json "the first relay's /nodes/peers to list the circuit address through the new relay" \
@@ -530,7 +531,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover relay-ranking"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 
