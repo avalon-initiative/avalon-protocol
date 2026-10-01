@@ -39,6 +39,7 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `punch-symmetric-fallback` | The same with symmetric NATs. The punch fails, the failure is recorded, and both nodes keep reporting `relayed`, and the same probe reports `path: direct`. The node with the lower peer id starts the punch, so either one records the failure. | no |
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
 | `url-less-admission` | A node behind a no-inbound NAT with no `AVALON_NODE_URL`, and reachability verification on everywhere, announces as `p2p://<peer id>`: both neighbors list it in `/nodes/discover`, the seed's topology describes it, and a `p2p://` announce for the relay's id over plain HTTP stores nothing. | no |
+| `url-less-participation` | Three public nodes (relay, seed, a shard authority) and a url-less node behind a no-inbound NAT, verification on everywhere. Neighbors measure a latency to it and list it in `/nodes/peers`; `POST /nodes/probe` from the seed and `POST /nodes/trace` from the relay reach `p2p://<peer id>` over the stream and report a path; the url-less node mirrors the seed's shard with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` and serves a head that matches the seed's, whose key hashes to the shard id and verifies with `verify_sth`; and a write it authors for `game:urllessapp` lands in the shard authority's ledger over outbound HTTP. | no |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
 | `relay-ranking` | Three discovered relays with 150, 60 and 5 ms of added delay (`tc netem`). Once the node has measured all three, the relay holding its reservation is stopped and the reservation must move to the nearest of the other two. Not yet run in the lab: the added delay, the identity binding the latency attribution needs, and the poll on `/nodes/topology` are unverified. The lab's public segment is one /24, so prefix diversity is covered by unit and loopback tests, not here. | no |
 
@@ -47,18 +48,26 @@ is reachable only through a relay, then hole punching makes up to three attempts
 
 ## Known limitations
 
-- **Probing a node behind a NAT is not covered here.** A stream request needs the target's
-  libp2p identity to be bound to its URL, and the suite's nodes skip the reachability check that
-  binds it, so a probe of a home node goes to its unreachable URL. The `traversed` and `relayed`
-  labels are covered by in-process libp2p tests instead.
+- **Probing a node behind a NAT needs a bound identity.** A stream request needs the target's
+  libp2p identity to be bound to its URL, and most scenarios skip the reachability check that binds
+  it, so a probe of a home node there goes to its unreachable URL. `url-less-participation` covers
+  a node bound through its `p2p://` entry; the `traversed` and `relayed` labels are covered by
+  in-process libp2p tests.
 - **The lab's full-cone NAT forwards every inbound port**, so it is reachable by any peer. It is
   more permissive than a real full-cone NAT, see the [NAT lab](./nat-lab.md) notes.
 - Most scenarios run nodes that skip the announce reachability check, because a node behind a NAT
   cannot pass an inbound HTTP fetch. A node with a URL nobody can reach is not admitted by
   default, so it is found through gossip and confirmed over libp2p. A node with no
   `AVALON_NODE_URL` announces as `p2p://<peer id>` and is admitted with the check on, see
-  `url-less-admission`. Such a node cannot call the write routes `/nodes/relay`,
-  `/nodes/replicate-chat` and `/mirror/notify` on its neighbors; the scenario does not cover them.
+  `url-less-admission` and `url-less-participation`. Such a node cannot call the write routes
+  `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors; the scenarios do
+  not cover them.
+- **The url-less probe and trace report `direct`.** The node's own outbound connection to the seed
+  carries them. A `relayed` or `traversed` path to a url-less node needs a peer it has no direct
+  connection with, for example a second url-less node, and is not covered.
+- **The seed's trace is not used.** In the lab a node's neighbor set is the network's default
+  seed list, unreachable here, and a trace routes only through neighbors, so the trace runs from
+  the relay, which has the url-less node as a neighbor.
 
 ## Live drill
 

@@ -128,11 +128,13 @@ pub struct NormalizedTrace {
 }
 
 pub fn normalize(req: TraceRequest) -> Result<NormalizedTrace, TopologyError> {
-    if req.target.len() > MAX_URL_LEN || OutboundPolicy::parse_base_url(&req.target).is_err() {
+    let valid = crate::node_http::parse_p2p_base(&req.target).is_some()
+        || OutboundPolicy::parse_base_url(&req.target).is_ok();
+    if req.target.len() > MAX_URL_LEN || !valid {
         return Err(TopologyError::new(
             StatusCode::BAD_REQUEST,
             "invalid_target",
-            "target must be an http(s) base URL",
+            "target must be an http(s) base URL or a p2p://<peer id> node URL",
         ));
     }
     let visited: Vec<String> = req
@@ -925,6 +927,21 @@ mod tests {
             budget_ms: None,
         })
         .is_err());
+    }
+
+    #[test]
+    fn normalize_accepts_a_p2p_target_and_rejects_a_malformed_one() {
+        let id = libp2p::PeerId::from(libp2p::identity::Keypair::generate_ed25519().public());
+        let with = |target: String| TraceRequest {
+            target,
+            ttl: None,
+            trace_id: None,
+            visited: None,
+            budget_ms: None,
+        };
+        let n = normalize(with(format!("p2p://{id}"))).unwrap();
+        assert_eq!(n.target, format!("p2p://{id}"));
+        assert!(normalize(with("p2p://not-a-peer-id".into())).is_err());
     }
 
     #[test]

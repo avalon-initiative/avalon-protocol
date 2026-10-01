@@ -346,7 +346,8 @@ nothing. Peers reach the node over the connection it opened, a relay circuit or 
 connection; the node's own outbound requests (mirror polling, settlement submit) are unchanged.
 It shows in `/nodes/peers`, `/nodes/discover` and `/nodes/topology` under its `p2p://` URL,
 usually with `connectivity` `relayed` or `outbound_only`. The node needs one reachable seed in
-`AVALON_BOOTSTRAP_PEERS` to start from.
+`AVALON_BOOTSTRAP_PEERS` to start from. See
+[`running-without-an-open-port.md`](running-without-an-open-port.md).
 
 Limitations: a `p2p://` peer proves only that it holds its key, so it cannot call the routes that
 inject data without their own credential (`/nodes/relay`, `/nodes/replicate-chat`,

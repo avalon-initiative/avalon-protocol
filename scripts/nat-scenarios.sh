@@ -5,7 +5,7 @@
 # usage: sudo scripts/nat-scenarios.sh [scenario ...]     (default: all scenarios)
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
-#              outbound-only url-less-admission relay-failover relay-ranking
+#              outbound-only url-less-admission url-less-participation relay-failover relay-ranking
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -299,6 +299,105 @@ scenario_url-less-admission() {
   fi
 }
 
+# post_json <ns> <ip> <path> <body>: POSTs a JSON body to that node and prints the response.
+post_json() {
+  "$LAB" exec "$1" -- curl -s -m 15 -H 'content-type: application/json' -d "$4" "http://$2:8080$3"
+}
+
+# wait_post <what> <jq filter> <ns> <ip> <path> <body>: waits until the filter is true on the response.
+wait_post() {
+  local what="$1" filter="$2" i out=""
+  shift 2
+  for i in $(seq 1 $((WAIT / 2))); do
+    out=$(post_json "$@")
+    if echo "$out" | jq -e "$filter" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  echo "    timed out after ${WAIT}s waiting for: $what; last response: $out" >&2
+  return 1
+}
+
+# lab_get <ns> <url>: GET a URL from inside a namespace.
+lab_get() { "$LAB" exec "$1" -- curl -s -m 8 "$2"; }
+
+# register_body <slug>: the JSON for POST /integrations with a fresh key.
+register_body() {
+  jq -nc --arg slug "$1" --arg key "$(head -c32 /dev/urandom | base64)" \
+    '{slug:$slug,name:$slug,owner_name:"lab",requested_capabilities:[],initial_key:{algorithm:"ed25519",public_key:$key}}'
+}
+
+# A node with no AVALON_NODE_URL does its whole job over connections it opened: a neighbor
+# probes and traces it over the stream, it mirrors a source over outbound HTTP, and a write
+# it authors reaches a shard authority over outbound HTTP.
+scenario_url-less-participation() {
+  "$LAB" up home1 no-inbound >/dev/null || return 1
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null \
+    && "$LAB" up-public shard 10.99.0.103 >/dev/null || return 1
+  local verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true key=lab-submit-key
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001 "$verify"
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080 "$verify"
+  node shard shard 10.99.0.103 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.103/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080 AVALON_OWN_SHARD_ID=game:urllessapp \
+    AVALON_SETTLEMENT_SUBMIT_KEY=$key "$verify"
+  ready relay 10.99.0.101 && ready seed 10.99.0.102 && ready shard 10.99.0.103 || return 1
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true AVALON_MIRROR_POLL_INTERVAL_SECS=5 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080 \
+    AVALON_OWN_SHARD_ID=game:urllessapp AVALON_SETTLEMENT_REMOTE_URLS=game:urllessapp=http://10.99.0.103:8080 \
+    AVALON_SETTLEMENT_SUBMIT_KEY=$key
+  local id url
+  wait_status home1 10.1.0.2 '.connectivity == "outbound_only"' "home1 to report outbound_only" || return 1
+  id=$(status home1 10.1.0.2 | jq -r .libp2p_peer_id)
+  url="p2p://$id"
+
+  # Both public neighbors list it and measure a latency over the path they share.
+  local nb="[.neighbors[] | select(.base_url == \"$url\" and .connectivity == \"outbound_only\" and .latency.samples >= 1 and .latency.path != null)] | length == 1"
+  wait_json "the relay's topology to measure home1" "$nb" topology relay 10.99.0.101 || return 1
+  wait_json "the shard node's topology to measure home1" "$nb" topology shard 10.99.0.103 || return 1
+  wait_json "the shard node's /nodes/peers to list home1" \
+    "[.[] | select(.base_url == \"$url\" and .libp2p_peer_id == \"$id\")] | length == 1" \
+    "$LAB" exec shard -- curl -s -m 5 http://10.99.0.103:8080/nodes/peers || return 1
+
+  # A neighbor probes and traces it over the authenticated stream.
+  wait_post "a probe of home1 from the seed" '.ok == true and (.path != null)' \
+    seed 10.99.0.102 /nodes/probe "{\"target\":\"$url\"}" || return 1
+  # The seed's neighbor set is the default seed list, unreachable in the lab, so trace from the relay.
+  wait_post "a trace to home1 from the relay" \
+    ".reached == true and (.hops | length) == 2 and .hops[-1].base_url == \"$url\" and .hops[0].path_to_next != null" \
+    relay 10.99.0.101 /nodes/trace "{\"target\":\"$url\"}" || return 1
+  echo "    probe: $(post_json seed 10.99.0.102 /nodes/probe "{\"target\":\"$url\"}" | jq -c '{ok,path,min_ms}')" \
+    "trace: $(post_json relay 10.99.0.101 /nodes/trace "{\"target\":\"$url\"}" | jq -c '{reached,hops:[.hops[]|{base_url,path_to_next}]}')"
+
+  # It mirrors the seed's shard over outbound HTTP and serves the same head, which verifies.
+  local shard head sk
+  shard=$(status seed 10.99.0.102 | jq -r .own_shard_replication.shard_id)
+  [ -n "$shard" ] && [ "$shard" != null ] || { echo "    the seed reports no shard" >&2; return 1; }
+  post_json seed 10.99.0.102 /integrations "$(register_body seedapp)" | jq -e .id >/dev/null || { echo "    seed registration failed" >&2; return 1; }
+  local seed_head
+  wait_json "the seed to sign a head" '.tree_size >= 1' lab_get seed "http://10.99.0.102:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  seed_head=$(lab_get seed "http://10.99.0.102:8080/ledger/sth/latest?shard_id=$shard")
+  WAIT=200 wait_json "home1 to mirror the seed's head" \
+    ".tree_size == $(echo "$seed_head" | jq .tree_size) and .root_hash == \"$(echo "$seed_head" | jq -r .root_hash)\"" \
+    lab_get home1 "http://10.1.0.2:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  head=$(lab_get home1 "http://10.1.0.2:8080/ledger/sth/latest?shard_id=$shard")
+  sk=$(echo "$head" | jq -r .signing_public_key)
+  [ "node:$(echo -n "$sk" | xxd -r -p | sha256sum | cut -d' ' -f1)" = "$shard" ] \
+    || { echo "    the served head's key does not hash to the shard id" >&2; return 1; }
+  (cd "$ROOT" && cargo build -q -p avalon-server --example verify_sth) || return 1
+  echo "$head" | AVALON_SETTLEMENT_VERIFY_KEY="$sk" "$ROOT/target/debug/examples/verify_sth" old \
+    || { echo "    the mirrored head does not verify" >&2; return 1; }
+  lab_get home1 "http://10.1.0.2:8080/ledger/mirror-progress?network_id=avalon-dev-lan&shard_id=$shard" \
+    | jq -e '.last_seq >= 1' >/dev/null || { echo "    no mirrored entries on home1" >&2; return 1; }
+
+  # A write it authors for its shard is submitted to the shard authority over outbound HTTP.
+  post_json home1 10.1.0.2 /integrations "$(register_body urllessapp)" | jq -e .id >/dev/null \
+    || { echo "    registration on home1 failed" >&2; return 1; }
+  wait_json "the shard authority to hold the entry home1 authored" \
+    '[.[] | select(.kind == "game.registered" and .payload.slug == "urllessapp")] | length == 1' \
+    lab_get shard "http://10.99.0.103:8080/ledger/entries?shard_id=game:urllessapp" || return 1
+  echo "    mirrored $shard to seq $(lab_get home1 "http://10.1.0.2:8080/ledger/mirror-progress?network_id=avalon-dev-lan&shard_id=$shard" | jq .last_seq); shard authority holds home1's write"
+}
+
 # Losing the relay a node reserved on moves it to a second relay.
 scenario_relay-failover() {
   "$LAB" up home1 symmetric >/dev/null || return 1
@@ -383,7 +482,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission relay-failover"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 
