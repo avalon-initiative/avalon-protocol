@@ -256,9 +256,9 @@ scenario_url-less-admission() {
   node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" \
     AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080
   local id url
-  id=$(peer_id home1) || return 1
-  url="p2p://$id"
   wait_status home1 10.1.0.2 '.connectivity == "outbound_only"' "home1 to report outbound_only" || return 1
+  id=$(status home1 10.1.0.2 | jq -r .libp2p_peer_id)
+  url="p2p://$id"
 
   local entry=".peers[] | select(.base_url == \"$url\" and .libp2p_peer_id == \"$id\" and .connectivity == \"outbound_only\")"
   wait_json "the seed to list home1 in /nodes/discover" "[$entry] | length == 1" discover seed 10.99.0.102 || return 1
@@ -275,7 +275,7 @@ scenario_url-less-admission() {
 
   # Claiming the relay's id over plain HTTP proves nothing, so nothing is stored for it.
   local other
-  other=$(peer_id relay) || return 1
+  other=$(status relay 10.99.0.101 | jq -r .libp2p_peer_id)
   "$LAB" exec seed -- curl -s -m 5 -o /dev/null -X POST "http://10.99.0.102:8080/nodes/announce" \
     -H 'content-type: application/json' \
     -d "{\"base_url\":\"p2p://$other\",\"libp2p_peer_id\":\"$other\",\"roles\":[\"combined\"],\"protocol_version\":\"$(status seed 10.99.0.102 | jq -r .protocol_version)\",\"network_id\":\"avalon-dev-lan\",\"coordinate\":{\"vector\":[0,0,0],\"height\":0.01,\"error\":1.0}}"
