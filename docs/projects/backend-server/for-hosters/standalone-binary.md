@@ -394,12 +394,35 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   headroom, so raise it before lowering it; a 429 drops that relay event.
 - The replay cache is in process memory. A restart, replicas sharing one identity key, or the
   clock stepping forward re-opens up to the 60 second window for a captured request.
+- The replay cache never evicts a live nonce. It holds up to `AVALON_NODE_MAX_PEERS` times
+  about four times the per-key rate, plus slack, entries (600,800 at the defaults), capped at
+  1,048,576 (about 170 MB). When it is full of live nonces a new request is refused with 503
+  `node_auth_replay_cache_full` until entries expire (121 seconds). Write-route delivery is
+  best effort and has poll fallbacks, so a refusal is a delay, not lost correctness.
+- The signature is verified before the body is read: the header carries the body's SHA-256
+  and the signature covers it, so only the holder of a standing peer's private key (or someone
+  replaying that peer's captured, unused header within 60 seconds) can make the node read a
+  body, and then at most the route's cap (64 KiB, 64 KiB, 1 KiB) followed by one SHA-256. A
+  stranger, including one who knows a standing peer's public id, is refused at the signature
+  stage after one Ed25519 verification at most. A valid signature over the wrong body is
+  refused after the read, records no nonce and costs the key no budget.
+- Remaining limits on that work: at most 64 body reads run at once
+  (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`, excess answered 503 `node_auth_busy`), and a
+  source IP that causes more than 30 credential failures a minute
+  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`; bad signature, stale, unknown peer, wrong body
+  hash, oversize body) is answered 429 before anything is read. The address is the one the
+  per-IP limiter uses, so behind a proxy configure the trusted proxies. Stream requests are not
+  affected. The per-IP limit, the request timeout and the per-route caps still apply.
+- A 403 for a claimed id means it has no bound entry, a 401 means the credential is bad; this
+  reveals whether an id is a known node, which is not secret. The budget is a fixed one-minute
+  window, so a key can burst to twice its rate across a minute boundary.
 - Peer URLs with a path prefix or a trailing path are not supported for these routes; such a
   request is sent unsigned and refused with 401.
 - Until per-route scope checks exist, any node with standing may call these routes, and a
   `p2p://` node gets standing by announcing over a stream with any key.
 - Redirects and system proxies are not used for node-to-node requests, so a signed request is
-  never re-sent to another host.
+  never re-sent to another host. A peer URL behind an http-to-https redirect gets the 3xx back
+  (logged as a warning naming the URL and the `Location`); configure the final https URL.
 
 ## Running under systemd
 

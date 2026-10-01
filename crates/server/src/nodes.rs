@@ -2137,6 +2137,15 @@ const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
 /// count must stay bounded regardless of network size.
 const DEFAULT_MAX_PEERS: usize = 50;
 
+/// `AVALON_NODE_MAX_PEERS`, defaulting to [`DEFAULT_MAX_PEERS`].
+pub(crate) fn max_peers_from_env() -> usize {
+    std::env::var("AVALON_NODE_MAX_PEERS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_PEERS)
+}
+
 /// Pure resolution logic, split out for direct unit testing (same "pure
 /// function behind the env-reading wrapper" pattern `registry::coarsen`
 /// already uses in this repo) — no real `bundled_trust_anchors()` call, so
@@ -2189,11 +2198,7 @@ impl AnnounceConfig {
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty());
 
-        let max_peers = std::env::var("AVALON_NODE_MAX_PEERS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(DEFAULT_MAX_PEERS);
+        let max_peers = max_peers_from_env();
 
         Self {
             peers,

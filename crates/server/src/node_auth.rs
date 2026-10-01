@@ -11,19 +11,29 @@
 //! Either way the peer must have standing ([`PeerTable::standing`]) and stays within a per-key
 //! request budget. A credential grants no authority beyond what the route itself checks.
 //!
+//! The signature is verified before the body is read (the header carries the body hash, the
+//! signature covers it), so only a holder of a standing peer's private key, or a replayer of
+//! its captured unused header, can make the node read a body; the read is capped per route,
+//! limited to a few concurrent stages, and a source IP that keeps failing is refused unread.
+//! The replay cache
+//! never evicts a live nonce: when full it refuses (503), a liveness gap only. Budget windows
+//! are fixed minutes, allowing a 2x burst across a boundary.
+//!
 //! The replay cache lives in process memory: a restart, replicas sharing one identity key or a
 //! forward clock step re-open up to [`MAX_SKEW_SECS`] for a captured request. Peer URLs with a
 //! path prefix are not signed, so they are refused.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::Hash;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 use avalon_protocol::node_request::{
-    parse_node_request_header, verify_node_request_header, NodeRequestError, NodeRequestTarget,
-    NODE_REQUEST_HEADER,
+    parse_node_request_header, verify_node_request_body, verify_node_request_head,
+    NodeRequestError, NodeRequestHead, NODE_REQUEST_HEADER,
 };
 use axum::body::Body;
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -54,8 +64,34 @@ const REPLAY_RETENTION_SECS: i64 = 2 * MAX_SKEW_SECS + 1;
 /// traffic passed before, so legitimate fan-out is not refused.
 pub const DEFAULT_RATE_PER_MINUTE: u32 = crate::DEFAULT_RATE_LIMIT_PER_MINUTE as u32;
 
-/// Most nonces held in total; the oldest go first when the cap is reached.
-const MAX_REPLAY_ENTRIES: usize = 262_144;
+/// Hard ceiling on nonces held in total (roughly 160 bytes each, so about 170 MB at the cap).
+const MAX_REPLAY_ENTRIES: usize = 1_048_576;
+
+/// How many nonces the cache holds for `max_peers` standing keys at `rate` requests a minute:
+/// each key can hold `per_signer_cap(rate)`, so a cap of `max_peers` times that is never reached
+/// by keys within the budget. Capped at [`MAX_REPLAY_ENTRIES`].
+fn replay_capacity(max_peers: usize, rate: u32) -> usize {
+    max_peers
+        .saturating_mul(per_signer_cap(rate))
+        .clamp(1, MAX_REPLAY_ENTRIES)
+}
+
+/// Nonces one key can hold: its budget across the retention window, doubled for a burst at a
+/// window boundary, plus slack.
+fn per_signer_cap(rate: u32) -> usize {
+    4 * rate as usize + 16
+}
+
+/// Credential failures one source IP may cause per minute before its requests are refused
+/// unread, unless `AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP` says otherwise.
+pub const DEFAULT_FAILED_PER_MINUTE_PER_IP: u32 = 30;
+
+/// Body read-and-hash stages that may run at once, unless
+/// `AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES` says otherwise.
+pub const DEFAULT_MAX_CONCURRENT_BODIES: usize = 64;
+
+/// Most source IPs tracked for failures; unknown ones are not counted while the table is full.
+const MAX_FAILURE_KEYS: usize = 16_384;
 
 /// Most keys with a request budget; keys only get one after passing the standing check.
 const MAX_BUDGET_KEYS: usize = 16_384;
@@ -91,10 +127,34 @@ pub enum NodeAuthError {
     NoStanding,
     /// The peer is over its request budget.
     RateLimited,
+    /// The replay cache holds only live nonces and has no room; the request is refused unseen.
+    ReplayCacheFull,
     BodyTooLarge,
+    /// The source address caused too many credential failures this minute.
+    SourceThrottled,
+    /// Too many body read stages are already running.
+    Busy,
 }
 
 impl NodeAuthError {
+    /// Whether a refusal is worth a warning: only those that need a standing peer, since a
+    /// stranger can cause every other one for free.
+    fn warns(&self) -> bool {
+        matches!(
+            self,
+            Self::Replay | Self::RateLimited | Self::ReplayCacheFull | Self::Busy
+        )
+    }
+
+    /// Whether the refusal counts against the source address's failure budget: a credential
+    /// that failed a check, as opposed to a valid one refused for load or repetition.
+    fn is_credential_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Invalid(_) | Self::PeerMismatch | Self::NoStanding | Self::BodyTooLarge
+        )
+    }
+
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Missing | Self::Invalid(_) | Self::PeerMismatch | Self::Replay => {
@@ -103,6 +163,8 @@ impl NodeAuthError {
             Self::NoStanding => StatusCode::FORBIDDEN,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::ReplayCacheFull | Self::Busy => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SourceThrottled => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -116,11 +178,15 @@ impl NodeAuthError {
             Self::Invalid(NodeRequestError::Stale) => "node_auth_stale",
             Self::Invalid(NodeRequestError::Future) => "node_auth_future",
             Self::Invalid(NodeRequestError::BadSignature) => "node_auth_bad_signature",
+            Self::Invalid(NodeRequestError::BodyMismatch) => "node_auth_body_hash",
             Self::PeerMismatch => "node_auth_peer_mismatch",
             Self::Replay => "node_auth_replay",
             Self::NoStanding => "node_auth_no_standing",
             Self::RateLimited => "node_auth_rate_limited",
             Self::BodyTooLarge => "node_auth_body_too_large",
+            Self::ReplayCacheFull => "node_auth_replay_cache_full",
+            Self::SourceThrottled => "node_auth_source_throttled",
+            Self::Busy => "node_auth_busy",
         }
     }
 
@@ -129,10 +195,15 @@ impl NodeAuthError {
             Self::NoStanding => "this node has no standing with the receiver",
             Self::RateLimited => "too many requests from this node, retry later",
             Self::BodyTooLarge => "request body too large for this route",
+            Self::ReplayCacheFull | Self::Busy => "this node is busy, retry later",
+            Self::SourceThrottled => "too many failed credentials from this address",
             _ => "node credential missing or invalid",
         };
         let mut error = TopologyError::new(self.status(), self.code(), message);
-        if self == Self::RateLimited {
+        if matches!(
+            self,
+            Self::RateLimited | Self::ReplayCacheFull | Self::Busy | Self::SourceThrottled
+        ) {
             error.retry_after_secs = Some(30);
         }
         error.into_response()
@@ -173,37 +244,63 @@ impl ReplayCache {
         }
     }
 
-    /// Records `(signer, nonce)`; refuses a repeat, and a signer already holding its share.
-    fn insert(&mut self, signer: PeerId, nonce: [u8; 16], now: i64) -> Result<(), NodeAuthError> {
+    /// Whether `(signer, nonce)` is held and unexpired; drops expired entries first.
+    fn is_live(&mut self, signer: PeerId, nonce: [u8; 16], now: i64) -> bool {
         while self.order.front().is_some_and(|(exp, ..)| *exp <= now) {
             self.forget_front();
         }
-        if self.seen.contains(&(signer, nonce)) {
+        self.seen.contains(&(signer, nonce))
+    }
+
+    /// Whether `(signer, nonce)` could be recorded now: refuses a repeat, a signer already
+    /// holding its share, and a cache full of live nonces. Expired entries go first; a live
+    /// nonce is never evicted, so a refusal is a liveness gap and never a replay window.
+    fn admit(&mut self, signer: PeerId, nonce: [u8; 16], now: i64) -> Result<(), NodeAuthError> {
+        if self.is_live(signer, nonce, now) {
             return Err(NodeAuthError::Replay);
         }
         if self.per_signer.get(&signer).copied().unwrap_or(0) >= self.max_per_signer {
             return Err(NodeAuthError::RateLimited);
         }
         if self.seen.len() >= self.max_total {
-            self.forget_front();
+            return Err(NodeAuthError::ReplayCacheFull);
         }
+        Ok(())
+    }
+
+    /// Records a nonce [`Self::admit`] allowed.
+    fn record(&mut self, signer: PeerId, nonce: [u8; 16], now: i64) {
         self.seen.insert((signer, nonce));
         self.order
             .push_back((now.saturating_add(REPLAY_RETENTION_SECS), signer, nonce));
         *self.per_signer.entry(signer).or_insert(0) += 1;
-        Ok(())
     }
 }
 
-/// Requests per key in the current minute.
-struct Budget {
-    windows: HashMap<PeerId, (i64, u32)>,
+/// Events per key in the current minute.
+struct Budget<K> {
+    windows: HashMap<K, (i64, u32)>,
     per_minute: u32,
     max_keys: usize,
 }
 
-impl Budget {
-    fn charge(&mut self, peer: PeerId, now: i64) -> bool {
+impl<K: Hash + Eq + Copy> Budget<K> {
+    fn new(per_minute: u32, max_keys: usize) -> Self {
+        Self {
+            windows: HashMap::new(),
+            per_minute,
+            max_keys,
+        }
+    }
+
+    /// Whether `key` has used up this minute, without counting anything.
+    fn exhausted(&self, key: &K, now: i64) -> bool {
+        self.windows
+            .get(key)
+            .is_some_and(|(m, n)| *m == now.div_euclid(60) && *n >= self.per_minute)
+    }
+
+    fn charge(&mut self, peer: K, now: i64) -> bool {
         let minute = now.div_euclid(60);
         if self.windows.len() >= self.max_keys && !self.windows.contains_key(&peer) {
             self.windows.retain(|_, (m, _)| *m == minute);
@@ -228,7 +325,10 @@ struct Inner {
     network_id: String,
     recipients: Vec<String>,
     replay: Mutex<ReplayCache>,
-    budget: Mutex<Budget>,
+    budget: Mutex<Budget<PeerId>>,
+    failures: Mutex<Budget<IpAddr>>,
+    body_stage: Arc<tokio::sync::Semaphore>,
+    proxies: crate::trusted_proxies::TrustedProxies,
 }
 
 /// The receiving side of the node credential; one per node, shared by the three routes so a
@@ -287,7 +387,10 @@ impl NodeAuth {
             own_peer_id,
             own_base_url,
             rate_per_minute_from_env(),
-            MAX_REPLAY_ENTRIES,
+            replay_capacity(
+                crate::nodes::max_peers_from_env(),
+                rate_per_minute_from_env(),
+            ),
         )
     }
 
@@ -301,20 +404,43 @@ impl NodeAuth {
         rate_per_minute: u32,
         max_replay_entries: usize,
     ) -> Self {
+        Self::with_stage_limits(
+            peers,
+            network_id,
+            own_peer_id,
+            own_base_url,
+            rate_per_minute,
+            max_replay_entries,
+            StageLimits::from_env(),
+        )
+    }
+
+    /// [`Self::with_limits`] with explicit limits for the pre-body stages too.
+    pub fn with_stage_limits(
+        peers: PeerTable,
+        network_id: &str,
+        own_peer_id: Option<&str>,
+        own_base_url: Option<&str>,
+        rate_per_minute: u32,
+        max_replay_entries: usize,
+        stage: StageLimits,
+    ) -> Self {
         let mut recipients: Vec<String> = own_peer_id.map(str::to_string).into_iter().collect();
         recipients.extend(own_base_url.and_then(normalized_origin));
-        let per_signer = 4 * rate_per_minute as usize + 16;
+        let per_signer = per_signer_cap(rate_per_minute);
         Self {
             inner: Arc::new(Inner {
                 peers,
                 network_id: network_id.to_string(),
                 recipients,
                 replay: Mutex::new(ReplayCache::new(max_replay_entries, per_signer)),
-                budget: Mutex::new(Budget {
-                    windows: HashMap::new(),
-                    per_minute: rate_per_minute,
-                    max_keys: MAX_BUDGET_KEYS,
-                }),
+                budget: Mutex::new(Budget::new(rate_per_minute, MAX_BUDGET_KEYS)),
+                failures: Mutex::new(Budget::new(
+                    stage.failed_per_minute_per_ip,
+                    MAX_FAILURE_KEYS,
+                )),
+                body_stage: Arc::new(tokio::sync::Semaphore::new(stage.max_concurrent_bodies)),
+                proxies: crate::trusted_proxies::TrustedProxies::from_env(),
             }),
         }
     }
@@ -347,9 +473,46 @@ impl NodeAuth {
             .len()
     }
 
-    /// Cheap checks on an HTTP credential before the body is read: header form, clock window,
-    /// key-to-peer-id binding and standing. No signature is verified and nothing is recorded.
-    pub fn precheck(&self, headers: &HeaderMap, now: i64) -> Result<(), NodeAuthError> {
+    /// Whether `ip` has used up its credential-failure budget this minute.
+    pub fn source_throttled(&self, ip: IpAddr, now: i64) -> bool {
+        self.inner
+            .failures
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .exhausted(&ip, now)
+    }
+
+    /// Counts a failed credential against `ip`.
+    pub fn note_failure(&self, ip: IpAddr, now: i64) {
+        self.inner
+            .failures
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .charge(ip, now);
+    }
+
+    /// Takes one of the body read stages, or refuses with [`NodeAuthError::Busy`].
+    pub fn body_stage(&self) -> Result<tokio::sync::OwnedSemaphorePermit, NodeAuthError> {
+        self.inner
+            .body_stage
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| NodeAuthError::Busy)
+    }
+
+    /// Everything about an HTTP credential that can be checked without the body: header form,
+    /// clock window, key-to-peer-id binding, standing, then the signature over the header's own
+    /// body hash, then whether the nonce was already used. Only the holder of a standing
+    /// peer's private key gets past the signature, so only that holder can make the node read
+    /// a body. Nothing is recorded.
+    pub fn verify_head(
+        &self,
+        headers: &HeaderMap,
+        method: &str,
+        path: &str,
+        now: i64,
+    ) -> Result<VerifiedHead, NodeAuthError> {
+        let inner = &*self.inner;
         let auth =
             parse_node_request_header(header_text(headers)?).map_err(NodeAuthError::Invalid)?;
         if auth.timestamp < now.saturating_sub(MAX_SKEW_SECS) {
@@ -358,17 +521,55 @@ impl NodeAuth {
         if auth.timestamp > now.saturating_add(MAX_SKEW_SECS) {
             return Err(NodeAuthError::Invalid(NodeRequestError::Future));
         }
-        let derived = peer_id_of_key(&auth.public_key)
+        let signer = peer_id_of_key(&auth.public_key)
             .filter(|id| id.to_string() == auth.peer_id)
             .ok_or(NodeAuthError::PeerMismatch)?;
-        if !self.inner.peers.standing(&derived) {
+        if !inner.peers.standing(&signer) {
             return Err(NodeAuthError::NoStanding);
         }
-        Ok(())
+        let head = NodeRequestHead {
+            method,
+            path,
+            network_id: &inner.network_id,
+        };
+        let recipients: Vec<&str> = inner.recipients.iter().map(String::as_str).collect();
+        verify_node_request_head(&auth, &head, &recipients, now, MAX_SKEW_SECS)
+            .map_err(NodeAuthError::Invalid)?;
+        let replayed = inner
+            .replay
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_live(signer, auth.nonce, now);
+        if replayed {
+            return Err(NodeAuthError::Replay);
+        }
+        Ok(VerifiedHead { signer, auth })
     }
 
-    /// Resolves the caller. `remote` is the noise-authenticated peer of a stream request; when
-    /// set, the header is not read at all.
+    /// Completes an HTTP credential once the body is read: the body must hash to the signed
+    /// hash, then the nonce, budget and standing bookkeeping run under one lock. A request
+    /// with the wrong body records no nonce and costs no budget.
+    pub fn finish(
+        &self,
+        head: VerifiedHead,
+        body: &[u8],
+        now: i64,
+    ) -> Result<AuthenticatedNode, NodeAuthError> {
+        verify_node_request_body(&head.auth, body).map_err(NodeAuthError::Invalid)?;
+        self.admit(head.signer, Some(head.auth.nonce), now)
+    }
+
+    /// Admits a stream peer, whose handshake is its credential.
+    pub fn authenticate_stream(
+        &self,
+        peer: PeerId,
+        now: i64,
+    ) -> Result<AuthenticatedNode, NodeAuthError> {
+        self.admit(peer, None, now)
+    }
+
+    /// Resolves the caller in one step. `remote` is the noise-authenticated peer of a stream
+    /// request; when set, the header is not read at all.
     pub fn authenticate(
         &self,
         remote: Option<PeerId>,
@@ -378,41 +579,87 @@ impl NodeAuth {
         body: &[u8],
         now: i64,
     ) -> Result<AuthenticatedNode, NodeAuthError> {
-        let inner = &*self.inner;
-        let (signer, nonce) = match remote {
-            Some(peer) => (peer, None),
+        match remote {
+            Some(peer) => self.authenticate_stream(peer, now),
             None => {
-                let header = header_text(headers)?;
-                let target = NodeRequestTarget {
-                    method,
-                    path,
-                    body,
-                    network_id: &inner.network_id,
-                };
-                let recipients: Vec<&str> = inner.recipients.iter().map(String::as_str).collect();
-                let auth =
-                    verify_node_request_header(header, &target, &recipients, now, MAX_SKEW_SECS)
-                        .map_err(NodeAuthError::Invalid)?;
-                let derived = peer_id_of_key(&auth.public_key)
-                    .filter(|id| id.to_string() == auth.peer_id)
-                    .ok_or(NodeAuthError::PeerMismatch)?;
-                (derived, Some(auth.nonce))
+                let head = self.verify_head(headers, method, path, now)?;
+                self.finish(head, body, now)
             }
-        };
+        }
+    }
+
+    fn admit(
+        &self,
+        signer: PeerId,
+        nonce: Option<[u8; 16]>,
+        now: i64,
+    ) -> Result<AuthenticatedNode, NodeAuthError> {
+        let inner = &*self.inner;
         if !inner.peers.standing(&signer) {
             return Err(NodeAuthError::NoStanding);
         }
-        // Charged first so a refused request records no nonce.
-        let mut budget = inner.budget.lock().unwrap_or_else(|p| p.into_inner());
-        if !budget.charge(signer, now) {
+        // One lock covers replay check, budget and record: a replay is refused before it costs
+        // budget, a refused request records no nonce, and a nonce is accepted at most once.
+        // Lock order is replay then budget everywhere.
+        let mut replay = inner.replay.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(nonce) = nonce {
+            replay.admit(signer, nonce, now)?;
+        }
+        let charged = inner
+            .budget
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .charge(signer, now);
+        if !charged {
             return Err(NodeAuthError::RateLimited);
         }
-        drop(budget);
         if let Some(nonce) = nonce {
-            let mut replay = inner.replay.lock().unwrap_or_else(|p| p.into_inner());
-            replay.insert(signer, nonce, now)?;
+            replay.record(signer, nonce, now);
         }
         Ok(AuthenticatedNode(signer))
+    }
+}
+
+/// A credential whose signature, peer id and standing are verified and whose body is not yet
+/// read.
+pub struct VerifiedHead {
+    signer: PeerId,
+    auth: avalon_protocol::node_request::NodeRequestAuth,
+}
+
+/// Limits on the work done before a credential is fully verified.
+#[derive(Debug, Clone, Copy)]
+pub struct StageLimits {
+    pub failed_per_minute_per_ip: u32,
+    pub max_concurrent_bodies: usize,
+}
+
+impl Default for StageLimits {
+    fn default() -> Self {
+        Self {
+            failed_per_minute_per_ip: DEFAULT_FAILED_PER_MINUTE_PER_IP,
+            max_concurrent_bodies: DEFAULT_MAX_CONCURRENT_BODIES,
+        }
+    }
+}
+
+impl StageLimits {
+    fn from_env() -> Self {
+        let get = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .filter(|n| *n > 0)
+        };
+        let d = Self::default();
+        Self {
+            failed_per_minute_per_ip: get("AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP")
+                .map_or(d.failed_per_minute_per_ip, |n| {
+                    n.min(u32::MAX as usize) as u32
+                }),
+            max_concurrent_bodies: get("AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES")
+                .unwrap_or(d.max_concurrent_bodies),
+        }
     }
 }
 
@@ -421,6 +668,12 @@ impl NodeAuth {
 pub struct NodeAuthRoute {
     auth: NodeAuth,
     max_body_bytes: usize,
+}
+
+/// One warning per reason per interval, with the count held back.
+fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
+    static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> = std::sync::OnceLock::new();
+    LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(std::time::Duration::from_secs(30)))
 }
 
 /// Middleware for the node-to-node write routes: refuses the request unless it resolves to an
@@ -433,40 +686,67 @@ pub async fn require_node_auth(
 ) -> Response {
     let (mut parts, body) = request.into_parts();
     let remote = parts.extensions.get::<RemotePeer>().map(|r| r.0);
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let auth = &route.auth;
+    let source = parts
+        .extensions
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|ConnectInfo(addr)| auth.inner.proxies.client_ip(addr.ip(), &parts.headers))
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     let refuse = |e: NodeAuthError| {
         let (reason, path) = (e.code(), parts.uri.path());
         let transport = if remote.is_some() { "stream" } else { "http" };
-        // Refusals a stranger can cause at will stay at debug.
-        if matches!(
-            e,
-            NodeAuthError::Replay | NodeAuthError::NoStanding | NodeAuthError::RateLimited
-        ) {
-            tracing::warn!(reason, path, transport, "node-auth: request refused");
+        // Only refusals that need a standing peer can warn; a stranger can cause the rest.
+        if e.warns() {
+            if let Some(held_back) = refusal_log().permit(reason, std::time::Instant::now()) {
+                tracing::warn!(
+                    reason,
+                    path,
+                    transport,
+                    held_back,
+                    "node-auth: request refused"
+                );
+            }
         } else {
             tracing::debug!(reason, path, transport, "node-auth: request refused");
         }
+        if remote.is_none() && e.is_credential_failure() {
+            auth.note_failure(source, now);
+        }
         e.into_response()
     };
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    // HTTP: refuse a source that keeps failing, then verify the signature before any body.
+    let mut verified = None;
     if remote.is_none() {
-        if let Err(e) = route.auth.precheck(&parts.headers, now) {
-            return refuse(e);
+        if !parts.headers.contains_key(NODE_REQUEST_HEADER) {
+            return refuse(NodeAuthError::Missing);
+        }
+        if auth.source_throttled(source, now) {
+            return refuse(NodeAuthError::SourceThrottled);
+        }
+        match auth.verify_head(&parts.headers, parts.method.as_str(), parts.uri.path(), now) {
+            Ok(head) => verified = Some(head),
+            Err(e) => return refuse(e),
         }
     }
+    let stage = match auth.body_stage() {
+        Ok(permit) => permit,
+        Err(e) => return refuse(e),
+    };
     let Ok(bytes) = axum::body::to_bytes(body, route.max_body_bytes).await else {
         return refuse(NodeAuthError::BodyTooLarge);
     };
-    let node = match route.auth.authenticate(
-        remote,
-        &parts.headers,
-        parts.method.as_str(),
-        parts.uri.path(),
-        &bytes,
-        now,
-    ) {
+    let node = match (remote, verified) {
+        (Some(peer), _) => auth.authenticate_stream(peer, now),
+        (None, Some(head)) => auth.finish(head, &bytes, now),
+        (None, None) => Err(NodeAuthError::Missing),
+    };
+    let node = match node {
         Ok(node) => node,
         Err(e) => return refuse(e),
     };
+    drop(stage);
     parts.extensions.insert(node);
     next.run(Request::from_parts(parts, Body::from(bytes)))
         .await
@@ -476,6 +756,7 @@ pub async fn require_node_auth(
 mod tests {
     use super::*;
     use crate::nodes::PeerInfo;
+    use avalon_protocol::node_request::NodeRequestTarget;
     use axum::routing::post;
     use axum::Router;
     use libp2p::identity::Keypair;
@@ -672,7 +953,10 @@ mod tests {
         let bad = invalid(NodeRequestError::BadSignature);
         let other = header_at(&n, b"{}", "https://elsewhere.test", NOW, [5; 16]);
         assert_eq!(f.http(&other, b"{}", NOW), bad);
-        assert_eq!(f.http(&ok(NOW, 6), b"{ }", NOW), bad);
+        assert_eq!(
+            f.http(&ok(NOW, 6), b"{ }", NOW),
+            invalid(NodeRequestError::BodyMismatch)
+        );
         // A header signed for another network.
         let other_net = Fixture {
             auth: NodeAuth::with_limits(f.peers.clone(), "other-net", Some(&me), None, 600, 1000),
@@ -800,20 +1084,31 @@ mod tests {
 
     #[test]
     fn the_nonce_cache_is_bounded_globally_and_per_signer() {
-        // Global cap: the oldest nonce is forgotten to make room, the total never exceeds it.
+        // Global cap: a cache of live nonces refuses new ones and never evicts.
         let f = fixture_with(600, 5);
         let me = f.me.to_string();
         let nodes: Vec<Node> = (0..4).map(|_| node()).collect();
         for n in &nodes {
             f.grant(n);
         }
-        for i in 0..40u8 {
+        let send = |i: u8, now: i64| {
             let n = &nodes[i as usize % 4];
-            let h = header_at(n, b"{}", &me, NOW, [i; 16]);
-            assert!(f.http(&h, b"{}", NOW).is_ok());
-            assert!(f.auth.replay_len() <= 5);
+            f.http(&header_at(n, b"{}", &me, now, [i; 16]), b"{}", now)
+        };
+        for i in 0..5u8 {
+            assert!(send(i, NOW).is_ok());
         }
-        assert_eq!(f.auth.replay_len(), 5);
+        for i in 5..40u8 {
+            assert_eq!(send(i, NOW), Err(NodeAuthError::ReplayCacheFull));
+            assert_eq!(f.auth.replay_len(), 5);
+        }
+        // Every live nonce still counts as used: nothing was evicted to make room.
+        for i in 0..5u8 {
+            assert_eq!(send(i, NOW + 1), Err(NodeAuthError::Replay), "nonce {i}");
+        }
+        // Expired entries are pruned before a request is refused.
+        assert!(send(50, NOW + REPLAY_RETENTION_SECS).is_ok());
+        assert_eq!(f.auth.replay_len(), 1);
 
         // Per-signer cap (4 * rate + 16): one key cannot take more than its share.
         let g = fixture_with(1, MAX_REPLAY_ENTRIES);
@@ -963,6 +1258,14 @@ mod tests {
             (NoStanding, 403, "node_auth_no_standing"),
             (RateLimited, 429, "node_auth_rate_limited"),
             (BodyTooLarge, 413, "node_auth_body_too_large"),
+            (ReplayCacheFull, 503, "node_auth_replay_cache_full"),
+            (Busy, 503, "node_auth_busy"),
+            (SourceThrottled, 429, "node_auth_source_throttled"),
+            (
+                Invalid(NodeRequestError::BodyMismatch),
+                401,
+                "node_auth_body_hash",
+            ),
         ];
         for (e, status, code) in all {
             assert_eq!((e.status().as_u16(), e.code()), (status, code));
@@ -1093,7 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn the_precheck_refuses_garbage_before_any_body_or_signature_work() {
+    fn the_head_check_refuses_everything_but_a_valid_standing_signature_without_a_body() {
         let f = fixture();
         let n = node();
         f.grant(&n);
@@ -1101,19 +1404,18 @@ mod tests {
         let check = |h: &str| {
             let mut headers = HeaderMap::new();
             headers.insert(NODE_REQUEST_HEADER, h.parse().unwrap());
-            f.auth.precheck(&headers, NOW)
+            f.auth.verify_head(&headers, "POST", PATH, NOW).map(|_| ())
         };
         let good = header_at(&n, b"{}", &me, NOW, [1; 16]);
         assert_eq!(check(&good), Ok(()));
-        assert!(matches!(
-            check("garbage"),
-            Err(NodeAuthError::Invalid(NodeRequestError::Malformed(_)))
-        ));
-        let long = format!("{good}{}", "a".repeat(600));
-        assert!(matches!(
-            check(&long),
-            Err(NodeAuthError::Invalid(NodeRequestError::Malformed(_)))
-        ));
+        let mal = |r: Result<(), NodeAuthError>| {
+            assert!(matches!(
+                r,
+                Err(NodeAuthError::Invalid(NodeRequestError::Malformed(_)))
+            ))
+        };
+        mal(check("garbage"));
+        mal(check(&format!("{good}{}", "a".repeat(600))));
         let stale = header_at(&n, b"{}", &me, NOW - 1000, [2; 16]);
         assert_eq!(
             check(&stale),
@@ -1127,10 +1429,53 @@ mod tests {
         let stranger = node();
         let h = header_at(&stranger, b"{}", &me, NOW, [4; 16]);
         assert_eq!(check(&h), Err(NodeAuthError::NoStanding));
-        // A claimed id that does not belong to the key.
         let h = good.replacen(&n.id.to_string(), &stranger.id.to_string(), 1);
         assert_eq!(check(&h), Err(NodeAuthError::PeerMismatch));
+        // Everything public about a standing peer (id and key) with a garbage signature.
+        let sig_at = good.find("sig=").unwrap() + 4;
+        let mut forged = good.clone();
+        forged.replace_range(
+            sig_at..sig_at + 1,
+            if &good[sig_at..sig_at + 1] == "0" {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        assert_eq!(
+            check(&forged),
+            Err(NodeAuthError::Invalid(NodeRequestError::BadSignature))
+        );
+        let elsewhere = header_at(&n, b"{}", "https://elsewhere.test", NOW, [5; 16]);
+        assert_eq!(
+            check(&elsewhere),
+            Err(NodeAuthError::Invalid(NodeRequestError::BadSignature))
+        );
         assert_eq!(f.auth.replay_len(), 0);
+        // A header already used is refused at this stage too.
+        assert!(f.http(&good, b"{}", NOW).is_ok());
+        assert_eq!(check(&good), Err(NodeAuthError::Replay));
+    }
+
+    #[test]
+    fn a_valid_signature_over_the_wrong_body_is_refused_without_a_nonce_or_budget() {
+        let f = fixture_with(2, MAX_REPLAY_ENTRIES);
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let h = header_at(&n, b"{}", &me, NOW, [1; 16]);
+        for _ in 0..10 {
+            assert_eq!(
+                f.http(&h, b"{ }", NOW),
+                Err(NodeAuthError::Invalid(NodeRequestError::BodyMismatch))
+            );
+        }
+        assert_eq!((f.auth.replay_len(), f.auth.budget_keys()), (0, 0));
+        // The same header with its real body still works, and the budget is intact.
+        assert!(f.http(&h, b"{}", NOW).is_ok());
+        assert!(f
+            .http(&header_at(&n, b"{}", &me, NOW, [2; 16]), b"{}", NOW)
+            .is_ok());
     }
 
     /// A body that records whether anything polled it.
@@ -1141,38 +1486,201 @@ mod tests {
         }))
     }
 
+    fn watched_request(h: &str, polled: &Arc<std::sync::atomic::AtomicBool>, ip: &str) -> Request {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(PATH)
+            .header(NODE_REQUEST_HEADER, h)
+            .body(watched_body(polled.clone()))
+            .unwrap();
+        let addr: std::net::SocketAddr = format!("{ip}:1000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    }
+
+    fn was_polled(polled: &Arc<std::sync::atomic::AtomicBool>) -> bool {
+        polled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     #[tokio::test]
-    async fn a_request_that_fails_the_precheck_never_has_its_body_read() {
+    async fn only_a_valid_signature_from_a_standing_key_gets_its_body_read() {
         let f = fixture();
         let n = node();
         f.grant(&n);
+        let me = f.me.to_string();
         let app = app(&f, 64);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let stale = header_at(&n, b"", &f.me.to_string(), now - 1000, [1; 16]);
-        let stranger = header_at(&node(), b"", &f.me.to_string(), now, [2; 16]);
-        for h in [stale.as_str(), stranger.as_str(), "garbage"] {
+        let good = header_at(&n, b"", &me, now, [9; 16]);
+        let sig_at = good.find("sig=").unwrap() + 4;
+        let mut forged = good.clone();
+        forged.replace_range(
+            sig_at..sig_at + 1,
+            if &good[sig_at..sig_at + 1] == "0" {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        let refused = [
+            header_at(&n, b"", &me, now - 1000, [1; 16]),
+            header_at(&node(), b"", &me, now, [2; 16]),
+            header_at(&n, b"", "https://elsewhere.test", now, [3; 16]),
+            forged,
+            "garbage".to_string(),
+        ];
+        for h in &refused {
             let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let req = Request::builder()
-                .method("POST")
-                .uri(PATH)
-                .header(NODE_REQUEST_HEADER, h)
-                .body(watched_body(polled.clone()))
-                .unwrap();
-            let status = call(&app, req).await.0;
-            assert!(status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN);
-            assert!(!polled.load(std::sync::atomic::Ordering::SeqCst), "{h}");
+            let status = call(&app, watched_request(h, &polled, "198.51.100.1"))
+                .await
+                .0;
+            assert!(
+                status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN,
+                "{h}"
+            );
+            assert!(!was_polled(&polled), "the body was read for {h}");
         }
-        // A credential that passes the precheck does get its body read.
-        let ok = header_at(&n, b"", &f.me.to_string(), now, [3; 16]);
+        // A valid credential gets its body read, once; a replay of it is refused unread.
         let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let req = Request::builder()
-            .method("POST")
-            .uri(PATH)
-            .header(NODE_REQUEST_HEADER, ok)
-            .body(watched_body(polled.clone()))
-            .unwrap();
-        assert_eq!(call(&app, req).await.0, StatusCode::OK);
-        assert!(polled.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(
+            call(&app, watched_request(&good, &polled, "198.51.100.1"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert!(was_polled(&polled));
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let replay = call(&app, watched_request(&good, &polled, "198.51.100.1"))
+            .await
+            .0;
+        assert_eq!(replay, StatusCode::UNAUTHORIZED);
+        assert!(!was_polled(&polled));
+        // A valid signature over another body is read, then refused.
+        let other = header_at(&n, b"x", &me, now, [10; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (status, body) = call(&app, watched_request(&other, &polled, "198.51.100.1")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("node_auth_body_hash"), "{body}");
+        assert!(was_polled(&polled));
+    }
+
+    fn fixture_stage(stage: StageLimits) -> Fixture {
+        let peers = PeerTable::new();
+        let me = PeerId::random();
+        let auth = NodeAuth::with_stage_limits(
+            peers.clone(),
+            NET,
+            Some(&me.to_string()),
+            None,
+            600,
+            MAX_REPLAY_ENTRIES,
+            stage,
+        );
+        Fixture { auth, peers, me }
+    }
+
+    #[tokio::test]
+    async fn a_source_that_keeps_failing_is_refused_before_any_body_read() {
+        let f = fixture_stage(StageLimits {
+            failed_per_minute_per_ip: 3,
+            ..StageLimits::default()
+        });
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let bad = |i: u8| header_at(&n, b"", &me, now - 1000, [i; 16]);
+        for i in 0..3 {
+            let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (status, _) = call(&app, watched_request(&bad(i), &polled, "198.51.100.7")).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        // Over budget: even a valid credential from that address is refused unread.
+        let good = header_at(&n, b"", &me, now, [50; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (status, body) = call(&app, watched_request(&good, &polled, "198.51.100.7")).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(body.contains("node_auth_source_throttled"), "{body}");
+        assert!(!was_polled(&polled));
+        // Another address, and a stream peer, are unaffected.
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ok = call(&app, watched_request(&good, &polled, "198.51.100.8"))
+            .await
+            .0;
+        assert_eq!(ok, StatusCode::OK);
+        assert_eq!(
+            call(&app, post_req(None, b"", Some(n.id))).await.0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn only_credential_failures_count_against_the_source() {
+        let f = fixture_stage(StageLimits {
+            failed_per_minute_per_ip: 2,
+            ..StageLimits::default()
+        });
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let good = header_at(&n, b"", &me, now, [1; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(
+            call(&app, watched_request(&good, &polled, "198.51.100.9"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // Replays and missing headers are not credential failures.
+        for _ in 0..10 {
+            let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let replay = call(&app, watched_request(&good, &polled, "198.51.100.9"))
+                .await
+                .0;
+            assert_eq!(replay, StatusCode::UNAUTHORIZED);
+        }
+        let fresh = header_at(&n, b"", &me, now, [2; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(
+            call(&app, watched_request(&fresh, &polled, "198.51.100.9"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn body_stages_are_bounded_and_refused_with_503_when_busy() {
+        let f = fixture_stage(StageLimits {
+            max_concurrent_bodies: 2,
+            ..StageLimits::default()
+        });
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let held = [f.auth.body_stage().unwrap(), f.auth.body_stage().unwrap()];
+        assert_eq!(f.auth.body_stage().err(), Some(NodeAuthError::Busy));
+        let good = header_at(&n, b"", &me, now, [1; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (status, body) = call(&app, watched_request(&good, &polled, "198.51.100.1")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body.contains("node_auth_busy"), "{body}");
+        assert!(!was_polled(&polled));
+        // Busy is not the sender's failure: no nonce is spent, so the retry works.
+        drop(held);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(
+            call(&app, watched_request(&good, &polled, "198.51.100.1"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // The permit is returned once the request is done.
+        assert!(f.auth.body_stage().is_ok());
     }
 
     #[test]
@@ -1182,5 +1690,95 @@ mod tests {
             DEFAULT_RATE_PER_MINUTE as u64,
             crate::DEFAULT_RATE_LIMIT_PER_MINUTE
         );
+    }
+
+    #[test]
+    fn a_victims_live_nonce_survives_a_flood_from_another_key_at_the_cap() {
+        let f = fixture_with(600, 8);
+        let (victim, flooder) = (node(), node());
+        f.grant(&victim);
+        f.grant(&flooder);
+        let me = f.me.to_string();
+        let captured = header_at(&victim, b"{}", &me, NOW, [200; 16]);
+        assert!(f.http(&captured, b"{}", NOW).is_ok());
+        for i in 0..100u8 {
+            let h = header_at(&flooder, b"{}", &me, NOW, [i; 16]);
+            let _ = f.http(&h, b"{}", NOW);
+        }
+        assert_eq!(f.auth.replay_len(), 8);
+        assert_eq!(f.http(&captured, b"{}", NOW), Err(NodeAuthError::Replay));
+    }
+
+    #[test]
+    fn a_replay_costs_no_budget_and_a_nonce_is_accepted_once_under_concurrency() {
+        let f = fixture_with(3, MAX_REPLAY_ENTRIES);
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let first = header_at(&n, b"{}", &me, NOW, [1; 16]);
+        assert!(f.http(&first, b"{}", NOW).is_ok());
+        for _ in 0..20 {
+            assert_eq!(f.http(&first, b"{}", NOW), Err(NodeAuthError::Replay));
+        }
+        // Two tokens of the three are left.
+        for i in 2..4u8 {
+            assert!(f
+                .http(&header_at(&n, b"{}", &me, NOW, [i; 16]), b"{}", NOW)
+                .is_ok());
+        }
+        let over = header_at(&n, b"{}", &me, NOW, [9; 16]);
+        assert_eq!(f.http(&over, b"{}", NOW), Err(NodeAuthError::RateLimited));
+
+        let g = fixture();
+        g.grant(&n);
+        let same = header_at(&n, b"{}", &g.me.to_string(), NOW, [7; 16]);
+        let accepted = std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..16)
+                .map(|_| scope.spawn(|| g.http(&same, b"{}", NOW).is_ok()))
+                .collect();
+            jobs.into_iter()
+                .map(|j| j.join().unwrap())
+                .filter(|ok| *ok)
+                .count()
+        });
+        assert_eq!(accepted, 1);
+    }
+
+    #[test]
+    fn the_replay_capacity_follows_the_peer_cap_and_the_rate_up_to_a_ceiling() {
+        assert_eq!(per_signer_cap(3000), 12_016);
+        assert_eq!(replay_capacity(50, 3000), 50 * 12_016);
+        assert_eq!(replay_capacity(10_000, 3000), MAX_REPLAY_ENTRIES);
+        assert_eq!(replay_capacity(0, 3000), 1);
+    }
+
+    #[test]
+    fn only_refusals_that_need_a_standing_peer_warn() {
+        use NodeAuthError::*;
+        for e in [Replay, RateLimited, ReplayCacheFull] {
+            assert!(e.warns(), "{e:?}");
+        }
+        for e in [
+            Missing,
+            NoStanding,
+            PeerMismatch,
+            BodyTooLarge,
+            Invalid(NodeRequestError::BadSignature),
+            Invalid(NodeRequestError::Stale),
+        ] {
+            assert!(!e.warns(), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn one_signer_cannot_hold_more_than_its_share_of_the_cache() {
+        let mut c = ReplayCache::new(100, 3);
+        let (a, b) = (PeerId::random(), PeerId::random());
+        for i in 0..3u8 {
+            assert_eq!(c.admit(a, [i; 16], NOW), Ok(()));
+            c.record(a, [i; 16], NOW);
+        }
+        assert_eq!(c.admit(a, [9; 16], NOW), Err(NodeAuthError::RateLimited));
+        assert_eq!(c.admit(b, [9; 16], NOW), Ok(()));
     }
 }

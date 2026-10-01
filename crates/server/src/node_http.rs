@@ -701,6 +701,7 @@ impl NodeRequestBuilder {
                 };
                 rb.send()
                     .await
+                    .inspect(warn_on_redirect)
                     .map(NodeResponse::from_http)
                     .map_err(NodeHttpError::from)
             }
@@ -720,6 +721,41 @@ impl NodeRequestBuilder {
             }
         }
         result
+    }
+}
+
+/// `scheme://host[:port]/path` of `url`, without userinfo or query, for logs.
+fn loggable_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) => format!("{}{}", u.origin().ascii_serialization(), u.path()),
+        Err(_) => "<unparsable url>".to_string(),
+    }
+}
+
+/// The line logged when a node answers a node-to-node request with a redirect.
+fn redirect_notice(target: &str, location: Option<&str>) -> String {
+    format!(
+        "node-to-node request to {} was answered with a redirect to {}; redirects are not \
+         followed, configure the final URL",
+        loggable_url(target),
+        location.map_or("<none>".to_string(), loggable_url)
+    )
+}
+
+/// Makes a 3xx answer visible, once per target per interval: it is returned unfollowed.
+fn warn_on_redirect(response: &reqwest::Response) {
+    if !response.status().is_redirection() {
+        return;
+    }
+    static LOG: OnceLock<crate::log_throttle::LogThrottle> = OnceLock::new();
+    let log = LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(Duration::from_secs(300)));
+    let target = loggable_url(response.url().as_str());
+    if let Some(held_back) = log.permit(&target, std::time::Instant::now()) {
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok());
+        tracing::warn!(held_back, status = %response.status(), "{}", redirect_notice(response.url().as_str(), location));
     }
 }
 
@@ -2283,5 +2319,17 @@ mod tests {
             assert_eq!(live.received_requests().await.unwrap().len(), 2);
             assert_eq!(http_hits(&elsewhere).await, 0, "{status} was followed");
         }
+    }
+
+    #[test]
+    fn the_redirect_notice_names_target_and_location_without_secrets() {
+        let n = redirect_notice(
+            "http://user:pw@node.test:8080/nodes/relay?token=s",
+            Some("https://node.test/nodes/relay?x=1"),
+        );
+        assert!(n.contains("http://node.test:8080/nodes/relay "), "{n}");
+        assert!(n.contains("https://node.test/nodes/relay;"), "{n}");
+        assert!(!n.contains("pw") && !n.contains("token") && !n.contains("x=1"));
+        assert!(redirect_notice("http://a.test/x", None).contains("<none>"));
     }
 }

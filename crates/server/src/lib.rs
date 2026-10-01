@@ -58,6 +58,7 @@ pub mod interest;
 pub mod internal_role;
 pub mod issuer_registration;
 pub mod known_list;
+pub(crate) mod log_throttle;
 pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
@@ -1244,5 +1245,76 @@ mod node_auth_wiring {
                 assert_ne!(status, StatusCode::FORBIDDEN, "{path}");
             }
         }
+    }
+
+    /// A nonce used on one guarded route is refused on another: the routes share one cache.
+    #[tokio::test]
+    async fn the_guarded_routes_share_one_replay_cache() {
+        use avalon_protocol::node_request::{
+            encode_node_request_header, sign_node_request, NodeRequestTarget,
+        };
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let id = libp2p::PeerId::from(key.public());
+        let state = lazy_state();
+        state.peers.upsert(nodes::PeerInfo {
+            base_url: "http://signer.test".into(),
+            roles: vec![],
+            protocol_version: "0.1.0".into(),
+            network_id: "avalon-test".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(id.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: true,
+        });
+        let app = router(state, None);
+        let ed = key.clone().try_into_ed25519().unwrap();
+        let seed: [u8; 32] = ed.secret().as_ref().try_into().unwrap();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let send = |path: &'static str, nonce: [u8; 16]| {
+            let target = NodeRequestTarget {
+                method: "POST",
+                path,
+                body: b"{}",
+                network_id: "avalon-test",
+            };
+            let auth = sign_node_request(
+                &signing,
+                &id.to_string(),
+                &target,
+                "12D3KooWTestOwnPeerId",
+                now,
+                nonce,
+            )
+            .unwrap();
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("x-avalon-node-auth", encode_node_request_header(&auth))
+                .body(Body::from("{}"))
+                .unwrap();
+            with_addr(&mut req);
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        // The first use passes the guard (the handler then rejects the body), the second does not.
+        let first = send("/nodes/relay", [5; 16]).await;
+        assert_ne!(first, StatusCode::UNAUTHORIZED);
+        assert_ne!(first, StatusCode::FORBIDDEN);
+        assert_eq!(
+            send("/mirror/notify", [5; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send("/nodes/replicate-chat", [5; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        // A fresh nonce passes on the other route.
+        assert_ne!(
+            send("/mirror/notify", [6; 16]).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

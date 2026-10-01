@@ -110,6 +110,12 @@ fn advertises_realtime_relay_role(roles: &[String]) -> bool {
     })
 }
 
+/// One warning per refusing peer per interval, with the count held back.
+fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
+    static LOG: OnceLock<crate::log_throttle::LogThrottle> = OnceLock::new();
+    LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(std::time::Duration::from_secs(60)))
+}
+
 fn relay_client() -> &'static crate::node_http::NodeClient {
     static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
     CLIENT.get_or_init(crate::node_http::NodeClient::new)
@@ -198,7 +204,12 @@ pub async fn relay_to_peers(state: AppState, event: RelayEvent) {
         tokio::spawn(async move {
             match client.post(&url).json(&event).send().await {
                 Ok(response) if !response.status().is_success() => {
-                    tracing::warn!(peer = %url, status = %response.status(), "realtime relay: peer refused the event");
+                    let status = response.status();
+                    tracing::debug!(peer = %url, %status, "realtime relay: peer refused the event");
+                    let now = std::time::Instant::now();
+                    if let Some(held_back) = refusal_log().permit(&base_url, now) {
+                        tracing::warn!(peer = %base_url, %status, held_back, "realtime relay: peer refused events");
+                    }
                 }
                 Ok(_) => {}
                 Err(err) => {
