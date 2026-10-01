@@ -41,6 +41,9 @@ standalone-binary route needs only a Postgres database.
    changes over time.
 5. [`verifying-a-release.md`](verifying-a-release.md) — checking the checksum and
    build provenance of a prebuilt release download before running it.
+6. [`running-without-an-open-port.md`](running-without-an-open-port.md) — a node
+   with no inbound reachability: what it needs, what works over its outbound
+   connections, and the limits.
 
 ## If something goes wrong
 
