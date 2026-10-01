@@ -443,7 +443,8 @@ scenario_relay-ranking() {
     case $name in far) far_pid=$LAST_PID ;; mid) mid_pid=$LAST_PID ;; near) near_pid=$LAST_PID ;; esac
     ready "$name" "$ip" || return 1
   done
-  node home1 home1 10.1.0.2 "$verify" \
+  # home1 announces url-less: its private base URL would be refused (422) by the verifying relays.
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" \
     AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.103:8080,http://10.99.0.104:8080 \
     AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1
   wait_status home1 10.1.0.2 '.connectivity == "relayed" and (.relay_reservations|length) == 1' \
@@ -485,7 +486,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover relay-ranking"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 
