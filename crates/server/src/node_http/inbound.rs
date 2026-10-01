@@ -52,7 +52,8 @@ pub const ALLOWED_EXACT: &[&str] = &[
 ];
 
 /// Routes that write or inject data without their own credential. Over a stream they are
-/// reserved for peers whose http URL vouched for their id (not `p2p://` self-announcers); the rest stay open to any authenticated peer id.
+/// reserved for peers whose http URL answered `/nodes/status` with their id (not `p2p://`
+/// self-announcers); the rest stay open to any authenticated peer id.
 pub const BOUND_ONLY_PATHS: &[&str] = &["/nodes/relay", "/nodes/replicate-chat", "/mirror/notify"];
 
 /// Whether `path_and_query` names a route in [`BOUND_ONLY_PATHS`].

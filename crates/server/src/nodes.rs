@@ -249,12 +249,16 @@ fn carry_identity(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
     }
 }
 
-fn is_p2p_url(url: &str) -> bool {
+pub(crate) fn is_p2p_url(url: &str) -> bool {
     url.starts_with("p2p://")
 }
 
 /// Most `p2p://` entries the main table holds, so free peer ids cannot fill it.
 const MAX_P2P_ENTRIES: usize = 64;
+/// Most `p2p://` entries the unverified pool holds.
+const MAX_P2P_UNVERIFIED: usize = 32;
+/// Most `p2p://` shard URLs the shard registry holds in total.
+const MAX_P2P_SHARD_URLS_TOTAL: usize = 32;
 /// Most unseen `p2p://` shard URLs accepted from one gossip exchange.
 const MAX_P2P_SHARD_URLS_PER_EXCHANGE: usize = 8;
 
@@ -392,7 +396,8 @@ impl PeerTable {
             evicted = Some(victim);
         }
         if is_new && peers.len() >= max {
-            let victim = oldest(&peers, false).ok_or(TableFull)?;
+            // A p2p newcomer never displaces an http peer.
+            let victim = oldest(&peers, is_p2p_url(&info.base_url)).ok_or(TableFull)?;
             peers.remove(&victim);
             evicted = Some(victim);
         }
@@ -474,8 +479,8 @@ impl PeerTable {
             .find_map(|p| p.libp2p_peer_id.as_ref()?.parse().ok())
     }
 
-    /// Whether `peer` is the libp2p id of a bound entry whose URL's own server vouched for it.
-    /// A self-announced `p2p://` entry only proves a key pair, so it never counts here.
+    /// Whether `peer` is the libp2p id of a bound entry whose http URL answered `/nodes/status`
+    /// with that id. A self-announced `p2p://` entry only proves a key pair, so it never counts.
     pub fn is_bound_libp2p_peer(&self, peer: &libp2p::PeerId) -> bool {
         let id = peer.to_string();
         self.peers
@@ -520,17 +525,30 @@ impl PeerTable {
             .write()
             .expect("unverified pool lock poisoned");
         carry_witness(pool.get(&info.base_url), &mut info);
-        if !pool.contains_key(&info.base_url) && pool.len() >= MAX_UNVERIFIED_PEERS {
-            if let Some(victim) = pool
-                .values()
+        let new_p2p = is_p2p_url(&info.base_url) && !pool.contains_key(&info.base_url);
+        let oldest = |pool: &HashMap<String, PeerInfo>, only_p2p: bool| {
+            pool.values()
+                .filter(|p| !only_p2p || is_p2p_url(&p.base_url))
                 .min_by(|a, b| {
-                    a.last_announced_at
-                        .cmp(&b.last_announced_at)
+                    is_p2p_url(&b.base_url)
+                        .cmp(&is_p2p_url(&a.base_url))
+                        .then_with(|| a.last_announced_at.cmp(&b.last_announced_at))
                         .then_with(|| a.base_url.cmp(&b.base_url))
                 })
                 .map(|p| p.base_url.clone())
-            {
+        };
+        if new_p2p && pool.keys().filter(|u| is_p2p_url(u)).count() >= MAX_P2P_UNVERIFIED {
+            if let Some(victim) = oldest(&pool, true) {
                 pool.remove(&victim);
+            }
+        }
+        if !pool.contains_key(&info.base_url) && pool.len() >= MAX_UNVERIFIED_PEERS {
+            // A p2p newcomer only displaces p2p entries, and is dropped if there are none.
+            match oldest(&pool, new_p2p) {
+                Some(victim) => {
+                    pool.remove(&victim);
+                }
+                None => return,
             }
         }
         pool.insert(info.base_url.clone(), info);
@@ -718,6 +736,26 @@ impl ShardRegistry {
                     }
                 })
                 .or_insert(entry.last_seen_at);
+        }
+        // Past the cap the oldest `p2p://` URLs go; they cost nothing to claim.
+        let mut p2p: Vec<(OffsetDateTime, String, String)> = shards
+            .iter()
+            .flat_map(|(id, urls)| {
+                urls.iter()
+                    .filter(|(u, _)| is_p2p_url(u))
+                    .map(move |(u, t)| (*t, id.clone(), u.clone()))
+            })
+            .collect();
+        if p2p.len() > MAX_P2P_SHARD_URLS_TOTAL {
+            p2p.sort();
+            for (_, id, url) in &p2p[..p2p.len() - MAX_P2P_SHARD_URLS_TOTAL] {
+                if let Some(urls) = shards.get_mut(id) {
+                    urls.remove(url);
+                    if urls.is_empty() {
+                        shards.remove(id);
+                    }
+                }
+            }
         }
         newly_learned
     }
@@ -5096,5 +5134,110 @@ mod tests {
             false,
         );
         assert!(table.contains(url));
+    }
+    #[test]
+    fn a_p2p_newcomer_at_the_cap_never_evicts_an_http_peer() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        table
+            .insert_bounded(supported("http://127.0.0.1:1", now), 1)
+            .unwrap();
+        let err = table.insert_bounded(p2p_entry(&fresh_peer_id(), true), 1);
+        assert_eq!(err, Err(TableFull));
+        assert!(table.contains("http://127.0.0.1:1"));
+        // A p2p entry can displace another p2p entry.
+        let t2 = PeerTable::new();
+        t2.insert_bounded(p2p_entry(&fresh_peer_id(), true), 1)
+            .unwrap();
+        assert!(t2
+            .insert_bounded(p2p_entry(&fresh_peer_id(), true), 1)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn p2p_entries_cannot_flush_the_unverified_pool_of_http_entries() {
+        let table = PeerTable::new();
+        let now = OffsetDateTime::now_utc();
+        for i in 0..MAX_UNVERIFIED_PEERS {
+            table.insert_unverified(supported(
+                &format!("http://127.0.0.1:{}", 1000 + i),
+                now - time::Duration::hours(1),
+            ));
+        }
+        for _ in 0..(MAX_P2P_UNVERIFIED * 3) {
+            table.insert_unverified(p2p_entry(&fresh_peer_id(), false));
+        }
+        let pool = table.list_unverified();
+        assert_eq!(pool.iter().filter(|p| is_p2p_url(&p.base_url)).count(), 0);
+        assert_eq!(pool.len(), MAX_UNVERIFIED_PEERS);
+        // With room, p2p entries are held up to their own cap.
+        let roomy = PeerTable::new();
+        for _ in 0..(MAX_P2P_UNVERIFIED + 5) {
+            roomy.insert_unverified(p2p_entry(&fresh_peer_id(), false));
+        }
+        assert_eq!(roomy.unverified_len(), MAX_P2P_UNVERIFIED);
+    }
+
+    #[test]
+    fn the_shard_registry_holds_a_bounded_total_of_p2p_urls() {
+        let reg = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        for i in 0..MAX_P2P_SHARD_URLS_TOTAL + 5 {
+            reg.merge(&[ShardAnnouncement {
+                shard_id: format!("s{i}"),
+                url: crate::node_http::p2p_base_url(&fresh_peer_id()),
+                last_seen_at: now + time::Duration::seconds(i as i64),
+            }]);
+        }
+        reg.merge(&[ShardAnnouncement {
+            shard_id: "http".into(),
+            url: "http://a.test".into(),
+            last_seen_at: now - time::Duration::days(1),
+        }]);
+        let snap = reg.snapshot();
+        assert_eq!(
+            snap.iter().filter(|a| is_p2p_url(&a.url)).count(),
+            MAX_P2P_SHARD_URLS_TOTAL
+        );
+        assert!(snap.iter().any(|a| a.url == "http://a.test"));
+        // The oldest p2p URLs went.
+        assert!(!snap.iter().any(|a| a.shard_id == "s0"));
+    }
+
+    #[test]
+    fn an_http_entry_naming_a_p2p_peers_id_is_still_bound() {
+        let id = fresh_peer_id();
+        let table = PeerTable::new();
+        table.upsert(p2p_entry(&id, true));
+        assert!(!table.is_bound_libp2p_peer(&id));
+        table.upsert(table_entry("http://v.test", Some(&id), true));
+        assert!(table.is_bound_libp2p_peer(&id));
+    }
+
+    #[tokio::test]
+    async fn a_vouch_over_http_for_a_url_less_node_contacts_nobody() {
+        let server = wiremock::MockServer::start().await;
+        announce_mock(&server, 0).await;
+        let adm = admission_for_tests(true, |_| {});
+        let client = crate::node_http::NodeClient::new();
+        let table = PeerTable::new();
+        let url = normalized_base_url(&server.uri());
+        let own = crate::node_http::p2p_base_url(&fresh_libp2p());
+        vouch_contact(&client, &table, &adm, &url, &url, &announce_body(&own)).await;
+
+        // With an http identity the same call does announce.
+        let server = wiremock::MockServer::start().await;
+        announce_mock(&server, 1).await;
+        let url = normalized_base_url(&server.uri());
+        vouch_contact(
+            &client,
+            &table,
+            &adm,
+            &url,
+            &url,
+            &announce_body("http://me.test"),
+        )
+        .await;
     }
 }
