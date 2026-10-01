@@ -399,8 +399,9 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   121 seconds, and never evicts a live one; a hash collision could only reject a fresh nonce
   as a replay (about 2^-128 per pair). It is sized for `AVALON_NODE_MAX_KNOWN_PEERS` standing
   keys (the peer table bounds them) at the key budget plus slack, capped at 1,048,576 nonces.
-  Measured with a counting allocator: about 66 bytes per nonce, 69 MB at the cap, and the
-  memory is released once the cache empties. When it is full of live nonces a new request is
+  Measured with a counting allocator at steady state: about 66 bytes per nonce, 69 MB at the
+  cap (growth transients while the tables resize can briefly reach about 1.5 times that), and
+  the memory is released once the cache empties. When it is full of live nonces a new request is
   refused with 503 `node_auth_replay_cache_full` until entries expire. Only keys with standing
   can cause that, and it takes about 175 of them sending 3000 requests a minute each (about 88
   at the worst boundary burst); self-announced `p2p://` entries are capped at 64 per node, so
@@ -409,16 +410,28 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
 - The signature is verified before the body is read: the header carries the body's SHA-256
   and the signature covers it. A stranger, including one who knows a standing peer's public id,
   is refused at the signature stage after one Ed25519 verification at most and no body is read.
-  Standing is free until per-route scope checks exist (a self-announced `p2p://` entry
+- The nonce is consumed when the body read begins, so a captured, unused header is worth one
+  lost request: every later use is a cheap 401 replay that costs the real sender no budget, no
+  failure count and no read slot. A body that never arrives or does not match burns its nonce;
+  senders use a fresh nonce per request.
+- Standing is free until per-route scope checks exist (a self-announced `p2p://` entry
   qualifies), so a key with standing can make the node read a body, bounded by: the route cap
-  (64 KiB, 64 KiB, 1 KiB); a 5 second read timeout; at most 3 reads in flight per key; the
-  key's request budget, which every read spends before it starts; its failure budget (30 wrong
-  bodies, oversize bodies or timeouts a minute, then 429); and 64 reads at once for the whole
-  node (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`, excess answered 503 `node_auth_busy`). Stream
-  requests take no read slot. A valid signature over the wrong body records no nonce.
+  (64 KiB, 64 KiB, 1 KiB); a total read timeout of 5 seconds
+  (`AVALON_NODE_AUTH_BODY_TIMEOUT_MS`, at most 30000) and an idle timeout of 1.5 seconds
+  without a byte (`AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS`, at most 10000); at most 16 reads in
+  flight per key (`AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER`, at most 64); the key's request
+  budget, which every read spends; its failure budget (30 units a minute: a wrong or oversize
+  body or a failed read costs 1, a timeout 10, so a key gets about 3 timeouts a minute before
+  429); and 64 reads at once for the whole node (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`,
+  excess answered 503 `node_auth_busy`). A quarter of those stages is reserved for keys that
+  completed a read in the last 10 minutes, so a flood of fresh slow keys cannot take them.
+  Residual: a determined set of hundreds of standing keys, each earning the reserve and then
+  timing out, can still degrade the stage, and standing is free until scope checks land. Stream
+  requests take no read stage. A connection reset mid-body is answered 400 and costs the key one
+  unit, not the source address.
 - A source address that causes more than 30 expensive failures a minute
-  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`: bad signature, wrong body hash, oversize body;
-  IPv6 counted per /64) has further failures answered 429 without counting. It never refuses a
+  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`: bad signature, wrong body hash, oversize body,
+  body timeout; IPv6 counted per /64) has further failures answered 429 without counting. It never refuses a
   valid credential, because behind a reverse proxy not listed in `AVALON_TRUSTED_PROXIES`
   every client shares the proxy's address; the node logs a startup warning in that setup.
   Configure `AVALON_TRUSTED_PROXIES` so the per-IP limits see real clients. A refused-for-load

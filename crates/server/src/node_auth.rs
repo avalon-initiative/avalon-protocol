@@ -20,6 +20,9 @@
 //! further failures: a valid credential is never refused for the address it came from, since
 //! behind a proxy that is not in `AVALON_TRUSTED_PROXIES` every client shares one address.
 //!
+//! The nonce is consumed when the body read begins, so a captured unused header is worth one
+//! lost request and every later use is a cheap replay.
+//!
 //! The replay cache stores a 128-bit truncated SHA-256 of (signer id, nonce) per live nonce,
 //! so a collision can only reject a fresh nonce as a replay, with probability about 2^-128
 //! per pair. It never evicts a live nonce: when full it refuses (503), a liveness gap only.
@@ -104,11 +107,27 @@ pub const DEFAULT_FAILED_PER_MINUTE_PER_IP: u32 = 30;
 /// otherwise.
 pub const DEFAULT_MAX_CONCURRENT_BODIES: usize = 64;
 
-/// Body reads one signer may have in flight at once.
-pub const DEFAULT_MAX_INFLIGHT_PER_SIGNER: usize = 3;
+/// Body reads one signer may have in flight at once, unless
+/// `AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER` says otherwise (at most 64). A node fans one event
+/// out per peer, so a burst of several in one round trip is normal.
+pub const DEFAULT_MAX_INFLIGHT_PER_SIGNER: usize = 16;
 
-/// Longest a body read may take, for the largest route body.
+/// Longest a body read may take in total, unless `AVALON_NODE_AUTH_BODY_TIMEOUT_MS` says
+/// otherwise (at most 30000).
 pub const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Longest a body read may go without receiving a byte, unless
+/// `AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS` says otherwise (at most 10000).
+pub const DEFAULT_BODY_IDLE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Failure units a body timeout costs the signer; its budget is 30 a minute.
+const TIMEOUT_FAILURE_UNITS: u32 = 10;
+
+/// How long a signer that completed a read counts as recently good.
+const RECENTLY_GOOD_SECS: i64 = 600;
+
+/// Most recently-good signers remembered.
+const MAX_RECENTLY_GOOD: usize = 4096;
 
 /// Most sources tracked for failures; the table evicts when full.
 const MAX_FAILURE_KEYS: usize = 16_384;
@@ -152,6 +171,8 @@ pub enum NodeAuthError {
     BodyTooLarge,
     /// The body did not arrive within the read timeout.
     BodyReadTimeout,
+    /// The connection failed while the body was being read.
+    BodyReadFailed,
     /// The source address caused too many expensive failures this minute.
     SourceThrottled,
     /// Too many body reads are already running.
@@ -175,22 +196,23 @@ impl NodeAuthError {
         )
     }
 
+    /// Failure units the refusal costs the signer, if it counts at all.
+    fn signer_failure_units(&self) -> u32 {
+        match self {
+            Self::BodyReadTimeout => TIMEOUT_FAILURE_UNITS,
+            Self::Invalid(NodeRequestError::BodyMismatch)
+            | Self::BodyTooLarge
+            | Self::BodyReadFailed => 1,
+            _ => 0,
+        }
+    }
+
     /// Whether the refusal counts against the source address: only failures that cost a
     /// signature verification or a body read. Cheaper rejections cost no more than a hash.
     fn is_expensive_failure(&self) -> bool {
         matches!(
             self,
             Self::Invalid(NodeRequestError::BadSignature | NodeRequestError::BodyMismatch)
-                | Self::BodyTooLarge
-        )
-    }
-
-    /// Whether the refusal counts against the signer's own failure budget: only a holder of
-    /// the key can cause these.
-    fn is_signer_failure(&self) -> bool {
-        matches!(
-            self,
-            Self::Invalid(NodeRequestError::BodyMismatch)
                 | Self::BodyTooLarge
                 | Self::BodyReadTimeout
         )
@@ -207,6 +229,7 @@ impl NodeAuthError {
             }
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::BodyReadTimeout => StatusCode::REQUEST_TIMEOUT,
+            Self::BodyReadFailed => StatusCode::BAD_REQUEST,
             Self::ReplayCacheFull | Self::Busy => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -228,6 +251,7 @@ impl NodeAuthError {
             Self::RateLimited => "node_auth_rate_limited",
             Self::BodyTooLarge => "node_auth_body_too_large",
             Self::BodyReadTimeout => "node_auth_body_timeout",
+            Self::BodyReadFailed => "node_auth_body_read",
             Self::ReplayCacheFull => "node_auth_replay_cache_full",
             Self::SourceThrottled => "node_auth_source_throttled",
             Self::Busy => "node_auth_busy",
@@ -241,6 +265,7 @@ impl NodeAuthError {
             Self::RateLimited | Self::SignerBusy => "too many requests from this node, retry later",
             Self::BodyTooLarge => "request body too large for this route",
             Self::BodyReadTimeout => "request body not received in time",
+            Self::BodyReadFailed => "request body could not be read",
             Self::ReplayCacheFull | Self::Busy => "this node is busy, retry later",
             Self::SourceThrottled => "too many failed credentials from this address",
             _ => "node credential missing or invalid",
@@ -269,22 +294,15 @@ fn nonce_key(signer: &PeerId, nonce: &[u8; 16]) -> u128 {
     u128::from_be_bytes(digest[..16].try_into().expect("a digest is 32 bytes"))
 }
 
-/// A short per-signer tag for the share counters: collisions only make two signers share one
-/// counter, which can refuse early and never accepts more.
-fn signer_tag(signer: &PeerId) -> u64 {
-    let digest = Sha256::new()
-        .chain_update(b"signer")
-        .chain_update(signer.to_bytes())
-        .finalize();
-    u64::from_be_bytes(digest[..8].try_into().expect("a digest is 32 bytes"))
-}
-
 /// Nonces seen from each signer, kept for [`REPLAY_RETENTION_SECS`].
 struct ReplayCache {
     seen: HashSet<u128>,
-    /// Insertion order, which is expiry order: `(expires_at, key, signer tag)`.
-    order: VecDeque<(i64, u128, u64)>,
-    per_signer: HashMap<u64, u32>,
+    /// Insertion order, which is expiry order: `(expires_at, key, signer slot)`.
+    order: VecDeque<(i64, u128, u32)>,
+    /// Live nonces per signer, with the slot entries in `order` refer to.
+    per_signer: HashMap<PeerId, (u32, u32)>,
+    slots: Vec<Option<PeerId>>,
+    free_slots: Vec<u32>,
     max_total: usize,
     max_per_signer: usize,
 }
@@ -295,20 +313,27 @@ impl ReplayCache {
             seen: HashSet::new(),
             order: VecDeque::new(),
             per_signer: HashMap::new(),
+            slots: Vec::new(),
+            free_slots: Vec::new(),
             max_total,
             max_per_signer,
         }
     }
 
     fn forget_front(&mut self) {
-        let Some((_, key, tag)) = self.order.pop_front() else {
+        let Some((_, key, slot)) = self.order.pop_front() else {
             return;
         };
         self.seen.remove(&key);
-        if let Some(n) = self.per_signer.get_mut(&tag) {
+        let Some(signer) = self.slots[slot as usize] else {
+            return;
+        };
+        if let Some((_, n)) = self.per_signer.get_mut(&signer) {
             *n -= 1;
             if *n == 0 {
-                self.per_signer.remove(&tag);
+                self.per_signer.remove(&signer);
+                self.slots[slot as usize] = None;
+                self.free_slots.push(slot);
             }
         }
     }
@@ -322,6 +347,8 @@ impl ReplayCache {
             self.seen = HashSet::new();
             self.order = VecDeque::new();
             self.per_signer = HashMap::new();
+            self.slots = Vec::new();
+            self.free_slots = Vec::new();
         }
     }
 
@@ -338,11 +365,7 @@ impl ReplayCache {
         if self.is_live(signer, nonce, now) {
             return Err(NodeAuthError::Replay);
         }
-        let held = self
-            .per_signer
-            .get(&signer_tag(signer))
-            .copied()
-            .unwrap_or(0);
+        let held = self.per_signer.get(signer).map_or(0, |(_, n)| *n);
         if held as usize >= self.max_per_signer {
             return Err(NodeAuthError::RateLimited);
         }
@@ -354,11 +377,25 @@ impl ReplayCache {
 
     /// Records a nonce [`Self::admit`] allowed.
     fn record(&mut self, signer: &PeerId, nonce: &[u8; 16], now: i64) {
-        let (key, tag) = (nonce_key(signer, nonce), signer_tag(signer));
+        let key = nonce_key(signer, nonce);
+        let slot = match self.per_signer.get_mut(signer) {
+            Some((slot, n)) => {
+                *n += 1;
+                *slot
+            }
+            None => {
+                let slot = self.free_slots.pop().unwrap_or_else(|| {
+                    self.slots.push(None);
+                    (self.slots.len() - 1) as u32
+                });
+                self.slots[slot as usize] = Some(*signer);
+                self.per_signer.insert(*signer, (slot, 1));
+                slot
+            }
+        };
         self.seen.insert(key);
         self.order
-            .push_back((now.saturating_add(REPLAY_RETENTION_SECS), key, tag));
-        *self.per_signer.entry(tag).or_insert(0) += 1;
+            .push_back((now.saturating_add(REPLAY_RETENTION_SECS), key, slot));
     }
 }
 
@@ -389,15 +426,23 @@ impl<K: Hash + Eq + Copy> Budget<K> {
     }
 
     fn charge(&mut self, key: K, now: i64) -> bool {
+        self.charge_units(key, 1, now)
+    }
+
+    /// Spends `units` of the key's minute, saturating at the limit; false when it was already
+    /// spent. A full table evicts an arbitrary entry (O(1)) when `evict_when_full`, and
+    /// otherwise reclaims past windows before refusing a new key.
+    fn charge_units(&mut self, key: K, units: u32, now: i64) -> bool {
         let minute = now.div_euclid(60);
         if self.windows.len() >= self.max_keys && !self.windows.contains_key(&key) {
-            self.windows.retain(|_, (m, _)| *m == minute);
-            if self.windows.len() >= self.max_keys {
-                if !self.evict_when_full {
-                    return false;
-                }
+            if self.evict_when_full {
                 if let Some(victim) = self.windows.keys().next().copied() {
                     self.windows.remove(&victim);
+                }
+            } else {
+                self.windows.retain(|_, (m, _)| *m == minute);
+                if self.windows.len() >= self.max_keys {
+                    return false;
                 }
             }
         }
@@ -408,7 +453,7 @@ impl<K: Hash + Eq + Copy> Budget<K> {
         if *count >= self.per_minute {
             return false;
         }
-        *count += 1;
+        *count = count.saturating_add(units).min(self.per_minute);
         true
     }
 }
@@ -438,6 +483,10 @@ struct Inner {
     /// Body reads in flight per signer.
     inflight: Mutex<HashMap<PeerId, usize>>,
     body_stage: Arc<tokio::sync::Semaphore>,
+    /// A slice of the read stages only recently-good signers may use.
+    reserve_stage: Arc<tokio::sync::Semaphore>,
+    /// Signers that completed a read, with when that expires.
+    recent_good: Mutex<HashMap<PeerId, i64>>,
     limits: StageLimits,
     proxies: crate::trusted_proxies::TrustedProxies,
 }
@@ -490,6 +539,7 @@ pub struct StageLimits {
     pub max_concurrent_bodies: usize,
     pub max_inflight_per_signer: usize,
     pub body_read_timeout: Duration,
+    pub body_idle_timeout: Duration,
 }
 
 impl Default for StageLimits {
@@ -499,6 +549,7 @@ impl Default for StageLimits {
             max_concurrent_bodies: DEFAULT_MAX_CONCURRENT_BODIES,
             max_inflight_per_signer: DEFAULT_MAX_INFLIGHT_PER_SIGNER,
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
+            body_idle_timeout: DEFAULT_BODY_IDLE_TIMEOUT,
         }
     }
 }
@@ -519,7 +570,16 @@ impl StageLimits {
                 }),
             max_concurrent_bodies: get("AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES")
                 .unwrap_or(d.max_concurrent_bodies),
-            ..d
+            max_inflight_per_signer: get("AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER")
+                .map_or(d.max_inflight_per_signer, |n| n.min(64)),
+            body_read_timeout: get("AVALON_NODE_AUTH_BODY_TIMEOUT_MS")
+                .map_or(d.body_read_timeout, |n| {
+                    Duration::from_millis(n.min(30_000) as u64)
+                }),
+            body_idle_timeout: get("AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS")
+                .map_or(d.body_idle_timeout, |n| {
+                    Duration::from_millis(n.min(10_000) as u64)
+                }),
         }
     }
 }
@@ -622,7 +682,13 @@ impl NodeAuth {
                     true,
                 )),
                 inflight: Mutex::new(HashMap::new()),
-                body_stage: Arc::new(tokio::sync::Semaphore::new(stage.max_concurrent_bodies)),
+                body_stage: Arc::new(tokio::sync::Semaphore::new(
+                    stage.max_concurrent_bodies - stage.max_concurrent_bodies / 4,
+                )),
+                reserve_stage: Arc::new(tokio::sync::Semaphore::new(
+                    stage.max_concurrent_bodies / 4,
+                )),
+                recent_good: Mutex::new(HashMap::new()),
                 limits: stage,
                 proxies: crate::trusted_proxies::TrustedProxies::from_env(),
             }),
@@ -704,13 +770,13 @@ impl NodeAuth {
             .charge(source_key(ip), now);
     }
 
-    /// Counts a body failure against `signer`.
-    pub fn note_signer_failure(&self, signer: PeerId, now: i64) {
+    /// Counts a body failure of `units` against `signer`.
+    pub fn note_signer_failure(&self, signer: PeerId, units: u32, now: i64) {
         self.inner
             .signer_failures
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .charge(signer, now);
+            .charge_units(signer, units, now);
     }
 
     /// Everything about an HTTP credential that can be checked without the body: header form,
@@ -757,10 +823,12 @@ impl NodeAuth {
         Ok(VerifiedHead { signer, auth })
     }
 
-    /// Admits the body read of a verified credential: the signer's failure budget and
-    /// in-flight share, a global read stage, and one request of the signer's budget, which
-    /// repeated slow or wrong reads therefore spend. The guard frees both on drop, however the
-    /// read ends.
+    /// Admits the body read of a verified credential: the signer's failure budget and in-flight
+    /// share, a read stage (the reserved ones only for a recently-good signer), then, under one
+    /// lock, the nonce and one request of the signer's budget. The nonce is consumed here, at
+    /// first sight, so a captured header is worth one lost request and every later use is a
+    /// cheap replay; a body that never arrives or does not match burns it. The guard frees the
+    /// stage and slot on drop, however the read ends.
     pub fn begin_read(&self, head: &VerifiedHead, now: i64) -> Result<ReadGuard, NodeAuthError> {
         let inner = &self.inner;
         let signer = head.signer;
@@ -784,11 +852,17 @@ impl NodeAuth {
             inner: inner.clone(),
             signer,
         };
-        let stage = inner
-            .body_stage
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| NodeAuthError::Busy)?;
+        let stage = match inner.body_stage.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) if self.recently_good(&signer, now) => inner
+                .reserve_stage
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| NodeAuthError::Busy)?,
+            Err(_) => return Err(NodeAuthError::Busy),
+        };
+        let mut replay = inner.replay.lock().unwrap_or_else(|p| p.into_inner());
+        replay.admit(&signer, &head.auth.nonce, now)?;
         let charged = inner
             .budget
             .lock()
@@ -797,6 +871,7 @@ impl NodeAuth {
         if !charged {
             return Err(NodeAuthError::RateLimited);
         }
+        replay.record(&signer, &head.auth.nonce, now);
         Ok(ReadGuard {
             _stage: stage,
             _slot: slot,
@@ -804,8 +879,7 @@ impl NodeAuth {
     }
 
     /// Completes an HTTP credential once the body is read: the body must hash to the signed
-    /// hash, then the nonce is checked and recorded under one lock (the budget was spent when
-    /// the read began). A request with the wrong body records no nonce.
+    /// hash. The nonce was consumed when the read began.
     pub fn finish(
         &self,
         head: VerifiedHead,
@@ -813,10 +887,36 @@ impl NodeAuth {
         now: i64,
     ) -> Result<AuthenticatedNode, NodeAuthError> {
         verify_node_request_body(&head.auth, body).map_err(NodeAuthError::Invalid)?;
-        let mut replay = self.inner.replay.lock().unwrap_or_else(|p| p.into_inner());
-        replay.admit(&head.signer, &head.auth.nonce, now)?;
-        replay.record(&head.signer, &head.auth.nonce, now);
+        self.mark_good(head.signer, now);
         Ok(AuthenticatedNode(head.signer))
+    }
+
+    /// Whether `signer` completed a read lately.
+    fn recently_good(&self, signer: &PeerId, now: i64) -> bool {
+        self.inner
+            .recent_good
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(signer)
+            .is_some_and(|until| *until > now)
+    }
+
+    /// Remembers that `signer` completed a read; the table is bounded and evicts when full.
+    fn mark_good(&self, signer: PeerId, now: i64) {
+        let mut map = self
+            .inner
+            .recent_good
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if map.len() >= MAX_RECENTLY_GOOD && !map.contains_key(&signer) {
+            map.retain(|_, until| *until > now);
+            if map.len() >= MAX_RECENTLY_GOOD {
+                if let Some(victim) = map.keys().next().copied() {
+                    map.remove(&victim);
+                }
+            }
+        }
+        map.insert(signer, now.saturating_add(RECENTLY_GOOD_SECS));
     }
 
     /// Admits a stream peer, whose handshake is its credential: standing, then one request
@@ -883,6 +983,40 @@ fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
     LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(Duration::from_secs(30)))
 }
 
+/// Reads a request body of at most `max` bytes within the total timeout, cutting a read that
+/// goes quiet for the idle timeout. Telling a too-large body from a failed connection keeps a
+/// reset from being reported as an oversize body.
+async fn read_body(
+    body: Body,
+    max: usize,
+    limits: &StageLimits,
+) -> Result<axum::body::Bytes, NodeAuthError> {
+    use futures_util::StreamExt;
+    let mut stream = body.into_data_stream();
+    let mut buf = Vec::new();
+    let total = tokio::time::timeout(limits.body_read_timeout, async {
+        loop {
+            match tokio::time::timeout(limits.body_idle_timeout, stream.next()).await {
+                Err(_) => return Err(NodeAuthError::BodyReadTimeout),
+                Ok(None) => return Ok(()),
+                Ok(Some(Err(_))) => return Err(NodeAuthError::BodyReadFailed),
+                Ok(Some(Ok(chunk))) => {
+                    if buf.len() + chunk.len() > max {
+                        return Err(NodeAuthError::BodyTooLarge);
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+            }
+        }
+    })
+    .await;
+    match total {
+        Err(_) => Err(NodeAuthError::BodyReadTimeout),
+        Ok(Err(e)) => Err(e),
+        Ok(Ok(())) => Ok(buf.into()),
+    }
+}
+
 /// Middleware for the node-to-node write routes: refuses the request unless it resolves to an
 /// [`AuthenticatedNode`], which it adds as a request extension. Over HTTP the signature is
 /// verified before the body is read; the body read is bounded by the route's limit, a read
@@ -924,8 +1058,8 @@ pub async fn require_node_auth(
             if e.is_expensive_failure() && !throttled {
                 auth.note_source_failure(source, now);
             }
-            if let (true, Some(signer)) = (e.is_signer_failure(), signer) {
-                auth.note_signer_failure(signer, now);
+            if let (units @ 1.., Some(signer)) = (e.signer_failure_units(), signer) {
+                auth.note_signer_failure(signer, units, now);
             }
         }
         // A throttled source's failures are answered cheaply; its valid requests never get here.
@@ -958,15 +1092,10 @@ pub async fn require_node_auth(
             Ok(guard) => guard,
             Err(e) => return refuse(e, Some(signer)),
         };
-        let read = tokio::time::timeout(
-            auth.inner.limits.body_read_timeout,
-            axum::body::to_bytes(body, route.max_body_bytes),
-        )
-        .await;
-        let bytes = match read {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(_)) => return refuse(NodeAuthError::BodyTooLarge, Some(signer)),
-            Err(_) => return refuse(NodeAuthError::BodyReadTimeout, Some(signer)),
+        let limits = auth.inner.limits;
+        let bytes = match read_body(body, route.max_body_bytes, &limits).await {
+            Ok(bytes) => bytes,
+            Err(e) => return refuse(e, Some(signer)),
         };
         match auth.finish(head, &bytes, now) {
             Ok(node) => (node, bytes),
@@ -1196,8 +1325,8 @@ mod tests {
         assert_eq!(f.http(&h, b"{}", NOW), bad);
         assert_eq!(
             f.auth.replay_len(),
-            2,
-            "only the two accepted requests were recorded"
+            3,
+            "the two accepted requests and the wrong-body one consumed a nonce, nothing else"
         );
     }
 
@@ -1306,8 +1435,8 @@ mod tests {
             let h = header_at(&known, b"{}", "https://x.test", NOW, [i as u8; 16]);
             assert!(f.http(&h, b"{}", NOW).is_err());
         }
-        // Only the known key ever got a budget; no stranger did.
-        assert_eq!(f.auth.replay_len(), 0);
+        // Only the known key's valid-signature requests left a nonce; no stranger did.
+        assert_eq!(f.auth.replay_len(), 30);
         assert!(f.auth.budget_keys() <= 1);
     }
 
@@ -1583,7 +1712,8 @@ mod tests {
         // No credential: 401, not 413, since the body is never read.
         let (status, _) = call(&app, post_req(None, &big, None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert_eq!(f.auth.replay_len(), 1);
+        // The two valid credentials each consumed their nonce, the oversize one too.
+        assert_eq!(f.auth.replay_len(), 2);
     }
 
     #[tokio::test]
@@ -1683,20 +1813,36 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_signature_over_the_wrong_body_records_no_nonce_but_spends_the_signers_budget() {
-        let f = fixture_with(2, MAX_REPLAY_ENTRIES);
+    fn a_header_is_consumed_at_first_sight_so_a_captured_one_is_worth_one_request() {
+        let f = fixture_with(600, MAX_REPLAY_ENTRIES);
         let n = node();
         f.grant(&n);
         let me = f.me.to_string();
-        let h = header_at(&n, b"{}", &me, NOW, [1; 16]);
+        let captured = header_at(&n, b"{}", &me, NOW, [1; 16]);
         let wrong = Err(NodeAuthError::Invalid(NodeRequestError::BodyMismatch));
-        assert_eq!(f.http(&h, b"{ }", NOW), wrong);
-        assert_eq!(f.http(&h, b"{ }", NOW), wrong);
-        // Repeated wrong or slow reads cost budget, so they run out.
-        assert_eq!(f.http(&h, b"{ }", NOW), Err(NodeAuthError::RateLimited));
-        assert_eq!(f.auth.replay_len(), 0);
-        // The next minute, the same header with its real body still works.
-        assert!(f.http(&h, b"{}", NOW + 60).is_ok());
+        assert_eq!(f.http(&captured, b"{ }", NOW), wrong);
+        // Every later use is a cheap replay: no budget, no failure count, no in-flight slot.
+        for _ in 0..60 {
+            assert_eq!(f.http(&captured, b"{ }", NOW), Err(NodeAuthError::Replay));
+            assert_eq!(f.http(&captured, b"{}", NOW), Err(NodeAuthError::Replay));
+        }
+        assert_eq!(f.auth.replay_len(), 1);
+        let spent = f
+            .auth
+            .inner
+            .budget
+            .lock()
+            .unwrap()
+            .windows
+            .values()
+            .next()
+            .unwrap()
+            .1;
+        assert_eq!(spent, 1);
+        assert!(f.auth.inner.inflight.lock().unwrap().is_empty());
+        // The victim's own next request, with a fresh nonce, goes through.
+        let next = header_at(&n, b"{}", &me, NOW, [2; 16]);
+        assert!(f.http(&next, b"{}", NOW).is_ok());
     }
 
     /// A body that records whether anything polled it.
@@ -1901,6 +2047,10 @@ mod tests {
         assert_eq!(f.auth.failure_keys(), 1);
     }
 
+    fn free_stages(f: &Fixture) -> usize {
+        f.auth.inner.body_stage.available_permits() + f.auth.inner.reserve_stage.available_permits()
+    }
+
     fn take_stage(f: &Fixture) -> Result<tokio::sync::OwnedSemaphorePermit, ()> {
         f.auth
             .inner
@@ -2023,7 +2173,6 @@ mod tests {
     async fn a_slow_body_times_out_frees_its_slots_and_counts_against_the_signer() {
         let f = fixture_stage(StageLimits {
             body_read_timeout: Duration::from_millis(100),
-            failed_per_minute_per_ip: 2,
             ..StageLimits::default()
         });
         let n = node();
@@ -2031,26 +2180,24 @@ mod tests {
         let me = f.me.to_string();
         let app = app(&f, 64);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        for i in 0..2u8 {
+        for i in 0..3u8 {
             let h = header_at(&n, b"", &me, now, [i; 16]);
             let (status, body) = call(&app, stalled_request(&h, "198.51.100.1")).await;
             assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
             assert!(body.contains("node_auth_body_timeout"), "{body}");
-            // Everything the read held is back, and no nonce was spent.
+            // Everything the read held is back; the nonce is burnt.
             assert!(take_stage(&f).is_ok());
             assert!(f.auth.inner.inflight.lock().unwrap().is_empty());
-            assert_eq!(f.auth.replay_len(), 0);
+            assert_eq!(f.auth.replay_len(), i as usize + 1);
         }
-        // Two timeouts used up the signer's failure budget: it is refused before reading.
+        // Three timeouts cost 30 units: the signer is refused before reading.
         let h = header_at(&n, b"", &me, now, [9; 16]);
         let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (status, _) = call(&app, watched_request(&h, &polled, "198.51.100.2")).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         assert!(!was_polled(&polled));
-        // The slow reads were not charged to the address.
-        assert!(!f
-            .auth
-            .source_throttled("198.51.100.1".parse().unwrap(), now));
+        // The slow reads count against the address too (advisory).
+        assert_eq!(f.auth.failure_keys(), 1);
     }
 
     #[tokio::test]
@@ -2073,45 +2220,47 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(f.auth.inner.inflight.lock().unwrap().len(), 1);
-        assert!(f.auth.inner.body_stage.available_permits() < DEFAULT_MAX_CONCURRENT_BODIES);
+        assert!(free_stages(&f) < DEFAULT_MAX_CONCURRENT_BODIES);
         task.abort();
         let _ = task.await;
         assert!(f.auth.inner.inflight.lock().unwrap().is_empty());
-        assert_eq!(
-            f.auth.inner.body_stage.available_permits(),
-            DEFAULT_MAX_CONCURRENT_BODIES
-        );
+        assert_eq!(free_stages(&f), DEFAULT_MAX_CONCURRENT_BODIES);
     }
 
     #[test]
     fn each_refusal_is_classified_for_logging_and_failure_accounting() {
         use NodeAuthError::*;
         use NodeRequestError as E;
-        // (error, warns, counts against the source, counts against the signer)
+        // (error, warns, counts against the source, failure units for the signer)
         let table = [
-            (Missing, false, false, false),
-            (Invalid(E::Malformed("x")), false, false, false),
-            (Invalid(E::InvalidRequest("x")), false, false, false),
-            (Invalid(E::InvalidKey), false, false, false),
-            (Invalid(E::Stale), false, false, false),
-            (Invalid(E::Future), false, false, false),
-            (Invalid(E::BadSignature), false, true, false),
-            (Invalid(E::BodyMismatch), false, true, true),
-            (PeerMismatch, false, false, false),
-            (NoStanding, false, false, false),
-            (SourceThrottled, false, false, false),
-            (BodyTooLarge, false, true, true),
-            (BodyReadTimeout, true, false, true),
-            (Replay, true, false, false),
-            (RateLimited, true, false, false),
-            (ReplayCacheFull, true, false, false),
-            (Busy, true, false, false),
-            (SignerBusy, true, false, false),
+            (Missing, false, false, 0),
+            (Invalid(E::Malformed("x")), false, false, 0),
+            (Invalid(E::InvalidRequest("x")), false, false, 0),
+            (Invalid(E::InvalidKey), false, false, 0),
+            (Invalid(E::Stale), false, false, 0),
+            (Invalid(E::Future), false, false, 0),
+            (Invalid(E::BadSignature), false, true, 0),
+            (Invalid(E::BodyMismatch), false, true, 1),
+            (PeerMismatch, false, false, 0),
+            (NoStanding, false, false, 0),
+            (SourceThrottled, false, false, 0),
+            (BodyTooLarge, false, true, 1),
+            (BodyReadFailed, false, false, 1),
+            (BodyReadTimeout, true, true, TIMEOUT_FAILURE_UNITS),
+            (Replay, true, false, 0),
+            (RateLimited, true, false, 0),
+            (ReplayCacheFull, true, false, 0),
+            (Busy, true, false, 0),
+            (SignerBusy, true, false, 0),
         ];
-        for (e, warns, source, signer) in table {
+        for (e, warns, source, units) in table {
             assert_eq!(
-                (e.warns(), e.is_expensive_failure(), e.is_signer_failure()),
-                (warns, source, signer),
+                (
+                    e.warns(),
+                    e.is_expensive_failure(),
+                    e.signer_failure_units()
+                ),
+                (warns, source, units),
                 "{e:?}"
             );
         }
@@ -2279,5 +2428,359 @@ mod tests {
         }
         assert_eq!(c.admit(&a, &[9; 16], NOW), Err(NodeAuthError::RateLimited));
         assert_eq!(c.admit(&b, &[9; 16], NOW), Ok(()));
+    }
+
+    fn slow_request(
+        h: &str,
+        ip: &str,
+        chunks: Vec<(Duration, &'static [u8])>,
+        then_stall: bool,
+    ) -> Request {
+        let stream = futures_util::stream::unfold(
+            (chunks.into_iter(), then_stall),
+            |(mut it, stall)| async move {
+                match it.next() {
+                    Some((wait, bytes)) => {
+                        tokio::time::sleep(wait).await;
+                        Some((
+                            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(bytes)),
+                            (it, stall),
+                        ))
+                    }
+                    None if stall => std::future::pending().await,
+                    None => None,
+                }
+            },
+        );
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(PATH)
+            .header(NODE_REQUEST_HEADER, h)
+            .body(Body::from_stream(stream))
+            .unwrap();
+        let addr: std::net::SocketAddr = format!("{ip}:1000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    }
+
+    #[tokio::test]
+    async fn a_trickling_body_is_cut_by_the_idle_deadline_and_a_slow_one_by_the_total() {
+        let f = fixture_stage(StageLimits {
+            body_idle_timeout: Duration::from_millis(100),
+            body_read_timeout: Duration::from_millis(400),
+            ..StageLimits::default()
+        });
+        let (a, b) = (node(), node());
+        f.grant(&a);
+        f.grant(&b);
+        let me = f.me.to_string();
+        let app = app(&f, 1024);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // One byte, then silence: cut after the idle deadline, long before the total one.
+        let h = header_at(&a, b"x", &me, now, [1; 16]);
+        let started = std::time::Instant::now();
+        let req = slow_request(&h, "198.51.100.1", vec![(Duration::ZERO, b"x")], true);
+        // The body never ends, so the whole body hash can never match: it is a timeout.
+        assert_eq!(call(&app, req).await.0, StatusCode::REQUEST_TIMEOUT);
+        assert!(
+            started.elapsed() < Duration::from_millis(350),
+            "{:?}",
+            started.elapsed()
+        );
+        // A body that keeps trickling inside the idle deadline still hits the total deadline.
+        let h = header_at(&b, b"x", &me, now, [2; 16]);
+        let drip = vec![(Duration::from_millis(60), &b"x"[..]); 20];
+        let started = std::time::Instant::now();
+        let req = slow_request(&h, "198.51.100.2", drip, false);
+        assert_eq!(call(&app, req).await.0, StatusCode::REQUEST_TIMEOUT);
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            started.elapsed()
+        );
+        // A prompt body is untouched by either deadline.
+        let h = header_at(&a, b"x", &me, now, [3; 16]);
+        let req = slow_request(
+            &h,
+            "198.51.100.1",
+            vec![(Duration::from_millis(50), b"x")],
+            false,
+        );
+        assert_eq!(call(&app, req).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn too_large_and_failed_bodies_are_told_apart() {
+        let f = fixture_stage(StageLimits::default());
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let app = app(&f, 8);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut over = slow_request(
+            &header_at(&n, &[b'x'; 9], &me, now, [1; 16]),
+            "198.51.100.1",
+            vec![(Duration::ZERO, b"xxxxx"), (Duration::ZERO, b"xxxx")],
+            false,
+        );
+        let (status, body) = call(
+            &app,
+            std::mem::replace(&mut over, Request::new(Body::empty())),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+        // A reset mid-body is a failed read, not an oversize one, and does not count against
+        // the source address.
+        let failing = Body::from_stream(futures_util::stream::iter([
+            Ok(axum::body::Bytes::from_static(b"xx")),
+            Err(std::io::Error::other("reset")),
+        ]));
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(PATH)
+            .header(NODE_REQUEST_HEADER, header_at(&n, b"xx", &me, now, [2; 16]))
+            .body(failing)
+            .unwrap();
+        let addr: std::net::SocketAddr = "198.51.100.2:1000".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        let (status, body) = call(&app, req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("node_auth_body_read"), "{body}");
+        assert!(!f
+            .auth
+            .source_throttled("198.51.100.2".parse().unwrap(), now));
+        assert_eq!(f.auth.failure_keys(), 1, "only the oversize one counted");
+    }
+
+    #[tokio::test]
+    async fn one_signer_can_fan_out_well_past_three_reads_and_no_further_than_its_cap() {
+        let f = fixture();
+        let n = node();
+        f.grant(&n);
+        let me = f.me.to_string();
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let fan = |count: u8, base: u8, app: Router| {
+            let jobs: Vec<_> = (0..count)
+                .map(|i| {
+                    let h = header_at(&n, b"x", &me, now, [base + i; 16]);
+                    let req = slow_request(
+                        &h,
+                        "198.51.100.1",
+                        vec![(Duration::from_millis(150), b"x")],
+                        false,
+                    );
+                    let app = app.clone();
+                    tokio::spawn(async move { call(&app, req).await.0 })
+                })
+                .collect();
+            async move {
+                let mut out = Vec::new();
+                for j in jobs {
+                    out.push(j.await.unwrap());
+                }
+                out
+            }
+        };
+        let statuses = fan(12, 1, app.clone()).await;
+        assert!(
+            statuses.iter().all(|s| *s == StatusCode::OK),
+            "{statuses:?}"
+        );
+
+        let g = fixture_stage(StageLimits {
+            max_inflight_per_signer: 4,
+            ..StageLimits::default()
+        });
+        g.grant(&n);
+        let me2 = g.me.to_string();
+        let app2 = self::app(&g, 64);
+        let jobs: Vec<_> = (0..6u8)
+            .map(|i| {
+                let h = header_at(&n, b"x", &me2, now, [100 + i; 16]);
+                let req = slow_request(
+                    &h,
+                    "198.51.100.1",
+                    vec![(Duration::from_millis(150), b"x")],
+                    false,
+                );
+                let app = app2.clone();
+                tokio::spawn(async move { call(&app, req).await.0 })
+            })
+            .collect();
+        let mut ok = 0;
+        let mut busy = 0;
+        for j in jobs {
+            match j.await.unwrap() {
+                StatusCode::OK => ok += 1,
+                StatusCode::TOO_MANY_REQUESTS => busy += 1,
+                other => panic!("{other}"),
+            }
+        }
+        assert_eq!((ok, busy), (4, 2));
+    }
+
+    #[test]
+    fn the_stage_knobs_read_the_environment_with_ceilings() {
+        let _env = crate::test_env::guard();
+        let d = StageLimits::default();
+        assert_eq!(d.max_inflight_per_signer, 16);
+        assert_eq!(d.body_read_timeout, Duration::from_secs(5));
+        assert_eq!(d.body_idle_timeout, Duration::from_millis(1500));
+        unsafe {
+            std::env::set_var("AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER", "32");
+            std::env::set_var("AVALON_NODE_AUTH_BODY_TIMEOUT_MS", "2000");
+            std::env::set_var("AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS", "500");
+        }
+        let l = StageLimits::from_env();
+        assert_eq!(l.max_inflight_per_signer, 32);
+        assert_eq!(l.body_read_timeout, Duration::from_millis(2000));
+        assert_eq!(l.body_idle_timeout, Duration::from_millis(500));
+        unsafe {
+            std::env::set_var("AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER", "5000");
+            std::env::set_var("AVALON_NODE_AUTH_BODY_TIMEOUT_MS", "9999999");
+            std::env::set_var("AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS", "9999999");
+        }
+        let l = StageLimits::from_env();
+        assert_eq!(l.max_inflight_per_signer, 64);
+        assert_eq!(l.body_read_timeout, Duration::from_secs(30));
+        assert_eq!(l.body_idle_timeout, Duration::from_secs(10));
+        for k in [
+            "AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER",
+            "AVALON_NODE_AUTH_BODY_TIMEOUT_MS",
+            "AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS",
+        ] {
+            unsafe { std::env::remove_var(k) };
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_slow_keys_cannot_starve_a_recently_good_signer_and_the_stages_come_back() {
+        let f = fixture_stage(StageLimits {
+            max_concurrent_bodies: 8,
+            body_idle_timeout: Duration::from_millis(300),
+            body_read_timeout: Duration::from_millis(600),
+            ..StageLimits::default()
+        });
+        let good = node();
+        f.grant(&good);
+        let me = f.me.to_string();
+        let app = app(&f, 64);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // The good signer completes one read, which earns it the reserve.
+        let h = header_at(&good, b"", &me, now, [1; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(
+            call(&app, watched_request(&h, &polled, "198.51.100.1"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // Many fresh keys stall their bodies and fill the general stages (6 of 8).
+        let mut flood = Vec::new();
+        for i in 0..20u8 {
+            let k = node();
+            f.grant(&k);
+            let h = header_at(&k, b"", &me, now, [i; 16]);
+            let app = app.clone();
+            flood.push(tokio::spawn(async move {
+                call(&app, stalled_request(&h, &format!("203.0.113.{i}")))
+                    .await
+                    .0
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(f.auth.inner.body_stage.available_permits(), 0);
+        // A stranger to the stage is turned away, the recently-good signer is not.
+        let fresh = node();
+        f.grant(&fresh);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = header_at(&fresh, b"", &me, now, [90; 16]);
+        assert_eq!(
+            call(&app, watched_request(&h, &polled, "198.51.100.3"))
+                .await
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let h = header_at(&good, b"", &me, now, [91; 16]);
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(
+            call(&app, watched_request(&h, &polled, "198.51.100.1"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        for j in flood {
+            let status = j.await.unwrap();
+            assert!(
+                status == StatusCode::REQUEST_TIMEOUT || status == StatusCode::SERVICE_UNAVAILABLE,
+                "{status}"
+            );
+        }
+        assert_eq!(free_stages(&f), 8);
+        assert!(f.auth.inner.inflight.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_recently_good_set_is_bounded_and_expires() {
+        let f = fixture();
+        let a = PeerId::random();
+        assert!(!f.auth.recently_good(&a, NOW));
+        f.auth.mark_good(a, NOW);
+        assert!(f.auth.recently_good(&a, NOW + RECENTLY_GOOD_SECS - 1));
+        assert!(!f.auth.recently_good(&a, NOW + RECENTLY_GOOD_SECS));
+        for _ in 0..MAX_RECENTLY_GOOD + 100 {
+            f.auth.mark_good(PeerId::random(), NOW);
+        }
+        assert!(f.auth.inner.recent_good.lock().unwrap().len() <= MAX_RECENTLY_GOOD);
+    }
+
+    #[test]
+    fn a_timeout_costs_ten_failure_units_so_a_key_gets_three_a_minute() {
+        let f = fixture();
+        let signer = PeerId::random();
+        for _ in 0..3 {
+            assert!(!f
+                .auth
+                .inner
+                .signer_failures
+                .lock()
+                .unwrap()
+                .exhausted(&signer, NOW));
+            f.auth
+                .note_signer_failure(signer, TIMEOUT_FAILURE_UNITS, NOW);
+        }
+        assert!(f
+            .auth
+            .inner
+            .signer_failures
+            .lock()
+            .unwrap()
+            .exhausted(&signer, NOW));
+        assert!(!f
+            .auth
+            .inner
+            .signer_failures
+            .lock()
+            .unwrap()
+            .exhausted(&signer, NOW + 60));
+    }
+
+    #[test]
+    fn signer_slots_are_reused_and_counts_follow_the_signer() {
+        let mut c = ReplayCache::new(1000, 1000);
+        let signers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
+        for (i, s) in signers.iter().enumerate() {
+            c.record(s, &[i as u8; 16], NOW);
+        }
+        assert_eq!(c.slots.len(), 5);
+        c.expire(NOW + REPLAY_RETENTION_SECS);
+        assert!(c.per_signer.is_empty());
+        assert_eq!(c.free_slots.len(), 5);
+        // New signers take freed slots rather than growing the table.
+        let again = PeerId::random();
+        c.record(&again, &[9; 16], NOW + 1000);
+        assert_eq!((c.slots.len(), c.free_slots.len()), (5, 4));
+        assert_eq!(c.per_signer.get(&again).map(|(_, n)| *n), Some(1));
     }
 }
