@@ -283,6 +283,18 @@ pub async fn run_with_tracing(
     // than a second parse of it.
     let mut announce_config = crate::nodes::AnnounceConfig::from_env(chain.network_id())
         .with_p2p_fallback(dht_commands.as_ref().map(|_| dht_identity.peer_id.as_str()));
+    if clients_share_one_source(
+        announce_config.own_http_base_url().is_some(),
+        &addr,
+        crate::trusted_proxies::TrustedProxies::from_env().is_empty(),
+    ) {
+        tracing::warn!(
+            "avalon-server: AVALON_TRUSTED_PROXIES is empty but this node looks to be behind a \
+             reverse proxy (AVALON_NODE_URL set or a loopback listener): every client then shares \
+             the proxy's address, which feeds the per-IP limits and failure counts. List the proxy \
+             addresses in AVALON_TRUSTED_PROXIES."
+        );
+    }
     let witness_signer =
         crate::witness_cosign::WitnessCosignConfig::from_env().and_then(|w| w.announce_signer());
     announce_config.witness = witness_signer.clone();
@@ -841,6 +853,19 @@ pub async fn run_with_tracing(
     tracing::info!("avalon-server stopped");
 }
 
+/// Whether every client probably reaches this node through one proxy address: a public URL or a
+/// loopback listener, with no trusted proxy configured.
+fn clients_share_one_source(
+    has_public_url: bool,
+    listen_addr: &str,
+    no_trusted_proxies: bool,
+) -> bool {
+    let loopback = listen_addr
+        .parse::<std::net::SocketAddr>()
+        .is_ok_and(|a| a.ip().is_loopback());
+    no_trusted_proxies && (has_public_url || loopback)
+}
+
 /// The identity a node announces when no swarm runs: its id for signed requests, no addresses
 /// and no connectivity claim.
 fn auth_only_identity(peer_id: &libp2p::PeerId) -> crate::nodes::DhtIdentity {
@@ -853,6 +878,14 @@ fn auth_only_identity(peer_id: &libp2p::PeerId) -> crate::nodes::DhtIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shared_source_warning_needs_a_proxy_shaped_setup_and_no_trusted_proxies() {
+        assert!(clients_share_one_source(true, "0.0.0.0:8080", true));
+        assert!(clients_share_one_source(false, "127.0.0.1:8080", true));
+        assert!(!clients_share_one_source(false, "0.0.0.0:8080", true));
+        assert!(!clients_share_one_source(true, "127.0.0.1:8080", false));
+    }
 
     #[test]
     fn a_node_without_a_swarm_announces_its_id_with_no_addresses_or_connectivity() {

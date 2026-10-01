@@ -394,25 +394,36 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   headroom, so raise it before lowering it; a 429 drops that relay event.
 - The replay cache is in process memory. A restart, replicas sharing one identity key, or the
   clock stepping forward re-opens up to the 60 second window for a captured request.
-- The replay cache never evicts a live nonce. It holds up to `AVALON_NODE_MAX_PEERS` times
-  about four times the per-key rate, plus slack, entries (600,800 at the defaults), capped at
-  1,048,576 (about 170 MB). When it is full of live nonces a new request is refused with 503
-  `node_auth_replay_cache_full` until entries expire (121 seconds). Write-route delivery is
-  best effort and has poll fallbacks, so a refusal is a delay, not lost correctness.
+- The replay cache keeps a 128-bit truncated SHA-256 of (signer id, nonce) per live nonce for
+  121 seconds, and never evicts a live one; a hash collision could only reject a fresh nonce
+  as a replay (about 2^-128 per pair). It is sized for `AVALON_NODE_MAX_KNOWN_PEERS` standing
+  keys (the peer table bounds them) at the key budget plus slack, capped at 1,048,576 nonces.
+  Measured with a counting allocator: about 66 bytes per nonce, 69 MB at the cap, and the
+  memory is released once the cache empties. When it is full of live nonces a new request is
+  refused with 503 `node_auth_replay_cache_full` until entries expire. Only keys with standing
+  can cause that, and it takes about 175 of them sending 3000 requests a minute each (about 88
+  at the worst boundary burst); self-announced `p2p://` entries are capped at 64 per node, so
+  at least 24 http-bound keys are needed besides. Write-route delivery is best effort and has
+  poll fallbacks, so a refusal is a delay, not lost correctness.
 - The signature is verified before the body is read: the header carries the body's SHA-256
-  and the signature covers it, so only the holder of a standing peer's private key (or someone
-  replaying that peer's captured, unused header within 60 seconds) can make the node read a
-  body, and then at most the route's cap (64 KiB, 64 KiB, 1 KiB) followed by one SHA-256. A
-  stranger, including one who knows a standing peer's public id, is refused at the signature
-  stage after one Ed25519 verification at most. A valid signature over the wrong body is
-  refused after the read, records no nonce and costs the key no budget.
-- Remaining limits on that work: at most 64 body reads run at once
-  (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`, excess answered 503 `node_auth_busy`), and a
-  source IP that causes more than 30 credential failures a minute
-  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`; bad signature, stale, unknown peer, wrong body
-  hash, oversize body) is answered 429 before anything is read. The address is the one the
-  per-IP limiter uses, so behind a proxy configure the trusted proxies. Stream requests are not
-  affected. The per-IP limit, the request timeout and the per-route caps still apply.
+  and the signature covers it. A stranger, including one who knows a standing peer's public id,
+  is refused at the signature stage after one Ed25519 verification at most and no body is read.
+  Standing is free until per-route scope checks exist (a self-announced `p2p://` entry
+  qualifies), so a key with standing can make the node read a body, bounded by: the route cap
+  (64 KiB, 64 KiB, 1 KiB); a 5 second read timeout; at most 3 reads in flight per key; the
+  key's request budget, which every read spends before it starts; its failure budget (30 wrong
+  bodies, oversize bodies or timeouts a minute, then 429); and 64 reads at once for the whole
+  node (`AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`, excess answered 503 `node_auth_busy`). Stream
+  requests take no read slot. A valid signature over the wrong body records no nonce.
+- A source address that causes more than 30 expensive failures a minute
+  (`AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`: bad signature, wrong body hash, oversize body;
+  IPv6 counted per /64) has further failures answered 429 without counting. It never refuses a
+  valid credential, because behind a reverse proxy not listed in `AVALON_TRUSTED_PROXIES`
+  every client shares the proxy's address; the node logs a startup warning in that setup.
+  Configure `AVALON_TRUSTED_PROXIES` so the per-IP limits see real clients. A refused-for-load
+  request is a 429 or 503 the sender retries or drops; the per-IP limit, the request timeout
+  and the per-route caps still apply. Looking up standing scans the peer table (at most
+  `AVALON_NODE_MAX_KNOWN_PEERS` entries) once per request.
 - A 403 for a claimed id means it has no bound entry, a 401 means the credential is bad; this
   reveals whether an id is a known node, which is not secret. The budget is a fixed one-minute
   window, so a key can burst to twice its rate across a minute boundary.

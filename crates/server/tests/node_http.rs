@@ -224,8 +224,24 @@ async fn served(probe: &Probe, settings: NodeHttpSettings) -> (Node, Node) {
     (a, b)
 }
 
+/// Sends a request, retrying while the first dial to the peer has not connected yet.
+async fn send_retrying(
+    build: impl Fn() -> avalon_server::node_http::NodeRequestBuilder,
+) -> avalon_server::node_http::NodeResponse {
+    let mut attempt = 0;
+    loop {
+        match build().send().await {
+            Err(e) if e.is_connect() && attempt < 5 => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            other => return other.expect("stream request"),
+        }
+    }
+}
+
 async fn get_ok(client: &NodeClient, url: String) -> (StatusCode, String) {
-    let res = client.get(url).send().await.expect("stream request");
+    let res = send_retrying(|| client.get(&url)).await;
     (res.status(), res.text().await.unwrap())
 }
 
@@ -373,11 +389,7 @@ async fn write_routes_over_a_stream_follow_standing() {
     introduce(&a, &b);
     let client = a.client();
     for path in CREDENTIAL_PATHS {
-        let res = client
-            .post(format!("{}{path}", b.url()))
-            .send()
-            .await
-            .unwrap();
+        let res = send_retrying(|| client.post(format!("{}{path}", b.url()))).await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}");
     }
     assert_eq!(hits.load(Ordering::SeqCst), 0);
@@ -391,12 +403,12 @@ async fn write_routes_over_a_stream_follow_standing() {
         ..info_for(&a.handle, vec![], None)
     });
     for path in CREDENTIAL_PATHS {
-        let res = client
-            .post(format!("{}{path}", b.url()))
-            .header("x-avalon-node-auth", "v1; garbage")
-            .send()
-            .await
-            .unwrap();
+        let res = send_retrying(|| {
+            client
+                .post(format!("{}{path}", b.url()))
+                .header("x-avalon-node-auth", "v1; garbage")
+        })
+        .await;
         assert_eq!(res.status(), StatusCode::OK, "{path}");
         assert_eq!(res.text().await.unwrap(), a.handle.peer_id.to_string());
     }

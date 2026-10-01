@@ -20,6 +20,11 @@ pub struct TrustedProxies {
 }
 
 impl TrustedProxies {
+    /// Whether no proxy is trusted, so the connecting address is always the client.
+    pub fn is_empty(&self) -> bool {
+        self.nets.is_empty()
+    }
+
     /// Parses a comma-separated list of IPs or CIDR ranges.
     pub fn parse(list: &str) -> Result<Self, String> {
         let mut nets = Vec::new();
