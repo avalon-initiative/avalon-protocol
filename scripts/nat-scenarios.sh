@@ -3,7 +3,7 @@
 # (scripts/nat-lab.sh), one throwaway Postgres schema per node.
 #
 # usage: sudo scripts/nat-scenarios.sh [scenario ...]     (default: all scenarios)
-#   scenarios: public full-cone-direct restricted-cone-detected-public relayed-port-restricted
+#   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
 #              outbound-only url-less-admission relay-failover
 #
@@ -172,6 +172,7 @@ relayed_behind() {
 }
 
 scenario_relayed-port-restricted() { relayed_behind port-restricted; }
+scenario_relayed-restricted-cone() { relayed_behind restricted-cone; }
 scenario_relayed-symmetric() { relayed_behind symmetric; }
 scenario_relayed-no-inbound() { relayed_behind no-inbound; }
 
@@ -219,17 +220,6 @@ scenario_full-cone-direct() {
   node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
   wait_status home1 10.1.0.2 '.reachability == "public" and .connectivity == "direct"' \
     "a node behind a full-cone NAT to report direct"
-}
-
-# Known limitation: AutoNAT asks a peer the node has already talked to to dial back, and an
-# address-restricted NAT lets that peer's address through, so the node is reported public
-# although a peer it never contacted cannot reach it.
-scenario_restricted-cone-detected-public() {
-  "$LAB" up home1 restricted-cone >/dev/null || return 1
-  public_pair || return 1
-  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080
-  wait_status home1 10.1.0.2 '.reachability == "public"' \
-    "AutoNAT to report a restricted-cone node public"
 }
 
 # With no relay to use, a private node still participates and reports outbound_only.
@@ -345,7 +335,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct restricted-cone-detected-public punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission relay-failover"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission relay-failover"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 
