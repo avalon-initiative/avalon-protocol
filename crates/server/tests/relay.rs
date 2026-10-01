@@ -702,6 +702,178 @@ async fn one_prefix_still_fills_every_reservation() {
     assert_eq!(held(&a).len(), 2);
 }
 
+/// A relay that is listed up front but only starts serving later.
+struct LateRelay {
+    key: identity::Keypair,
+    addr: String,
+    listed: Multiaddr,
+}
+
+impl LateRelay {
+    fn at(ip: &str) -> Self {
+        let key = identity::Keypair::generate_ed25519();
+        let peer = key.public().to_peer_id();
+        let addr = format!("/ip4/{ip}/tcp/{}", free_port());
+        let listed = format!("{addr}/p2p/{peer}").parse().unwrap();
+        Self { key, addr, listed }
+    }
+
+    async fn start(&self) -> DhtHandle {
+        let relay = RelaySettings {
+            server: Some(server_settings()),
+            ..RelaySettings::default()
+        };
+        let mut cfg = config(&self.addr, Some(&self.addr), relay);
+        cfg.identity = self.key.clone();
+        dht::start(PeerTable::new(), cfg).await
+    }
+}
+
+const HOLD: Duration = Duration::from_secs(8);
+
+/// Short hold and interval so a move can be seen; the margin rules have unit tests.
+fn reselecting(relays: Vec<Multiaddr>, max: usize) -> RelayClientSettings {
+    RelayClientSettings {
+        retry_backoff: Duration::from_secs(1),
+        reselect_hold: HOLD,
+        reselect_interval: Duration::from_secs(1),
+        ..client_settings(relays, max)
+    }
+}
+
+async fn private_node_with(client: RelayClientSettings, probe_via: &DhtHandle) -> DhtHandle {
+    let peers = PeerTable::new();
+    let relay = RelaySettings {
+        client,
+        ..RelaySettings::default()
+    };
+    let node = dht::start(peers.clone(), config("/ip6/::1/tcp/0", None, relay)).await;
+    introduce(&peers, probe_via);
+    node
+}
+
+/// Records whether the node ever advertised no reservation after it first had one.
+fn watch_for_gaps(node: &DhtHandle) -> Arc<AtomicBool> {
+    let gap = Arc::new(AtomicBool::new(false));
+    let seen = gap.clone();
+    let mut rx = node.reachability.subscribe();
+    tokio::spawn(async move {
+        let mut had = false;
+        loop {
+            let empty = rx.borrow_and_update().relay_reservations.is_empty();
+            if !empty {
+                had = true;
+            } else if had {
+                seen.store(true, Ordering::SeqCst);
+            }
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    });
+    gap
+}
+
+/// Whether the announce loop was woken by a change of advertised relayed addresses.
+async fn announce_woken(node: &DhtHandle) -> bool {
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        node.reachability.relayed_addrs_changed(),
+    )
+    .await
+    .is_ok()
+}
+
+/// A listed relay that comes up after the node reserved on a discovered one takes its place, but
+/// only once the hold time is over; the node is never without a reservation and the change wakes
+/// the announce loop.
+#[tokio::test]
+async fn a_listed_relay_that_appears_later_replaces_a_discovered_one_after_the_hold() {
+    if !ipv6_available() {
+        return eprintln!("skipping: no IPv6 loopback");
+    }
+    let (found, _) = relay_node(server_settings()).await;
+    let listed = LateRelay::at("127.0.0.1");
+    let a = private_node_with(reselecting(vec![listed.listed.clone()], 1), &found).await;
+    let gaps = watch_for_gaps(&a);
+
+    reserved_on(&a, found.peer_id).await;
+    let reserved_at = std::time::Instant::now();
+    assert!(
+        announce_woken(&a).await,
+        "the first reservation wakes the announce loop"
+    );
+
+    let late = listed.start().await;
+    tokio::time::sleep(HOLD / 2).await;
+    assert_eq!(
+        held(&a),
+        vec![found.peer_id.to_string()],
+        "still inside the hold time"
+    );
+
+    let moved = reserved_on(&a, late.peer_id).await;
+    assert!(
+        reserved_at.elapsed() >= HOLD - Duration::from_secs(1),
+        "moved after {:?}",
+        reserved_at.elapsed()
+    );
+    assert_eq!(
+        held(&a),
+        vec![late.peer_id.to_string()],
+        "the old reservation is released"
+    );
+    assert_eq!(a.reachability.advertised_addrs(), vec![moved.to_string()]);
+    assert!(announce_woken(&a).await, "the move wakes the announce loop");
+    assert!(!gaps.load(Ordering::SeqCst), "never without a reservation");
+    let mut b = raw_swarm();
+    dial_through_relay(&mut b, moved, a.peer_id)
+        .await
+        .expect("reachable through the new relay");
+}
+
+/// Two reservations on one /24 are rebalanced onto a relay in another /24 once it is up and the
+/// hold time is over.
+#[tokio::test]
+async fn a_same_prefix_fallback_moves_to_a_diverse_relay_that_appears_later() {
+    if !ipv6_available() || !loopback_aliases_available() {
+        return eprintln!("skipping: no IPv6 loopback or loopback aliases");
+    }
+    let (r1, r1_addr) = relay_node_at("127.0.0.1", server_settings()).await;
+    let (r2, r2_addr) = relay_node_at("127.0.0.2", server_settings()).await;
+    let diverse = LateRelay::at("127.0.1.1");
+    let a = private_node_with(
+        reselecting(vec![r1_addr, r2_addr, diverse.listed.clone()], 2),
+        &r1,
+    )
+    .await;
+    let gaps = watch_for_gaps(&a);
+    reserved_on(&a, r1.peer_id).await;
+    reserved_on(&a, r2.peer_id).await;
+    let reserved_at = std::time::Instant::now();
+
+    let late = diverse.start().await;
+    tokio::time::sleep(HOLD / 2).await;
+    assert_eq!(held(&a).len(), 2);
+    assert!(
+        held(&a).contains(&r2.peer_id.to_string()),
+        "inside the hold time"
+    );
+
+    reserved_on(&a, late.peer_id).await;
+    assert!(reserved_at.elapsed() >= HOLD - Duration::from_secs(1));
+    eventually("the same-prefix fallback to be released", || {
+        let now = held(&a);
+        now.len() == 2 && !now.contains(&r2.peer_id.to_string())
+    })
+    .await;
+    assert!(
+        held(&a).contains(&r1.peer_id.to_string()),
+        "the better-ranked relay stays"
+    );
+    assert!(!gaps.load(Ordering::SeqCst));
+}
+
 /// With `max_circuits` of 1 a second concurrent circuit is refused.
 #[tokio::test]
 async fn circuits_beyond_the_limit_are_refused() {

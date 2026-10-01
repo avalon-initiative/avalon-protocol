@@ -6,6 +6,7 @@
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
 #              outbound-only url-less-admission url-less-participation relay-failover relay-ranking
+#              relay-reselect
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -471,6 +472,50 @@ scenario_relay-ranking() {
   wait_status home1 10.1.0.2 \
     ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id == \"$want\"" \
     "the reservation to move to the nearest remaining relay ($want)"
+}
+
+# A node holding a reservation on a discovered relay moves to an operator-listed relay that comes
+# up later, only after the hold time, and the peers see the new circuit address well before the
+# (long) announce interval would have refreshed it.
+scenario_relay-reselect() {
+  "$LAB" up home1 symmetric >/dev/null || return 1
+  public_pair || return 1
+  "$LAB" up-public relay2 10.99.0.103 >/dev/null || return 1
+  local key2 hold=30 pid2 id2 home_id
+  key2=$(head -c32 /dev/urandom | xxd -p -c64)
+  local relay2=(AVALON_LIBP2P_IDENTITY_KEY="$key2" AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.103/tcp/4001
+    AVALON_RELAY_SERVER_ENABLED=true AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080)
+  # Start the listed relay once to learn its peer id, then stop it until the node holds another.
+  node relay2 relay2 10.99.0.103 "${relay2[@]}"
+  pid2=$LAST_PID
+  ready relay2 10.99.0.103 || return 1
+  id2=$(peer_id relay2)
+  kill "$pid2"
+  node home1 home1 10.1.0.2 AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080 \
+    AVALON_RELAY_CLIENT_MAX_RESERVATIONS=1 AVALON_RELAY_ADDRS="/ip4/10.99.0.103/tcp/4001/p2p/$id2" \
+    AVALON_RELAY_RESELECT_HOLD_SECS=$hold AVALON_RELAY_RESELECT_INTERVAL_SECS=5 AVALON_ANNOUNCE_INTERVAL_SECS=600
+  home_id=$(peer_id home1)
+  wait_status home1 10.1.0.2 \
+    ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id == \"$(peer_id relay)\"" \
+    "a reservation on the discovered relay" || return 1
+  local reserved_at moved_at
+  reserved_at=$(date +%s)
+  node relay2 relay2 10.99.0.103 "${relay2[@]}"
+  ready relay2 10.99.0.103 || return 1
+  sleep $((hold / 3))
+  status home1 10.1.0.2 | jq -e ".relay_reservations[0].relay_peer_id == \"$(peer_id relay)\"" >/dev/null \
+    || { echo "    the node moved before the hold time" >&2; return 1; }
+  wait_status home1 10.1.0.2 \
+    ".connectivity == \"relayed\" and (.relay_reservations|length) == 1 and .relay_reservations[0].relay_peer_id == \"$id2\"" \
+    "the reservation to move to the listed relay" || return 1
+  moved_at=$(date +%s)
+  [ $((moved_at - reserved_at)) -ge $((hold - 4)) ] \
+    || { echo "    moved after $((moved_at - reserved_at))s, under the ${hold}s hold" >&2; return 1; }
+  # The announce interval is 600 s, so only the early announce can tell the relay in time.
+  wait_json "the first relay's /nodes/peers to list the circuit address through the new relay" \
+    "[.[] | select(.libp2p_peer_id == \"$home_id\") | .libp2p_listen_addrs[] | select(contains(\"/p2p/$id2/p2p-circuit\"))] | length >= 1" \
+    "$LAB" exec relay -- curl -s -m 5 http://10.99.0.101:8080/nodes/peers || return 1
+  [ $(($(date +%s) - moved_at)) -lt 60 ] || { echo "    the new address took over 60s to be announced" >&2; return 1; }
 }
 
 # dump_logs: the lines of each node's log that explain a failed wait.
