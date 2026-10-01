@@ -15,6 +15,9 @@ receives, from a seed or anywhere else, is verified against it.
 - An entry with an empty `seed_nodes` (`avalon-dev-local`, used by local and CI
   nodes) changes nothing: no default mirror source is applied.
 
+A joining node needs only outbound access to one HTTP-reachable seed; it does not need an open
+port of its own, see [`running-without-an-open-port.md`](running-without-an-open-port.md).
+
 A replica-only node needs no `AVALON_WEBAUTHN_RP_ID` or
 `AVALON_WEBAUTHN_ORIGIN`; any node that serves logins still requires both.
 
