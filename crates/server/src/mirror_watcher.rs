@@ -1504,8 +1504,6 @@ async fn backfill_network(
     observations: &[(String, SignedTreeHead)],
     limits: Option<BackfillLimits>,
 ) -> Result<(), MirrorWatcherError> {
-    reproject_unapplied(pool, indexer, network_id, shard_id).await?;
-
     let equivocations = mirror::unresolved_equivocations(pool, network_id, shard_id).await?;
     if !equivocations.is_empty() {
         tracing::error!(
@@ -1517,6 +1515,10 @@ async fn backfill_network(
         );
         return Ok(());
     }
+
+    let projection_blocked = reproject_unapplied(pool, indexer, network_id, shard_id)
+        .await?
+        .blocked;
 
     let mut agreement: HashMap<(i64, &str), Vec<&str>> = HashMap::new();
     for (peer, sth) in observations {
@@ -1553,6 +1555,7 @@ async fn backfill_network(
         &candidate_peers,
         &target_sth,
         limits,
+        projection_blocked,
     )
     .await
 }
@@ -1583,6 +1586,7 @@ async fn backfill_network(
 /// fed *only* by content this node independently verified itself, never by
 /// trusting a peer's response or (for the write side) `POST
 /// /ledger/submit`'s request body.
+#[allow(clippy::too_many_arguments)]
 async fn backfill(
     client: &crate::node_http::NodeClient,
     pool: &PgPool,
@@ -1591,6 +1595,7 @@ async fn backfill(
     candidate_peers: &[String],
     sth: &SignedTreeHead,
     limits: Option<BackfillLimits>,
+    mut projection_blocked: bool,
 ) -> Result<(), MirrorWatcherError> {
     if candidate_peers.is_empty() {
         return Ok(());
@@ -1762,21 +1767,7 @@ async fn backfill(
                 batch_id: entry.batch_id,
                 verified_tree_size: sth.tree_size,
             };
-            // The `mirrored_entries` write always lands: it is the verified
-            // fact this node records. Projection is best-effort on top of it
-            // (see `project_mirrored_entry`) and re-driven by
-            // `reproject_unapplied` if it fails.
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
-            mirror::insert_mirrored_entry(&mut *tx, &mirrored_entry).await?;
-            if projects_mirrored_entries(shard_id) {
-                project_mirrored_entry(&mut tx, indexer, &mirrored_entry).await?;
-            }
-            tx.commit()
-                .await
-                .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+            store_and_project(pool, indexer, &mirrored_entry, &mut projection_blocked).await?;
 
             progress.last_seq = mirrored_entry.seq;
             progress.verified_count += 1;
@@ -1786,84 +1777,258 @@ async fn backfill(
     Ok(())
 }
 
+/// How one projection attempt ended. `Permanent` failures are deterministic
+/// for this entry; `Transient` ones (storage unavailable) may succeed later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProjectionOutcome {
+    Applied,
+    Permanent(String),
+    Transient(String),
+}
+
+/// Entries that failed permanently this process; later passes skip them so
+/// they cannot block the entries behind them. Cleared by a restart.
+static PARKED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<Uuid>>> =
+    std::sync::LazyLock::new(Default::default);
+const MAX_PARKED: usize = 1024;
+
+fn park_in(parked: &mut std::collections::HashSet<Uuid>, event_id: Uuid, cap: usize) -> bool {
+    (parked.len() < cap && parked.insert(event_id)) || parked.contains(&event_id)
+}
+
+fn park_entry(event_id: Uuid) -> bool {
+    park_in(
+        &mut PARKED.lock().unwrap_or_else(|e| e.into_inner()),
+        event_id,
+        MAX_PARKED,
+    )
+}
+
+fn is_parked(event_id: &Uuid) -> bool {
+    PARKED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(event_id)
+}
+
+/// `(network, shard)` pairs whose last full unapplied-entry scan was clean.
+/// A pair absent here (process start, or after any projection failure) gets a
+/// full anti-join scan; a present one does no scan work at all.
+static CLEAN_SCANS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn scan_due(network_id: &str, shard_id: &str) -> bool {
+    !CLEAN_SCANS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&(network_id.to_string(), shard_id.to_string()))
+}
+
+fn mark_scan_clean(network_id: &str, shard_id: &str) {
+    CLEAN_SCANS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((network_id.to_string(), shard_id.to_string()));
+}
+
+fn mark_projection_failed(network_id: &str, shard_id: &str) {
+    CLEAN_SCANS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(network_id.to_string(), shard_id.to_string()));
+}
+
+/// Stores a verified entry and, unless an earlier projection this tick is
+/// blocked, projects it in the same transaction. A blocked entry stays
+/// unapplied so the ordered re-projection applies it after its predecessors.
+async fn store_and_project(
+    pool: &PgPool,
+    indexer: &PostgresIndexer,
+    entry: &mirror::MirroredEntry,
+    projection_blocked: &mut bool,
+) -> Result<(), MirrorWatcherError> {
+    let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
+    let mut tx = pool.begin().await.map_err(storage)?;
+    mirror::insert_mirrored_entry(&mut *tx, entry).await?;
+    if projects_mirrored_entries(&entry.shard_id) {
+        if *projection_blocked {
+            mark_projection_failed(&entry.network_id, &entry.shard_id);
+        } else {
+            match project_mirrored_entry(&mut tx, indexer, entry).await? {
+                ProjectionOutcome::Applied => {}
+                ProjectionOutcome::Permanent(_) => {
+                    park_entry(entry.event_id);
+                    mark_projection_failed(&entry.network_id, &entry.shard_id);
+                }
+                ProjectionOutcome::Transient(_) => {
+                    *projection_blocked = true;
+                    mark_projection_failed(&entry.network_id, &entry.shard_id);
+                }
+            }
+        }
+    }
+    tx.commit().await.map_err(storage)?;
+    Ok(())
+}
+
 /// Applies one verified mirrored entry to the local indexer inside a savepoint
-/// of `tx`. Returns whether it projected; a failure rolls back only the
-/// savepoint, is logged, and leaves the entry unclaimed in
-/// `indexer_applied_events` so [`reproject_unapplied`] retries it.
+/// of `tx`. A failure rolls back only the savepoint (so the entry stays
+/// unclaimed in `indexer_applied_events`), is logged, and is classified.
 async fn project_mirrored_entry(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     indexer: &PostgresIndexer,
     entry: &mirror::MirroredEntry,
-) -> Result<bool, MirrorWatcherError> {
-    let Some(event) = protocol_event_from_mirrored(entry) else {
-        tracing::error!(
-            "mirror-watcher: {}: seq={} could not be decoded into a ProtocolEvent (pruned payload or malformed issuer/subject) — mirrored, but not applied to the local indexer",
-            entry.network_id, entry.seq
-        );
-        return Ok(false);
-    };
+) -> Result<ProjectionOutcome, MirrorWatcherError> {
     let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
+    let Some(event) = protocol_event_from_mirrored(entry) else {
+        let reason = "payload pruned or issuer/subject malformed".to_string();
+        tracing::error!(
+            "mirror-watcher: {}: event_id={} seq={} cannot be decoded ({reason}) — mirrored, not applied to the local indexer",
+            entry.network_id, entry.event_id, entry.seq
+        );
+        return Ok(ProjectionOutcome::Permanent(reason));
+    };
     let mut savepoint = tx.begin().await.map_err(storage)?;
-    ensure_identity_row_exists(&mut savepoint, &event).await?;
-    match indexer.apply_in_tx(&mut savepoint, &event).await {
+    let applied = async {
+        ensure_identity_row_exists(&mut savepoint, &event).await?;
+        indexer.apply_in_tx(&mut savepoint, &event).await
+    }
+    .await;
+    match applied {
         Ok(()) => {
             savepoint.commit().await.map_err(storage)?;
-            Ok(true)
+            Ok(ProjectionOutcome::Applied)
         }
         Err(err) => {
             savepoint.rollback().await.map_err(storage)?;
+            let reason = err.to_string();
+            let (kind, outcome) = if err.is_transient() {
+                ("transient", ProjectionOutcome::Transient(reason))
+            } else {
+                ("permanent", ProjectionOutcome::Permanent(reason))
+            };
             tracing::error!(
-                "mirror-watcher: {}: seq={} verified and mirrored, but the local indexer projection failed ({err}) — entry is stored and will be re-projected on the next tick",
-                entry.network_id, entry.seq
+                "mirror-watcher: {}: event_id={} seq={} verified and mirrored, but the local indexer projection failed ({kind}): {err}",
+                entry.network_id, entry.event_id, entry.seq
             );
-            Ok(false)
+            Ok(outcome)
         }
     }
 }
 
 const REPROJECT_BATCH: i64 = 500;
 
-/// Re-drives projection for stored entries of `shard_id` that were never
-/// claimed by the indexer (a failed projection, or a node upgraded past a
-/// projection bug), oldest first. Stops at the first failure so later
-/// entries never apply ahead of an earlier one they may depend on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ReprojectReport {
+    projected: usize,
+    parked: usize,
+    /// A transient failure stopped the pass; later entries were left unapplied.
+    blocked: bool,
+}
+
+/// Re-drives projection for stored entries of `shard_id` that the indexer
+/// never claimed (a failed projection, or a node upgraded past a projection
+/// bug), oldest first. Does a full anti-join scan only the first time per
+/// shard after process start and after a projection failure; otherwise it is
+/// a no-op. A transient failure stops the pass to keep order; a permanent one
+/// parks the entry (see [`PARKED`]) and continues.
 async fn reproject_unapplied(
     pool: &PgPool,
     indexer: &PostgresIndexer,
     network_id: &str,
     shard_id: &str,
-) -> Result<usize, MirrorWatcherError> {
-    if !projects_mirrored_entries(shard_id) {
-        return Ok(0);
+) -> Result<ReprojectReport, MirrorWatcherError> {
+    reproject_with(pool, network_id, shard_id, |entry| async move {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+        let outcome = project_mirrored_entry(&mut tx, indexer, &entry).await?;
+        tx.commit()
+            .await
+            .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+        Ok(outcome)
+    })
+    .await
+}
+
+async fn reproject_with<F, Fut>(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    mut project: F,
+) -> Result<ReprojectReport, MirrorWatcherError>
+where
+    F: FnMut(mirror::MirroredEntry) -> Fut,
+    Fut: std::future::Future<Output = Result<ProjectionOutcome, MirrorWatcherError>>,
+{
+    let mut report = ReprojectReport::default();
+    if !projects_mirrored_entries(shard_id) || !scan_due(network_id, shard_id) {
+        return Ok(report);
     }
     let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
-    let rows = sqlx::query(
-        "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, m.issuer,                 m.subject, m.payload, m.event_timestamp, m.version, m.prev_hash, m.entry_hash,                 m.batch_id, m.verified_tree_size          FROM mirrored_entries m          WHERE m.network_id = $1 AND m.shard_id = $2 AND m.payload IS NOT NULL            AND NOT EXISTS (SELECT 1 FROM indexer_applied_events a WHERE a.event_id = m.event_id)          ORDER BY m.seq LIMIT $3",
-    )
-    .bind(network_id)
-    .bind(shard_id)
-    .bind(REPROJECT_BATCH)
-    .fetch_all(pool)
-    .await
-    .map_err(storage)?;
-
-    let mut projected = 0;
-    for row in rows {
-        let entry = mirror::mirrored_entry_from_row(row)?;
-        let mut tx = pool.begin().await.map_err(storage)?;
-        let applied = project_mirrored_entry(&mut tx, indexer, &entry).await?;
-        tx.commit().await.map_err(storage)?;
-        if !applied {
+    let mut cursor = 0i64;
+    loop {
+        let rows = sqlx::query(
+            "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, \
+                    m.issuer, m.subject, m.payload, m.event_timestamp, m.version, \
+                    m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size \
+             FROM mirrored_entries m \
+             WHERE m.network_id = $1 AND m.shard_id = $2 AND m.seq > $3 \
+               AND m.payload IS NOT NULL \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM indexer_applied_events a WHERE a.event_id = m.event_id) \
+             ORDER BY m.seq LIMIT $4",
+        )
+        .bind(network_id)
+        .bind(shard_id)
+        .bind(cursor)
+        .bind(REPROJECT_BATCH)
+        .fetch_all(pool)
+        .await
+        .map_err(storage)?;
+        let fetched = rows.len() as i64;
+        for row in rows {
+            let entry = mirror::mirrored_entry_from_row(row)?;
+            cursor = entry.seq;
+            if is_parked(&entry.event_id) {
+                continue;
+            }
+            let event_id = entry.event_id;
+            let outcome = match project(entry).await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    mark_projection_failed(network_id, shard_id);
+                    return Err(err);
+                }
+            };
+            match outcome {
+                ProjectionOutcome::Applied => report.projected += 1,
+                ProjectionOutcome::Permanent(_) => {
+                    park_entry(event_id);
+                    report.parked += 1;
+                    mark_projection_failed(network_id, shard_id);
+                }
+                ProjectionOutcome::Transient(_) => {
+                    report.blocked = true;
+                    mark_projection_failed(network_id, shard_id);
+                    return Ok(report);
+                }
+            }
+        }
+        if fetched < REPROJECT_BATCH {
             break;
         }
-        projected += 1;
     }
-    if projected > 0 {
+    mark_scan_clean(network_id, shard_id);
+    if report.projected > 0 {
         tracing::info!(
-            "mirror-watcher: {network_id}: re-projected {projected} previously unapplied entr(ies) of shard {shard_id}"
+            "mirror-watcher: {network_id}: re-projected {} previously unapplied entr(ies) of shard {shard_id}",
+            report.projected
         );
     }
-    Ok(projected)
+    Ok(report)
 }
 
 /// Decodes a verified `MirroredEntry` into the same `ProtocolEvent` shape
@@ -1896,33 +2061,49 @@ fn global_id_from_str(raw: &str) -> Option<GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
-/// Idempotently inserts the `identities` row an identity event refers to, from
-/// its `identity_id` payload field. A replay-only node never ran the local
-/// registration that creates it, and older history orders a passkey or
-/// signing-key event ahead of its `identity.created`.
-async fn ensure_identity_row_exists(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    event: &ProtocolEvent,
-) -> Result<(), MirrorWatcherError> {
+/// The identity an identity event may create a parent row for: its payload
+/// `identity_id`, only when it matches the id embedded in issuer and subject.
+fn identity_row_target(event: &ProtocolEvent) -> Option<Uuid> {
     if !matches!(
         event.kind.as_str(),
         "identity.created" | "identity.passkey_registered" | "identity.signing_key_added"
     ) {
-        return Ok(());
+        return None;
     }
-    let Some(identity_id) = event
+    let id = event
         .payload
         .get("identity_id")
         .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok())
-    else {
+        .and_then(|s| Uuid::parse_str(s).ok())?;
+    let embedded = |g: &GlobalId| g.as_str().split(':').nth(1).map(str::to_owned);
+    let want = id.to_string();
+    (embedded(&event.issuer).as_deref() == Some(want.as_str())
+        && embedded(&event.subject).as_deref() == Some(want.as_str()))
+    .then_some(id)
+}
+
+/// Idempotently inserts the `identities` row an identity event refers to. A
+/// replay-only node never ran the local registration that creates it, and
+/// older history orders a passkey or signing-key event ahead of its
+/// `identity.created`.
+async fn ensure_identity_row_exists(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &ProtocolEvent,
+) -> Result<(), avalon_indexer::IndexError> {
+    let Some(identity_id) = identity_row_target(event) else {
+        if event.kind.starts_with("identity.") {
+            tracing::warn!(
+                "mirror-watcher: event {} ({}) has an identity_id that does not match its issuer/subject; not creating an identity row",
+                event.id, event.kind
+            );
+        }
         return Ok(());
     };
-    sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO identities (id, created_at) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(identity_id)
+        .bind(event.timestamp)
         .execute(&mut **tx)
-        .await
-        .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+        .await?;
     Ok(())
 }
 
@@ -3103,83 +3284,97 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Entries as a core shard recorded them for a fresh registration: the
+    fn mk_entry(
+        network_id: &str,
+        seq: i64,
+        kind: &str,
+        identity_id: Uuid,
+        payload: Option<serde_json::Value>,
+    ) -> mirror::MirroredEntry {
+        let who = format!(
+            "identity:{identity_id}:self:{}",
+            kind.trim_start_matches("identity.")
+        );
+        mirror::MirroredEntry {
+            source_url: "http://peer.invalid".to_string(),
+            network_id: network_id.to_string(),
+            shard_id: mirror::CORE_SHARD_ID.to_string(),
+            seq,
+            event_id: Uuid::new_v4(),
+            kind: kind.to_string(),
+            issuer: who.clone(),
+            subject: who,
+            payload,
+            event_timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+            prev_hash: "00".repeat(32),
+            entry_hash: format!("{seq:064x}"),
+            batch_id: Uuid::new_v4(),
+            verified_tree_size: seq,
+        }
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+    }
+
+    fn created_payload(identity_id: Uuid, name: &str) -> serde_json::Value {
+        serde_json::json!({ "identity_id": identity_id, "display_name": name })
+    }
+
+    fn passkey_payload(identity_id: Uuid, passkey_id: Uuid) -> serde_json::Value {
+        serde_json::json!({
+            "passkey_id": passkey_id,
+            "identity_id": identity_id,
+            "credential_id": b64(Uuid::new_v4().as_bytes()),
+            "passkey_data": {"k": 1},
+            "label": null,
+        })
+    }
+
+    /// Entries as a core shard recorded them for fresh registrations: the
     /// passkey and signing-key events ahead of `identity.created`.
     fn child_first_history(network_id: &str, identities: usize) -> Vec<mirror::MirroredEntry> {
         let mut entries = Vec::new();
         let mut seq = 0;
-        for n in 0..identities {
-            let identity_id = Uuid::new_v4();
-            let payloads = [
+        for _ in 0..identities {
+            let id = Uuid::new_v4();
+            let key = serde_json::json!({
+                "signing_key_id": Uuid::new_v4(),
+                "public_key": b64(&[7u8; 32]),
+                "device_label": null,
+                "approved_by_signing_key_id": Uuid::new_v4(),
+                "identity_id": id,
+            });
+            for (kind, payload) in [
                 (
                     "identity.passkey_registered",
-                    serde_json::json!({
-                        "passkey_id": Uuid::new_v4(),
-                        "identity_id": identity_id,
-                        "credential_id": base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            Uuid::new_v4().as_bytes(),
-                        ),
-                        "passkey_data": {"k": n},
-                        "label": null,
-                    }),
+                    passkey_payload(id, Uuid::new_v4()),
                 ),
-                (
-                    "identity.signing_key_added",
-                    serde_json::json!({
-                        "signing_key_id": Uuid::new_v4(),
-                        "public_key": base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            [7u8; 32],
-                        ),
-                        "device_label": null,
-                        "approved_by_signing_key_id": Uuid::new_v4(),
-                        "identity_id": identity_id,
-                    }),
-                ),
+                ("identity.signing_key_added", key),
                 (
                     "identity.created",
-                    serde_json::json!({
-                        "identity_id": identity_id,
-                        "display_name": format!("replay-{identity_id}"),
-                    }),
+                    created_payload(id, &format!("replay-{id}")),
                 ),
-            ];
-            for (kind, payload) in payloads {
+            ] {
                 seq += 1;
-                let verb = kind.trim_start_matches("identity.");
-                let who = format!("identity:{identity_id}:self:{verb}");
-                entries.push(mirror::MirroredEntry {
-                    source_url: "http://peer.invalid".to_string(),
-                    network_id: network_id.to_string(),
-                    shard_id: mirror::CORE_SHARD_ID.to_string(),
-                    seq,
-                    event_id: Uuid::new_v4(),
-                    kind: kind.to_string(),
-                    issuer: who.clone(),
-                    subject: who,
-                    payload: Some(payload),
-                    event_timestamp: OffsetDateTime::now_utc(),
-                    version: 1,
-                    prev_hash: "00".repeat(32),
-                    entry_hash: format!("{seq:064x}"),
-                    batch_id: Uuid::new_v4(),
-                    verified_tree_size: seq,
-                });
+                entries.push(mk_entry(network_id, seq, kind, id, Some(payload)));
             }
         }
         entries
     }
 
-    async fn projected_counts(pool: &PgPool, entries: &[mirror::MirroredEntry]) -> (i64, i64, i64) {
+    async fn claimed(pool: &PgPool, entries: &[&mirror::MirroredEntry]) -> i64 {
         let ids: Vec<Uuid> = entries.iter().map(|e| e.event_id).collect();
-        let claimed: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM indexer_applied_events WHERE event_id = ANY($1)",
-        )
-        .bind(&ids)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        sqlx::query_scalar("SELECT count(*) FROM indexer_applied_events WHERE event_id = ANY($1)")
+            .bind(&ids)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn projected_counts(pool: &PgPool, entries: &[mirror::MirroredEntry]) -> (i64, i64, i64) {
+        let all: Vec<&mirror::MirroredEntry> = entries.iter().collect();
         let ident_ids: Vec<Uuid> = entries
             .iter()
             .filter(|e| e.kind == "identity.created")
@@ -3202,13 +3397,17 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        (claimed, passkeys, keys)
+        (claimed(pool, &all).await, passkeys, keys)
     }
 
     async fn store_entries(pool: &PgPool, entries: &[mirror::MirroredEntry]) {
         for entry in entries {
             mirror::insert_mirrored_entry(pool, entry).await.unwrap();
         }
+    }
+
+    fn fresh_network(tag: &str) -> String {
+        format!("avalon-test-{tag}-{}", Uuid::new_v4())
     }
 
     /// Replaying child-before-parent history into an empty replica projects every
@@ -3218,22 +3417,14 @@ mod tests {
     async fn replaying_children_ahead_of_identity_created_projects_completely() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
-        let entries = child_first_history(&format!("avalon-test-replay-{}", Uuid::new_v4()), 3);
+        let entries = child_first_history(&fresh_network("replay"), 3);
+        let mut blocked = false;
         for entry in &entries {
-            let mut tx = pool.begin().await.unwrap();
-            mirror::insert_mirrored_entry(&mut *tx, entry)
+            store_and_project(&pool, &indexer, entry, &mut blocked)
                 .await
                 .unwrap();
-            let applied = project_mirrored_entry(&mut tx, &indexer, entry)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-            assert!(
-                applied,
-                "seq={} ({}) failed to project",
-                entry.seq, entry.kind
-            );
         }
+        assert!(!blocked);
         assert_eq!(projected_counts(&pool, &entries).await, (9, 3, 3));
     }
 
@@ -3243,20 +3434,408 @@ mod tests {
     async fn unapplied_mirrored_entries_are_reprojected() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
-        let network_id = format!("avalon-test-reproject-{}", Uuid::new_v4());
+        let network_id = fresh_network("reproject");
         let entries = child_first_history(&network_id, 2);
         store_entries(&pool, &entries).await;
         assert_eq!(projected_counts(&pool, &entries).await, (0, 0, 0));
 
-        let n = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
             .unwrap();
-        assert_eq!(n, 6);
+        assert_eq!(report.projected, 6);
         assert_eq!(projected_counts(&pool, &entries).await, (6, 2, 2));
 
         let again = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
             .unwrap();
-        assert_eq!(again, 0);
+        assert_eq!(again, ReprojectReport::default());
+    }
+
+    /// A permanently failing entry is parked and the entries behind it still
+    /// project; a later forced pass skips it instead of retrying.
+    #[tokio::test]
+    #[ignore]
+    async fn a_permanently_failing_entry_is_parked_without_blocking_later_entries() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("poison");
+        let bad_owner = Uuid::new_v4();
+        let mut bad = mk_entry(
+            &network_id,
+            1,
+            "identity.passkey_registered",
+            bad_owner,
+            Some(passkey_payload(bad_owner, Uuid::new_v4())),
+        );
+        bad.issuer = "not a global id".to_string();
+        let mut entries = vec![bad];
+        for mut e in child_first_history(&network_id, 1) {
+            e.seq += 1;
+            entries.push(e);
+        }
+        store_entries(&pool, &entries).await;
+
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            (report.projected, report.parked, report.blocked),
+            (3, 1, false)
+        );
+        assert_eq!(claimed(&pool, &entries.iter().collect::<Vec<_>>()).await, 3);
+
+        mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
+        let again = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            again,
+            ReprojectReport::default(),
+            "parked entry must be skipped"
+        );
+    }
+
+    /// A display-name conflict is deterministic: the entry fails permanently,
+    /// stays unclaimed (savepoint rolled back) and does not stop the next one.
+    #[tokio::test]
+    #[ignore]
+    async fn a_display_name_conflict_fails_permanently_and_leaves_the_entry_unclaimed() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("dupname");
+        let name = format!("dup-{}", Uuid::new_v4());
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let first = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            a,
+            Some(created_payload(a, &name)),
+        );
+        let second = mk_entry(
+            &network_id,
+            2,
+            "identity.created",
+            b,
+            Some(created_payload(b, &name)),
+        );
+        let after = mk_entry(
+            &network_id,
+            3,
+            "identity.passkey_registered",
+            a,
+            Some(passkey_payload(a, Uuid::new_v4())),
+        );
+        for e in [&first, &second, &after] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
+        }
+
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(
+            project_mirrored_entry(&mut tx, &indexer, &first)
+                .await
+                .unwrap(),
+            ProjectionOutcome::Applied
+        );
+        let outcome = project_mirrored_entry(&mut tx, &indexer, &second)
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, ProjectionOutcome::Permanent(_)),
+            "{outcome:?}"
+        );
+        tx.commit().await.unwrap();
+        assert_eq!(claimed(&pool, &[&first]).await, 1);
+        assert_eq!(claimed(&pool, &[&second]).await, 0);
+
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            (report.projected, report.parked, report.blocked),
+            (1, 1, false)
+        );
+        assert_eq!(claimed(&pool, &[&after]).await, 1);
+    }
+
+    /// A transient failure stops the pass at that entry and keeps the scan due.
+    #[tokio::test]
+    #[ignore]
+    async fn a_transient_failure_stops_the_pass_and_reports_blocked() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("transient");
+        store_entries(&pool, &child_first_history(&network_id, 1)).await;
+
+        let mut calls = 0;
+        let report = reproject_with(&pool, &network_id, mirror::CORE_SHARD_ID, |_| {
+            calls += 1;
+            let outcome = if calls == 2 {
+                ProjectionOutcome::Transient("db down".to_string())
+            } else {
+                ProjectionOutcome::Applied
+            };
+            async move { Ok(outcome) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            calls, 2,
+            "entries after the transient failure must not be attempted"
+        );
+        assert_eq!((report.projected, report.blocked), (1, true));
+        assert!(scan_due(&network_id, mirror::CORE_SHARD_ID));
+    }
+
+    /// Self-certifying shards are stored but never projected.
+    #[tokio::test]
+    #[ignore]
+    async fn reproject_skips_self_certifying_shards() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("selfcert");
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let shard =
+            avalon_protocol::shard_identity::derive_self_certifying_id(&key.verifying_key());
+        let mut entries = child_first_history(&network_id, 1);
+        for e in &mut entries {
+            e.shard_id = shard.clone();
+        }
+        store_entries(&pool, &entries).await;
+        let report = reproject_unapplied(&pool, &indexer, &network_id, &shard)
+            .await
+            .unwrap();
+        assert_eq!(report, ReprojectReport::default());
+        assert_eq!(claimed(&pool, &entries.iter().collect::<Vec<_>>()).await, 0);
+    }
+
+    /// Pruned-payload entries are neither projected nor treated as failures.
+    #[tokio::test]
+    #[ignore]
+    async fn reproject_skips_pruned_payload_entries() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("pruned");
+        let pruned = mk_entry(&network_id, 1, "identity.created", Uuid::new_v4(), None);
+        store_entries(&pool, std::slice::from_ref(&pruned)).await;
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(report, ReprojectReport::default());
+        assert_eq!(claimed(&pool, &[&pruned]).await, 0);
+    }
+
+    /// While projection is blocked, new entries are stored but left unapplied,
+    /// so a revoke can never apply ahead of the registration it follows.
+    #[tokio::test]
+    #[ignore]
+    async fn a_blocked_projection_keeps_later_entries_unapplied_so_a_revoke_stays_ordered() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("revoke");
+        let (id, passkey_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let created = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            id,
+            Some(created_payload(id, &format!("revoke-{id}"))),
+        );
+        let registered = mk_entry(
+            &network_id,
+            2,
+            "identity.passkey_registered",
+            id,
+            Some(passkey_payload(id, passkey_id)),
+        );
+        let revoked = mk_entry(
+            &network_id,
+            3,
+            "identity.passkey_revoked",
+            id,
+            Some(serde_json::json!({ "passkey_id": passkey_id })),
+        );
+        let mut blocked = true;
+        for e in [&created, &registered, &revoked] {
+            store_and_project(&pool, &indexer, e, &mut blocked)
+                .await
+                .unwrap();
+        }
+        assert_eq!(claimed(&pool, &[&created, &registered, &revoked]).await, 0);
+
+        reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        let revoked_at: Option<OffsetDateTime> = sqlx::query_scalar(
+            "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
+        )
+        .bind(passkey_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(revoked_at.is_some(), "the passkey must end up revoked");
+    }
+
+    fn ev(kind: &str, issuer_id: Uuid, payload_id: Uuid) -> ProtocolEvent {
+        let who = GlobalId::new("identity", &issuer_id.to_string(), "self", "x");
+        ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: kind.to_string(),
+            issuer: who.clone(),
+            subject: who,
+            payload: serde_json::json!({ "identity_id": payload_id }),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+            identity_chain: None,
+        }
+    }
+
+    #[test]
+    fn identity_row_target_requires_an_identity_kind_and_a_matching_embedded_id() {
+        let id = Uuid::new_v4();
+        assert_eq!(
+            identity_row_target(&ev("identity.passkey_registered", id, id)),
+            Some(id)
+        );
+        assert_eq!(
+            identity_row_target(&ev("identity.created", id, Uuid::new_v4())),
+            None
+        );
+        assert_eq!(identity_row_target(&ev("friend.requested", id, id)), None);
+        assert_eq!(
+            identity_row_target(&ev("identity.passkey_revoked", id, id)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ensure_identity_row_only_inserts_for_a_matching_identity_event() {
+        let pool = live_test_pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        let (good, other, mismatched) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut event = ev("identity.signing_key_added", good, good);
+        event.timestamp = OffsetDateTime::UNIX_EPOCH + time::Duration::days(400);
+        ensure_identity_row_exists(&mut tx, &event).await.unwrap();
+        ensure_identity_row_exists(&mut tx, &ev("friend.requested", other, other))
+            .await
+            .unwrap();
+        ensure_identity_row_exists(&mut tx, &ev("identity.created", other, mismatched))
+            .await
+            .unwrap();
+        let rows: Vec<(Uuid, OffsetDateTime)> =
+            sqlx::query_as("SELECT id, created_at FROM identities WHERE id = ANY($1)")
+                .bind(vec![good, other, mismatched])
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap();
+        tx.rollback().await.unwrap();
+        assert_eq!(rows, vec![(good, event.timestamp)]);
+    }
+
+    #[test]
+    fn the_scan_flag_is_cleared_by_a_failure_and_set_by_a_clean_pass() {
+        let net = fresh_network("flag");
+        assert!(scan_due(&net, "core"), "first pass after start scans");
+        mark_scan_clean(&net, "core");
+        assert!(!scan_due(&net, "core"));
+        assert!(scan_due(&net, "other"), "flags are per shard");
+        mark_projection_failed(&net, "core");
+        assert!(scan_due(&net, "core"));
+    }
+
+    #[test]
+    fn parking_is_bounded() {
+        let mut set = std::collections::HashSet::new();
+        let ids: Vec<Uuid> = (0..4).map(|_| Uuid::new_v4()).collect();
+        let results: Vec<bool> = ids.iter().map(|id| park_in(&mut set, *id, 3)).collect();
+        assert_eq!(results, vec![true, true, true, false]);
+        assert!(
+            park_in(&mut set, ids[0], 3),
+            "an already parked entry stays parked"
+        );
+    }
+
+    fn dummy_sth(network_id: &str) -> Vec<(String, SignedTreeHead)> {
+        vec![(
+            "peer-a".to_string(),
+            SignedTreeHead {
+                tree_size: 10,
+                root_hash: "aa".repeat(32),
+                network_id: network_id.to_string(),
+                signing_key_id: "test-key".to_string(),
+                signature: "sig".to_string(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        )]
+    }
+
+    /// `backfill_network` re-projects stored entries, but only once the
+    /// equivocation gate has passed.
+    #[tokio::test]
+    #[ignore]
+    async fn backfill_network_reprojects_only_after_the_equivocation_gate() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let client = crate::node_http::NodeClient::new();
+        let network_id = fresh_network("wiring");
+        let entries = child_first_history(&network_id, 1);
+        store_entries(&pool, &entries).await;
+        let refs: Vec<&mirror::MirroredEntry> = entries.iter().collect();
+
+        mirror::record_equivocation(
+            &pool,
+            &mirror::EquivocationFinding {
+                network_id: network_id.clone(),
+                shard_id: mirror::CORE_SHARD_ID.to_string(),
+                tree_size: 10,
+                source_a: "peer-a".to_string(),
+                root_hash_a: "aa".repeat(32),
+                source_b: "peer-b".to_string(),
+                root_hash_b: "bb".repeat(32),
+                resolved_at: None,
+                resolved_root_hash: None,
+            },
+        )
+        .await
+        .unwrap();
+        let obs = dummy_sth(&network_id);
+        backfill_network(
+            &client,
+            &pool,
+            &indexer,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            &obs,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            claimed(&pool, &refs).await,
+            0,
+            "gated: nothing may be projected"
+        );
+
+        mirror::resolve_equivocation(
+            &pool,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            10,
+            &"aa".repeat(32),
+        )
+        .await
+        .unwrap();
+        backfill_network(
+            &client,
+            &pool,
+            &indexer,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(claimed(&pool, &refs).await, 3);
     }
 }

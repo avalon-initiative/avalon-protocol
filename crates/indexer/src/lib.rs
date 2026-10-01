@@ -52,6 +52,31 @@ pub enum IndexError {
     /// downstream dependency being down.
     #[error("remote indexer role unreachable: {0}")]
     RemoteUnreachable(String),
+    /// The database could not serve the write (connection, pool, resource or
+    /// serialization failure); retrying the same event may succeed.
+    #[error("index storage unavailable: {0}")]
+    Unavailable(String),
+}
+
+impl IndexError {
+    /// Whether retrying the same event later can succeed.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Unavailable(_) | Self::RemoteUnreachable(_))
+    }
+}
+
+fn is_unavailable(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::WorkerCrashed => true,
+        sqlx::Error::Database(db) => db
+            .code()
+            .is_some_and(|c| ["08", "40", "53", "57"].iter().any(|p| c.starts_with(p))),
+        _ => false,
+    }
 }
 
 impl From<sqlx::Error> for IndexError {
@@ -61,6 +86,9 @@ impl From<sqlx::Error> for IndexError {
             .is_some_and(|db_err| db_err.constraint() == Some("profiles_display_name_lower_idx"));
         if is_display_name_conflict {
             return IndexError::DisplayNameTaken;
+        }
+        if is_unavailable(&err) {
+            return IndexError::Unavailable(err.to_string());
         }
         IndexError::Storage(err.to_string())
     }
@@ -82,5 +110,18 @@ pub trait Indexer: Send + Sync {
             self.apply(event).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+
+    #[test]
+    fn connection_class_errors_are_transient_and_others_are_not() {
+        assert!(IndexError::from(sqlx::Error::PoolTimedOut).is_transient());
+        assert!(IndexError::from(sqlx::Error::PoolClosed).is_transient());
+        assert!(!IndexError::from(sqlx::Error::RowNotFound).is_transient());
+        assert!(!IndexError::DisplayNameTaken.is_transient());
     }
 }
