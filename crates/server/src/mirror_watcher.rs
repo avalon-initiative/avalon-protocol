@@ -1782,12 +1782,16 @@ async fn backfill(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProjectionOutcome {
     Applied,
+    /// Nothing to project (pruned payload or malformed ids): not a failure,
+    /// and no reason to park or rescan.
+    Skipped,
     Permanent(String),
     Transient(String),
 }
 
 /// Entries that failed permanently this process; later passes skip them so
-/// they cannot block the entries behind them. Cleared by a restart.
+/// they cannot block the entries behind them. Cleared by a restart, which
+/// retries them (a register may then apply after its revoke; accepted).
 static PARKED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<Uuid>>> =
     std::sync::LazyLock::new(Default::default);
 const MAX_PARKED: usize = 1024;
@@ -1796,12 +1800,17 @@ fn park_in(parked: &mut std::collections::HashSet<Uuid>, event_id: Uuid, cap: us
     (parked.len() < cap && parked.insert(event_id)) || parked.contains(&event_id)
 }
 
-fn park_entry(event_id: Uuid) -> bool {
-    park_in(
+fn park_entry(event_id: Uuid) {
+    let parked = park_in(
         &mut PARKED.lock().unwrap_or_else(|e| e.into_inner()),
         event_id,
         MAX_PARKED,
-    )
+    );
+    if !parked {
+        tracing::warn!(
+            "mirror-watcher: parked-entry cap ({MAX_PARKED}) reached; event_id={event_id} will be retried on every full scan"
+        );
+    }
 }
 
 fn is_parked(event_id: &Uuid) -> bool {
@@ -1856,7 +1865,7 @@ async fn store_and_project(
             mark_projection_failed(&entry.network_id, &entry.shard_id);
         } else {
             match project_mirrored_entry(&mut tx, indexer, entry).await? {
-                ProjectionOutcome::Applied => {}
+                ProjectionOutcome::Applied | ProjectionOutcome::Skipped => {}
                 ProjectionOutcome::Permanent(_) => {
                     park_entry(entry.event_id);
                     mark_projection_failed(&entry.network_id, &entry.shard_id);
@@ -1882,12 +1891,11 @@ async fn project_mirrored_entry(
 ) -> Result<ProjectionOutcome, MirrorWatcherError> {
     let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
     let Some(event) = protocol_event_from_mirrored(entry) else {
-        let reason = "payload pruned or issuer/subject malformed".to_string();
-        tracing::error!(
-            "mirror-watcher: {}: event_id={} seq={} cannot be decoded ({reason}) — mirrored, not applied to the local indexer",
+        tracing::warn!(
+            "mirror-watcher: {}: event_id={} seq={} cannot be decoded (payload pruned or issuer/subject malformed) — mirrored, not applied to the local indexer",
             entry.network_id, entry.event_id, entry.seq
         );
-        return Ok(ProjectionOutcome::Permanent(reason));
+        return Ok(ProjectionOutcome::Skipped);
     };
     let mut savepoint = tx.begin().await.map_err(storage)?;
     let applied = async {
@@ -2005,6 +2013,7 @@ where
             };
             match outcome {
                 ProjectionOutcome::Applied => report.projected += 1,
+                ProjectionOutcome::Skipped => {}
                 ProjectionOutcome::Permanent(_) => {
                     park_entry(event_id);
                     report.parked += 1;
@@ -2063,6 +2072,7 @@ fn global_id_from_str(raw: &str) -> Option<GlobalId> {
 
 /// The identity an identity event may create a parent row for: its payload
 /// `identity_id`, only when it matches the id embedded in issuer and subject.
+/// Older history that lacks that match is dropped by design.
 fn identity_row_target(event: &ProtocolEvent) -> Option<Uuid> {
     if !matches!(
         event.kind.as_str(),
@@ -3451,6 +3461,34 @@ mod tests {
         assert_eq!(again, ReprojectReport::default());
     }
 
+    /// Two registrations sharing a display name (the second fails permanently),
+    /// followed by a full child-first history that must still project.
+    fn poison_history(network_id: &str) -> Vec<mirror::MirroredEntry> {
+        let name = format!("poison-{}", Uuid::new_v4());
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut entries = vec![
+            mk_entry(
+                network_id,
+                1,
+                "identity.created",
+                a,
+                Some(created_payload(a, &name)),
+            ),
+            mk_entry(
+                network_id,
+                2,
+                "identity.created",
+                b,
+                Some(created_payload(b, &name)),
+            ),
+        ];
+        for mut e in child_first_history(network_id, 1) {
+            e.seq += 2;
+            entries.push(e);
+        }
+        entries
+    }
+
     /// A permanently failing entry is parked and the entries behind it still
     /// project; a later forced pass skips it instead of retrying.
     #[tokio::test]
@@ -3459,20 +3497,7 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("poison");
-        let bad_owner = Uuid::new_v4();
-        let mut bad = mk_entry(
-            &network_id,
-            1,
-            "identity.passkey_registered",
-            bad_owner,
-            Some(passkey_payload(bad_owner, Uuid::new_v4())),
-        );
-        bad.issuer = "not a global id".to_string();
-        let mut entries = vec![bad];
-        for mut e in child_first_history(&network_id, 1) {
-            e.seq += 1;
-            entries.push(e);
-        }
+        let entries = poison_history(&network_id);
         store_entries(&pool, &entries).await;
 
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
@@ -3480,9 +3505,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             (report.projected, report.parked, report.blocked),
-            (3, 1, false)
+            (4, 1, false)
         );
-        assert_eq!(claimed(&pool, &entries.iter().collect::<Vec<_>>()).await, 3);
+        assert!(is_parked(&entries[1].event_id));
 
         mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
         let again = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
@@ -3493,6 +3518,57 @@ mod tests {
             ReprojectReport::default(),
             "parked entry must be skipped"
         );
+    }
+
+    /// A restart empties the parked set, so previously parked entries are retried.
+    #[tokio::test]
+    #[ignore]
+    async fn parked_entries_are_retried_after_a_restart() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("restart");
+        let entries = poison_history(&network_id);
+        store_entries(&pool, &entries).await;
+        reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+
+        PARKED.lock().unwrap().remove(&entries[1].event_id);
+        mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
+        let after_restart =
+            reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+                .await
+                .unwrap();
+        assert_eq!(after_restart.parked, 1, "the entry must be attempted again");
+    }
+
+    /// A pruned-payload entry is skipped: not parked, and it leaves the clean
+    /// scan flag set.
+    #[tokio::test]
+    #[ignore]
+    async fn undecodable_entries_are_skipped_not_parked() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("skipped");
+        let pruned = mk_entry(&network_id, 1, "identity.created", Uuid::new_v4(), None);
+
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(
+            project_mirrored_entry(&mut tx, &indexer, &pruned)
+                .await
+                .unwrap(),
+            ProjectionOutcome::Skipped
+        );
+        tx.rollback().await.unwrap();
+
+        mark_scan_clean(&network_id, mirror::CORE_SHARD_ID);
+        let mut blocked = false;
+        store_and_project(&pool, &indexer, &pruned, &mut blocked)
+            .await
+            .unwrap();
+        assert!(!blocked);
+        assert!(!is_parked(&pruned.event_id));
+        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
     }
 
     /// A display-name conflict is deterministic: the entry fails permanently,

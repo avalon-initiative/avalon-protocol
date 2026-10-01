@@ -65,6 +65,16 @@ impl IndexError {
     }
 }
 
+/// SQLSTATEs worth retrying: connection (08), serialization/deadlock (40),
+/// resources (53), operator shutdown (57), system I/O (58), lock timeout and
+/// read-only transaction (failover).
+fn is_transient_sqlstate(code: &str) -> bool {
+    ["08", "40", "53", "57", "58"]
+        .iter()
+        .any(|p| code.starts_with(p))
+        || matches!(code, "55P03" | "25006")
+}
+
 fn is_unavailable(err: &sqlx::Error) -> bool {
     match err {
         sqlx::Error::Io(_)
@@ -72,9 +82,7 @@ fn is_unavailable(err: &sqlx::Error) -> bool {
         | sqlx::Error::PoolTimedOut
         | sqlx::Error::PoolClosed
         | sqlx::Error::WorkerCrashed => true,
-        sqlx::Error::Database(db) => db
-            .code()
-            .is_some_and(|c| ["08", "40", "53", "57"].iter().any(|p| c.starts_with(p))),
+        sqlx::Error::Database(db) => db.code().is_some_and(|c| is_transient_sqlstate(&c)),
         _ => false,
     }
 }
@@ -123,5 +131,17 @@ mod classification_tests {
         assert!(IndexError::from(sqlx::Error::PoolClosed).is_transient());
         assert!(!IndexError::from(sqlx::Error::RowNotFound).is_transient());
         assert!(!IndexError::DisplayNameTaken.is_transient());
+    }
+
+    #[test]
+    fn every_transient_sqlstate_branch_is_covered() {
+        for code in [
+            "08006", "40001", "40P01", "53300", "57P01", "58030", "55P03", "25006",
+        ] {
+            assert!(is_transient_sqlstate(code), "{code}");
+        }
+        for code in ["23503", "23505", "42P01", "XX000", "22P02", "55000"] {
+            assert!(!is_transient_sqlstate(code), "{code}");
+        }
     }
 }
