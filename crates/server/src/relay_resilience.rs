@@ -8,6 +8,7 @@ use libp2p::swarm::{ConnectionId, DialError};
 use libp2p::{Multiaddr, PeerId};
 
 use crate::reachability::Reachability;
+use crate::relay::{bounded_env, bounded_env_from};
 
 const DEFAULT_PRIVATE_GRACE_SECS: u64 = 90;
 const MAX_PRIVATE_GRACE_SECS: u64 = 600;
@@ -17,8 +18,6 @@ const DEFAULT_RETRY_BASE_SECS: u64 = 5;
 const MAX_RETRY_BASE_SECS: u64 = 60;
 /// Longest wait between two retries of one peer.
 const RETRY_CAP: Duration = Duration::from_secs(120);
-/// Peers whose retry state is held at once.
-const MAX_TRACKED_PEERS: usize = 1024;
 
 /// Resolved once at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,38 +40,27 @@ impl Default for RelayResilience {
     }
 }
 
-/// An integer knob within `0..=max`.
-fn env_up_to(name: &str, default: u64, max: u64) -> Result<u64, String> {
-    let Ok(raw) = std::env::var(name) else {
-        return Ok(default);
-    };
-    match raw.trim().parse::<u64>() {
-        Ok(v) if v <= max => Ok(v),
-        _ => Err(format!(
-            "{name} must be an integer from 0 to {max}, got {raw:?}"
-        )),
-    }
-}
-
 impl RelayResilience {
     /// `AVALON_RELAY_SERVER_PRIVATE_GRACE_SECS` (90, at most 600, 0 stops serving at once),
     /// `AVALON_RELAY_DIAL_RETRIES` (5, at most 20, 0 disables) and
     /// `AVALON_RELAY_DIAL_RETRY_BASE_SECS` (5, 1 to 60).
     pub fn from_env() -> Result<Self, String> {
-        let base = crate::relay::bounded_env(
+        let base = bounded_env(
             "AVALON_RELAY_DIAL_RETRY_BASE_SECS",
             DEFAULT_RETRY_BASE_SECS,
             MAX_RETRY_BASE_SECS,
         )?;
         Ok(Self {
-            private_grace: Duration::from_secs(env_up_to(
+            private_grace: Duration::from_secs(bounded_env_from(
                 "AVALON_RELAY_SERVER_PRIVATE_GRACE_SECS",
                 DEFAULT_PRIVATE_GRACE_SECS,
+                0,
                 MAX_PRIVATE_GRACE_SECS,
             )?),
-            dial_retries: env_up_to(
+            dial_retries: bounded_env_from(
                 "AVALON_RELAY_DIAL_RETRIES",
                 DEFAULT_DIAL_RETRIES,
+                0,
                 MAX_DIAL_RETRIES,
             )? as u32,
             dial_retry_base: Duration::from_secs(base),
@@ -126,7 +114,8 @@ impl RelayGate {
 
 /// Whether a failed dial went through a relay and may succeed once the relay is back: the relay
 /// was briefly unavailable (for example it did not offer the hop protocol), timed out or was at
-/// its limits. Policy refusals and identity mismatches are not retried.
+/// its limits. Policy refusals and identity mismatches are not retried. Any failure of a
+/// circuit-address dial counts against the retry budget, whatever its cause.
 pub fn is_retryable_relayed_failure(error: &DialError) -> bool {
     match error {
         DialError::Transport(failures) => failures.iter().any(|(addr, _)| {
@@ -137,34 +126,62 @@ pub fn is_retryable_relayed_failure(error: &DialError) -> bool {
     }
 }
 
-/// Extra outbound connections to peers that already have one, by the address they were dialed
-/// at. An AutoNAT dial-back opens one and nothing closes it before the idle timeout, so repeated
-/// probes pile connections up against the per-peer limit, which then denies further dial-backs
-/// and the prober is told `private`. The dial-back's own connection is closed once it is answered.
+/// The connection each pending AutoNAT dial-back opened. It stays open until the idle timeout, so
+/// repeated probes pile connections up against the per-peer limit, which then denies further
+/// dial-backs and the prober is told `private`; it is closed once the probe is answered.
 #[derive(Default)]
 pub struct DialbackConns {
-    extra: HashMap<ConnectionId, (PeerId, Multiaddr)>,
+    pending: HashMap<PeerId, Pending>,
 }
 
+struct Pending {
+    addresses: Vec<Multiaddr>,
+    conn: Option<ConnectionId>,
+}
+
+/// Dial-backs awaited at once.
+const MAX_PENDING_DIALBACKS: usize = 256;
+
 impl DialbackConns {
-    /// An outbound connection to `peer` at `address` opened while `peer` had others.
-    pub fn opened_extra(&mut self, id: ConnectionId, peer: PeerId, address: Multiaddr) {
-        self.extra.insert(id, (peer, address));
+    /// A dial-back request from `peer`, to be attempted at `addresses`.
+    pub fn requested(&mut self, peer: PeerId, addresses: Vec<Multiaddr>) {
+        if self.pending.len() < MAX_PENDING_DIALBACKS || self.pending.contains_key(&peer) {
+            self.pending.insert(
+                peer,
+                Pending {
+                    addresses,
+                    conn: None,
+                },
+            );
+        }
+    }
+
+    /// An outbound connection to `peer` opened; only the first one at a requested address, with
+    /// the dialer role (not a hole punch), is taken for the dial-back's.
+    pub fn opened(&mut self, id: ConnectionId, peer: &PeerId, address: &Multiaddr, dialer: bool) {
+        if let Some(p) = self.pending.get_mut(peer) {
+            if dialer && p.conn.is_none() && p.addresses.contains(address) {
+                p.conn = Some(id);
+            }
+        }
     }
 
     pub fn closed(&mut self, id: &ConnectionId) {
-        self.extra.remove(id);
+        for p in self.pending.values_mut() {
+            if p.conn.as_ref() == Some(id) {
+                p.conn = None;
+            }
+        }
     }
 
-    /// The connection a dial-back to `peer` at `address` succeeded over, to be closed now.
-    pub fn answered(&mut self, peer: &PeerId, address: &Multiaddr) -> Option<ConnectionId> {
-        let id = *self
-            .extra
-            .iter()
-            .find(|(_, (p, a))| p == peer && a == address)?
-            .0;
-        self.extra.remove(&id);
-        Some(id)
+    /// The probe from `peer` ended without a connection to close.
+    pub fn failed(&mut self, peer: &PeerId) {
+        self.pending.remove(peer);
+    }
+
+    /// The probe from `peer` succeeded: the connection to close, if one was seen.
+    pub fn answered(&mut self, peer: &PeerId) -> Option<ConnectionId> {
+        self.pending.remove(peer)?.conn
     }
 }
 
@@ -176,13 +193,16 @@ struct Backoff {
 /// Per-peer exponential backoff for relayed dials, bounded in attempts and in tracked peers.
 pub struct DialRetry {
     resilience: RelayResilience,
+    /// Peers tracked at once.
+    cap: usize,
     peers: HashMap<PeerId, Backoff>,
 }
 
 impl DialRetry {
-    pub fn new(resilience: RelayResilience) -> Self {
+    pub fn new(resilience: RelayResilience, cap: usize) -> Self {
         Self {
             resilience,
+            cap: cap.max(1),
             peers: HashMap::new(),
         }
     }
@@ -191,15 +211,14 @@ impl DialRetry {
     /// once the retries are spent. A failure while still backing off (another dial of the same
     /// peer) does not use up a retry.
     pub fn on_failure(&mut self, peer: PeerId, now: Instant) -> Option<Duration> {
-        if !self.peers.contains_key(&peer) && self.peers.len() >= MAX_TRACKED_PEERS {
-            if let Some(oldest) = self
+        if !self.peers.contains_key(&peer) && self.peers.len() >= self.cap {
+            // Only a spent entry may go: evicting a waiting one would reset its budget.
+            let spent = self
                 .peers
                 .iter()
-                .min_by_key(|(_, b)| b.next_at)
-                .map(|(p, _)| *p)
-            {
-                self.peers.remove(&oldest);
-            }
+                .find(|(_, b)| b.failures >= self.resilience.dial_retries)
+                .map(|(p, _)| *p);
+            self.peers.remove(&spent?);
         }
         let entry = self.peers.entry(peer).or_insert(Backoff {
             failures: 0,
@@ -307,11 +326,14 @@ mod tests {
     }
 
     fn retry(retries: u32) -> DialRetry {
-        DialRetry::new(RelayResilience {
-            dial_retries: retries,
-            dial_retry_base: Duration::from_secs(5),
-            ..RelayResilience::default()
-        })
+        DialRetry::new(
+            RelayResilience {
+                dial_retries: retries,
+                dial_retry_base: Duration::from_secs(5),
+                ..RelayResilience::default()
+            },
+            1000,
+        )
     }
 
     #[test]
@@ -364,13 +386,48 @@ mod tests {
         assert_eq!(retry.on_failure(PeerId::random(), Instant::now()), None);
     }
 
+    fn capped(retries: u32, cap: usize) -> DialRetry {
+        DialRetry::new(
+            RelayResilience {
+                dial_retries: retries,
+                ..RelayResilience::default()
+            },
+            cap,
+        )
+    }
+
     #[test]
-    fn tracked_peers_are_bounded() {
-        let (mut retry, t0) = (retry(3), Instant::now());
-        for i in 0..MAX_TRACKED_PEERS as u64 + 10 {
-            retry.on_failure(PeerId::random(), t0 + Duration::from_secs(i));
+    fn a_waiting_peer_keeps_its_budget_when_the_set_is_full() {
+        let (mut retry, t0) = (capped(3, 2), Instant::now());
+        let (a, b, c) = (PeerId::random(), PeerId::random(), PeerId::random());
+        retry.on_failure(a, t0);
+        retry.on_failure(b, t0);
+        // Neither is spent, so a third peer is not tracked and nobody loses their count.
+        assert_eq!(retry.on_failure(c, t0), None);
+        assert_eq!(retry.peers.len(), 2);
+        assert_eq!(retry.peers[&a].failures, 1);
+    }
+
+    #[test]
+    fn a_spent_entry_makes_room_first() {
+        let (mut retry, t0) = (capped(1, 2), Instant::now());
+        let (a, b, c) = (PeerId::random(), PeerId::random(), PeerId::random());
+        retry.on_failure(a, t0);
+        retry.on_failure(b, t0);
+        assert!(retry.peers.len() == 2);
+        // Both are spent (one retry each); the new peer replaces one of them.
+        assert!(retry.on_failure(c, t0).is_some());
+        assert_eq!(retry.peers.len(), 2);
+        assert!(retry.peers.contains_key(&c));
+    }
+
+    #[test]
+    fn the_tracked_set_never_exceeds_its_cap() {
+        let (mut retry, t0) = (capped(1, 8), Instant::now());
+        for _ in 0..50 {
+            retry.on_failure(PeerId::random(), t0);
         }
-        assert_eq!(retry.peers.len(), MAX_TRACKED_PEERS);
+        assert!(retry.peers.len() <= 8);
     }
 
     #[test]
@@ -388,28 +445,144 @@ mod tests {
             "/ip4/10.0.0.1/tcp/4001"
         )));
         assert!(!is_retryable_relayed_failure(&DialError::NoAddresses));
+        assert!(!is_retryable_relayed_failure(&DialError::WrongPeerId {
+            obtained: PeerId::random(),
+            address: circuit.parse().unwrap(),
+        }));
+        assert!(!is_retryable_relayed_failure(&DialError::LocalPeerId {
+            address: circuit.parse().unwrap(),
+        }));
+        assert!(!is_retryable_relayed_failure(&DialError::Denied {
+            cause: libp2p::swarm::ConnectionDenied::new(std::io::Error::other("limit")),
+        }));
         assert!(!is_retryable_relayed_failure(&DialError::Aborted));
     }
 
+    fn conn(n: usize) -> ConnectionId {
+        ConnectionId::new_unchecked(n)
+    }
+
+    fn addr(s: &str) -> Multiaddr {
+        s.parse().unwrap()
+    }
+
     #[test]
-    fn an_answered_dialback_yields_its_own_connection_once() {
+    fn only_the_first_dialback_connection_is_closed_not_an_older_one() {
         let mut conns = DialbackConns::default();
-        let (peer, other) = (PeerId::random(), PeerId::random());
-        let addr: Multiaddr = "/ip4/10.0.0.1/tcp/4001".parse().unwrap();
-        let (first, second) = (
-            ConnectionId::new_unchecked(1),
-            ConnectionId::new_unchecked(2),
-        );
-        conns.opened_extra(first, peer, addr.clone());
-        conns.opened_extra(second, other, addr.clone());
+        let (peer, a) = (PeerId::random(), addr("/ip4/10.0.0.1/tcp/4001"));
+        // An older extra connection to the same peer and address was never recorded.
+        conns.opened(conn(1), &peer, &a, true);
+        conns.requested(peer, vec![a.clone()]);
+        conns.opened(conn(2), &peer, &a, true);
+        conns.opened(conn(3), &peer, &a, true);
+        assert_eq!(conns.answered(&peer), Some(conn(2)));
+        assert_eq!(conns.answered(&peer), None);
+    }
+
+    #[test]
+    fn a_connection_without_a_pending_request_is_never_recorded() {
+        let mut conns = DialbackConns::default();
+        let (peer, a) = (PeerId::random(), addr("/ip4/10.0.0.1/tcp/4001"));
+        conns.opened(conn(1), &peer, &a, true);
+        assert_eq!(conns.answered(&peer), None);
+        conns.requested(peer, vec![a.clone()]);
+        assert_eq!(conns.answered(&peer), None);
+    }
+
+    #[test]
+    fn a_listener_role_dial_is_never_recorded() {
+        let mut conns = DialbackConns::default();
+        let (peer, a) = (PeerId::random(), addr("/ip4/10.0.0.1/tcp/4001"));
+        conns.requested(peer, vec![a.clone()]);
+        conns.opened(conn(1), &peer, &a, false);
+        assert_eq!(conns.answered(&peer), None);
+    }
+
+    #[test]
+    fn an_address_outside_the_request_is_never_recorded() {
+        let mut conns = DialbackConns::default();
+        let peer = PeerId::random();
+        conns.requested(peer, vec![addr("/ip4/10.0.0.1/tcp/4001")]);
+        conns.opened(conn(1), &peer, &addr("/ip4/10.0.0.2/tcp/4001"), true);
+        assert_eq!(conns.answered(&peer), None);
+    }
+
+    #[test]
+    fn a_failed_probe_or_closed_connection_clears_the_record() {
+        let mut conns = DialbackConns::default();
+        let (peer, a) = (PeerId::random(), addr("/ip4/10.0.0.1/tcp/4001"));
+        conns.requested(peer, vec![a.clone()]);
+        conns.opened(conn(1), &peer, &a, true);
+        conns.closed(&conn(1));
+        assert_eq!(conns.answered(&peer), None);
+        conns.requested(peer, vec![a.clone()]);
+        conns.opened(conn(2), &peer, &a, true);
+        conns.failed(&peer);
+        assert_eq!(conns.answered(&peer), None);
+    }
+
+    #[test]
+    fn pending_dialbacks_are_bounded() {
+        let mut conns = DialbackConns::default();
+        for _ in 0..MAX_PENDING_DIALBACKS + 10 {
+            conns.requested(PeerId::random(), Vec::new());
+        }
+        assert_eq!(conns.pending.len(), MAX_PENDING_DIALBACKS);
+    }
+
+    #[test]
+    fn env_settings_default_range_and_ceiling() {
+        const VARS: [&str; 3] = [
+            "AVALON_RELAY_SERVER_PRIVATE_GRACE_SECS",
+            "AVALON_RELAY_DIAL_RETRIES",
+            "AVALON_RELAY_DIAL_RETRY_BASE_SECS",
+        ];
+        let set = |name: &str, v: Option<&str>| unsafe {
+            match v {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        };
+        for v in VARS {
+            set(v, None);
+        }
         assert_eq!(
-            conns.answered(&other, &"/ip4/10.0.0.2/tcp/1".parse().unwrap()),
-            None
+            RelayResilience::from_env().unwrap(),
+            RelayResilience::default()
         );
-        assert_eq!(conns.answered(&peer, &addr), Some(first));
-        assert_eq!(conns.answered(&peer, &addr), None);
-        conns.closed(&second);
-        assert_eq!(conns.answered(&other, &addr), None);
+
+        set(VARS[0], Some("0"));
+        set(VARS[1], Some("0"));
+        let off = RelayResilience::from_env().unwrap();
+        assert_eq!((off.private_grace, off.dial_retries), (Duration::ZERO, 0));
+
+        set(VARS[0], Some("600"));
+        set(VARS[1], Some("20"));
+        set(VARS[2], Some("60"));
+        let max = RelayResilience::from_env().unwrap();
+        assert_eq!(max.private_grace, Duration::from_secs(600));
+        assert_eq!(
+            (max.dial_retries, max.dial_retry_base),
+            (20, Duration::from_secs(60))
+        );
+
+        for (name, bad) in [
+            (VARS[0], "601"),
+            (VARS[0], "-1"),
+            (VARS[1], "21"),
+            (VARS[2], "0"),
+            (VARS[2], "61"),
+            (VARS[2], "x"),
+        ] {
+            for v in VARS {
+                set(v, None);
+            }
+            set(name, Some(bad));
+            assert!(RelayResilience::from_env().is_err(), "{name}={bad}");
+        }
+        for v in VARS {
+            set(v, None);
+        }
     }
 
     #[test]

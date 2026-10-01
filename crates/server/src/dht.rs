@@ -965,6 +965,44 @@ fn relayed_dial_due(
     now.duration_since(first) >= RELAYED_DIAL_GRACE
 }
 
+/// Whether the scan may dial `remote` now: not backing off after a failed dial and, when it is
+/// reachable only through a relay, past the crossed-dial tie-break.
+fn scan_dial_due(
+    first_seen: &mut HashMap<PeerId, Instant>,
+    retry: &DialRetry,
+    local: &PeerId,
+    remote: PeerId,
+    relayed_only: bool,
+    now: Instant,
+) -> bool {
+    retry.due(&remote, now) && (!relayed_only || relayed_dial_due(first_seen, local, remote, now))
+}
+
+/// A relayed dial to `peer` failed: let the scan dial it again after the backoff, with the
+/// crossed-dial tie-break applied afresh. `Some(wait)` when a retry is allowed.
+fn on_relayed_dial_failed(
+    retry: &mut DialRetry,
+    known: &mut HashSet<PeerId>,
+    first_seen: &mut HashMap<PeerId, Instant>,
+    peer: PeerId,
+    now: Instant,
+) -> Option<Duration> {
+    let wait = retry.on_failure(peer, now)?;
+    known.remove(&peer);
+    first_seen.remove(&peer);
+    Some(wait)
+}
+
+/// A connection to `peer` opened: its failures and tie-break wait no longer count.
+fn on_peer_connected(
+    retry: &mut DialRetry,
+    first_seen: &mut HashMap<PeerId, Instant>,
+    peer: &PeerId,
+) {
+    retry.on_connected(peer);
+    first_seen.remove(peer);
+}
+
 fn is_relayed_addr(addr: &Multiaddr) -> bool {
     addr.iter().any(|p| matches!(p, Protocol::P2pCircuit))
 }
@@ -1039,24 +1077,39 @@ fn close_answered_dialbacks(
     dialbacks: &mut DialbackConns,
     event: &SwarmEvent<DhtBehaviourEvent>,
 ) {
+    use autonat::InboundProbeEvent as Probe;
+    use libp2p::core::{ConnectedPoint, Endpoint};
     match event {
+        SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::InboundProbe(probe))) => {
+            match probe {
+                Probe::Request {
+                    peer, addresses, ..
+                } => dialbacks.requested(*peer, addresses.clone()),
+                Probe::Response { peer, .. } => {
+                    if let Some(id) = dialbacks.answered(peer) {
+                        swarm.close_connection(id);
+                    }
+                }
+                Probe::Error { peer, .. } => dialbacks.failed(peer),
+            }
+        }
         SwarmEvent::ConnectionEstablished {
             peer_id,
             connection_id,
-            endpoint: libp2p::core::ConnectedPoint::Dialer { address, .. },
-            num_established,
+            endpoint:
+                ConnectedPoint::Dialer {
+                    address,
+                    role_override,
+                    ..
+                },
             ..
-        } if num_established.get() > 1 => {
-            dialbacks.opened_extra(*connection_id, *peer_id, address.clone());
-        }
+        } => dialbacks.opened(
+            *connection_id,
+            peer_id,
+            address,
+            *role_override == Endpoint::Dialer,
+        ),
         SwarmEvent::ConnectionClosed { connection_id, .. } => dialbacks.closed(connection_id),
-        SwarmEvent::Behaviour(DhtBehaviourEvent::Autonat(autonat::Event::InboundProbe(
-            autonat::InboundProbeEvent::Response { peer, address, .. },
-        ))) => {
-            if let Some(id) = dialbacks.answered(peer, address) {
-                swarm.close_connection(id);
-            }
-        }
         _ => {}
     }
 }
@@ -1267,7 +1320,10 @@ async fn run_worker(
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut punched: HashMap<ConnectionId, PeerId> = HashMap::new();
     let mut relayed_first_seen: HashMap<PeerId, Instant> = HashMap::new();
-    let mut relayed_retry = DialRetry::new(relay.resilience);
+    let mut relayed_retry = DialRetry::new(
+        relay.resilience,
+        crate::peer_admission::admission().cfg.max_known_peers,
+    );
     let mut dialbacks = DialbackConns::default();
     let local_peer_id = *swarm.local_peer_id();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
@@ -1360,13 +1416,8 @@ async fn run_worker(
                     .collect();
                 for info in peers.list_all().into_iter().chain(pooled) {
                     if let Some((peer_id, addrs)) = new_dht_peer(&info, &known_peers) {
-                        if !addrs.is_empty()
-                            && addrs.iter().all(is_relayed_addr)
-                            && !relayed_dial_due(&mut relayed_first_seen, &local_peer_id, peer_id, Instant::now())
-                        {
-                            continue;
-                        }
-                        if !relayed_retry.due(&peer_id, Instant::now()) {
+                        let relayed_only = !addrs.is_empty() && addrs.iter().all(is_relayed_addr);
+                        if !scan_dial_due(&mut relayed_first_seen, &relayed_retry, &local_peer_id, peer_id, relayed_only, Instant::now()) {
                             continue;
                         }
                         if addrs.is_empty() {
@@ -1448,7 +1499,7 @@ async fn run_worker(
                         .kad
                         .add_address(&peer_id, endpoint.get_remote_address().clone());
                     known_peers.insert(peer_id);
-                    relayed_retry.on_connected(&peer_id);
+                    on_peer_connected(&mut relayed_retry, &mut relayed_first_seen, &peer_id);
                 } else if let SwarmEvent::OutgoingConnectionError { peer_id, error, .. } = event {
                     // Otherwise a dial that fails asynchronously (bad
                     // multiaddr, handshake mismatch, unreachable host)
@@ -1463,9 +1514,8 @@ async fn run_worker(
                     // A relayed dial can fail only because the relay was briefly unavailable:
                     // let the scan dial the peer again after a backoff.
                     if let Some(peer_id) = peer_id.filter(|_| is_retryable_relayed_failure(&error)) {
-                        if let Some(wait) = relayed_retry.on_failure(peer_id, Instant::now()) {
+                        if let Some(wait) = on_relayed_dial_failed(&mut relayed_retry, &mut known_peers, &mut relayed_first_seen, peer_id, Instant::now()) {
                             tracing::info!(%peer_id, ?wait, "avalon-dht: relayed dial failed, retrying");
-                            known_peers.remove(&peer_id);
                         }
                     }
                 } else if let SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(
@@ -1925,6 +1975,85 @@ mod tests {
             low,
             t0 + RELAYED_DIAL_GRACE
         ));
+    }
+
+    fn ordered_ids() -> (PeerId, PeerId) {
+        let (a, b) = (sample_peer_id(), sample_peer_id());
+        if a.to_bytes() < b.to_bytes() {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
+
+    fn retry_for_tests(retries: u32) -> DialRetry {
+        DialRetry::new(
+            RelayResilience {
+                dial_retries: retries,
+                dial_retry_base: Duration::from_secs(5),
+                ..RelayResilience::default()
+            },
+            16,
+        )
+    }
+
+    #[test]
+    fn a_failed_relayed_dial_applies_the_crossed_dial_tie_break_afresh() {
+        let (low, high) = ordered_ids();
+        let (mut retry, mut known, mut seen) =
+            (retry_for_tests(3), HashSet::from([low]), HashMap::new());
+        let t0 = Instant::now();
+        assert!(!scan_dial_due(&mut seen, &retry, &high, low, true, t0));
+        let t1 = t0 + RELAYED_DIAL_GRACE;
+        assert!(scan_dial_due(&mut seen, &retry, &high, low, true, t1));
+        let wait = on_relayed_dial_failed(&mut retry, &mut known, &mut seen, low, t1).unwrap();
+        assert!(!known.contains(&low));
+        // Backoff over, but the higher id waits out the grace again before retrying.
+        let t2 = t1 + wait;
+        assert!(!scan_dial_due(&mut seen, &retry, &high, low, true, t2));
+        assert!(scan_dial_due(
+            &mut seen,
+            &retry,
+            &high,
+            low,
+            true,
+            t2 + RELAYED_DIAL_GRACE
+        ));
+        // The lower id is never held back by the tie-break.
+        assert!(scan_dial_due(&mut seen, &retry, &low, high, true, t1));
+    }
+
+    #[test]
+    fn the_scan_waits_out_the_backoff_and_a_connection_clears_it() {
+        let (low, high) = ordered_ids();
+        let (mut retry, mut known, mut seen) = (retry_for_tests(3), HashSet::new(), HashMap::new());
+        let t0 = Instant::now();
+        let wait = on_relayed_dial_failed(&mut retry, &mut known, &mut seen, high, t0).unwrap();
+        assert!(!scan_dial_due(&mut seen, &retry, &low, high, true, t0));
+        assert!(!scan_dial_due(&mut seen, &retry, &low, high, false, t0));
+        assert!(scan_dial_due(
+            &mut seen,
+            &retry,
+            &low,
+            high,
+            true,
+            t0 + wait
+        ));
+        on_peer_connected(&mut retry, &mut seen, &high);
+        assert!(scan_dial_due(&mut seen, &retry, &low, high, true, t0));
+    }
+
+    #[test]
+    fn spent_retries_leave_the_peer_known() {
+        let (low, high) = ordered_ids();
+        let (mut retry, mut known, mut seen) =
+            (retry_for_tests(0), HashSet::from([high]), HashMap::new());
+        assert_eq!(
+            on_relayed_dial_failed(&mut retry, &mut known, &mut seen, high, Instant::now()),
+            None
+        );
+        assert!(known.contains(&high));
+        let _ = low;
     }
 
     #[test]
