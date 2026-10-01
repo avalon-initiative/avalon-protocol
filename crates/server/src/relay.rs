@@ -614,6 +614,8 @@ pub struct RelayClient {
     handle: ReachabilityHandle,
     replacing: Option<Replacement>,
     last_replacement: Option<Instant>,
+    /// Latencies are refetched for a reselection no sooner than this.
+    next_reselect_fetch: Option<Instant>,
 }
 
 impl RelayClient {
@@ -631,6 +633,7 @@ impl RelayClient {
             handle,
             replacing: None,
             last_replacement: None,
+            next_reselect_fetch: None,
         };
         for (index, addr) in client.settings.relay_addrs.clone().into_iter().enumerate() {
             if let Some((peer, dial)) = split_relay_addr(&addr) {
@@ -772,7 +775,13 @@ impl RelayClient {
         fetch: impl FnOnce() -> Vec<(PeerId, f64)>,
     ) {
         let fill = self.wants_slots(reachability) && self.next_candidate(now).is_some();
-        if fill || (reachability == Reachability::Private && self.reselect_due(now)) {
+        let review = reachability == Reachability::Private
+            && self.reselect_due(now)
+            && self.next_reselect_fetch.is_none_or(|t| now >= t);
+        if review {
+            self.next_reselect_fetch = Some(now + self.settings.reselect_interval);
+        }
+        if fill || review {
             self.set_latencies(fetch());
         }
     }
@@ -1015,6 +1024,8 @@ impl RelayClient {
 
     /// The relay accepted or renewed a reservation. Returns the listener of the reservation this
     /// one replaced, for the caller to release.
+    /// A swapped-in relay becomes the only reservation once accepted; that needs the best rank,
+    /// happens at most once per hold per slot and leaves no gap at two or more reservations.
     #[must_use]
     pub fn on_accepted(
         &mut self,
@@ -2374,6 +2385,113 @@ mod tests {
         assert_eq!(calls.get(), 0, "not private");
         c.refresh_latencies_if_needed(Reachability::Private, due, fetch);
         assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn reselection_latencies_are_refetched_once_per_interval() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = || {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        };
+        let mut c = client(vec![], 1);
+        let held = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, held, t0);
+        let due = t0 + c.settings.reselect_hold;
+        let every = c.settings.reselect_interval;
+        c.refresh_latencies_if_needed(Reachability::Private, due, fetch);
+        for secs in [5, 30, 60] {
+            c.refresh_latencies_if_needed(
+                Reachability::Private,
+                due + Duration::from_secs(secs),
+                fetch,
+            );
+        }
+        assert_eq!(calls.get(), 1, "ticks inside the interval do not refetch");
+        c.refresh_latencies_if_needed(
+            Reachability::Private,
+            due + every - Duration::from_secs(1),
+            fetch,
+        );
+        assert_eq!(calls.get(), 1);
+        c.refresh_latencies_if_needed(Reachability::Private, due + every, fetch);
+        assert_eq!(calls.get(), 2, "a check after the interval fetches again");
+    }
+
+    #[tokio::test]
+    async fn releasing_everything_forgets_a_swap_in_flight() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_some());
+        c.reconcile(&mut swarm, Reachability::Public, now);
+        assert!(c.replacing.is_none() && c.slots.is_empty());
+        // The old relay is held again, still inside its hold: a stale swap must not supersede it.
+        hold_since(&mut c, old, now);
+        c.slots.insert(
+            new,
+            Slot {
+                accepted: false,
+                held_since: None,
+                ..take_slot(&c, old)
+            },
+        );
+        assert!(c.on_accepted(new, false, now).is_none());
+        assert!(c.slots.contains_key(&old));
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_replacement_is_forgotten_when_it_times_out() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(c.replacing.is_some());
+        let later = now + c.settings.pending_timeout;
+        c.reconcile(&mut swarm, Reachability::Private, later);
+        assert!(c.replacing.is_none(), "the abandoned swap is cleared");
+        assert!(c.slots.contains_key(&old));
+        // A late accept of the abandoned relay must not release the old reservation.
+        let stale = Slot {
+            accepted: false,
+            held_since: None,
+            ..take_slot(&c, old)
+        };
+        c.slots.insert(new, stale);
+        assert!(c.on_accepted(new, false, later).is_none());
+        assert!(c.slots.contains_key(&old));
+    }
+
+    #[tokio::test]
+    async fn a_renewal_of_the_new_relay_never_supersedes_the_old_one() {
+        let mut c = client(vec![], 1);
+        let old = relay_at(&mut c, "/ip4/203.0.113.1/tcp/1");
+        let new = relay_at(&mut c, "/ip4/198.51.100.1/tcp/1");
+        let t0 = Instant::now();
+        hold_since(&mut c, old, t0);
+        c.set_latencies([(old, 300.0), (new, 10.0)]);
+        let mut swarm = test_swarm();
+        let now = t0 + c.settings.reselect_hold;
+        c.reconcile(&mut swarm, Reachability::Private, now);
+        assert!(
+            c.on_accepted(new, true, now).is_none(),
+            "a renewal is not the first accept"
+        );
+        assert!(c.slots.contains_key(&old) && c.replacing.is_some());
+        assert!(c.on_accepted(new, false, now).is_some());
     }
 
     #[test]
