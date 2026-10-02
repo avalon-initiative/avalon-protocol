@@ -228,6 +228,11 @@ as fully isolated:
   it's safe to run mixed versions across a mirrored set for an extended
   period, and never assume it's safe across an `X` boundary at all until
   #797 (clean version-mismatch rejection) is decided and built.
+- **The node-to-node write routes are an exception to running mixed versions.** A receiver that
+  requires the node credential refuses `/nodes/relay`, `/nodes/replicate-chat` and
+  `/mirror/notify` from a sender that does not send it, with no unsigned fallback, so update
+  every node close together and set `AVALON_LIBP2P_IDENTITY_KEY` on long-lived ones first. See
+  [Credential format and rollout](standalone-binary.md#credential-format-and-rollout).
 - **Relaying beyond direct peers becomes safe once #798 lands** — a
   *signed* release manifest (#619's opt-in auto-update, gated on that
   signing key) can be relayed peer-to-peer indefinitely without the

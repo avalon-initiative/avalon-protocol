@@ -371,12 +371,14 @@ usually with `connectivity` `relayed` or `outbound_only`. The node needs one rea
 [`running-without-an-open-port.md`](running-without-an-open-port.md).
 
 Limitations: a `p2p://` peer can call the routes that carry data (`/nodes/relay`,
-`/nodes/replicate-chat`, `/mirror/notify`) because its handshake authenticates it, but those
-routes do not yet check what a given node may push, so any node with standing can use them. It
-receives no chat or mirror pushes of its own because its URL is not advertised for interest
-lookups, so it falls back to polling. At most 64 `p2p://` entries are kept per node and they are
-evicted first. Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. A
-fronting gateway for such nodes is planned, not implemented.
+`/nodes/replicate-chat`, `/mirror/notify`) because its handshake authenticates it and its
+self-announced entry gives it standing; each route then checks what the caller may push (see
+[Node-to-node write routes](#node-to-node-write-routes)). It is not a chat replication target, because the roles of a
+`p2p://` entry are self-reported, and it cannot be a mirror source, because a source needs an HTTP
+URL. It registers mirror interest under its `p2p://` address and polls as the fallback. At most
+64 `p2p://` entries are kept per node and they are evicted first. Clients cannot reach the node
+directly: a `p2p://` URL is not an HTTP address. A fronting gateway for such nodes is planned,
+not implemented.
 
 ## Node-to-node write routes
 
@@ -466,8 +468,44 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   window, so a key can burst to twice its rate across a minute boundary.
 - Peer URLs with a path prefix or a trailing path are not supported for these routes; such a
   request is sent unsigned and refused with 401.
-- Until per-route scope checks exist, any node with standing may call these routes, and a
-  `p2p://` node gets standing by announcing over a stream with any key.
+- Standing is cheap: a `p2p://` entry announced over a stream authenticated as that key gives a
+  free keypair standing, so the per-route checks above, not the credential, limit what such a
+  node may do.
+- The lab scenario `url-less-credential` runs these checks between real processes. A keypair that
+  never announced is refused 403 `node_auth_no_standing` on all three routes over a stream and
+  over signed HTTP, and 401 `node_auth_missing` over HTTP with no header. After announcing as
+  `p2p://<its peer id>` over a stream the same key is accepted on `/nodes/replicate-chat` over
+  both transports (204) and passes the credential on the other two, which then answer with
+  their own scope refusals (422 for a relay event nobody subscribes to, 403 with no `code` for a
+  mirror notification from a non-source). A node with no URL also replicated a chat message to
+  a neighbor, and the replica row carries its key.
+
+### Credential format and rollout
+
+The header is `x-avalon-node-auth: v1; peer=<peer id>; key=<64 hex>; ts=<unix seconds>;
+nonce=<32 hex>; bh=<64 hex>; sig=<128 hex>`. The signature is Ed25519 over the method, the raw
+path, the SHA-256 of the body, the network id, the recipient, the signer's peer id, the
+timestamp and the nonce, so a header cannot be reused for another route, body, network or
+receiver. The exact bytes are specified in `avalon_protocol::node_request` and checked by
+`conformance/vectors/node-request.json`. A stream request carries no header; its handshake is
+the credential.
+
+- Update every node together. A receiver on this version has no unsigned mode and no setting to
+  allow one: a request to the three routes with no header over HTTP is answered 401
+  `node_auth_missing`, and a node on the previous build sends them with no header. Until a
+  sender is updated, its relay events, chat replicas and mirror notifications to updated
+  receivers are refused; chat replication sends each event once and does not retry, and mirror
+  followers keep up by polling. Not tested: an updated sender talking to a receiver on the
+  previous build.
+- No deploy order avoids that window, so update the nodes close together rather than staggering
+  them over days. A receiver logs missing credentials at debug level only
+  (`node-auth: request refused`).
+- Set `AVALON_LIBP2P_IDENTITY_KEY` on a long-lived node before updating it, so its peer id
+  survives the restart; see the first bullet above.
+- The knobs are `AVALON_NODE_AUTH_RATE_PER_MINUTE`, `AVALON_NODE_AUTH_REPLICATE_PER_MINUTE`,
+  `AVALON_NODE_AUTH_FAILED_PER_MINUTE_PER_IP`, `AVALON_NODE_AUTH_MAX_CONCURRENT_BODIES`,
+  `AVALON_NODE_AUTH_MAX_INFLIGHT_PER_SIGNER`, `AVALON_NODE_AUTH_BODY_TIMEOUT_MS` and
+  `AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS`; defaults are in the list above and in `.env.example`.
 - Redirects and system proxies are not used for node-to-node requests, so a signed request is
   never re-sent to another host. A peer URL behind an http-to-https redirect gets the 3xx back
   (logged as a warning naming the URL and the `Location`); configure the final https URL.
