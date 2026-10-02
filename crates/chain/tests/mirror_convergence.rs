@@ -23,49 +23,49 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-fn entry_hash(seq: i64) -> String {
-    hex::encode([seq as u8; 32])
-}
-
 /// Seeds `count` mirrored entries whose `prev_hash` links form an unbroken
-/// chain, except at `break_at` (a seq) when set.
-async fn seed_entries(pool: &PgPool, network_id: &str, count: i64, break_at: Option<i64>) {
+/// chain, except at `break_at` (a seq) when set; returns their hashes.
+async fn seed_entries(
+    pool: &PgPool,
+    network_id: &str,
+    count: i64,
+    break_at: Option<i64>,
+) -> Vec<String> {
+    let mut hashes: Vec<String> = Vec::new();
     for seq in 1..=count {
         let prev_hash = if Some(seq) == break_at {
             "ff".repeat(32)
-        } else if seq == 1 {
-            "00".repeat(32)
         } else {
-            entry_hash(seq - 1)
+            hashes.last().cloned().unwrap_or_else(|| "00".repeat(32))
         };
-        mirror::insert_mirrored_entry(
-            pool,
-            &MirroredEntry {
-                source_url: SOURCE.to_string(),
-                network_id: network_id.to_string(),
-                shard_id: CORE_SHARD_ID.to_string(),
-                seq,
-                event_id: Uuid::new_v4(),
-                kind: "identity.created".to_string(),
-                issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
-                subject: format!("identity:{seq}"),
-                payload: Some(serde_json::json!({})),
-                event_timestamp: OffsetDateTime::UNIX_EPOCH,
-                version: 1,
-                prev_hash,
-                entry_hash: entry_hash(seq),
-                batch_id: Uuid::new_v4(),
-                verified_tree_size: seq,
-            },
-        )
-        .await
-        .expect("insert_mirrored_entry failed");
+        let mut entry = MirroredEntry {
+            source_url: SOURCE.to_string(),
+            network_id: network_id.to_string(),
+            shard_id: CORE_SHARD_ID.to_string(),
+            seq,
+            event_id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
+            subject: format!("identity:{seq}"),
+            payload: Some(serde_json::json!({})),
+            event_timestamp: OffsetDateTime::UNIX_EPOCH,
+            version: 1,
+            prev_hash,
+            entry_hash: String::new(),
+            batch_id: Uuid::new_v4(),
+            verified_tree_size: seq,
+        };
+        entry.entry_hash = entry.recomputed_hash().expect("payload present");
+        hashes.push(entry.entry_hash.clone());
+        mirror::insert_mirrored_entry(pool, &entry)
+            .await
+            .expect("insert_mirrored_entry failed");
     }
+    hashes
 }
 
-fn root_over(count: i64) -> String {
-    let hashes: Vec<String> = (1..=count).map(entry_hash).collect();
-    hex::encode(merkle::mth_of_hex_hashes(&hashes).expect("valid hex hashes"))
+fn root_over(hashes: &[String]) -> String {
+    hex::encode(merkle::mth_of_hex_hashes(hashes).expect("valid hex hashes"))
 }
 
 async fn observe(pool: &PgPool, network_id: &str, tree_size: i64, root_hash: String) {
@@ -103,8 +103,8 @@ fn network(label: &str) -> String {
 async fn a_fully_mirrored_shard_matching_the_latest_sth_is_converged() {
     let pool = test_pool().await;
     let net = network("converged");
-    seed_entries(&pool, &net, 5, None).await;
-    observe(&pool, &net, 5, root_over(5)).await;
+    let hashes = seed_entries(&pool, &net, 5, None).await;
+    observe(&pool, &net, 5, root_over(&hashes)).await;
     assert_eq!(
         verdict(&pool, &net).await,
         ConvergenceVerdict::Converged { tree_size: 5 }
@@ -116,8 +116,8 @@ async fn a_fully_mirrored_shard_matching_the_latest_sth_is_converged() {
 async fn a_mirror_missing_the_tail_the_latest_sth_attests_to_is_behind() {
     let pool = test_pool().await;
     let net = network("behind");
-    seed_entries(&pool, &net, 5, None).await;
-    observe(&pool, &net, 5, root_over(5)).await;
+    let hashes = seed_entries(&pool, &net, 5, None).await;
+    observe(&pool, &net, 5, root_over(&hashes)).await;
     observe(&pool, &net, 8, "ab".repeat(32)).await;
     assert_eq!(
         verdict(&pool, &net).await,
@@ -146,8 +146,8 @@ async fn mirrored_data_whose_root_matches_no_observed_sth_is_a_mismatch() {
 async fn a_broken_prev_hash_link_is_reported_even_when_the_root_matches() {
     let pool = test_pool().await;
     let net = network("chain-break");
-    seed_entries(&pool, &net, 5, Some(4)).await;
-    observe(&pool, &net, 5, root_over(5)).await;
+    let hashes = seed_entries(&pool, &net, 5, Some(4)).await;
+    observe(&pool, &net, 5, root_over(&hashes)).await;
     assert_eq!(
         verdict(&pool, &net).await,
         ConvergenceVerdict::ChainBroken { breaks: 1 }
@@ -159,8 +159,8 @@ async fn a_broken_prev_hash_link_is_reported_even_when_the_root_matches() {
 async fn an_unresolved_equivocation_blocks_convergence() {
     let pool = test_pool().await;
     let net = network("equivocation");
-    seed_entries(&pool, &net, 5, None).await;
-    observe(&pool, &net, 5, root_over(5)).await;
+    let hashes = seed_entries(&pool, &net, 5, None).await;
+    observe(&pool, &net, 5, root_over(&hashes)).await;
     mirror::record_equivocation(
         &pool,
         &EquivocationFinding {
@@ -168,7 +168,7 @@ async fn an_unresolved_equivocation_blocks_convergence() {
             shard_id: CORE_SHARD_ID.to_string(),
             tree_size: 5,
             source_a: "peer-a".to_string(),
-            root_hash_a: root_over(5),
+            root_hash_a: root_over(&hashes),
             source_b: "peer-b".to_string(),
             root_hash_b: "ee".repeat(32),
             resolved_at: None,

@@ -63,7 +63,7 @@ async fn insert_finding(
 }
 
 fn mirrored_entry(network_id: &str, seq: i64, verified_tree_size: i64) -> MirroredEntry {
-    MirroredEntry {
+    let mut entry = MirroredEntry {
         source_url: "http://peer".to_string(),
         network_id: network_id.to_string(),
         shard_id: CORE_SHARD_ID.to_string(),
@@ -76,10 +76,12 @@ fn mirrored_entry(network_id: &str, seq: i64, verified_tree_size: i64) -> Mirror
         event_timestamp: OffsetDateTime::UNIX_EPOCH,
         version: 1,
         prev_hash: "aa".repeat(32),
-        entry_hash: "bb".repeat(32),
+        entry_hash: String::new(),
         batch_id: Uuid::new_v4(),
         verified_tree_size,
-    }
+    };
+    entry.entry_hash = entry.recomputed_hash().expect("payload present");
+    entry
 }
 
 /// A network with an equivocation finding shows up in

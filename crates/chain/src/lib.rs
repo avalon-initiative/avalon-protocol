@@ -23,7 +23,7 @@ pub use avalon_protocol::sth;
 
 pub use postgres::{
     hash_entry, EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,
-    PostgresSettlementProvider,
+    PostgresSettlementProvider, GENESIS_HASH,
 };
 
 use async_trait::async_trait;
@@ -37,6 +37,12 @@ pub enum SettlementError {
     VerificationFailed,
     #[error("storage error: {0}")]
     Storage(String),
+    /// A mirrored entry's hash does not match its own content, so it was not stored.
+    #[error("mirrored entry seq={seq}: content does not hash to the claimed entry_hash")]
+    MirroredContentMismatch { seq: i64 },
+    /// A mirrored entry has no payload, so its hash cannot be recomputed and it was not stored.
+    #[error("mirrored entry seq={seq}: payload is absent, so its hash cannot be recomputed")]
+    MirroredPayloadUnverifiable { seq: i64 },
 }
 
 /// Anything capable of durably committing event batches and letting a caller
