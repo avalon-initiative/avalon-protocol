@@ -97,10 +97,11 @@ everywhere and the node behind a no-inbound NAT:
   URL.
 - Addresses read from interest lookups are checked for shape only (an http(s) URL without
   credentials, query or fragment, or a `p2p://` peer id), deduplicated and capped at 64 per
-  lookup. That check does not block private or internal addresses: the direct HTTP pushes for
-  mirror notifications and chat relay do not apply the outbound address policy, so a hostile
-  record can point them at an internal host. Run these nodes where internal hosts are not
-  reachable with the node's privileges.
+  lookup. The direct HTTP pushes for mirror notifications and chat relay then apply the same
+  outbound address policy as peer dials: link-local and metadata addresses are always refused,
+  loopback and private addresses unless `AVALON_ALLOW_PRIVATE_PEERS` is true. A hostname is
+  checked against every address it resolves to when the connection is made, and redirects are
+  not followed.
 - Each neighbor keeps at most 64 `p2p://` entries, and they are evicted first.
 - Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. Serving
   clients needs a fronting node; a fronting gateway is planned, not implemented.
@@ -108,9 +109,8 @@ everywhere and the node behind a no-inbound NAT:
   hole punch; this has not been exercised between two url-less nodes yet.
 - First contact needs a reachable HTTP seed.
 
-Planned, not implemented: a fronting gateway for clients, the outbound address policy on those
-direct pushes, relay re-selection and probing when a relay degrades, and binding the `p2p://`
-identity to a key proof.
+Planned, not implemented: a fronting gateway for clients, relay re-selection and probing
+when a relay degrades, and binding the `p2p://` identity to a key proof.
 
 ## Check that it joined
 

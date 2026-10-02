@@ -306,7 +306,11 @@ impl NodeClient {
     /// [`Self::peer`] for addresses read from lookups: every http(s) dial must pass the
     /// environment's outbound policy, checked when the connection is made.
     pub fn guarded() -> Self {
-        let policy = OutboundPolicy::from_env();
+        Self::guarded_with(OutboundPolicy::from_env())
+    }
+
+    /// [`Self::guarded`] under an explicit `policy`.
+    pub fn guarded_with(policy: OutboundPolicy) -> Self {
         let mut client = Self::from(crate::outbound_policy::guarded_peer_client(policy))
             .with_timeout(crate::outbound_policy::PEER_REQUEST_TIMEOUT)
             .with_policy(policy);
@@ -2356,5 +2360,96 @@ mod tests {
         assert!(n.contains("https://node.test/nodes/relay;"), "{n}");
         assert!(!n.contains("pw") && !n.contains("token") && !n.contains("x=1"));
         assert!(redirect_notice("http://a.test/x", None).contains("<none>"));
+    }
+
+    /// A listener that counts accepted connections and answers each with `reply`.
+    async fn counting_listener(
+        reply: &'static str,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(reply.as_bytes()).await;
+            }
+        });
+        (port, hits)
+    }
+
+    const OK_REPLY: &str = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+    fn hits_of(hits: &std::sync::atomic::AtomicUsize) -> usize {
+        hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_guarded_client_refuses_forbidden_literals_without_connecting() {
+        let (port, hits) = counting_listener(OK_REPLY).await;
+        let strict = NodeClient::guarded_with(OutboundPolicy::new(false));
+        let lax = NodeClient::guarded_with(OutboundPolicy::new(true));
+        for url in [
+            format!("http://127.0.0.1:{port}/x"),
+            format!("http://[::1]:{port}/x"),
+            "http://169.254.169.254/latest/meta-data".to_string(),
+            "http://10.0.0.1/x".to_string(),
+        ] {
+            assert!(strict.post(&url).send().await.is_err(), "{url}");
+        }
+        for url in ["http://169.254.169.254/x", "http://[fe80::1]/x"] {
+            assert!(lax.post(url).send().await.is_err(), "{url}");
+        }
+        assert_eq!(hits_of(&hits), 0);
+    }
+
+    #[tokio::test]
+    async fn a_guarded_client_dials_an_allowed_address() {
+        let (port, hits) = counting_listener(OK_REPLY).await;
+        let lax = NodeClient::guarded_with(OutboundPolicy::new(true));
+        let res = lax
+            .post(format!("http://127.0.0.1:{port}/x"))
+            .send()
+            .await
+            .unwrap();
+        assert!(res.status().is_success());
+        assert_eq!(hits_of(&hits), 1);
+    }
+
+    #[tokio::test]
+    async fn a_guarded_client_checks_what_a_hostname_resolves_to_at_connect_time() {
+        let (port, hits) = counting_listener(OK_REPLY).await;
+        let url = format!("http://localhost:{port}/x");
+        let strict = NodeClient::guarded_with(OutboundPolicy::new(false));
+        assert!(strict.post(&url).send().await.is_err());
+        assert_eq!(hits_of(&hits), 0);
+        let lax = NodeClient::guarded_with(OutboundPolicy::new(true));
+        assert!(lax.post(&url).send().await.unwrap().status().is_success());
+        assert_eq!(hits_of(&hits), 1);
+    }
+
+    #[tokio::test]
+    async fn a_guarded_client_does_not_follow_redirects() {
+        let (target_port, target_hits) = counting_listener(OK_REPLY).await;
+        let redirect: &'static str = Box::leak(
+            format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{target_port}/x\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            )
+            .into_boxed_str(),
+        );
+        let (port, hits) = counting_listener(redirect).await;
+        let lax = NodeClient::guarded_with(OutboundPolicy::new(true));
+        let res = lax
+            .post(format!("http://127.0.0.1:{port}/x"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert_eq!(hits_of(&hits), 1);
+        assert_eq!(hits_of(&target_hits), 0);
     }
 }

@@ -352,6 +352,19 @@ pub async fn relay_handler(
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn the_relay_client_refuses_a_loopback_peer_unless_private_peers_are_allowed() {
+        if crate::outbound_policy::OutboundPolicy::from_env().allow_private {
+            return;
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/nodes/relay", listener.local_addr().unwrap());
+        assert!(relay_client().post(&url).send().await.is_err());
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept()).await;
+        assert!(accepted.is_err(), "the relay dialed a loopback address");
+    }
     use super::*;
     use time::OffsetDateTime;
 

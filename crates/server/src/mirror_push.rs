@@ -417,6 +417,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_hostile_http_interest_is_not_dialed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let values = vec![
+            format!("http://127.0.0.1:{port}").into_bytes(),
+            b"http://169.254.169.254".to_vec(),
+        ];
+        let (commands, _, _) = mock_swarm(values);
+        let mut config = config(commands, None);
+        config.client = crate::node_http::NodeClient::guarded_with(
+            crate::outbound_policy::OutboundPolicy::new(false),
+        );
+        notify_peers(&config, "avalon-test", 7).await;
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept()).await;
+        assert!(accepted.is_err(), "a loopback interest value was dialed");
+    }
+
+    #[tokio::test]
     async fn pushes_are_capped_in_number_and_in_flight() {
         let values: Vec<Vec<u8>> = (0..100)
             .map(|_| crate::node_http::p2p_base_url(&libp2p::PeerId::random()).into_bytes())

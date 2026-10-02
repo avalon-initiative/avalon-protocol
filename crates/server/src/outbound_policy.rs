@@ -46,9 +46,8 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let policy = self.0;
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
-                .await?
-                .collect();
+            let addrs: Vec<SocketAddr> =
+                tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
             if addrs.is_empty() {
                 return Err(PolicyError::Resolve.into());
             }
