@@ -527,6 +527,10 @@ async fn resolve_signing_key_cross_shard(
     let known_list = crate::cosign_verify::known_list_verifying_keys(&state.known_list);
     let sources = crate::cosign_gather::witness_sources(&known_list, &state.peers.list_all());
     let signing_key_id_str = signing_key_id.to_string();
+    let identity_id_str = identity_id.to_string();
+    let belongs_to_identity = |payload: &serde_json::Value| {
+        payload.get("identity_id").and_then(|v| v.as_str()) == Some(identity_id_str.as_str())
+    };
     let added_subject = format!("identity:{identity_id}:self:signing_key_added");
     let revoked_subject = format!("identity:{identity_id}:self:signing_key_revoked");
 
@@ -546,8 +550,9 @@ async fn resolve_signing_key_cross_shard(
             continue;
         };
         let Some(matching) = added.iter().find(|entry| {
-            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
-                == Some(signing_key_id_str.as_str())
+            belongs_to_identity(&entry.payload)
+                && entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                    == Some(signing_key_id_str.as_str())
         }) else {
             continue;
         };
@@ -565,8 +570,9 @@ async fn resolve_signing_key_cross_shard(
         .await
         .unwrap_or_default();
         let is_revoked = revoked.iter().any(|entry| {
-            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
-                == Some(signing_key_id_str.as_str())
+            belongs_to_identity(&entry.payload)
+                && entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                    == Some(signing_key_id_str.as_str())
         });
         if is_revoked {
             return None;
@@ -581,6 +587,15 @@ async fn resolve_signing_key_cross_shard(
         else {
             continue;
         };
+        // An inception key is valid only if it is the key the identity id was derived from.
+        if matching.payload.get("kind").and_then(|v| v.as_str()) == Some("inception") {
+            let derived = <[u8; 32]>::try_from(public_key.as_slice())
+                .ok()
+                .is_some_and(|key| identity_id.matches_key(&key));
+            if !derived {
+                continue;
+            }
+        }
         return Some(public_key);
     }
     None

@@ -195,3 +195,52 @@ async fn a_projected_identity_created_with_an_id_lookalike_name_is_refused() {
         .unwrap();
     assert_eq!(rows, 0);
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_signing_key_row_cannot_be_repointed_to_another_identity_or_key() {
+    use base64::Engine as _;
+    let pool = test_pool().await;
+    let indexer = PostgresIndexer::new(pool.clone());
+    let (a, b) = (seed_identity(&pool).await, seed_identity(&pool).await);
+    let key_id = Uuid::new_v4();
+    let added = |who: &TestIdentity, key: [u8; 32]| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.signing_key_added".to_string(),
+        issuer: GlobalId::new("identity", &who.id.to_string(), "self", "signing_key_added"),
+        subject: GlobalId::new("identity", &who.id.to_string(), "self", "signing_key_added"),
+        payload: serde_json::json!({
+            "signing_key_id": key_id,
+            "public_key": base64::engine::general_purpose::STANDARD.encode(key),
+            "device_label": null,
+            "approved_by_signing_key_id": key_id,
+            "identity_id": who.id,
+            "kind": "device_grant",
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 2,
+        identity_chain: None,
+    };
+    indexer.apply(&added(&a, a.public_key())).await.unwrap();
+    let to_other_identity = indexer.apply(&added(&b, a.public_key())).await;
+    assert!(
+        matches!(
+            to_other_identity,
+            Err(avalon_indexer::IndexError::Rejected(_))
+        ),
+        "{to_other_identity:?}"
+    );
+    let to_other_key = indexer.apply(&added(&a, b.public_key())).await;
+    assert!(
+        matches!(to_other_key, Err(avalon_indexer::IndexError::Rejected(_))),
+        "{to_other_key:?}"
+    );
+    let owner: String = sqlx::query_scalar(
+        "SELECT identity_id FROM indexer_identity_signing_keys WHERE signing_key_id = $1",
+    )
+    .bind(key_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(owner, a.id.to_string());
+}

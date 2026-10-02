@@ -30,6 +30,7 @@ pub enum SigningKeyWrite {
     },
     Revoked {
         signing_key_id: Uuid,
+        identity_id: IdentityId,
         revoked_at: OffsetDateTime,
     },
 }
@@ -47,6 +48,13 @@ pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
                 &added.public_key,
             )
             .ok()?;
+            if added.kind == avalon_protocol::event_payloads::SIGNING_KEY_KIND_INCEPTION {
+                let key: [u8; 32] = public_key.as_slice().try_into().ok()?;
+                avalon_protocol::ed25519_key::parse_ed25519_public_key(&key)?;
+                if !added.identity_id.matches_key(&key) {
+                    return None;
+                }
+            }
             Some(SigningKeyWrite::Added {
                 signing_key_id: added.signing_key_id,
                 identity_id: added.identity_id,
@@ -59,9 +67,11 @@ pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
             if event.version != 2 {
                 return None;
             }
-            let signing_key_id = super::uuid_field(&event.payload, "signing_key_id")?;
+            let revoked: avalon_protocol::event_payloads::IdentitySigningKeyRevokedPayload =
+                serde_json::from_value(event.payload.clone()).ok()?;
             Some(SigningKeyWrite::Revoked {
-                signing_key_id,
+                signing_key_id: revoked.signing_key_id,
+                identity_id: revoked.identity_id,
                 revoked_at: event.timestamp,
             })
         }
@@ -81,13 +91,14 @@ pub async fn apply(
             label,
             added_at,
         } => {
-            sqlx::query(
-                "INSERT INTO indexer_identity_signing_keys \
+            // An existing key row keeps its identity and public key; a conflicting event is refused.
+            let written = sqlx::query(
+                "INSERT INTO indexer_identity_signing_keys AS k \
                  (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \
                  VALUES ($1, $2, $3, $4, $5, NULL) \
                  ON CONFLICT (signing_key_id) DO UPDATE SET \
-                     identity_id = EXCLUDED.identity_id, public_key = EXCLUDED.public_key, \
-                     label = EXCLUDED.label, added_at = EXCLUDED.added_at",
+                     label = EXCLUDED.label, added_at = EXCLUDED.added_at \
+                 WHERE k.identity_id = EXCLUDED.identity_id AND k.public_key = EXCLUDED.public_key",
             )
             .bind(signing_key_id)
             .bind(identity_id)
@@ -96,16 +107,24 @@ pub async fn apply(
             .bind(added_at)
             .execute(&mut **tx)
             .await?;
+            if written.rows_affected() == 0 {
+                return Err(IndexError::Rejected(format!(
+                    "signing key {signing_key_id} already belongs to a different identity or key"
+                )));
+            }
         }
         SigningKeyWrite::Revoked {
             signing_key_id,
+            identity_id,
             revoked_at,
         } => {
             sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = $2 WHERE signing_key_id = $1",
+                "UPDATE indexer_identity_signing_keys SET revoked_at = $2 \
+                 WHERE signing_key_id = $1 AND identity_id = $3",
             )
             .bind(signing_key_id)
             .bind(revoked_at)
+            .bind(identity_id)
             .execute(&mut **tx)
             .await?;
         }
@@ -210,7 +229,7 @@ mod tests {
                 "device_label": "Pixel 9",
                 "approved_by_signing_key_id": signing_key_id,
                 "identity_id": identity_id,
-                "kind": "inception",
+                "kind": "device_grant",
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -229,19 +248,55 @@ mod tests {
     #[test]
     fn decodes_a_revoked_event() {
         let signing_key_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.signing_key_revoked",
-            IdentityId::random_for_tests(),
-            serde_json::json!({ "signing_key_id": signing_key_id }),
+            identity_id,
+            serde_json::json!({
+                "identity_id": identity_id,
+                "signing_key_id": signing_key_id,
+                "revoked_by_signing_key_id": signing_key_id,
+                "signature": "c2ln",
+            }),
         );
         let write = decode(&source_event).unwrap();
         assert_eq!(
             write,
             SigningKeyWrite::Revoked {
                 signing_key_id,
+                identity_id,
                 revoked_at: source_event.timestamp,
             }
         );
+    }
+
+    #[test]
+    fn an_inception_key_must_hash_to_the_identity_id() {
+        use base64::Engine as _;
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let other = avalon_protocol::identity_id::TestIdentity::new();
+        let payload = |identity: IdentityId, key: [u8; 32]| {
+            serde_json::json!({
+                "signing_key_id": Uuid::new_v4(),
+                "public_key": base64::engine::general_purpose::STANDARD.encode(key),
+                "device_label": null,
+                "approved_by_signing_key_id": Uuid::new_v4(),
+                "identity_id": identity,
+                "kind": "inception",
+            })
+        };
+        let good = event(
+            "identity.signing_key_added",
+            who.id,
+            payload(who.id, who.public_key()),
+        );
+        assert!(decode(&good).is_some());
+        let forged = event(
+            "identity.signing_key_added",
+            who.id,
+            payload(who.id, other.public_key()),
+        );
+        assert_eq!(decode(&forged), None);
     }
 
     #[test]
@@ -256,7 +311,7 @@ mod tests {
                 "device_label": null,
                 "approved_by_signing_key_id": Uuid::new_v4(),
                 "identity_id": id,
-                "kind": "inception",
+                "kind": "device_grant",
             }),
         );
         assert!(decode(&e).is_some());

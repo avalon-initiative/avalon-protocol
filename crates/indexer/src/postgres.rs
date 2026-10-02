@@ -139,7 +139,18 @@ impl PostgresIndexer {
         }
 
         for event in events {
-            self.apply_in_tx(&mut tx, event).await?;
+            match self.apply_in_tx(&mut tx, event).await {
+                Ok(()) => {}
+                // Refused by a validity rule, not a storage fault: the same event is refused on
+                // every replay, so it must not abort the whole rebuild.
+                Err(IndexError::DisplayNameNotPermitted | IndexError::Rejected(_)) => {
+                    eprintln!(
+                        "indexer: skipping refused event {} ({})",
+                        event.id, event.kind
+                    );
+                }
+                Err(other) => return Err(other),
+            }
         }
 
         tx.commit().await?;

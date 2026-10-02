@@ -38,6 +38,10 @@ pub enum IndexError {
     /// 500.
     #[error("display_name is already taken")]
     DisplayNameTaken,
+    /// An event contradicts what is already projected (for example it would repoint an existing
+    /// signing key to another identity or key); it is refused, not applied.
+    #[error("event rejected: {0}")]
+    Rejected(String),
     /// The display name is an identity-id lookalike or carries hidden characters.
     #[error("display_name is not permitted")]
     DisplayNameNotPermitted,
