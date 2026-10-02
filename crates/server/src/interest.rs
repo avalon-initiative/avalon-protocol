@@ -497,8 +497,10 @@ impl InterestRegistry {
                 .expect("interest registry lock poisoned")
                 .get(&scope)
                 .map(|claim| claim.as_bytes().to_vec()),
-            InterestScope::Network(_) | InterestScope::Identity(_) => {
-                Some(own_base_url.as_bytes().to_vec())
+            InterestScope::Network(_) => Some(own_base_url.as_bytes().to_vec()),
+            // A location is an http(s) base URL a login can dial; a `p2p://` identity is not one.
+            InterestScope::Identity(_) => {
+                crate::state::http_only(Some(own_base_url)).map(|url| url.as_bytes().to_vec())
             }
         }
     }
@@ -525,9 +527,31 @@ impl InterestRegistry {
     }
 }
 
+/// A DHT-read node address worth dialing: an http(s) base URL or a canonical `p2p://<peer id>`.
+/// Anything else (userinfo, query, fragment, another scheme, a bad peer id) is dropped.
+fn valid_node_address(raw: &str) -> Option<String> {
+    if raw.starts_with("p2p://") {
+        let peer = crate::node_http::parse_p2p_base(raw)?;
+        return Some(crate::node_http::p2p_base_url(&peer));
+    }
+    valid_http_node_url(raw)
+}
+
+/// [`valid_node_address`] restricted to http(s), for targets that must be reachable by URL.
+fn valid_http_node_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    let plain = matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    plain.then(|| raw.to_string())
+}
+
 /// Looks up who currently has a local subscriber for `scope`, decoding
-/// each stored value as a UTF-8 base URL (silently dropping anything that
-/// doesn't decode — never expected from this module's own
+/// each stored value as a UTF-8 node address ([`valid_node_address`]; silently dropping anything
+/// that doesn't decode or validate — never expected from this module's own
 /// [`run_worker`], but a malformed or malicious record from elsewhere in
 /// the DHT shouldn't be fatal to the caller, same posture
 /// `crate::dht::new_dht_peer` already takes for a bad peer-table entry).
@@ -551,6 +575,7 @@ pub async fn lookup(
 ) -> Vec<String> {
     if let Some(redis_fast_path) = redis_fast_path {
         if let Some(mut members) = redis_fast_path.lookup(scope).await {
+            members.retain(|m| valid_node_address(m).is_some());
             members.sort_unstable();
             members.dedup();
             return members;
@@ -575,6 +600,7 @@ pub async fn lookup(
     let mut base_urls: Vec<String> = values
         .into_iter()
         .filter_map(|v| String::from_utf8(v).ok())
+        .filter_map(|v| valid_node_address(&v))
         .collect();
     base_urls.sort_unstable();
     base_urls.dedup();
@@ -647,7 +673,11 @@ pub async fn lookup_claimed(
             }
         };
         if still_a_member {
-            base_urls.push(claim.base_url);
+            // Chat only goes to an http target: a `p2p://` role is self-reported, unverified.
+            let Some(base_url) = valid_http_node_url(&claim.base_url) else {
+                continue;
+            };
+            base_urls.push(base_url);
         }
     }
     base_urls.sort_unstable();
@@ -760,18 +790,16 @@ fn put_command(scope: InterestScope, value: Vec<u8>, ttl: Duration) -> DhtComman
     }
 }
 
-/// Never returns. `PutRecord`s `own_base_url` under a scope immediately
+/// Never returns. `PutRecord`s this node's own address under a scope immediately
 /// when [`InterestRegistry::register`] signals it just went active (via
 /// `newly_active`, the receiver [`InterestRegistry::new`] hands back), and
 /// again every [`REFRESH_INTERVAL`] for every still-active scope — the one
 /// thing this node ever advertises into the DHT for interest routing,
 /// reusing the exact same `base_url` identity #362's HTTP peer table
 /// already announces rather than inventing a second way to name this node.
-/// `None` (matching `AnnounceConfig::own_base_url`'s own "can be announced
-/// TO but can't announce" degenerate case) means this node has nothing
-/// useful to put — the worker still runs so it starts advertising
-/// correctly the moment `AVALON_NODE_URL` is set and the process restarts,
-/// but does nothing, on a tick or otherwise, until then.
+/// A node with no `AVALON_NODE_URL` advertises its `p2p://<peer id>` form, so
+/// it is reached over its stream; `None` (no DHT identity either) means
+/// there is nothing to put, and the worker does nothing.
 pub async fn run_worker(
     registry: InterestRegistry,
     mut newly_active: mpsc::UnboundedReceiver<InterestScope>,
@@ -781,9 +809,7 @@ pub async fn run_worker(
 ) {
     let Some(own_base_url) = own_base_url else {
         tracing::warn!(
-            "avalon-interest: AVALON_NODE_URL unset — this node can register local subscribers' \
-             interest for others to find, but has no reachable base URL to advertise, so it \
-             never will"
+            "avalon-interest: this node has no address to advertise, so it never registers interest"
         );
         return;
     };
@@ -998,6 +1024,96 @@ mod tests {
         let _guard_a = registry.register(a);
         assert_eq!(registry.count(a), 1);
         assert_eq!(registry.count(b), 0);
+    }
+
+    fn own_p2p() -> (libp2p::PeerId, String) {
+        let id = libp2p::PeerId::random();
+        (id, crate::node_http::p2p_base_url(&id))
+    }
+
+    #[tokio::test]
+    async fn a_node_with_no_url_advertises_its_p2p_address_for_a_network() {
+        let (registry, newly_active) = InterestRegistry::new();
+        let (tx, mut rx) = mpsc::channel(8);
+        let (_, own) = own_p2p();
+        tokio::spawn(run_worker(
+            registry.clone(),
+            newly_active,
+            tx,
+            Some(own.clone()),
+            None,
+        ));
+        let network = InterestScope::for_network("avalon-test");
+        let _guard = registry.register(network);
+        let Some(DhtCommand::PutRecord { key, value, .. }) = rx.recv().await else {
+            panic!("expected a PutRecord");
+        };
+        assert_eq!(key, network.dht_key());
+        assert_eq!(value, own.as_bytes());
+    }
+
+    #[test]
+    fn an_identity_location_is_never_a_p2p_address() {
+        let (registry, _rx) = InterestRegistry::new();
+        let scope = InterestScope::Identity(Uuid::new_v4());
+        let (_, own) = own_p2p();
+        assert_eq!(registry.dht_value(scope, &own), None);
+        assert_eq!(
+            registry.dht_value(scope, "http://node.test"),
+            Some(b"http://node.test".to_vec())
+        );
+    }
+
+    #[test]
+    fn only_a_plain_http_or_canonical_p2p_address_is_valid() {
+        let (_, p2p) = own_p2p();
+        assert_eq!(valid_node_address(&p2p), Some(p2p.clone()));
+        assert_eq!(valid_node_address(&format!("{p2p}/")), Some(p2p));
+        for ok in [
+            "http://node.test",
+            "https://node.test:8443",
+            "http://10.0.0.1:80/avalon",
+        ] {
+            assert_eq!(valid_node_address(ok).as_deref(), Some(ok));
+        }
+        for bad in [
+            "",
+            "node.test",
+            "ftp://node.test",
+            "http://",
+            "http://user:pw@node.test",
+            "http://node.test?x=1",
+            "http://node.test#frag",
+            "p2p://not-a-peer-id",
+            "p2p://",
+            "p2p://12D3KooWabc/path",
+        ] {
+            assert_eq!(valid_node_address(bad), None, "{bad}");
+        }
+        assert_eq!(valid_http_node_url(&own_p2p().1), None);
+    }
+
+    #[tokio::test]
+    async fn a_lookup_drops_malformed_values_instead_of_returning_them() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_, p2p) = own_p2p();
+        let answer = vec![
+            b"http://good.test".to_vec(),
+            p2p.clone().into_bytes(),
+            b"http://user:pw@evil.test".to_vec(),
+            b"ftp://evil.test".to_vec(),
+            b"p2p://garbage".to_vec(),
+            vec![0xff, 0xfe],
+        ];
+        tokio::spawn(async move {
+            if let Some(DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let _ = respond_to.send(answer);
+            }
+        });
+        let found = lookup(&tx, InterestScope::for_network("avalon-test"), None).await;
+        let mut expected = vec!["http://good.test".to_string(), p2p];
+        expected.sort();
+        assert_eq!(found, expected);
     }
 
     #[test]

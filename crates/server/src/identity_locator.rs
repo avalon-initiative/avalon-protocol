@@ -147,6 +147,9 @@ pub async fn resolve(state: &AppState, identity_id: Uuid) -> Vec<String> {
         state.interest_redis_fast_path.as_ref(),
     )
     .await
+    .into_iter()
+    .filter(|url| crate::state::http_only(Some(url)).is_some())
+    .collect()
 }
 
 #[derive(Serialize, utoipa::ToSchema)]

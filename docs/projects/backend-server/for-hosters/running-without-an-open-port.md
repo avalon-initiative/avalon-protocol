@@ -84,9 +84,12 @@ everywhere and the node behind a no-inbound NAT:
   `/mirror/notify`) on its neighbors: its libp2p handshake authenticates it, and a self-announced
   `p2p://` entry gives it standing with that neighbor. Those routes only check who is calling,
   not what that node may push, so any node with standing, including one that announced a free
-  key, can still use them; per-route scope checks are not implemented yet. It receives no chat
-  or mirror pushes, because its URL is not advertised for interest lookups, so it falls back
-  to polling.
+  key, can still use them; per-route scope checks are not implemented yet.
+- It registers mirror interest under its `p2p://` address, so its mirror sources push to it over
+  its stream and it still polls as the fallback. It receives no chat: it is not a replication
+  target, because a `p2p://` entry's roles are self-reported, and channel and conversation
+  interest is only registered by nodes with an HTTP URL. Addresses read from lookups are
+  validated before use, and a malformed one is dropped. A source must still have an HTTP URL.
 - Each neighbor keeps at most 64 `p2p://` entries, and they are evicted first.
 - Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. Serving
   clients needs a fronting node; a fronting gateway is planned, not implemented.

@@ -1459,6 +1459,25 @@ mod node_auth_wiring {
     }
 
     #[tokio::test]
+    async fn a_node_with_no_url_still_accepts_a_stream_notification_from_its_source() {
+        let (source, receiver) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let mut state = lazy_state();
+        state.own_base_url = Some(node_http::p2p_base_url(&receiver));
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw("http://src.test:8080");
+        state
+            .peers
+            .upsert(bound_entry(&source, "http://src.test:8080".into()));
+        let app = router(state, None);
+        let note = |network: &str| serde_json::json!({"network_id": network, "tree_size": 9});
+        // Past the source check (not 403); the wrong network is then refused before any database read.
+        assert_eq!(
+            stream_post(&app, "/mirror/notify", source, note("elsewhere")).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
     async fn relay_refuses_again_once_the_subscribing_connection_is_gone() {
         let node = libp2p::PeerId::random();
         let state = lazy_state();

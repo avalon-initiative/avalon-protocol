@@ -329,7 +329,7 @@ pub async fn run_with_tracing(
             interest.clone(),
             interest_newly_active,
             dht_commands,
-            announce_config.own_http_base_url(),
+            announce_config.own_base_url.clone(),
             interest_redis_fast_path.clone(),
         ));
         // Epic #623, issue #635: identity locator — registers DHT interest
@@ -358,7 +358,7 @@ pub async fn run_with_tracing(
         mirror_push::MirrorPushConfig::new(
             dht_commands,
             interest_redis_fast_path.clone(),
-            announce_config.own_http_base_url(),
+            announce_config.own_base_url.clone(),
         )
     });
     // Issue #596: shared between `mirror_watcher::run_worker` (if spawned)
