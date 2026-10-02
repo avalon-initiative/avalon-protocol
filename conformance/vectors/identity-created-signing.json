@@ -155,7 +155,7 @@
         "shardId": "game:wow-é/3",
         "ticketId": "3c1f5a7e-9b2d-4e6f-8a0b-1c2d3e4f5a6b"
       },
-      "name": "multi-byte UTF-8 network and shard ids use byte lengths (7 and 15, not 6 and 13)"
+      "name": "multi-byte UTF-8 network and shard ids use byte lengths (11 and 13, not 10 and 12)"
     }
   ]
 }
