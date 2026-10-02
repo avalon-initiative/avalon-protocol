@@ -6,7 +6,7 @@
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
 #              outbound-only url-less-admission url-less-participation url-less-credential
-#              relay-failover relay-ranking relay-reselect
+#              url-less-shard-author relay-failover relay-ranking relay-reselect
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -475,6 +475,93 @@ scenario_url-less-credential() {
   echo "    home1 ($id) replicated its message to a neighbor"
 }
 
+# A node with no AVALON_NODE_URL authors a self-certifying `node:` shard. One neighbor finds it by
+# discovery and polls it; another names it as a static `node:<hash>=p2p://<peer id>` source, polls
+# it over the stream and is woken by the author's push, with a poll interval too long to explain it.
+scenario_url-less-shard-author() {
+  "$LAB" up home1 no-inbound >/dev/null || return 1
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null \
+    && "$LAB" up-public mira 10.99.0.103 >/dev/null && "$LAB" up-public mirb 10.99.0.104 >/dev/null \
+    && "$LAB" up-public free 10.99.0.105 >/dev/null || return 1
+  (cd "$ROOT" && cargo build -q -p avalon-server --example verify_sth --example node_request) || return 1
+  local verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true boot=http://10.99.0.101:8080,http://10.99.0.102:8080 poll=30
+  local seed pub shard
+  seed=$(head -c32 /dev/urandom | xxd -p -c64)
+  pub=$("$ROOT/target/debug/examples/verify_sth" pubkey "$seed")
+  shard="node:$(echo -n "$pub" | xxd -r -p | sha256sum | cut -d' ' -f1)"
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001 "$verify"
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.102:8080 "$verify"
+  ready relay 10.99.0.101 && ready seed 10.99.0.102 || return 1
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" AVALON_BOOTSTRAP_PEERS=$boot \
+    AVALON_OWN_SHARD_ID="$shard" AVALON_SETTLEMENT_SIGNING_KEY="$seed" \
+    RUST_LOG=info,avalon_server::mirror_push=debug
+  wait_status home1 10.1.0.2 '.connectivity == "outbound_only"' "home1 to report outbound_only" || return 1
+  local id url
+  id=$(status home1 10.1.0.2 | jq -r .libp2p_peer_id)
+  url="p2p://$id"
+  post_json home1 10.1.0.2 /integrations "$(register_body firstapp)" | jq -e .id >/dev/null \
+    || { echo "    registration on home1 failed" >&2; return 1; }
+  wait_json "home1 to sign a head for $shard" '.tree_size >= 1' lab_get home1 "http://10.1.0.2:8080/ledger/sth/latest?shard_id=$shard" || return 1
+
+  # mira only discovers the shard; mirb names it. Both start with the author's first head in place.
+  node mira mira 10.99.0.103 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.103/tcp/4001 AVALON_BOOTSTRAP_PEERS=$boot \
+    AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true AVALON_MIRROR_POLL_INTERVAL_SECS=5 "$verify"
+  node mirb mirb 10.99.0.104 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.104/tcp/4001 AVALON_BOOTSTRAP_PEERS=$boot \
+    AVALON_MIRROR_PEERS="$shard=$url" AVALON_MIRROR_POLL_INTERVAL_SECS=$poll "$verify"
+  ready mira 10.99.0.103 && ready mirb 10.99.0.104 || return 1
+  local author_head
+  author_head() { lab_get home1 "http://10.1.0.2:8080/ledger/sth/latest?shard_id=$shard"; }
+  local size root
+  size=$(author_head | jq .tree_size) root=$(author_head | jq -r .root_hash)
+  WAIT=150 wait_json "mira to mirror the author's head" ".tree_size == $size and .root_hash == \"$root\"" \
+    lab_get mira "http://10.99.0.103:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  WAIT=$((poll * 3)) wait_json "mirb to mirror the author's head over the stream" ".tree_size == $size and .root_hash == \"$root\"" \
+    lab_get mirb "http://10.99.0.104:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  grep -q "registering interest" "$LOG_DIR/mirb.log" || { echo "    mirb never registered mirror interest" >&2; return 1; }
+
+  # mirb's first poll runs before it has the author's address, so it mirrors on its second. A write right
+  # after that must reach it well inside the next poll interval, which only the push can do.
+  post_json home1 10.1.0.2 /integrations "$(register_body secondapp)" | jq -e .id >/dev/null \
+    || { echo "    second registration on home1 failed" >&2; return 1; }
+  wait_json "home1 to sign a larger head" ".tree_size > $size" lab_get home1 "http://10.1.0.2:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  size=$(author_head | jq .tree_size) root=$(author_head | jq -r .root_hash)
+  local t0=$SECONDS
+  WAIT=$((poll * 4 / 5)) wait_json "mirb to catch up within $((poll * 4 / 5)) s although it polls every $poll s" ".tree_size == $size and .root_hash == \"$root\"" \
+    lab_get mirb "http://10.99.0.104:8080/ledger/sth/latest?shard_id=$shard" || return 1
+  local took=$((SECONDS - t0))
+  grep -q "mirror-push: received a push notification" "$LOG_DIR/mirb.log" \
+    || { echo "    mirb logged no push notification" >&2; return 1; }
+  WAIT=150 wait_json "mira to mirror the second head" ".tree_size == $size and .root_hash == \"$root\"" \
+    lab_get mira "http://10.99.0.103:8080/ledger/sth/latest?shard_id=$shard" || return 1
+
+  # Entries and heads match the author's on both neighbors, and each head verifies under the shard's own key.
+  local want got n h
+  want=$(lab_get home1 "http://10.1.0.2:8080/ledger/entries?shard_id=$shard" | jq -cS .)
+  [ "$(jq length <<<"$want")" -ge 2 ] || { echo "    the author lists fewer than two entries: $want" >&2; return 1; }
+  for n in mira:10.99.0.103 mirb:10.99.0.104; do
+    got=$(lab_get "${n%%:*}" "http://${n##*:}:8080/ledger/entries?shard_id=$shard" | jq -cS .)
+    [ "$got" = "$want" ] || { echo "    ${n%%:*} entries differ from the author's: $got" >&2; return 1; }
+    h=$(lab_get "${n%%:*}" "http://${n##*:}:8080/ledger/sth/latest?shard_id=$shard")
+    [ "$(echo "$h" | jq -r .signing_public_key)" = "$pub" ] || { echo "    ${n%%:*} serves a head signed by another key" >&2; return 1; }
+    echo "$h" | AVALON_SETTLEMENT_VERIFY_KEY="$pub" "$ROOT/target/debug/examples/verify_sth" old \
+      || { echo "    the head on ${n%%:*} does not verify" >&2; return 1; }
+  done
+
+  # A keypair with standing that is not the author is refused on a node that has the author as a source and on one with none.
+  local out target
+  for target in mira:10.99.0.103 mirb:10.99.0.104; do
+    local tid=$(peer_id "${target%%:*}")
+    out=$("$LAB" exec free -- "$ROOT/target/debug/examples/node_request" avalon-dev-lan \
+      /ip4/10.99.0.105/tcp/4001 "$tid" "/ip4/${target##*:}/tcp/4001/p2p/$tid" "http://${target##*:}:8080") \
+      || { echo "    the prober failed: $out" >&2; return 1; }
+    expect_call "$out" standing stream /mirror/notify 403 || return 1
+    expect_call "$out" standing http-signed /mirror/notify 403 || return 1
+  done
+  echo "    $shard authored by $url; mira and mirb match it and verify; mirb caught up ${took}s after the write" \
+    "(poll $poll s); a stranger's notify is refused on both"
+}
+
 # authed <ns> <ip> <method> <path> <body> <token>: a bearer-authenticated request to that node.
 authed() {
   "$LAB" exec "$1" -- curl -s -m 15 -X "$3" -H "authorization: Bearer $6" -H 'content-type: application/json' \
@@ -613,7 +700,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation url-less-credential relay-failover relay-ranking"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation url-less-credential url-less-shard-author relay-failover relay-ranking"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 

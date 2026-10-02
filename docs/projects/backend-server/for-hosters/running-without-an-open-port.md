@@ -78,6 +78,22 @@ everywhere and the node behind a no-inbound NAT:
   `AVALON_OWN_SHARD_ID` unset refuses to start. A wrong key leaves the batch pending and logs
   `401 Unauthorized` from the authority.
 
+- **Authoring a shard.** A node with no URL can author a self-certifying shard and be mirrored
+  by neighbors (NAT lab scenario `url-less-shard-author`). It needs no registration and no
+  reachable address:
+
+  ```bash
+  AVALON_OWN_SHARD_ID=node:<sha256-hex of the verify key>
+  AVALON_SETTLEMENT_SIGNING_KEY=<32-byte seed, hex>
+  ```
+
+  A neighbor with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` learned the shard by gossip, polled
+  it and served the author's entries and a head signed by the key the shard id hashes to. A
+  neighbor with `AVALON_MIRROR_PEERS=node:<hash>=p2p://<author peer id>` did the same over the
+  stream; once it had mirrored a head it registered mirror interest, the author pushed to it after
+  its next write, and it caught up inside its poll interval. A keypair that is not the author was
+  refused 403 on `/mirror/notify` by both neighbors.
+
 ## Limits
 
 - A `p2p://` peer can call the routes that carry data (`/nodes/relay`, `/nodes/replicate-chat`,
@@ -106,7 +122,9 @@ everywhere and the node behind a no-inbound NAT:
   `p2p://<peer id>` string. Any other shard configured with a `p2p://` source is verified
   against the network trust anchor as usual. A source that cannot be reached is logged once
   per five minutes, not every tick, and is retried every tick. Discovered shards still never
-  register push interest.
+  register push interest. A static source is polled once at start, before gossip may have
+  given the node an address for a url-less author; that poll fails and the next one, after
+  `AVALON_MIRROR_POLL_INTERVAL_SECS`, succeeds.
 - Addresses read from interest lookups are checked for shape only (an http(s) URL without
   credentials, query or fragment, or a `p2p://` peer id), deduplicated and capped at 64 per
   lookup. The direct HTTP pushes for mirror notifications and chat relay then apply the same
