@@ -418,6 +418,7 @@ mod live_tests {
                 None,
             ),
             own_witness: None,
+            replica_intake: crate::chat_replication::ReplicaIntake::new(&crate::nodes::node_roles()),
         }
     }
 

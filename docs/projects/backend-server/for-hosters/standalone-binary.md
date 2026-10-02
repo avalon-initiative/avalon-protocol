@@ -414,8 +414,8 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   lost request: every later use is a cheap 401 replay that costs the real sender no budget, no
   failure count and no read slot. A body that never arrives or does not match burns its nonce;
   senders use a fresh nonce per request.
-- Standing is free until per-route scope checks exist (a self-announced `p2p://` entry
-  qualifies), so a key with standing can make the node read a body, bounded by: the route cap
+- Standing alone is cheap to get (a self-announced `p2p://` entry qualifies), so a key with
+  standing can make the node read a body, bounded by: the route cap
   (64 KiB, 64 KiB, 1 KiB); a total read timeout of 5 seconds
   (`AVALON_NODE_AUTH_BODY_TIMEOUT_MS`, at most 30000) and an idle timeout of 1.5 seconds
   without a byte (`AVALON_NODE_AUTH_BODY_IDLE_TIMEOUT_MS`, at most 10000); at most 16 reads in
@@ -426,7 +426,7 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   excess answered 503 `node_auth_busy`). A quarter of those stages is reserved for keys that
   completed a read in the last 10 minutes, so a flood of fresh slow keys cannot take them.
   Residual: a determined set of hundreds of standing keys, each earning the reserve and then
-  timing out, can still degrade the stage, and standing is free until scope checks land. Stream
+  timing out, can still degrade the stage, because standing is cheap to get. Stream
   requests take no read stage. A connection reset mid-body is answered 400 and costs the key one
   unit, not the source address.
 - A source address that causes more than 30 expensive failures a minute
@@ -438,6 +438,29 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
   request is a 429 or 503 the sender retries or drops; the per-IP limit, the request timeout
   and the per-route caps still apply. Looking up standing scans the peer table (at most
   `AVALON_NODE_MAX_KNOWN_PEERS` entries) once per request.
+- Each route also checks what the caller may do with it:
+  - `/nodes/relay` refuses chat events (403) for a channel or conversation this node has no
+    connected subscriber for, and a message body over the send limit of 4000 characters (422).
+    The sender logs a throttled warning for the refusals.
+  - `/nodes/replicate-chat` is served only by a node whose `AVALON_NODE_ROLES` include `indexer`
+    or `combined` (403 otherwise). A key may write `AVALON_NODE_AUTH_REPLICATE_PER_MINUTE` replica
+    requests a minute (default 600, 429 over it), a message body must fit the send limit and its
+    sent time must be after 2024-01-01 and at most 5 minutes ahead of the node's clock (422).
+    Each replica row records the key that inserted it (`replicated_by`); a repeated insert never
+    overwrites a row, and a delete applies only to a row the same key inserted (404 otherwise).
+    Rows replicated before migration 0082 record an empty key, so no peer can delete them, and a
+    peer that rotates its identity key cannot delete the rows it inserted under the old one.
+  - `/mirror/notify` is served only for a peer that is one of this node's configured mirror
+    sources (`AVALON_MIRROR_PEERS`, or the network's seed nodes when unset): 403 for any other
+    key, 400 for another network. The mirror watcher is woken only when the announced tree size
+    is beyond what this node already observed from that source; a stale size is acknowledged
+    (202) without waking it. Nothing in this route makes the node contact anyone.
+    The match is on the origin (scheme, host and port) of the URL the peer announced against the
+    configured source URL, so a source configured by hostname but announced by IP address (or the
+    reverse) is refused, and the watcher falls back to polling.
+  - Residuals of the standing-peer model: replica inserts are first-writer-wins, so a standing
+    peer can claim a message id before the originating node replicates it; and relayed events
+    carry no binding between the sending peer and the channel or conversation, nor a sent time.
 - A 403 for a claimed id means it has no bound entry, a 401 means the credential is bad; this
   reveals whether an id is a known node, which is not secret. The budget is a fixed one-minute
   window, so a key can burst to twice its rate across a minute boundary.

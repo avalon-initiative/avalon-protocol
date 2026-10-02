@@ -272,15 +272,52 @@ async fn relay_traced(state: &AppState, event: &RelayEvent, scope: &crate::op_tr
     scope.add_branches(branches, truncated);
 }
 
+/// Why a relayed event was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayRefusal {
+    /// No connection on this node is subscribed to the event's channel or conversation.
+    NoLocalSubscriber,
+    BodyTooLong,
+}
+
+/// Checks a relayed event against this node: chat events are accepted only for a scope with a
+/// local subscriber, and a message body stays within the send limit. Presence has no scope.
+pub fn check_relay(
+    event: &RelayEvent,
+    interest: &crate::interest::InterestRegistry,
+) -> Result<(), RelayRefusal> {
+    if let Some(scope) = interest_scope_for(event) {
+        if !interest.has_local_subscriber(scope) {
+            return Err(RelayRefusal::NoLocalSubscriber);
+        }
+    }
+    let body = match event {
+        RelayEvent::ChannelMessage(m) => &m.body,
+        RelayEvent::ConversationMessage(m) => &m.body,
+        _ => return Ok(()),
+    };
+    if body.chars().count() > guild_messages::MESSAGE_BODY_MAX_CHARS {
+        return Err(RelayRefusal::BodyTooLong);
+    }
+    Ok(())
+}
+
 /// `POST /nodes/relay` — issue #539's receiving end. Applies `event` to
 /// this node's own local store/broadcast only; never relays it onward
 /// (see module doc comment for why that alone is sufficient to guarantee
 /// single-hop delivery). The caller is authenticated by
-/// [`crate::node_auth::require_node_auth`]; which events a given node may relay is not checked.
+/// [`crate::node_auth::require_node_auth`]; chat events are refused (403) for a scope this
+/// node has no local subscriber for, and an oversize message body (422).
+/// An event is not bound to its sending peer nor carries a sent time, so the sender is trusted for content.
 pub async fn relay_handler(
     State(state): State<AppState>,
     Json(event): Json<RelayEvent>,
 ) -> StatusCode {
+    match check_relay(&event, &state.interest) {
+        Ok(()) => {}
+        Err(RelayRefusal::NoLocalSubscriber) => return StatusCode::FORBIDDEN,
+        Err(RelayRefusal::BodyTooLong) => return StatusCode::UNPROCESSABLE_ENTITY,
+    }
     crate::op_trace::participate();
     match event {
         RelayEvent::Presence(presence) => {
@@ -414,5 +451,59 @@ mod tests {
             entry("http://real.test".into()),
         ]);
         assert_eq!(targets, vec!["http://real.test".to_string()]);
+    }
+
+    #[test]
+    fn chat_events_need_a_local_subscriber_and_a_bounded_body() {
+        let (registry, _rx) = crate::interest::InterestRegistry::new();
+        let channel_id = Uuid::new_v4();
+        let message = |body: String| {
+            RelayEvent::ChannelMessage(guild_messages::MessageResponse {
+                id: Uuid::new_v4(),
+                channel_id,
+                author: Uuid::new_v4(),
+                body,
+                sent_at: sample_time(),
+            })
+        };
+        assert_eq!(
+            check_relay(&message("hi".into()), &registry),
+            Err(RelayRefusal::NoLocalSubscriber)
+        );
+        let sub = registry.track_local(InterestScope::Channel(channel_id));
+        assert_eq!(check_relay(&message("hi".into()), &registry), Ok(()));
+        let long = "a".repeat(guild_messages::MESSAGE_BODY_MAX_CHARS + 1);
+        assert_eq!(
+            check_relay(&message(long), &registry),
+            Err(RelayRefusal::BodyTooLong)
+        );
+        let delete = RelayEvent::ChannelMessageDeleted {
+            channel_id,
+            message_id: Uuid::new_v4(),
+        };
+        assert_eq!(check_relay(&delete, &registry), Ok(()));
+        let other = RelayEvent::ConversationMessage(conversations::MessageResponse {
+            id: Uuid::new_v4(),
+            conversation_id: channel_id,
+            author: Uuid::new_v4(),
+            body: "hi".into(),
+            sent_at: sample_time(),
+        });
+        assert_eq!(
+            check_relay(&other, &registry),
+            Err(RelayRefusal::NoLocalSubscriber)
+        );
+        drop(sub);
+        assert_eq!(
+            check_relay(&delete, &registry),
+            Err(RelayRefusal::NoLocalSubscriber)
+        );
+        let presence = RelayEvent::Presence(PresenceResponse {
+            identity_id: Uuid::new_v4(),
+            status: avalon_protocol::social::PresenceStatus::Online,
+            active_in: None,
+            updated_at: sample_time(),
+        });
+        assert_eq!(check_relay(&presence, &registry), Ok(()));
     }
 }

@@ -93,7 +93,7 @@ impl ShardMirrorSources {
         Self::from_raw(&crate::mirror_watcher::effective_mirror_peers())
     }
 
-    fn from_raw(raw: &str) -> Self {
+    pub(crate) fn from_raw(raw: &str) -> Self {
         let mut sources = crate::mirror_watcher::parse_mirror_peers(raw);
         sources.sort();
         sources.dedup();

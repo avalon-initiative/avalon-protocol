@@ -22,7 +22,7 @@ use crate::handlers::authenticate;
 use crate::state::AppState;
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
 
-const MESSAGE_BODY_MAX_CHARS: usize = 4000;
+pub(crate) const MESSAGE_BODY_MAX_CHARS: usize = 4000;
 const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 50;
 const MAX_MESSAGE_PAGE_SIZE: i64 = 200;
 const DEFAULT_MESSAGE_CAP: i64 = 10_000;
