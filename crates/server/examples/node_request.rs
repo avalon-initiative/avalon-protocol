@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     });
     let message = serde_json::json!({"type": "channel_message", "data": {
         "id": uuid::Uuid::new_v4(), "channel_id": uuid::Uuid::new_v4(),
-        "author": uuid::Uuid::new_v4(), "body": "credential lab",
+        "author": avalon_protocol::identity_id::TestIdentity::new().id, "body": "credential lab",
         "sent_at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
     }});
     let notify = serde_json::json!({"network_id": network, "tree_size": 1});
