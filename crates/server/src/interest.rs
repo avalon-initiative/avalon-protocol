@@ -744,6 +744,7 @@ async fn verify_claim_signature(
 
     let key = avalon_indexer::projections::identity_signing_keys::find_active_by_id(
         &state.pool,
+        claim.identity_id,
         claim.signing_key_id,
     )
     .await

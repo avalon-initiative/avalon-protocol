@@ -53,6 +53,7 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_integrator_schemas",
     "indexer_identity_passkeys",
     "indexer_identity_signing_keys",
+    "indexer_identity_signing_key_revocations",
     "identity_chain_events",
     "identity_chain_state",
 ];
@@ -126,6 +127,9 @@ impl PostgresIndexer {
             .filter(|k| created.identity_id.matches_key(k)) else {
                 continue;
             };
+            if !avalon_protocol::identity_id::display_name_permitted(&created.display_name) {
+                continue;
+            }
             let identity_id = created.identity_id;
             sqlx::query(
                 "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
@@ -139,8 +143,10 @@ impl PostgresIndexer {
         }
 
         for event in events {
-            match self.apply_in_tx(&mut tx, event).await {
-                Ok(()) => {}
+            // Each event applies in its own savepoint so a refused one rolls back completely.
+            let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+            match self.apply_in_tx(&mut savepoint, event).await {
+                Ok(()) => savepoint.commit().await?,
                 // Refused by a validity rule, not a storage fault: the same event is refused on
                 // every replay, so it must not abort the whole rebuild.
                 Err(IndexError::DisplayNameNotPermitted | IndexError::Rejected(_)) => {
@@ -148,6 +154,7 @@ impl PostgresIndexer {
                         "indexer: skipping refused event {} ({})",
                         event.id, event.kind
                     );
+                    savepoint.rollback().await?;
                 }
                 Err(other) => return Err(other),
             }

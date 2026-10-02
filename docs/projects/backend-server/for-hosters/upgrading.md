@@ -292,13 +292,15 @@ because the default topology this project documents is single-node.
 Identity ids change from random UUIDs to the lowercase hex SHA-256 of a domain tag and the
 identity's inception public key (64 characters, `^[0-9a-f]{64}$`). Old ids cannot be converted, so
 migration 0083 **deletes every identity and every row keyed by one** (profiles, sessions, friends,
-guild membership, messages, bindings, projections and replicas). It refuses to run while
-`identities` has rows and says so in its error; the node then fails to start rather than wiping
+guild membership, messages, bindings, projections and replicas). It also clears in-flight WebAuthn ceremonies. It refuses to run while
+`identities`, `webauthn_ceremonies` or any of the truncated replica and projection tables has rows, and names the table in its error; the node then fails to start rather than wiping
 silently.
 
 - **Development nodes:** run `make db-reset`, which drops and recreates the schema, then migrates.
 - **Any other node:** back up or export first. If you accept the loss, re-run the migration with
   `PGOPTIONS="-c avalon.allow_identity_wipe=on"` set for the migrate process.
+- **The ledger and the outbox are not cleared by the migration.** Pending outbox rows still
+  carry old-format events and will be refused or parked by the new decoders.
 - **The ledger is not wiped by the migration.** A node migrated in place keeps ledger history for
   identities that no longer exist locally, and its older `identity.created`,
   `identity.signing_key_added` and `identity.signing_key_revoked` entries are version 1, which

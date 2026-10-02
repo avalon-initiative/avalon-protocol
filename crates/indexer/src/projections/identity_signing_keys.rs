@@ -91,14 +91,18 @@ pub async fn apply(
             label,
             added_at,
         } => {
-            // An existing key row keeps its identity and public key; a conflicting event is refused.
+            // Keys are unique per (identity, key id), so another identity cannot occupy this id.
+            // A re-delivery is idempotent; one that would swap the public key is refused. A
+            // revocation that arrived before this addition is applied to the new row.
             let written = sqlx::query(
                 "INSERT INTO indexer_identity_signing_keys AS k \
                  (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \
-                 VALUES ($1, $2, $3, $4, $5, NULL) \
-                 ON CONFLICT (signing_key_id) DO UPDATE SET \
+                 VALUES ($1, $2, $3, $4, $5, \
+                         (SELECT revoked_at FROM indexer_identity_signing_key_revocations \
+                          WHERE identity_id = $2 AND signing_key_id = $1)) \
+                 ON CONFLICT (identity_id, signing_key_id) DO UPDATE SET \
                      label = EXCLUDED.label, added_at = EXCLUDED.added_at \
-                 WHERE k.identity_id = EXCLUDED.identity_id AND k.public_key = EXCLUDED.public_key",
+                 WHERE k.public_key = EXCLUDED.public_key",
             )
             .bind(signing_key_id)
             .bind(identity_id)
@@ -109,7 +113,7 @@ pub async fn apply(
             .await?;
             if written.rows_affected() == 0 {
                 return Err(IndexError::Rejected(format!(
-                    "signing key {signing_key_id} already belongs to a different identity or key"
+                    "signing key {signing_key_id} already exists for this identity with a different public key"
                 )));
             }
         }
@@ -119,12 +123,24 @@ pub async fn apply(
             revoked_at,
         } => {
             sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = $2 \
-                 WHERE signing_key_id = $1 AND identity_id = $3",
+                "UPDATE indexer_identity_signing_keys SET revoked_at = $3 \
+                 WHERE signing_key_id = $1 AND identity_id = $2",
             )
             .bind(signing_key_id)
-            .bind(revoked_at)
             .bind(identity_id)
+            .bind(revoked_at)
+            .execute(&mut **tx)
+            .await?;
+            // Recorded unconditionally: a revocation delivered before the key's addition must
+            // still leave the key revoked when the addition arrives.
+            sqlx::query(
+                "INSERT INTO indexer_identity_signing_key_revocations \
+                 (identity_id, signing_key_id, revoked_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(identity_id)
+            .bind(signing_key_id)
+            .bind(revoked_at)
             .execute(&mut **tx)
             .await?;
         }
@@ -148,12 +164,14 @@ pub struct SigningKeyRow {
 /// session tokens.
 pub async fn find_active_by_id(
     pool: &sqlx::PgPool,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
 ) -> Result<Option<SigningKeyRow>, IndexError> {
     let row = sqlx::query(
         "SELECT signing_key_id, identity_id, public_key FROM indexer_identity_signing_keys \
-         WHERE signing_key_id = $1 AND revoked_at IS NULL",
+         WHERE identity_id = $1 AND signing_key_id = $2 AND revoked_at IS NULL",
     )
+    .bind(identity_id)
     .bind(signing_key_id)
     .fetch_optional(pool)
     .await?;

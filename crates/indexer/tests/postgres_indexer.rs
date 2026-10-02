@@ -198,7 +198,7 @@ async fn a_projected_identity_created_with_an_id_lookalike_name_is_refused() {
 
 #[tokio::test]
 #[ignore]
-async fn a_signing_key_row_cannot_be_repointed_to_another_identity_or_key() {
+async fn a_signing_key_row_cannot_change_its_public_key() {
     use base64::Engine as _;
     let pool = test_pool().await;
     let indexer = PostgresIndexer::new(pool.clone());
@@ -222,14 +222,8 @@ async fn a_signing_key_row_cannot_be_repointed_to_another_identity_or_key() {
         identity_chain: None,
     };
     indexer.apply(&added(&a, a.public_key())).await.unwrap();
-    let to_other_identity = indexer.apply(&added(&b, a.public_key())).await;
-    assert!(
-        matches!(
-            to_other_identity,
-            Err(avalon_indexer::IndexError::Rejected(_))
-        ),
-        "{to_other_identity:?}"
-    );
+    // The same registration delivered again is idempotent.
+    indexer.apply(&added(&a, a.public_key())).await.unwrap();
     let to_other_key = indexer.apply(&added(&a, b.public_key())).await;
     assert!(
         matches!(to_other_key, Err(avalon_indexer::IndexError::Rejected(_))),
@@ -333,4 +327,95 @@ async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
     .await
     .unwrap();
     assert!(revoked.is_some());
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_signing_key_id_cannot_be_occupied_by_another_identity_and_early_revocations_stick() {
+    use base64::Engine as _;
+    let pool = test_pool().await;
+    let indexer = PostgresIndexer::new(pool.clone());
+    let (a, b) = (seed_identity(&pool).await, seed_identity(&pool).await);
+    let key_id = Uuid::new_v4();
+    let key_b64 = |key: [u8; 32]| base64::engine::general_purpose::STANDARD.encode(key);
+    let added = |who: &TestIdentity| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.signing_key_added".to_string(),
+        issuer: GlobalId::new("identity", &who.id.to_string(), "self", "signing_key_added"),
+        subject: GlobalId::new("identity", &who.id.to_string(), "self", "signing_key_added"),
+        payload: serde_json::json!({
+            "signing_key_id": key_id,
+            "public_key": key_b64(who.public_key()),
+            "device_label": null,
+            "approved_by_signing_key_id": key_id,
+            "identity_id": who.id,
+            "kind": "device_grant",
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 2,
+        identity_chain: None,
+    };
+    let revoked = |who: &TestIdentity| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.signing_key_revoked".to_string(),
+        issuer: GlobalId::new(
+            "identity",
+            &who.id.to_string(),
+            "self",
+            "signing_key_revoked",
+        ),
+        subject: GlobalId::new(
+            "identity",
+            &who.id.to_string(),
+            "self",
+            "signing_key_revoked",
+        ),
+        payload: serde_json::json!({
+            "identity_id": who.id,
+            "signing_key_id": key_id,
+            "revoked_by_signing_key_id": key_id,
+            "signature": "c2ln",
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 2,
+        identity_chain: None,
+    };
+    // The attacker (b) uses a's key id first; a's own event is still applied.
+    indexer.apply(&added(&b)).await.unwrap();
+    indexer.apply(&added(&a)).await.unwrap();
+    let active_a =
+        avalon_indexer::projections::identity_signing_keys::find_active_by_id(&pool, a.id, key_id)
+            .await
+            .unwrap();
+    assert!(active_a.is_some());
+    // A revocation by b does not touch a's key.
+    indexer.apply(&revoked(&b)).await.unwrap();
+    assert!(
+        avalon_indexer::projections::identity_signing_keys::find_active_by_id(&pool, a.id, key_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // Revoked-before-added: the later addition is born revoked.
+    let c = seed_identity(&pool).await;
+    let late_key = Uuid::new_v4();
+    let early = ProtocolEvent {
+        payload: serde_json::json!({
+            "identity_id": c.id, "signing_key_id": late_key,
+            "revoked_by_signing_key_id": late_key, "signature": "c2ln",
+        }),
+        ..revoked(&c)
+    };
+    indexer.apply(&early).await.unwrap();
+    let mut late_added = added(&c);
+    late_added.payload["signing_key_id"] = serde_json::json!(late_key);
+    indexer.apply(&late_added).await.unwrap();
+    assert!(
+        avalon_indexer::projections::identity_signing_keys::find_active_by_id(
+            &pool, c.id, late_key
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
 }

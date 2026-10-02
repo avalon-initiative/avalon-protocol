@@ -48,9 +48,13 @@ pub async fn verify(state: &AppState, wire_body: &str) -> Result<IdentityId, App
         return Err(AppError::Unauthorized);
     }
 
-    let key = identity_signing_keys::find_active_by_id(&state.pool, token.signing_key_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
+    let key = identity_signing_keys::find_active_by_id(
+        &state.pool,
+        token.identity_id,
+        token.signing_key_id,
+    )
+    .await?
+    .ok_or(AppError::Unauthorized)?;
 
     let signature_bytes = hex::decode(&token.signature).map_err(|_| AppError::Unauthorized)?;
     if !verify_event_signature(&key.public_key, &token.signing_bytes(), &signature_bytes) {
@@ -76,11 +80,8 @@ pub async fn verify(state: &AppState, wire_body: &str) -> Result<IdentityId, App
         return Err(AppError::Unauthorized);
     }
 
-    // The verified key's own `identity_id`, never the token's claimed one
-    // — `signing_key_id` already univocally names one identity via
-    // `indexer_identity_signing_keys`' primary key, so this is the
-    // authoritative answer regardless of what the token's own
-    // `identity_id` field says.
+    // The key is looked up by (identity, key id), so the returned identity is both the one the
+    // token claims and the one the key belongs to.
     Ok(key.identity_id)
 }
 

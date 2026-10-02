@@ -733,31 +733,36 @@ async fn verify_grant(
         return Err(AppError::Unauthorized);
     }
 
-    let public_key =
-        match identity_signing_keys::find_active_by_id(&state.pool, grant.signing_key_id).await? {
-            Some(key) => {
-                if key.identity_id != grant.identity_id {
-                    return Err(AppError::Unauthorized);
-                }
-                key.public_key
+    let public_key = match identity_signing_keys::find_active_by_id(
+        &state.pool,
+        grant.identity_id,
+        grant.signing_key_id,
+    )
+    .await?
+    {
+        Some(key) => {
+            if key.identity_id != grant.identity_id {
+                return Err(AppError::Unauthorized);
             }
-            // Not local — falls back to cross-shard resolution. A cross-shard-fetched entry
-            // is already scoped to `grant.identity_id` by construction (it's
-            // fetched from that exact identity's own `identity:{id}:...`
-            // subject), so there's no separate identity-id cross-check to
-            // repeat here the way the local path needs one.
-            None => {
-                let key =
-                    resolve_signing_key_cross_shard(state, grant.identity_id, grant.signing_key_id)
-                        .await
-                        .ok_or(AppError::Unauthorized)?;
-                // Needed before `submit` can insert into `sessions` (its
-                // `identity_id` FK) or `GET /me` can return anything — see
-                // this function's own doc comment.
-                provision_local_identity_stub(state, grant.identity_id).await;
-                key
-            }
-        };
+            key.public_key
+        }
+        // Not local — falls back to cross-shard resolution. A cross-shard-fetched entry
+        // is already scoped to `grant.identity_id` by construction (it's
+        // fetched from that exact identity's own `identity:{id}:...`
+        // subject), so there's no separate identity-id cross-check to
+        // repeat here the way the local path needs one.
+        None => {
+            let key =
+                resolve_signing_key_cross_shard(state, grant.identity_id, grant.signing_key_id)
+                    .await
+                    .ok_or(AppError::Unauthorized)?;
+            // Needed before `submit` can insert into `sessions` (its
+            // `identity_id` FK) or `GET /me` can return anything — see
+            // this function's own doc comment.
+            provision_local_identity_stub(state, grant.identity_id).await;
+            key
+        }
+    };
 
     let signature_bytes = hex::decode(&grant.signature).map_err(|_| AppError::Unauthorized)?;
     if !verify_event_signature(&public_key, &grant.signing_bytes(), &signature_bytes) {
