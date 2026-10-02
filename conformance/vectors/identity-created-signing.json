@@ -1,0 +1,78 @@
+{
+  "$schema": "./SCHEMA.md#identity-created-signing",
+  "description": "identity.created v2 signing bytes (avalon_protocol::identity_id::identity_created_signing_bytes_v2): UTF-8 of 'avalon:identity.created:v2:{identity_id}:{public_key_hex}:{display_name}'. The display name is last, so a ':' in it is harmless; it is taken as-is (multi-byte UTF-8 stays UTF-8, no normalisation). The public key is lowercase HEX in the signing bytes and standard BASE64 on the wire. The signature is Ed25519 by the identity's inception key over the bytes (verified strictly).",
+  "domainSeparationVectors": [
+    {
+      "expected": {
+        "equal": false,
+        "v1SigningBytesUtf8": "avalon:identity.created:v1:0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d:Alice",
+        "v2SigningBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a416c696365"
+      },
+      "input": {
+        "displayName": "Alice",
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "identityUuid": "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
+      },
+      "name": "v1 and v2 differ for display name \"Alice\""
+    },
+    {
+      "expected": {
+        "equal": false,
+        "v1SigningBytesUtf8": "avalon:identity.created:v1:0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d:a:b:c",
+        "v2SigningBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a613a623a63"
+      },
+      "input": {
+        "displayName": "a:b:c",
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "identityUuid": "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
+      },
+      "name": "v1 and v2 differ for display name \"a:b:c\""
+    }
+  ],
+  "generation": "Deterministic: signingKeySeedHex is the Ed25519 seed, identityId derives from signingPublicKeyHex per identity-id.json; Ed25519 signatures are deterministic.",
+  "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "notSupported": {
+    "csharp": "no identity-id implementation yet",
+    "typescript": "no identity-id implementation yet"
+  },
+  "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+  "supportedIn": [
+    "rust"
+  ],
+  "vectors": [
+    {
+      "expected": {
+        "signatureHex": "94aeb71dbd962159d9ad10049154f8ef4aef454f440bfe23f6c156a93f7b996096ae58a2f76b1b62bfca5877e78886ce43e0540734a917b8c988a77019c6c506",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a416c696365",
+        "signingBytesUtf8": "avalon:identity.created:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48:Alice"
+      },
+      "input": {
+        "displayName": "Alice"
+      },
+      "name": "display name \"Alice\""
+    },
+    {
+      "expected": {
+        "signatureHex": "3fac05768514b4f6dad1aad436d7aba341418a0f9d2ae1cb548d2c5c27d27a95939caecb7a62de96118b8323900580f993ed30f5bd11ba06a744d71eb1233509",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a613a623a63",
+        "signingBytesUtf8": "avalon:identity.created:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48:a:b:c"
+      },
+      "input": {
+        "displayName": "a:b:c"
+      },
+      "name": "display name \"a:b:c\""
+    },
+    {
+      "expected": {
+        "signatureHex": "8efa4fdde8cf5bd40178c1f1ddbad2a506713eff540354d0559de154eec51cf6676ec4697e01230975be26b7e8ed7f98eecccacfa25a695f8b9cc7ab980a9b02",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a5a6fc3ab20e697a5e69cace8aa9e20f09f8eae203a656e64",
+        "signingBytesUtf8": "avalon:identity.created:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48:Zoë 日本語 🎮 :end"
+      },
+      "input": {
+        "displayName": "Zoë 日本語 🎮 :end"
+      },
+      "name": "display name \"Zoë 日本語 🎮 :end\""
+    }
+  ]
+}
