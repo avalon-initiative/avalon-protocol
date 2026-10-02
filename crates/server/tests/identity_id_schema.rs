@@ -54,9 +54,7 @@ const GENERIC_UUID_COLUMNS: &[&str] = &[
 ];
 
 /// TEXT columns with identity-style names that hold something other than an identity id.
-const NON_ID_TEXT_COLUMNS: &[(&str, &str)] = &[
-    ("ledger_entries", "subject"),
-];
+const NON_ID_TEXT_COLUMNS: &[(&str, &str)] = &[("ledger_entries", "subject")];
 
 /// Table-specific non-identity UUID columns not covered by the generic names.
 const NON_IDENTITY_UUID_COLUMNS: &[(&str, &str)] = &[];

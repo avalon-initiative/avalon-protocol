@@ -9667,6 +9667,7 @@
         "required": [
           "ticket_id",
           "network_id",
+          "shard_id",
           "challenge"
         ],
         "properties": {
@@ -9676,7 +9677,11 @@
           },
           "network_id": {
             "type": "string",
-            "description": "The ledger network id; the client signs it, with the ticket, into `identity.created`."
+            "description": "The ledger network id; the client signs it, with the shard id and ticket, into `identity.created`."
+          },
+          "shard_id": {
+            "type": "string",
+            "description": "The shard this node authors; part of the signed bytes."
           },
           "ticket_id": {
             "type": "string",
