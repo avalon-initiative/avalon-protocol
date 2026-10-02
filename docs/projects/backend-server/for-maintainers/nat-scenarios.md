@@ -65,10 +65,10 @@ is reachable only through a relay, then hole punching makes up to three attempts
   `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors under its node
   credential; `url-less-credential` covers the credential and chat replication.
 - **A mirror push by a url-less node is not run in the lab.** `/mirror/notify` is accepted only
-  from a configured mirror source, and a source needs an HTTP URL, so a url-less node's push is
-  always refused by scope. Triggering one also needs a receiver that registered mirror interest,
-  which only a statically configured source verified under a bundled trust anchor does, and a
-  lab-authored shard cannot be. The scenario covers the route with a direct call instead.
+  from a configured mirror source, so a url-less node's push is refused by scope unless a
+  receiver names it as a `p2p://<peer id>` source. Triggering one also needs a receiver that
+  registered mirror interest, which only a statically configured source whose head verified does,
+  and the lab does not configure one yet. The scenario covers the route with a direct call instead.
 - **Delivery by the real url-less node is observed through its effect** (the replica row), not
   the transport that carried it; the throwaway keypair covers both transports directly.
 - **The url-less probe and trace report `direct`.** The node's own outbound connection to the seed

@@ -34,7 +34,8 @@
 //! statically-configured `AVALON_MIRROR_PEERS` entry is verified against
 //! this process's pinned `docs/trusted-networks.json` network trust
 //! anchor (`fetch_and_verify_sth`, below) — the right check for mirroring
-//! another *whole network*. A gossip-discovered shard is a different
+//! another *whole network*, except a configured `node:<hash>` shard, which is verified by its own
+//! key like a discovered one; a source may be http(s) or `p2p://` (#1147). A gossip-discovered shard is a different
 //! shard *within this node's own network*, signed with an
 //! integrator-registered `shard_settlement` key, which almost
 //! never matches this network's root trust-anchor key — so a discovered
@@ -2355,6 +2356,9 @@ async fn fetch_inclusion_proof(
         .map_err(|e| MirrorWatcherError::Decode(e.to_string()))?;
     Ok(dto)
 }
+
+#[cfg(test)]
+mod p2p_source_tests;
 
 #[cfg(test)]
 mod tests {
