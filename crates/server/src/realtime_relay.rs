@@ -118,7 +118,13 @@ fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
 
 fn relay_client() -> &'static crate::node_http::NodeClient {
     static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
-    CLIENT.get_or_init(crate::node_http::NodeClient::new)
+    CLIENT.get_or_init(|| build_relay_client(crate::outbound_policy::OutboundPolicy::from_env()))
+}
+
+fn build_relay_client(
+    policy: crate::outbound_policy::OutboundPolicy,
+) -> crate::node_http::NodeClient {
+    crate::node_http::NodeClient::guarded_with(policy)
 }
 
 /// Every realtime-capable peer's base URL from #362's peer table — #539's
@@ -354,6 +360,21 @@ pub async fn relay_handler(
 mod tests {
     use super::*;
     use time::OffsetDateTime;
+
+    #[tokio::test]
+    async fn the_relay_client_refuses_a_loopback_peer_under_the_strict_policy() {
+        let strict = crate::outbound_policy::OutboundPolicy::new(false);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/nodes/relay", listener.local_addr().unwrap());
+        assert!(build_relay_client(strict).post(&url).send().await.is_err());
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept()).await;
+        assert!(accepted.is_err(), "the relay dialed a loopback address");
+        let lax = crate::outbound_policy::OutboundPolicy::new(true);
+        let dialed = build_relay_client(lax).post(&url).send();
+        let (_, accepted) = tokio::join!(dialed, listener.accept());
+        assert!(accepted.is_ok(), "an allowed address was not dialed");
+    }
 
     #[test]
     fn combined_role_is_eligible() {

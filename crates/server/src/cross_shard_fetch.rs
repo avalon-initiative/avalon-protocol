@@ -241,10 +241,36 @@ pub async fn fetch_verified_entries(
     known_list: &[(String, VerifyingKey)],
     sources: &[cosign_gather::WitnessSource],
 ) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
-    let client = crate::node_http::NodeClient::peer();
+    fetch_verified_entries_with(
+        &crate::node_http::NodeClient::guarded(),
+        pool,
+        this_network_id,
+        shard_id,
+        base_url,
+        subject,
+        static_verify_keys,
+        known_list,
+        sources,
+    )
+    .await
+}
 
+/// [`fetch_verified_entries`] over `client`; the base URL may come from a lookup, so the
+/// caller's client must apply the outbound address policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_verified_entries_with(
+    client: &crate::node_http::NodeClient,
+    pool: &PgPool,
+    this_network_id: &str,
+    shard_id: &str,
+    base_url: &str,
+    subject: &str,
+    static_verify_keys: &HashMap<String, VerifyingKey>,
+    known_list: &[(String, VerifyingKey)],
+    sources: &[cosign_gather::WitnessSource],
+) -> Result<Vec<VerifiedEntry>, CrossShardFetchError> {
     let sth = fetch_verified_sth(
-        &client,
+        client,
         pool,
         this_network_id,
         shard_id,
@@ -290,7 +316,7 @@ pub async fn fetch_verified_entries(
         let Some(payload) = entry.payload.clone() else {
             continue;
         };
-        verified.push(verify_one_entry(&client, base_url, shard_id, &sth, entry, payload).await?);
+        verified.push(verify_one_entry(client, base_url, shard_id, &sth, entry, payload).await?);
     }
     Ok(verified)
 }

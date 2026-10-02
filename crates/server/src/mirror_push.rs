@@ -69,7 +69,7 @@ impl MirrorPushConfig {
             dht_commands,
             redis_fast_path,
             own_base_url,
-            client: crate::node_http::NodeClient::peer(),
+            client: crate::node_http::NodeClient::guarded(),
         }
     }
 }
@@ -414,6 +414,51 @@ mod tests {
             more.is_err(),
             "a variant of this node's own URL was pushed to"
         );
+    }
+
+    #[tokio::test]
+    async fn a_hostile_http_interest_is_not_dialed_but_an_allowed_one_is() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = libp2p::PeerId::random();
+        let values = vec![
+            format!("http://127.0.0.1:{port}").into_bytes(),
+            b"http://169.254.169.254".to_vec(),
+            b"http://2130706433".to_vec(),
+            crate::node_http::p2p_base_url(&peer).into_bytes(),
+        ];
+        let (commands, mut pushed, _) = mock_swarm(values.clone());
+        let handle = crate::node_http::StreamHandle {
+            commands: commands.clone(),
+            peers: None,
+            settings: crate::node_http::NodeHttpSettings::default(),
+        };
+        let mut strict = config(commands, None);
+        strict.client = crate::node_http::NodeClient::guarded_with(
+            crate::outbound_policy::OutboundPolicy::new(false),
+        )
+        .with_stream(handle);
+        notify_peers(&strict, "avalon-test", 7).await;
+        // The allowed p2p value is pushed, so the fan-out ran over the hostile ones too.
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), pushed.recv())
+            .await
+            .expect("the allowed push should arrive")
+            .unwrap();
+        assert_eq!(first.0, peer);
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept()).await;
+        assert!(accepted.is_err(), "a loopback interest value was dialed");
+
+        // Same values under the lax policy: the loopback listener is dialed.
+        let (commands, _, _) = mock_swarm(values);
+        let mut lax = config(commands, None);
+        lax.client = crate::node_http::NodeClient::guarded_with(
+            crate::outbound_policy::OutboundPolicy::new(true),
+        );
+        notify_peers(&lax, "avalon-test", 7).await;
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await;
+        assert!(accepted.is_ok(), "an allowed interest value was not dialed");
     }
 
     #[tokio::test]
