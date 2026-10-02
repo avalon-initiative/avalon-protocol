@@ -279,8 +279,9 @@ pub async fn store_event(
 /// `POST /nodes/replicate-chat` — the receiving end. Accepted only on a node with a storage
 /// role, within the signer's replica rate, for a message of bounded size and a sane sent time.
 /// Rows go to the foreign-key-free replica tables (never the live ones), tagged with the
-/// authenticated signer: a repeated insert is a no-op and a delete applies only to a row that
-/// signer inserted (404 otherwise).
+/// authenticated signer: a repeated insert is a no-op (first writer wins) and a delete applies
+/// only to a row that signer inserted (404 otherwise). Rows from before the signer column, and
+/// rows of a signer that has since changed its key, can therefore never be deleted.
 pub async fn replicate_chat_handler(
     State(state): State<AppState>,
     AuthenticatedNode(signer): AuthenticatedNode,

@@ -1086,6 +1086,10 @@ mod node_auth_wiring {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@127.0.0.1:1/none")
             .expect("a lazy pool never connects while it is built");
+        state_with_pool(pool)
+    }
+
+    fn state_with_pool(pool: sqlx::PgPool) -> AppState {
         let webauthn = std::sync::Arc::new(
             auth::build_webauthn("localhost", "http://localhost:8080").expect("webauthn"),
         );
@@ -1452,5 +1456,118 @@ mod node_auth_wiring {
             woken.await.is_err(),
             "a refused notification woke the watcher"
         );
+    }
+
+    #[tokio::test]
+    async fn relay_refuses_again_once_the_subscribing_connection_is_gone() {
+        let node = libp2p::PeerId::random();
+        let state = lazy_state();
+        state
+            .peers
+            .upsert(bound_entry(&node, node_http::p2p_base_url(&node)));
+        let interest = state.interest.clone();
+        let app = router(state, None);
+        let channel = uuid::Uuid::new_v4();
+        let scope = interest::InterestScope::Channel(channel);
+        let hi = channel_message(channel, "hi");
+        // Two connections hold the same channel, as the chat socket does with its guard map.
+        let (first, second) = (interest.track_local(scope), interest.track_local(scope));
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, hi.clone()).await,
+            StatusCode::NO_CONTENT
+        );
+        drop(first);
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, hi.clone()).await,
+            StatusCode::NO_CONTENT
+        );
+        drop(second);
+        assert!(!interest.has_local_subscriber(scope));
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, hi).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// Needs `DATABASE_URL` (a throwaway database): only a larger tree size wakes the watcher.
+    #[tokio::test]
+    #[ignore]
+    async fn a_source_notification_wakes_the_watcher_only_for_a_larger_tree_size() {
+        use sqlx::AssertSqlSafe;
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let schema = format!("avalon_notify_route_{}", std::process::id());
+        let admin = sqlx::PgPool::connect(&url).await.unwrap();
+        for sql in [
+            format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
+            format!("CREATE SCHEMA {schema}"),
+        ] {
+            sqlx::query(AssertSqlSafe(sql))
+                .execute(&admin)
+                .await
+                .unwrap();
+        }
+        let sep = if url.contains('?') { "&" } else { "?" };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&format!("{url}{sep}options=-c%20search_path%3D{schema}"))
+            .await
+            .unwrap();
+        migrate::migrate_up(&pool, migrate::MigrationSource::Embedded)
+            .await
+            .unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        avalon_chain::mirror::insert_observation(
+            &pool,
+            &avalon_chain::mirror::ObservedSth {
+                source_url: "http://src.test:8080".into(),
+                network_id: "avalon-test".into(),
+                shard_id: "core".into(),
+                tree_size: 10,
+                root_hash: "0".repeat(64),
+                signature: "sig".into(),
+                signing_key_id: "key".into(),
+                created_at: now,
+                observed_at: now,
+            },
+        )
+        .await
+        .unwrap();
+
+        let source = libp2p::PeerId::random();
+        let mut state = state_with_pool(pool.clone());
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw("http://src.test:8080");
+        state
+            .peers
+            .upsert(bound_entry(&source, "http://src.test:8080".into()));
+        let wake = state.mirror_wake.clone();
+        let app = router(state, None);
+        let woken = |wake: &std::sync::Arc<tokio::sync::Notify>| {
+            let wake = wake.clone();
+            async move {
+                tokio::time::timeout(std::time::Duration::from_millis(100), wake.notified())
+                    .await
+                    .is_ok()
+            }
+        };
+        let note = |size: i64| serde_json::json!({"network_id": "avalon-test", "tree_size": size});
+        for size in [3, 10] {
+            let status = stream_post(&app, "/mirror/notify", source, note(size)).await;
+            assert_eq!(status, StatusCode::ACCEPTED, "{size}");
+            assert!(!woken(&wake).await, "tree size {size} woke the watcher");
+        }
+        let status = stream_post(&app, "/mirror/notify", source, note(11)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(
+            woken(&wake).await,
+            "a larger tree size did not wake the watcher"
+        );
+
+        pool.close().await;
+        let sql = format!("DROP SCHEMA IF EXISTS {schema} CASCADE");
+        sqlx::query(AssertSqlSafe(sql))
+            .execute(&admin)
+            .await
+            .unwrap();
     }
 }

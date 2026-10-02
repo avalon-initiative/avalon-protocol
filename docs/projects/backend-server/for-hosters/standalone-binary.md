@@ -448,12 +448,19 @@ from a peer it holds a bound entry for, within 60 seconds of its own clock, once
     sent time must be after 2024-01-01 and at most 5 minutes ahead of the node's clock (422).
     Each replica row records the key that inserted it (`replicated_by`); a repeated insert never
     overwrites a row, and a delete applies only to a row the same key inserted (404 otherwise).
-    Rows that predate the column record an empty key, so no peer can delete them.
+    Rows replicated before migration 0082 record an empty key, so no peer can delete them, and a
+    peer that rotates its identity key cannot delete the rows it inserted under the old one.
   - `/mirror/notify` is served only for a peer that is one of this node's configured mirror
     sources (`AVALON_MIRROR_PEERS`, or the network's seed nodes when unset): 403 for any other
     key, 400 for another network. The mirror watcher is woken only when the announced tree size
     is beyond what this node already observed from that source; a stale size is acknowledged
     (202) without waking it. Nothing in this route makes the node contact anyone.
+    The match is on the origin (scheme, host and port) of the URL the peer announced against the
+    configured source URL, so a source configured by hostname but announced by IP address (or the
+    reverse) is refused, and the watcher falls back to polling.
+  - Residuals of the standing-peer model: replica inserts are first-writer-wins, so a standing
+    peer can claim a message id before the originating node replicates it; and relayed events
+    carry no binding between the sending peer and the channel or conversation, nor a sent time.
 - A 403 for a claimed id means it has no bound entry, a 401 means the credential is bad; this
   reveals whether an id is a known node, which is not secret. The budget is a fixed one-minute
   window, so a key can burst to twice its rate across a minute boundary.

@@ -303,3 +303,33 @@ async fn a_notification_must_announce_more_than_the_source_has_already_shown() {
     assert!(exceeds_observed(&s.pool, &two, "net", 5).await.unwrap());
     s.drop().await;
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_guild_replica_keeps_the_first_signer() {
+    let s = Scratch::new("guild").await;
+    let channel = Uuid::new_v4();
+    let first = message(channel, "first");
+    store_event(
+        &s.pool,
+        "peer-a",
+        &ReplicationEvent::ChannelMessage(first.clone()),
+    )
+    .await
+    .unwrap();
+    let mut other = message(channel, "squatter");
+    other.id = first.id;
+    store_event(&s.pool, "peer-b", &ReplicationEvent::ChannelMessage(other))
+        .await
+        .unwrap();
+    assert_eq!(
+        replica_row(&s.pool, first.id).await,
+        ("first".into(), "peer-a".into(), false)
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM guild_messages_replica")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    s.drop().await;
+}

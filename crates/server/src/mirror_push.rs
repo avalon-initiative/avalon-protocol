@@ -193,7 +193,8 @@ pub async fn exceeds_observed(
 /// content" invariant. The signer must be one of this node's configured mirror sources (403),
 /// the network id must be this node's (400), and the announced tree size must exceed what this
 /// node has already observed from that source; only then is the mirror watcher woken. A stale
-/// size is acknowledged (202) without waking it. Nothing here starts outbound work itself.
+/// size is acknowledged (202) without waking it. A source matches by URL origin, so one
+/// configured by hostname but announced by IP (or the reverse) is refused and polling covers it. Nothing here starts outbound work itself.
 pub async fn notify(
     axum::extract::State(state): axum::extract::State<AppState>,
     crate::node_auth::AuthenticatedNode(signer): crate::node_auth::AuthenticatedNode,
@@ -274,5 +275,39 @@ mod tests {
         assert!(sources_of_signer(&peers, &sources, &other).is_empty());
         assert!(sources_of_signer(&peers, &sources, &unbound).is_empty());
         assert!(sources_of_signer(&peers, &sources, &libp2p::PeerId::random()).is_empty());
+    }
+
+    #[test]
+    fn a_source_matches_only_on_the_same_origin() {
+        let peers = crate::nodes::PeerTable::new();
+        let source_of = |announced: &str, configured: &str| {
+            let id = libp2p::PeerId::random();
+            let peers = crate::nodes::PeerTable::new();
+            peers.upsert(entry(&id, announced, true));
+            let sources = crate::settlement::ShardMirrorSources::from_raw(configured);
+            !sources_of_signer(&peers, &sources, &id).is_empty()
+        };
+        drop(peers);
+        // Userinfo and a default port are not part of the origin.
+        assert!(source_of(
+            "http://user:pw@src.test:8080",
+            "http://src.test:8080"
+        ));
+        assert!(source_of("http://src.test:80", "http://src.test"));
+        assert!(source_of("https://src.test:443", "https://src.test"));
+        // The scheme, the port and the host spelling all have to agree.
+        assert!(!source_of("https://src.test", "http://src.test"));
+        assert!(!source_of("http://src.test:8081", "http://src.test:8080"));
+        assert!(!source_of("http://src.test:8080", "http://src.test"));
+        assert!(!source_of("http://192.0.2.7:8080", "http://src.test:8080"));
+        assert!(!source_of("http://src.test:8080", "http://192.0.2.7:8080"));
+        // IPv6 hosts compare in their normalized form.
+        assert!(source_of(
+            "http://[::1]:8080",
+            "http://[0:0:0:0:0:0:0:1]:8080"
+        ));
+        assert!(!source_of("http://[::1]:8080", "http://[::2]:8080"));
+        // A p2p entry names no origin, so it is never a source.
+        assert!(!source_of("p2p://somepeer", "http://src.test"));
     }
 }

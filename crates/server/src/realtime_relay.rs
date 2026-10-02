@@ -308,6 +308,7 @@ pub fn check_relay(
 /// single-hop delivery). The caller is authenticated by
 /// [`crate::node_auth::require_node_auth`]; chat events are refused (403) for a scope this
 /// node has no local subscriber for, and an oversize message body (422).
+/// An event is not bound to its sending peer nor carries a sent time, so the sender is trusted for content.
 pub async fn relay_handler(
     State(state): State<AppState>,
     Json(event): Json<RelayEvent>,

@@ -338,7 +338,7 @@ impl Drop for LocalSubscriber {
             .registry
             .local
             .lock()
-            .expect("interest registry lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
         if let Some(n) = local.get_mut(&self.scope) {
             *n -= 1;
             if *n == 0 {
@@ -847,6 +847,32 @@ pub async fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scope_stays_subscribed_until_its_last_connection_drops() {
+        let (registry, _rx) = InterestRegistry::new();
+        let scope = InterestScope::Channel(Uuid::new_v4());
+        assert!(!registry.has_local_subscriber(scope));
+        let (a, b) = (registry.track_local(scope), registry.track_local(scope));
+        drop(a);
+        assert!(registry.has_local_subscriber(scope));
+        drop(b);
+        assert!(!registry.has_local_subscriber(scope));
+    }
+
+    #[test]
+    fn dropping_a_subscription_survives_a_poisoned_lock() {
+        let (registry, _rx) = InterestRegistry::new();
+        let scope = InterestScope::Channel(Uuid::new_v4());
+        let sub = registry.track_local(scope);
+        let r = registry.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = r.local.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        drop(sub);
+    }
 
     #[test]
     fn channel_and_conversation_keys_never_collide_for_the_same_uuid() {
