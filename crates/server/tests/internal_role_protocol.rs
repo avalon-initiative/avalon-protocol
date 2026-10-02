@@ -276,7 +276,6 @@ async fn remote_indexer_reports_a_clear_failure_when_the_role_is_killed() {
     // First: prove the process really is up before killing it — a failure
     // here means the process was never running, not that killing it works.
     let liveness_who = TestIdentity::new();
-    let liveness_identity = liveness_who.id;
     seed_identity(&pool, &liveness_who).await;
     remote_indexer
         .apply(&identity_created_event(&liveness_who, "pre-kill-liveness-check"))

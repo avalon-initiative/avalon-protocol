@@ -52,7 +52,6 @@ use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
-use uuid::Uuid;
 
 /// A fixed display name (not randomized) — `before_restart` and
 /// `after_restart` are separate `cargo test` invocations, run against a

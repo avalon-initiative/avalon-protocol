@@ -12,7 +12,6 @@ use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())

@@ -123,7 +123,7 @@ async fn register_identity_on_owner(
         avalon_protocol::identity_id::identity_created_signing_bytes_v2(
             &identity_id,
             &signing_key.verifying_key().to_bytes(),
-            &display_name,
+            display_name,
         );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 

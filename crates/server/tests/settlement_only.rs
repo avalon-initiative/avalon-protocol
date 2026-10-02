@@ -40,7 +40,6 @@ use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
-use uuid::Uuid;
 
 /// The Settlement-only node under test — the one this file's own
 /// acceptance criteria are about. `AVALON_SETTLEMENT_ONLY_SERVER_URL` to

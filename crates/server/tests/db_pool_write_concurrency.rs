@@ -23,7 +23,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 /// Comfortably above realistic queuing delay for a handful of writes on a
 /// pool of 2-3 connections, and comfortably below the 30s acquire timeout
