@@ -263,6 +263,8 @@ pub struct NodeClient {
     timeout: Option<Duration>,
     /// Policy a peer-table URL must pass before a stream failure falls over to it.
     policy: Option<OutboundPolicy>,
+    /// Set by [`NodeClient::guarded`]: http(s) dials are held to the policy at connect time.
+    guarded: bool,
 }
 
 impl Default for NodeClient {
@@ -279,6 +281,7 @@ impl From<reqwest::Client> for NodeClient {
             signer: None,
             timeout: None,
             policy: None,
+            guarded: false,
         }
     }
 }
@@ -298,6 +301,17 @@ impl NodeClient {
     pub fn peer() -> Self {
         Self::from(crate::outbound_policy::peer_client())
             .with_timeout(crate::outbound_policy::PEER_REQUEST_TIMEOUT)
+    }
+
+    /// [`Self::peer`] for addresses read from lookups: every http(s) dial must pass the
+    /// environment's outbound policy, checked when the connection is made.
+    pub fn guarded() -> Self {
+        let policy = OutboundPolicy::from_env();
+        let mut client = Self::from(crate::outbound_policy::guarded_peer_client(policy))
+            .with_timeout(crate::outbound_policy::PEER_REQUEST_TIMEOUT)
+            .with_policy(policy);
+        client.guarded = true;
+        client
     }
 
     /// Wraps `http`, giving stream requests the same `timeout` it enforces.
@@ -701,6 +715,11 @@ impl NodeRequestBuilder {
                     }
                     _ => {
                         let url = route.http.as_deref().unwrap_or(&self.url);
+                        if let Some(policy) = self.client.policy.filter(|_| self.client.guarded) {
+                            policy
+                                .check_url_literal(url)
+                                .map_err(|e| NodeHttpError::Invalid(e.to_string()))?;
+                        }
                         let rb = self.http_builder_with(&self.client.http, url, false);
                         self.sign_http(rb, route, url)?
                     }

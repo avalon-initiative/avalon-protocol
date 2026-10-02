@@ -118,7 +118,7 @@ fn refusal_log() -> &'static crate::log_throttle::LogThrottle {
 
 fn relay_client() -> &'static crate::node_http::NodeClient {
     static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
-    CLIENT.get_or_init(crate::node_http::NodeClient::new)
+    CLIENT.get_or_init(crate::node_http::NodeClient::guarded)
 }
 
 /// Every realtime-capable peer's base URL from #362's peer table — #539's

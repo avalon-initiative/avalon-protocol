@@ -38,6 +38,41 @@ pub fn peer_client() -> reqwest::Client {
         .expect("static reqwest client configuration is valid")
 }
 
+/// Resolver that refuses a host when any address it resolves to fails the policy, so the check
+/// runs on the answer the connection actually uses.
+struct GuardedResolver(OutboundPolicy);
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let policy = self.0;
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .collect();
+            if addrs.is_empty() {
+                return Err(PolicyError::Resolve.into());
+            }
+            for a in &addrs {
+                policy.check_ip(a.ip())?;
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// [`peer_client`] whose hostname lookups are checked against `policy` at connect time. IP
+/// literals skip the resolver, so callers check those with [`OutboundPolicy::check_url_literal`].
+pub fn guarded_peer_client(policy: OutboundPolicy) -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .connect_timeout(PEER_CONNECT_TIMEOUT)
+        .timeout(PEER_REQUEST_TIMEOUT)
+        .dns_resolver(std::sync::Arc::new(GuardedResolver(policy)))
+        .build()
+        .expect("static reqwest client configuration is valid")
+}
+
 /// Why a URL or address was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
@@ -61,6 +96,8 @@ impl std::fmt::Display for PolicyError {
         }
     }
 }
+
+impl std::error::Error for PolicyError {}
 
 /// Whether private and loopback addresses may be contacted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +259,20 @@ impl OutboundPolicy {
             return Err(PolicyError::Forbidden(ip.to_canonical()));
         }
         Ok(())
+    }
+
+    /// Refuses a URL whose host is an IP literal the policy forbids; a hostname passes, since
+    /// the connect-time resolver of [`guarded_peer_client`] checks its addresses.
+    pub fn check_url_literal(&self, url: &str) -> Result<(), PolicyError> {
+        match Url::parse(url.trim())
+            .map_err(|_| PolicyError::InvalidUrl)?
+            .host()
+        {
+            Some(Host::Ipv4(ip)) => self.check_ip(IpAddr::V4(ip)),
+            Some(Host::Ipv6(ip)) => self.check_ip(IpAddr::V6(ip)),
+            Some(Host::Domain(_)) => Ok(()),
+            None => Err(PolicyError::InvalidUrl),
+        }
     }
 
     /// Parses `base_url` without resolving anything.

@@ -69,7 +69,7 @@ impl MirrorPushConfig {
             dht_commands,
             redis_fast_path,
             own_base_url,
-            client: crate::node_http::NodeClient::peer(),
+            client: crate::node_http::NodeClient::guarded(),
         }
     }
 }
