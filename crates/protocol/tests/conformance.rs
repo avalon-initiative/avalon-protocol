@@ -736,3 +736,150 @@ fn self_certifying_tree_head_matches_shared_vectors() {
         );
     }
 }
+
+fn assert_identity_signing_vectors(file: &str, build: impl Fn(&Value, &Value) -> Vec<u8>) {
+    use avalon_protocol::ed25519_key::verify_strict_signature;
+
+    let doc = load(file);
+    let key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(key.verifying_key().as_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap()
+    );
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let bytes = build(&doc, &v["input"]);
+        let expected = &v["expected"];
+        assert_eq!(
+            String::from_utf8(bytes.clone()).unwrap(),
+            expected["signingBytesUtf8"].as_str().unwrap(),
+            "{name}: utf8"
+        );
+        assert_eq!(
+            hex::encode(&bytes),
+            expected["signingBytesHex"].as_str().unwrap(),
+            "{name}: hex"
+        );
+        let sig_hex = expected["signatureHex"].as_str().unwrap();
+        assert_signature_matches(name, &key, &bytes, sig_hex);
+        let sig: [u8; 64] = hex::decode(sig_hex).unwrap().try_into().unwrap();
+        assert!(verify_strict_signature(&key.verifying_key(), &bytes, &sig));
+    }
+}
+
+fn identity_id_of(
+    v: &Value,
+    field: &str,
+) -> avalon_protocol::identity_id::SelfCertifyingIdentityId {
+    v[field].as_str().unwrap().parse().unwrap()
+}
+
+#[test]
+fn identity_id_matches_shared_vectors() {
+    use avalon_protocol::ed25519_key::parse_ed25519_public_key_hex;
+    use avalon_protocol::identity_id::{
+        derive_identity_id, SelfCertifyingIdentityId, IDENTITY_ID_DOMAIN_TAG,
+    };
+    use avalon_protocol::shard_identity::derive_self_certifying_id;
+
+    let doc = load("identity-id.json");
+    assert_eq!(
+        hex::encode(IDENTITY_ID_DOMAIN_TAG),
+        doc["domainTagHex"].as_str().unwrap()
+    );
+    assert_eq!(
+        IDENTITY_ID_DOMAIN_TAG,
+        doc["domainTagUtf8"].as_str().unwrap().as_bytes()
+    );
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let (input, expected) = (&v["input"], &v["expected"]);
+        match v["kind"].as_str().unwrap() {
+            "derive" => {
+                let key = signing_key_from_seed_hex(input["seedHex"].as_str().unwrap());
+                let pk = key.verifying_key().to_bytes();
+                assert_eq!(hex::encode(pk), input["publicKeyHex"].as_str().unwrap());
+                assert_eq!(
+                    hex::encode([IDENTITY_ID_DOMAIN_TAG, &pk].concat()),
+                    expected["preimageHex"].as_str().unwrap(),
+                    "{name}: preimage"
+                );
+                assert_eq!(
+                    derive_identity_id(&pk).as_str(),
+                    expected["identityId"].as_str().unwrap(),
+                    "{name}"
+                );
+            }
+            "parse" => {
+                let parsed = SelfCertifyingIdentityId::parse(input["identityId"].as_str().unwrap());
+                assert_eq!(
+                    parsed.is_ok(),
+                    expected["valid"].as_bool().unwrap(),
+                    "{name}"
+                );
+            }
+            "key_acceptability" => {
+                let key = parse_ed25519_public_key_hex(input["publicKeyHex"].as_str().unwrap());
+                assert_eq!(
+                    key.is_some(),
+                    expected["acceptable"].as_bool().unwrap(),
+                    "{name}"
+                );
+            }
+            "distinct_from_shard_id" => {
+                let key = verifying_key_from_hex(input["publicKeyHex"].as_str().unwrap());
+                let id = derive_identity_id(key.as_bytes());
+                let shard = derive_self_certifying_id(&key);
+                assert_eq!(id.as_str(), expected["identityId"].as_str().unwrap());
+                assert_eq!(shard, expected["nodeShardId"].as_str().unwrap());
+                assert_ne!(shard.strip_prefix("node:"), Some(id.as_str()));
+                assert!(!expected["equal"].as_bool().unwrap());
+            }
+            other => panic!("{name}: unknown vector kind {other}"),
+        }
+    }
+}
+
+#[test]
+fn identity_created_signing_matches_shared_vectors() {
+    use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+    assert_identity_signing_vectors("identity-created-signing.json", |doc, input| {
+        let pk = verifying_key_from_hex(doc["signingPublicKeyHex"].as_str().unwrap());
+        let id = identity_id_of(doc, "identityId");
+        assert!(id.matches_key(pk.as_bytes()));
+        identity_created_signing_bytes_v2(
+            &id,
+            pk.as_bytes(),
+            input["displayName"].as_str().unwrap(),
+        )
+    });
+}
+
+#[test]
+fn device_grant_approval_matches_shared_vectors() {
+    use avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2;
+    assert_identity_signing_vectors("device-grant-approval.json", |_, input| {
+        let requested = verifying_key_from_hex(input["requestedPublicKeyHex"].as_str().unwrap());
+        device_grant_approval_signing_bytes_v2(
+            parse_uuid(input, "grantId"),
+            &identity_id_of(input, "identityId"),
+            requested.as_bytes(),
+        )
+    });
+}
+
+#[test]
+fn signing_key_revoked_matches_shared_vectors() {
+    use avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2;
+    assert_identity_signing_vectors("signing-key-revoked.json", |_, input| {
+        signing_key_revoked_signing_bytes_v2(
+            &identity_id_of(input, "identityId"),
+            input["signingKeyId"].as_str().unwrap(),
+            input["revokedBySigningKeyId"].as_str().unwrap(),
+        )
+    });
+}

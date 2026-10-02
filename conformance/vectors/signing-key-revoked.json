@@ -1,0 +1,28 @@
+{
+  "$schema": "./SCHEMA.md#signing-key-revoked",
+  "description": "Signing-key revocation signing bytes (avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2): UTF-8 of 'avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}'. The signature is Ed25519 by the revoking (already-active) key over the bytes. Key ids are opaque strings containing no ':'.",
+  "generation": "Deterministic: signingKeySeedHex is the Ed25519 seed of the revoking key.",
+  "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
+  "vectors": [
+    {
+      "expected": {
+        "signatureHex": "3d33b297d8cac87b6901bcd4b4e6a0156e3d1ba0820143857214641903ed4e2942c79e26f50c9c00dff380b24a97658365ba0b2d979b29ef3f7599a2f8b3f105",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e7369676e696e675f6b65795f7265766f6b65643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a6b65792d313a6b65792d32",
+        "signingBytesUtf8": "avalon:identity.signing_key_revoked:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:key-1:key-2"
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "revokedBySigningKeyId": "key-2",
+        "signingKeyId": "key-1"
+      },
+      "name": "key-1 revoked by key-2"
+    }
+  ]
+}

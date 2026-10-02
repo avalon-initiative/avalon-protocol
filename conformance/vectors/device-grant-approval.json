@@ -1,0 +1,30 @@
+{
+  "$schema": "./SCHEMA.md#device-grant-approval",
+  "description": "Device grant approval signing bytes (avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2): UTF-8 of 'avalon:device_grant.approved:v2:{grant_id}:{identity_id}:{requested_public_key_hex}'. grant_id is the grant's UUID text; identity_id is the 64-hex self-certifying id; the requested device key is lowercase HEX in the bytes and standard BASE64 on the wire. The signature is Ed25519 by an already-active identity key (the approver) over the bytes.",
+  "generation": "Deterministic: the approver is the identity of signingKeySeedHex; the requested key is the public key of requestedKeySeedHex.",
+  "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "requestedKeySeedHex": "5555555555555555555555555555555555555555555555555555555555555555",
+  "requestedPublicKeyHex": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242",
+  "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
+  "vectors": [
+    {
+      "expected": {
+        "signatureHex": "2d0d568a9a071708c9fc72b62ebb0397db879b6657dab81c489112b311d9eac43dde9410128a06a4003a74609987b31df34ec992990e3a499655c6fb4ab22301",
+        "signingBytesHex": "6176616c6f6e3a6465766963655f6772616e742e617070726f7665643a76323a37633965363637392d373432352d343064652d393434622d6530376663316639306165373a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a63363832323633376337643331306563353736323762653030626132353964323533373439663461616636343434373063666662653533613335663733323432",
+        "signingBytesUtf8": "avalon:device_grant.approved:v2:7c9e6679-7425-40de-944b-e07fc1f90ae7:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242"
+      },
+      "input": {
+        "grantId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "requestedPublicKeyHex": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242"
+      },
+      "name": "approval of a requested device key"
+    }
+  ]
+}
