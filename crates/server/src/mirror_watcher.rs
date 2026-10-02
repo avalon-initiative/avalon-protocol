@@ -4265,7 +4265,7 @@ mod tests {
             3,
             "identity.passkey_revoked",
             id,
-            Some(serde_json::json!({ "passkey_id": passkey_id })),
+            Some(serde_json::json!({ "passkey_id": passkey_id, "identity_id": id })),
         );
         let mut blocked = true;
         for e in [&created, &registered, &revoked] {
