@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota};
+use avalon_protocol::ids::IdentityId;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -29,7 +30,7 @@ pub(crate) fn principal_rate_limit_per_minute_from_env() -> u64 {
 /// integrator id can never share a bucket.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Principal {
-    Identity(Uuid),
+    Identity(IdentityId),
     Integrator(Uuid),
 }
 
@@ -110,8 +111,8 @@ mod tests {
     #[tokio::test]
     async fn principals_have_independent_budgets() {
         let limiter = PrincipalLimiter::with_limit(None, 2);
-        let a = Principal::Identity(Uuid::new_v4());
-        let b = Principal::Identity(Uuid::new_v4());
+        let a = Principal::Identity(IdentityId::random_for_tests());
+        let b = Principal::Identity(IdentityId::random_for_tests());
         assert!(limiter.check(a).await.is_ok());
         assert!(limiter.check(a).await.is_ok());
         assert!(limiter.check(a).await.is_err());
@@ -121,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn identity_and_integrator_ids_do_not_share_a_bucket() {
         let limiter = PrincipalLimiter::with_limit(None, 1);
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         assert!(limiter.check(Principal::Identity(id)).await.is_ok());
         assert!(limiter.check(Principal::Integrator(id)).await.is_ok());
         assert!(limiter.check(Principal::Identity(id)).await.is_err());

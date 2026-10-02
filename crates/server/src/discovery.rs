@@ -4,6 +4,7 @@
 //! discoverable-preference default, why `discover_people` never takes a
 //! query parameter, and the shared block/friend-exclusion logic.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_indexer::projections::friendships as friendship_reads;
@@ -29,9 +30,9 @@ use crate::state::AppState;
 /// array (which is valid but pointless here).
 async fn friends_of_friends(
     state: &AppState,
-    friend_ids: &HashSet<Uuid>,
-) -> Result<HashSet<Uuid>, AppError> {
-    let friend_ids: Vec<Uuid> = friend_ids.iter().copied().collect();
+    friend_ids: &HashSet<IdentityId>,
+) -> Result<HashSet<IdentityId>, AppError> {
+    let friend_ids: Vec<IdentityId> = friend_ids.iter().copied().collect();
     Ok(friendship_reads::friends_of_any(&state.pool, &friend_ids).await?)
 }
 
@@ -40,8 +41,8 @@ async fn friends_of_friends(
 /// reused by `conversations::create_conversation`.
 pub(crate) async fn mutual_guild_members(
     state: &AppState,
-    caller: Uuid,
-) -> Result<HashSet<Uuid>, AppError> {
+    caller: IdentityId,
+) -> Result<HashSet<IdentityId>, AppError> {
     Ok(guild_rosters::mutual_members(&state.pool, caller).await?)
 }
 
@@ -52,24 +53,24 @@ pub(crate) async fn mutual_guild_members(
 /// collapses to a single entry via the `HashSet` union. Sorted so the
 /// response is stable rather than depending on `HashSet` iteration order.
 pub(crate) fn compute_candidates(
-    caller: Uuid,
-    friends_of_friends: HashSet<Uuid>,
-    mutual_guild: HashSet<Uuid>,
-    existing_friends: &HashSet<Uuid>,
-    blocked_partners: &HashSet<Uuid>,
-) -> Vec<Uuid> {
-    let mut candidates: HashSet<Uuid> = friends_of_friends;
+    caller: IdentityId,
+    friends_of_friends: HashSet<IdentityId>,
+    mutual_guild: HashSet<IdentityId>,
+    existing_friends: &HashSet<IdentityId>,
+    blocked_partners: &HashSet<IdentityId>,
+) -> Vec<IdentityId> {
+    let mut candidates: HashSet<IdentityId> = friends_of_friends;
     candidates.extend(mutual_guild);
     candidates.remove(&caller);
     candidates.retain(|id| !existing_friends.contains(id) && !blocked_partners.contains(id));
-    let mut candidates: Vec<Uuid> = candidates.into_iter().collect();
+    let mut candidates: Vec<IdentityId> = candidates.into_iter().collect();
     candidates.sort();
     candidates
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct DiscoveryCandidate {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -121,7 +122,7 @@ pub async fn discover_people(
 /// reflects it, satisfying the "no grace period" invariant.
 pub(crate) async fn set_discoverable(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     discoverable: bool,
 ) -> Result<(), AppError> {
     sqlx::query(
@@ -160,7 +161,7 @@ pub struct SearchIdentitiesQuery {
 
 #[derive(Serialize, ToSchema)]
 pub struct SearchResultIdentity {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: String,
     pub avatar_url: Option<String>,
 }
@@ -187,8 +188,8 @@ pub struct SearchIdentitiesResponse {
 /// case-insensitively against `display_name` — `display_name`
 /// is the handle now, no separate discriminator suffix to also match.
 fn build_search_query(
-    caller: Uuid,
-    blocked: &[Uuid],
+    caller: IdentityId,
+    blocked: &[IdentityId],
     q: &str,
     limit: i64,
 ) -> QueryBuilder<Postgres> {
@@ -242,7 +243,7 @@ pub async fn search_identities(
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .clamp(1, MAX_SEARCH_LIMIT);
 
-    let blocked: Vec<Uuid> = crate::blocks::block_partners(&state, caller)
+    let blocked: Vec<IdentityId> = crate::blocks::block_partners(&state, caller)
         .await?
         .into_iter()
         .collect();
@@ -273,9 +274,9 @@ mod tests {
 
     #[test]
     fn excludes_the_caller_even_if_they_appear_as_a_candidate() {
-        let caller = Uuid::new_v4();
-        let other = Uuid::new_v4();
-        let fof: HashSet<Uuid> = [caller, other].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let other = IdentityId::random_for_tests();
+        let fof: HashSet<IdentityId> = [caller, other].into_iter().collect();
         let result = compute_candidates(
             caller,
             fof,
@@ -288,11 +289,11 @@ mod tests {
 
     #[test]
     fn excludes_an_existing_friend() {
-        let caller = Uuid::new_v4();
-        let friend = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
-        let fof: HashSet<Uuid> = [friend, stranger].into_iter().collect();
-        let existing_friends: HashSet<Uuid> = [friend].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let friend = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
+        let fof: HashSet<IdentityId> = [friend, stranger].into_iter().collect();
+        let existing_friends: HashSet<IdentityId> = [friend].into_iter().collect();
         let mut result = compute_candidates(
             caller,
             fof,
@@ -306,16 +307,16 @@ mod tests {
 
     #[test]
     fn excludes_a_blocked_identity_regardless_of_block_direction() {
-        let caller = Uuid::new_v4();
-        let blocked_by_caller = Uuid::new_v4();
-        let blocked_caller = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
-        let mutual_guild: HashSet<Uuid> = [blocked_by_caller, blocked_caller, stranger]
+        let caller = IdentityId::random_for_tests();
+        let blocked_by_caller = IdentityId::random_for_tests();
+        let blocked_caller = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
+        let mutual_guild: HashSet<IdentityId> = [blocked_by_caller, blocked_caller, stranger]
             .into_iter()
             .collect();
         // block_partners is direction-agnostic by construction (see
         // blocks::block_partners) — both ids land in the same set here.
-        let blocked_partners: HashSet<Uuid> =
+        let blocked_partners: HashSet<IdentityId> =
             [blocked_by_caller, blocked_caller].into_iter().collect();
         let mut result = compute_candidates(
             caller,
@@ -330,10 +331,10 @@ mod tests {
 
     #[test]
     fn a_candidate_from_both_sources_appears_exactly_once() {
-        let caller = Uuid::new_v4();
-        let both = Uuid::new_v4();
-        let fof: HashSet<Uuid> = [both].into_iter().collect();
-        let mutual_guild: HashSet<Uuid> = [both].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let both = IdentityId::random_for_tests();
+        let fof: HashSet<IdentityId> = [both].into_iter().collect();
+        let mutual_guild: HashSet<IdentityId> = [both].into_iter().collect();
         let result =
             compute_candidates(caller, fof, mutual_guild, &HashSet::new(), &HashSet::new());
         assert_eq!(result, vec![both]);
@@ -341,7 +342,7 @@ mod tests {
 
     #[test]
     fn no_candidates_yields_an_empty_list() {
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let result = compute_candidates(
             caller,
             HashSet::new(),
@@ -381,14 +382,14 @@ mod tests {
 
     #[test]
     fn search_query_only_ever_matches_discoverable_true() {
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let builder = build_search_query(caller, &[], "alice", 20);
         assert!(builder.sql().as_str().contains("dp.discoverable = true"));
     }
 
     #[test]
     fn search_query_excludes_the_caller() {
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let builder = build_search_query(caller, &[], "alice", 20);
         assert!(builder.sql().as_str().contains("p.identity_id <> "));
     }
@@ -399,15 +400,15 @@ mod tests {
         // direction-agnostic (both "caller blocked them" and "they blocked
         // caller" land in the same set) — this only has to check that the
         // set, whatever it contains, is actually applied as an exclusion.
-        let caller = Uuid::new_v4();
-        let blocked = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let caller = IdentityId::random_for_tests();
+        let blocked = vec![IdentityId::random_for_tests(), IdentityId::random_for_tests()];
         let builder = build_search_query(caller, &blocked, "alice", 20);
         assert!(builder.sql().as_str().contains("p.identity_id <> ALL("));
     }
 
     #[test]
     fn search_query_matches_display_name() {
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let builder = build_search_query(caller, &[], "alice", 20);
         let sql_str = builder.sql();
         let sql = sql_str.as_str();
@@ -420,7 +421,7 @@ mod tests {
         // as an ILIKE wildcard — reuses `guilds::escape_like`, already unit
         // tested in `guilds.rs`; this just checks `build_search_query`
         // actually calls through it rather than binding the raw term.
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let mut builder = build_search_query(caller, &[], "100%_off", 20);
         // The escaped like-pattern is one of the bound parameters, not
         // embedded in the SQL text itself (it's parameter-bound, not

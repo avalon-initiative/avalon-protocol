@@ -5,6 +5,7 @@
 //! configure/request/approve/finalize state machine and its abuse-
 //! resistance measures.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_protocol::event_payloads::{
@@ -68,7 +69,7 @@ fn recovery_delay_hours_from_env() -> i64 {
         .unwrap_or(DEFAULT_RECOVERY_DELAY_HOURS)
 }
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -137,9 +138,9 @@ pub(crate) fn guard_can_finalize(
 /// exactly the owner's own recourse, via the guardian-set endpoints below,
 /// not a reason that former guardian should retain a cancel button).
 pub(crate) fn guard_cancel_authority(
-    caller: Uuid,
-    identity_id: Uuid,
-    current_guardians: &HashSet<Uuid>,
+    caller: IdentityId,
+    identity_id: IdentityId,
+    current_guardians: &HashSet<IdentityId>,
 ) -> Result<(), AppError> {
     if caller == identity_id || current_guardians.contains(&caller) {
         Ok(())
@@ -165,7 +166,7 @@ pub(crate) fn guard_rate_limit(recent_count: i64) -> Result<(), AppError> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetGuardiansRequest {
-    pub guardian_ids: Vec<Uuid>,
+    pub guardian_ids: Vec<IdentityId>,
     pub threshold: i32,
     /// #697/#698: only required when this write *removes* an existing
     /// guardian or *raises* the threshold — see the conditional check in
@@ -177,7 +178,7 @@ pub struct SetGuardiansRequest {
 
 #[derive(Serialize, ToSchema)]
 pub struct GuardianSettingsResponse {
-    pub guardian_ids: Vec<Uuid>,
+    pub guardian_ids: Vec<IdentityId>,
     pub threshold: i32,
     #[serde(with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = "date-time")]
@@ -209,7 +210,7 @@ pub async fn set_guardians(
 ) -> Result<Json<GuardianSettingsResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let mut unique_guardians: Vec<Uuid> = body.guardian_ids.clone();
+    let mut unique_guardians: Vec<IdentityId> = body.guardian_ids.clone();
     unique_guardians.sort();
     unique_guardians.dedup();
     if unique_guardians.len() != body.guardian_ids.len() {
@@ -229,7 +230,7 @@ pub async fn set_guardians(
     // the owner's own recovery path — adding guardians or lowering the
     // threshold only ever makes recovery easier, so those stay ambient.
     let previous = fetch_guardian_settings(&state, identity_id).await?;
-    let previous_guardian_ids: HashSet<Uuid> = previous.guardian_ids.iter().copied().collect();
+    let previous_guardian_ids: HashSet<IdentityId> = previous.guardian_ids.iter().copied().collect();
     let removes_a_guardian = !previous_guardian_ids
         .iter()
         .all(|g| unique_guardians.contains(g));
@@ -241,7 +242,7 @@ pub async fn set_guardians(
                 &identity_id.to_string(),
                 &unique_guardians
                     .iter()
-                    .map(Uuid::to_string)
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(","),
                 &body.threshold.to_string(),
@@ -335,7 +336,7 @@ pub async fn get_guardians(
 
 async fn fetch_guardian_settings(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<GuardianSettingsResponse, AppError> {
     let guardian_rows = sqlx::query(
         "SELECT guardian_identity_id FROM recovery_guardians WHERE identity_id = $1 ORDER BY added_at",
@@ -368,7 +369,7 @@ async fn fetch_guardian_settings(
 
 #[derive(Serialize, ToSchema)]
 pub struct GuardianOfSummary {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -429,13 +430,13 @@ pub async fn guardian_of(
     delete,
     path = "/me/recovery/guardian-of/{identity_id}",
     tag = "recovery",
-    params(("identity_id" = Uuid, Path)),
+    params(("identity_id" = IdentityId, Path)),
     responses((status = 200, description = "Resigned as guardian")),
 )]
 pub async fn resign_guardian(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(identity_id): Path<Uuid>,
+    Path(identity_id): Path<IdentityId>,
 ) -> Result<Json<()>, AppError> {
     let caller = authenticate(&state, &headers).await?;
 
@@ -476,8 +477,8 @@ pub async fn resign_guardian(
 
 async fn current_guardian_set(
     state: &AppState,
-    identity_id: Uuid,
-) -> Result<HashSet<Uuid>, AppError> {
+    identity_id: IdentityId,
+) -> Result<HashSet<IdentityId>, AppError> {
     let rows =
         sqlx::query("SELECT guardian_identity_id FROM recovery_guardians WHERE identity_id = $1")
             .bind(identity_id)
@@ -496,14 +497,14 @@ async fn current_guardian_set(
 
 #[derive(Serialize, Deserialize)]
 struct RecoveryStartCeremonyState {
-    identity_id: Uuid,
+    identity_id: IdentityId,
     device_label: Option<String>,
     webauthn_state: PasskeyRegistration,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct RecoveryStartRequest {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub device_label: Option<String>,
 }
 
@@ -514,7 +515,7 @@ pub struct RecoveryStartResponse {
     pub challenge: CreationChallengeResponse,
 }
 
-async fn recent_request_count(state: &AppState, identity_id: Uuid) -> Result<i64, AppError> {
+async fn recent_request_count(state: &AppState, identity_id: IdentityId) -> Result<i64, AppError> {
     let window_start = OffsetDateTime::now_utc() - time::Duration::hours(RATE_LIMIT_WINDOW_HOURS);
     let row = sqlx::query(
         "SELECT COUNT(*) AS count FROM recovery_requests WHERE identity_id = $1 AND requested_at >= $2",
@@ -592,7 +593,7 @@ pub async fn start_request(
     let (challenge, webauthn_state) = state
         .webauthn
         .start_passkey_registration(
-            body.identity_id,
+            body.identity_id.webauthn_user_handle(),
             &body.identity_id.to_string(),
             &format!("{} (recovery)", body.identity_id),
             Some(exclude_credentials),
@@ -633,7 +634,7 @@ pub struct RecoveryFinishRequest {
 #[derive(Serialize, ToSchema)]
 pub struct RecoveryRequestResponse {
     pub id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub status: String,
     pub threshold: i32,
     pub approvals_count: i64,
@@ -774,7 +775,7 @@ pub async fn finish_request(
 // ---------------------------------------------------------------------
 
 struct RequestRow {
-    identity_id: Uuid,
+    identity_id: IdentityId,
     status: String,
     threshold_at_request: i32,
     requested_at: OffsetDateTime,
@@ -1193,7 +1194,7 @@ pub async fn get_request(
 )]
 pub async fn identity_recovery_status(
     State(state): State<AppState>,
-    Path(identity_id): Path<Uuid>,
+    Path(identity_id): Path<IdentityId>,
 ) -> Result<Json<Option<RecoveryRequestResponse>>, AppError> {
     let row = sqlx::query(
         "SELECT id FROM recovery_requests WHERE identity_id = $1 AND status IN ('pending_approvals', 'delay')",
@@ -1408,15 +1409,15 @@ mod tests {
 
     #[test]
     fn the_owner_can_always_cancel_their_own_recovery() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let guardians = HashSet::new();
         assert!(guard_cancel_authority(identity_id, identity_id, &guardians).is_ok());
     }
 
     #[test]
     fn a_current_guardian_can_cancel() {
-        let identity_id = Uuid::new_v4();
-        let guardian = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
+        let guardian = IdentityId::random_for_tests();
         let mut guardians = HashSet::new();
         guardians.insert(guardian);
         assert!(guard_cancel_authority(guardian, identity_id, &guardians).is_ok());
@@ -1424,8 +1425,8 @@ mod tests {
 
     #[test]
     fn a_bystander_cannot_cancel() {
-        let identity_id = Uuid::new_v4();
-        let bystander = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
+        let bystander = IdentityId::random_for_tests();
         let guardians = HashSet::new();
         assert!(matches!(
             guard_cancel_authority(bystander, identity_id, &guardians),
@@ -1435,8 +1436,8 @@ mod tests {
 
     #[test]
     fn a_removed_former_guardian_cannot_cancel() {
-        let identity_id = Uuid::new_v4();
-        let former_guardian = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
+        let former_guardian = IdentityId::random_for_tests();
         // Not in the *current* set — simulates having been removed since
         // the recovery started.
         let guardians = HashSet::new();

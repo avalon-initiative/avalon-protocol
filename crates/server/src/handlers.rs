@@ -18,14 +18,15 @@
 use avalon_indexer::projections::profiles as profile_reads;
 use avalon_protocol::event_payloads::{
     IdentityCreatedPayload, IdentityPasskeyRegisteredPayload, IdentitySigningKeyAddedPayload,
-    ProfileUpdatedPayload,
+    ProfileUpdatedPayload, SIGNING_KEY_KIND_INCEPTION,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity::{
     Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_LINKS, MAX_LINK_LEN, MAX_LOCATION_LEN,
     MAX_PRONOUNS_LEN, MAX_STATUS_LEN, MAX_TIMEZONE_LEN,
 };
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+use avalon_protocol::ids::{GlobalId, IdentityId};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -59,7 +60,10 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
 /// identity it belongs to. A missing, unknown, or expired token is always
 /// `AppError::Unauthorized` — never distinguished in the response, so a
 /// caller can't probe for which tokens once existed.
-pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Uuid, AppError> {
+pub(crate) async fn authenticate(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<IdentityId, AppError> {
     authenticate_token(state, bearer_token(headers)?).await
 }
 
@@ -76,8 +80,11 @@ pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Resul
 /// instead of an opaque `sessions`-table bearer token — additive, not a
 /// replacement; every existing caller of [`authenticate`]/[`authenticate_token`]
 /// gets continuation-token support for free, with no per-route changes,
-/// since both credential kinds resolve to the same `Uuid` return type.
-pub(crate) async fn authenticate_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
+/// since both credential kinds resolve to the same `IdentityId` return type.
+pub(crate) async fn authenticate_token(
+    state: &AppState,
+    token: &str,
+) -> Result<IdentityId, AppError> {
     let identity_id = resolve_token(state, token).await?;
     state
         .principal_limiter
@@ -86,7 +93,7 @@ pub(crate) async fn authenticate_token(state: &AppState, token: &str) -> Result<
     Ok(identity_id)
 }
 
-async fn resolve_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
+async fn resolve_token(state: &AppState, token: &str) -> Result<IdentityId, AppError> {
     if let Some(body) = token.strip_prefix(avalon_protocol::continuation::WIRE_PREFIX) {
         return crate::continuation::verify(state, body).await;
     }
@@ -104,14 +111,21 @@ async fn resolve_token(state: &AppState, token: &str) -> Result<Uuid, AppError> 
     Ok(row.try_get("identity_id")?)
 }
 
-/// The exact bytes an `identity.created` claim's Ed25519 signature covers —
-/// deliberately a small, explicit, versioned format rather than the full
-/// `ProtocolEvent` envelope: `id`/`timestamp` are server-assigned metadata,
-/// not something the identity itself is attesting to, so they're never part
-/// of what gets signed. Both the client (signing) and the server
-/// (verifying) must construct this identically.
-fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<u8> {
-    format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
+/// Decodes the base64 inception key and applies the key-acceptability policy.
+fn parse_inception_key(base64_key: &str) -> Result<[u8; 32], AppError> {
+    let bytes: [u8; 32] = BASE64
+        .decode(base64_key)
+        .ok()
+        .and_then(|raw| raw.try_into().ok())
+        .ok_or(AppError::InvalidIdentityId)?;
+    avalon_protocol::ed25519_key::parse_ed25519_public_key(&bytes)
+        .ok_or(AppError::InvalidIdentityId)?;
+    Ok(bytes)
+}
+
+/// Whether `name` has the exact shape of an identity id, which a display name must never imitate.
+pub(crate) fn display_name_mimics_identity_id(name: &str) -> bool {
+    IdentityId::parse(name).is_ok()
 }
 
 /// Ceremony state persisted between `register/start` and `register/finish`
@@ -120,17 +134,21 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
 /// `finish` doesn't need the client to resend them.
 #[derive(Serialize, Deserialize)]
 struct RegistrationCeremonyState {
-    identity_id: Uuid,
+    identity_id: IdentityId,
+    /// The inception public key the id was derived from.
+    public_key: [u8; 32],
     display_name: String,
     webauthn_state: PasskeyRegistration,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct RegisterStartRequest {
-    /// Client-chosen, not server-assigned — identity is a wallet its holder
-    /// creates themselves. Must also become the WebAuthn user handle, which
-    /// is why it has to be decided here rather than at `finish`.
-    pub identity_id: Uuid,
+    /// Lowercase hex SHA-256 of the domain tag and `event_signing_public_key`; the server
+    /// recomputes it and rejects a mismatch.
+    #[schema(value_type = IdentityId)]
+    pub identity_id: String,
+    /// Base64-encoded raw Ed25519 inception public key, the one the identity id is derived from.
+    pub event_signing_public_key: String,
     pub display_name: String,
 }
 
@@ -150,13 +168,26 @@ pub struct RegisterStartResponse {
     path = "/identities/register/start",
     tag = "identity",
     request_body = RegisterStartRequest,
-    responses((status = 200, description = "The resulting register start", body = RegisterStartResponse)),
+    responses(
+        (status = 200, description = "The resulting register start", body = RegisterStartResponse),
+        (status = 400, description = "INVALID_IDENTITY_ID, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"),
+        (status = 409, description = "IDENTITY_ID_TAKEN or DISPLAY_NAME_TAKEN"),
+    ),
 )]
 pub async fn register_start(
     State(state): State<AppState>,
     Json(body): Json<RegisterStartRequest>,
 ) -> Result<Json<RegisterStartResponse>, AppError> {
     crate::replica::require_authoring()?;
+    let identity_id =
+        IdentityId::parse(&body.identity_id).map_err(|_| AppError::InvalidIdentityId)?;
+    let public_key = parse_inception_key(&body.event_signing_public_key)?;
+    if !identity_id.matches_key(&public_key) {
+        return Err(AppError::IdentityIdMismatch);
+    }
+    if display_name_mimics_identity_id(&body.display_name) {
+        return Err(AppError::InvalidDisplayName);
+    }
     // Issue #629, implementing #622's decision: a shard past its
     // bootstrap grace period with too few independently-confirmed
     // mirrors doesn't get to accept a brand-new identity — checked first,
@@ -181,7 +212,7 @@ pub async fn register_start(
     }
 
     let existing = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
-        .bind(body.identity_id)
+        .bind(identity_id)
         .fetch_optional(&state.pool)
         .await?;
     if existing.is_some() {
@@ -211,15 +242,16 @@ pub async fn register_start(
     let (challenge, webauthn_state) = state
         .webauthn
         .start_passkey_registration(
-            body.identity_id,
-            &body.identity_id.to_string(),
+            identity_id.webauthn_user_handle(),
+            &identity_id.to_string(),
             &body.display_name,
             None,
         )
         .map_err(|_| AppError::WebauthnFailed)?;
 
     let ceremony = RegistrationCeremonyState {
-        identity_id: body.identity_id,
+        identity_id,
+        public_key,
         display_name: body.display_name,
         webauthn_state,
     };
@@ -246,11 +278,8 @@ pub struct RegisterFinishRequest {
     pub ticket_id: Uuid,
     #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
-    /// Base64-encoded raw Ed25519 public key — the identity's event-signing
-    /// key, distinct from the WebAuthn passkey above. See module docs.
-    pub event_signing_public_key: String,
     /// Base64-encoded Ed25519 signature over
-    /// `identity_created_signing_bytes(identity_id, display_name)`.
+    /// `avalon_protocol::identity_id::identity_created_signing_bytes_v2`.
     pub event_signature: String,
     /// A user-chosen label for the device completing this ceremony (e.g.
     /// "Work laptop") — purely descriptive, never part of what's signed.
@@ -262,7 +291,7 @@ pub struct RegisterFinishRequest {
 
 #[derive(Serialize, ToSchema)]
 pub struct RegisterFinishResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 #[utoipa::path(
@@ -299,14 +328,15 @@ pub async fn register_finish(
         .finish_passkey_registration(&body.webauthn_credential, &ceremony.webauthn_state)
         .map_err(|_| AppError::WebauthnFailed)?;
 
-    let public_key_bytes = BASE64
-        .decode(&body.event_signing_public_key)
-        .map_err(|_| AppError::InvalidEventSignature)?;
+    let public_key_bytes = ceremony.public_key.to_vec();
     let signature_bytes = BASE64
         .decode(&body.event_signature)
         .map_err(|_| AppError::InvalidEventSignature)?;
-    let signing_bytes =
-        identity_created_signing_bytes(ceremony.identity_id, &ceremony.display_name);
+    let signing_bytes = identity_created_signing_bytes_v2(
+        &ceremony.identity_id,
+        &ceremony.public_key,
+        &ceremony.display_name,
+    );
     if !verify_event_signature(&public_key_bytes, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidEventSignature);
     }
@@ -344,17 +374,20 @@ pub async fn register_finish(
         payload: serde_json::to_value(IdentityCreatedPayload {
             identity_id: ceremony.identity_id,
             display_name: ceremony.display_name.clone(),
+            public_key: BASE64.encode(public_key_bytes.as_slice()),
+            signature: body.event_signature.clone(),
         })
         .expect("IdentityCreatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
-        version: 1,
+        version: 2,
         identity_chain: None,
     };
 
     let mut tx = state.pool.begin().await?;
 
-    let insert_identity = sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+    let insert_identity = sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(ceremony.identity_id)
+        .bind(public_key_bytes.as_slice())
         .execute(&mut *tx)
         .await;
     if let Err(sqlx::Error::Database(db_err)) = &insert_identity {
@@ -435,7 +468,7 @@ pub async fn register_finish(
         "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
     )
     .bind(ceremony.identity_id)
-    .bind(&public_key_bytes)
+    .bind(public_key_bytes.as_slice())
     .bind(&body.device_label)
     .fetch_one(&mut *tx)
     .await?;
@@ -475,10 +508,13 @@ pub async fn register_finish(
             device_label: body.device_label.clone(),
             approved_by_signing_key_id: signing_key_id,
             identity_id: ceremony.identity_id,
+            kind: SIGNING_KEY_KIND_INCEPTION.to_string(),
+            grant_id: None,
+            approval_signature: None,
         })
         .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: signing_key_added_at,
-        version: 1,
+        version: 2,
         identity_chain: None,
     };
     outbox::enqueue(&mut tx, &signing_key_event).await?;
@@ -511,13 +547,13 @@ pub async fn register_finish(
 /// challenge-response proof, not that no identifier is ever asked for.
 #[derive(Serialize, Deserialize)]
 struct AuthenticationCeremonyState {
-    identity_id: Uuid,
+    identity_id: IdentityId,
     webauthn_state: PasskeyAuthentication,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct SessionStartRequest {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -527,7 +563,7 @@ pub struct SessionStartResponse {
     pub challenge: RequestChallengeResponse,
 }
 
-async fn fetch_passkeys(state: &AppState, identity_id: Uuid) -> Result<Vec<Passkey>, AppError> {
+async fn fetch_passkeys(state: &AppState, identity_id: IdentityId) -> Result<Vec<Passkey>, AppError> {
     let key_rows = sqlx::query("SELECT passkey_data FROM identity_keys WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_all(&state.pool)
@@ -668,7 +704,7 @@ pub async fn session_finish(
 
 #[derive(Serialize, ToSchema)]
 pub struct ProfileResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub identity_created_at: OffsetDateTime,
@@ -725,7 +761,7 @@ pub struct ProfileResponse {
 }
 
 fn profile_view_to_response(
-    identity_id: Uuid,
+    identity_id: IdentityId,
     view: profile_reads::ProfileView,
     effective_main_guild: Option<Uuid>,
 ) -> ProfileResponse {
@@ -769,7 +805,7 @@ fn profile_view_to_response(
 /// or left.
 async fn earliest_joined_guild<'e, E>(
     executor: E,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Option<Uuid>, AppError>
 where
     E: sqlx::PgExecutor<'e>,
@@ -833,7 +869,7 @@ pub struct ProfilesQuery {
 /// its own ticket, not a side effect of adding the columns.
 #[derive(Serialize, ToSchema)]
 pub struct PublicProfileResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: String,
     pub avatar_url: Option<String>,
 }
@@ -853,7 +889,7 @@ pub struct PublicProfileResponse {
 /// once they've already found the profile.
 #[derive(Serialize, ToSchema)]
 pub struct PublicIdentityProfileResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub identity_created_at: OffsetDateTime,
@@ -881,13 +917,13 @@ pub struct PublicIdentityProfileResponse {
     get,
     path = "/identities/{id}/profile",
     tag = "identity",
-    params(("id" = Uuid, Path)),
+    params(("id" = IdentityId, Path)),
     responses((status = 200, description = "The public identity profile", body = PublicIdentityProfileResponse)),
 )]
 pub async fn get_identity_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<Uuid>,
+    Path(id): Path<IdentityId>,
 ) -> Result<Json<PublicIdentityProfileResponse>, AppError> {
     authenticate(&state, &headers).await?;
 
@@ -947,12 +983,12 @@ pub async fn list_profiles(
 ) -> Result<Json<Vec<PublicProfileResponse>>, AppError> {
     authenticate(&state, &headers).await?;
 
-    let ids: Vec<Uuid> = query
+    let ids: Vec<IdentityId> = query
         .ids
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<Uuid>().map_err(|_| AppError::InvalidProfileQuery))
+        .map(|s| s.parse::<IdentityId>().map_err(|_| AppError::InvalidProfileQuery))
         .collect::<Result<_, _>>()?;
 
     if ids.len() > PROFILE_LOOKUP_MAX_IDS {
@@ -1284,7 +1320,7 @@ fn validate_location(location: &str) -> Result<Option<String>, AppError> {
 /// the pure `validate_*` functions above for that reason.
 async fn validate_main_guild(
     pool: &sqlx::PgPool,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     main_guild: &str,
 ) -> Result<Option<Uuid>, AppError> {
     if main_guild.is_empty() {
@@ -1362,6 +1398,9 @@ pub async fn update_profile(
     // check documents — the real enforcement is `apply_in_tx`'s write
     // further down, mapped to a clean rejection there.
     if let Some(new_name) = &body.display_name {
+        if display_name_mimics_identity_id(new_name) {
+            return Err(AppError::InvalidDisplayName);
+        }
         if profile_reads::is_display_name_taken(&state.pool, new_name, Some(identity_id)).await? {
             return Err(AppError::DisplayNameTaken);
         }

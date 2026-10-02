@@ -2,6 +2,7 @@
 //! chain position to an event an identity authors, and refusing operations
 //! that depend on knowing which key controls a forked identity.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_indexer::identity_chain_store;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgExecutor, Postgres, Transaction};
@@ -23,7 +24,7 @@ pub async fn assign(
 /// chain is forked.
 pub async fn ensure_not_forked<'e>(
     exec: impl PgExecutor<'e>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<(), AppError> {
     if identity_chain_store::is_forked(exec, identity_id).await? {
         return Err(AppError::IdentityChainForked);

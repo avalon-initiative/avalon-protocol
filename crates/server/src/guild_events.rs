@@ -4,6 +4,7 @@
 //! calendar + RSVP" section for the durability call, and "`event_manage`"
 //! for the per-resource-override authorization model.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind, RsvpStatus};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -30,7 +31,7 @@ const EVENT_DESCRIPTION_MAX_CHARS: usize = 4000;
 async fn require_manage_events(
     state: &AppState,
     guild_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let permissions = actor_permissions(state, guild_id, actor).await?;
@@ -48,7 +49,7 @@ async fn require_manage_event_resource(
     state: &AppState,
     guild_id: Uuid,
     event_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let allowed = has_resource_permission(
@@ -106,7 +107,7 @@ pub(crate) struct EventRow {
     pub description: Option<String>,
     pub starts_at: OffsetDateTime,
     pub ends_at: Option<OffsetDateTime>,
-    pub created_by: Uuid,
+    pub created_by: IdentityId,
     pub created_at: OffsetDateTime,
     pub public: bool,
 }
@@ -173,7 +174,7 @@ pub struct EventResponse {
     #[serde(with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = "date-time")]
     pub ends_at: Option<OffsetDateTime>,
-    pub created_by: Uuid,
+    pub created_by: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -208,7 +209,7 @@ pub struct EventResponse {
 async fn my_rsvp(
     state: &AppState,
     event_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<Option<String>, AppError> {
     let status: Option<String> = sqlx::query_scalar(
         "SELECT status FROM guild_event_rsvps WHERE event_id = $1 AND identity_id = $2",
@@ -251,7 +252,7 @@ async fn rsvp_counts(state: &AppState, event_id: Uuid) -> Result<RsvpCounts, App
 async fn event_response(
     state: &AppState,
     row: EventRow,
-    actor: Uuid,
+    actor: IdentityId,
     view_details: bool,
 ) -> Result<EventResponse, AppError> {
     if !view_details {
@@ -616,7 +617,7 @@ pub struct RsvpRequest {
 #[derive(Serialize, ToSchema)]
 pub struct RsvpResponse {
     pub event_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -673,7 +674,7 @@ pub async fn upsert_rsvp(
 
 #[derive(Serialize, ToSchema)]
 pub struct RsvpRosterEntry {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]

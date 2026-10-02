@@ -38,6 +38,7 @@
 //! mirror-only node keeps an audit trail) is what lets a *different* node
 //! learn the same fact.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
     IdentityPasskeyRegisteredPayload, IdentityPasskeyRevokedPayload,
 };
@@ -60,7 +61,7 @@ use crate::outbox;
 use crate::state::AppState;
 use utoipa::ToSchema;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -74,7 +75,7 @@ const ADD_PASSKEY_CEREMONY_KIND: &str = "add_passkey";
 /// display name being chosen here at all.
 #[derive(Serialize, Deserialize)]
 struct AddPasskeyCeremonyState {
-    identity_id: Uuid,
+    identity_id: IdentityId,
     webauthn_state: PasskeyRegistration,
 }
 
@@ -136,7 +137,7 @@ pub async fn register_start(
     let (challenge, webauthn_state) = state
         .webauthn
         .start_passkey_registration(
-            identity_id,
+            identity_id.webauthn_user_handle(),
             &identity_id.to_string(),
             &display_name,
             Some(exclude_credentials),

@@ -11,6 +11,7 @@
 
 use avalon_indexer::projections::identity_signing_keys;
 use avalon_protocol::continuation::ContinuationToken;
+use avalon_protocol::ids::IdentityId;
 use time::{Duration, OffsetDateTime};
 
 use crate::auth::verify_event_signature;
@@ -30,7 +31,7 @@ const CLOCK_SKEW_ALLOWANCE: Duration = Duration::seconds(5);
 /// key, bad signature, replayed nonce — is [`AppError::Unauthorized`],
 /// never distinguished, same posture `authenticate_token`'s own doc comment
 /// already states for session tokens.
-pub async fn verify(state: &AppState, wire_body: &str) -> Result<uuid::Uuid, AppError> {
+pub async fn verify(state: &AppState, wire_body: &str) -> Result<IdentityId, AppError> {
     let token = ContinuationToken::from_wire_body(wire_body).ok_or(AppError::Unauthorized)?;
 
     let now = OffsetDateTime::now_utc();

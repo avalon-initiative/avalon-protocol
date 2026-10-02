@@ -17,7 +17,7 @@
 //! `POST`s a grant request (its freshly generated public key); any other
 //! currently-trusted device (one whose own `identity_signing_keys` row
 //! isn't revoked) polls for pending grants and approves one by signing
-//! `device_grant_approval_signing_bytes(...)` with its own key — proving
+//! `device_grant_approval_signing_bytes_v2(...)` with its own key — proving
 //! the approval itself came from a device that once passed a real WebAuthn
 //! ceremony, not a bare unauthenticated request. Revocation is
 //! unilateral: any authenticated session for the identity can revoke any
@@ -27,13 +27,14 @@
 //! `identity.signing_key_added` is signed by the *approving* device's key
 //! (the same detached-signature verification `handlers::register_finish`
 //! already established for `identity.created`); `identity.signing_key_revoked`
-//! is network-attributed, milestone-1 stand-in, same precedent
-//! `friends.rs`'s `friend.requested` already uses — revocation only ever
-//! narrows trust, so it doesn't need the higher signing bar grant approval
-//! does.
+//! carries the signature of an active key of the same identity.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
-    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload,
+    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload, SIGNING_KEY_KIND_DEVICE_GRANT,
+};
+use avalon_protocol::identity_id::{
+    device_grant_approval_signing_bytes_v2, signing_key_revoked_signing_bytes_v2,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
@@ -56,26 +57,8 @@ use utoipa::ToSchema;
 
 const GRANT_TTL_MINUTES: i64 = 15;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
-}
-
-/// The exact bytes a grant approval's Ed25519 signature covers — mirrors
-/// `handlers::identity_created_signing_bytes`'s reasoning: a small,
-/// explicit, versioned format the approving device signs and the server
-/// independently reconstructs and verifies against. Binding the grant id
-/// and the requested public key means a signature can never be replayed
-/// against a different grant or a different requested key.
-fn device_grant_approval_signing_bytes(
-    grant_id: Uuid,
-    identity_id: Uuid,
-    requested_signing_public_key: &[u8],
-) -> Vec<u8> {
-    format!(
-        "avalon:device_grant.approved:v1:{grant_id}:{identity_id}:{}",
-        BASE64.encode(requested_signing_public_key)
-    )
-    .into_bytes()
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -93,7 +76,7 @@ pub struct DeviceGrantResponse {
     pub status: String,
     pub device_label: Option<String>,
     /// Base64-encoded — the approving device needs this exact value to
-    /// reconstruct `device_grant_approval_signing_bytes` and sign it; the
+    /// reconstruct `device_grant_approval_signing_bytes_v2` and sign it; the
     /// server never trusts a client-supplied copy of its own request back,
     /// but the *approver* is a different device that only ever learns this
     /// key by reading it back off this response.
@@ -126,7 +109,14 @@ pub async fn request_device_grant(
     let identity_id = authenticate(&state, &headers).await?;
     let requested_signing_public_key = BASE64
         .decode(&body.requested_signing_public_key)
-        .map_err(|_| AppError::InvalidGrantSignature)?;
+        .ok()
+        .filter(|raw| {
+            <[u8; 32]>::try_from(raw.as_slice())
+                .ok()
+                .and_then(|key| avalon_protocol::ed25519_key::parse_ed25519_public_key(&key))
+                .is_some()
+        })
+        .ok_or(AppError::InvalidGrantSignature)?;
 
     let grant_id = Uuid::new_v4();
     let requested_at = OffsetDateTime::now_utc();
@@ -257,7 +247,7 @@ struct PendingGrant {
 
 async fn fetch_pending_grant(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     grant_id: Uuid,
 ) -> Result<PendingGrant, AppError> {
     let row = sqlx::query(
@@ -291,7 +281,7 @@ pub struct ApproveDeviceGrantRequest {
     /// revoked.
     pub approver_signing_key_id: Uuid,
     /// Base64-encoded Ed25519 signature over
-    /// `device_grant_approval_signing_bytes(grant_id, identity_id, requested_signing_public_key)`,
+    /// `device_grant_approval_signing_bytes_v2(grant_id, identity_id, requested_signing_public_key)`,
     /// produced by `approver_signing_key_id`'s key.
     pub signature: String,
 }
@@ -354,11 +344,13 @@ pub async fn approve_device_grant(
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidGrantSignature)?;
-    let signing_bytes = device_grant_approval_signing_bytes(
-        grant_id,
-        identity_id,
-        &grant.requested_signing_public_key,
-    );
+    let requested_key: [u8; 32] = grant
+        .requested_signing_public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::InvalidGrantSignature)?;
+    let signing_bytes =
+        device_grant_approval_signing_bytes_v2(grant_id, &identity_id, &requested_key);
     if !verify_event_signature(&approver_public_key, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidGrantSignature);
     }
@@ -406,10 +398,13 @@ pub async fn approve_device_grant(
             device_label: grant.device_label.clone(),
             approved_by_signing_key_id: body.approver_signing_key_id,
             identity_id,
+            kind: SIGNING_KEY_KIND_DEVICE_GRANT.to_string(),
+            grant_id: Some(grant_id),
+            approval_signature: Some(body.signature.clone()),
         })
         .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: added_at,
-        version: 1,
+        version: 2,
         identity_chain: None,
     };
     crate::identity_chain::assign(&mut tx, &mut event).await?;
@@ -514,27 +509,54 @@ pub async fn rename_device(
     }))
 }
 
-/// `POST /me/devices/:id/revoke` — unilateral, per the ticket's invariant:
-/// any currently-authenticated session for the identity can revoke any
-/// signing-key row (including the one it's revoking itself with, for a
-/// deliberate self-rotation), independent of the revoked device's
-/// cooperation. Network-attributed, not individually signed — same
-/// milestone-1 precedent `friends.rs`'s `friend.requested` already uses;
-/// revocation only ever narrows trust, so it doesn't need the higher
-/// signing bar grant approval does.
+#[derive(Deserialize, ToSchema)]
+pub struct RevokeDeviceRequest {
+    /// The caller's own active signing key that signs the revocation (may be the key being revoked).
+    pub revoked_by_signing_key_id: Uuid,
+    /// Base64 Ed25519 signature by `revoked_by_signing_key_id` over
+    /// `avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2`.
+    pub signature: String,
+}
+
+/// `POST /me/devices/:id/revoke` — any authenticated session for the identity can
+/// revoke any of its signing keys (including the signer's own, for self-rotation), provided
+/// the request carries a valid signature from an active key of the same identity.
 #[utoipa::path(
     post,
     path = "/me/devices/{id}/revoke",
     tag = "devices",
     params(("id" = Uuid, Path)),
+    request_body = RevokeDeviceRequest,
     responses((status = 200, description = "Signing key revoked")),
 )]
 pub async fn revoke_device(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(signing_key_id): Path<Uuid>,
+    Json(body): Json<RevokeDeviceRequest>,
 ) -> Result<(), AppError> {
     let identity_id = authenticate(&state, &headers).await?;
+
+    let revoker_row = sqlx::query(
+        "SELECT public_key FROM identity_signing_keys WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(body.revoked_by_signing_key_id)
+    .bind(identity_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::ApproverKeyInvalid)?;
+    let revoker_public_key: Vec<u8> = revoker_row.try_get("public_key")?;
+    let signature_bytes = BASE64
+        .decode(&body.signature)
+        .map_err(|_| AppError::InvalidEventSignature)?;
+    let signing_bytes = signing_key_revoked_signing_bytes_v2(
+        &identity_id,
+        signing_key_id,
+        body.revoked_by_signing_key_id,
+    );
+    if !verify_event_signature(&revoker_public_key, &signing_bytes, &signature_bytes) {
+        return Err(AppError::InvalidEventSignature);
+    }
 
     let mut tx = state.pool.begin().await?;
     crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
@@ -557,10 +579,15 @@ pub async fn revoke_device(
             .to_string(),
         issuer: identity_ref(identity_id, "signing_key_revoked"),
         subject: identity_ref(identity_id, "signing_key_revoked"),
-        payload: serde_json::to_value(IdentitySigningKeyRevokedPayload { signing_key_id })
-            .expect("IdentitySigningKeyRevokedPayload should serialize"),
+        payload: serde_json::to_value(IdentitySigningKeyRevokedPayload {
+            identity_id,
+            signing_key_id,
+            revoked_by_signing_key_id: body.revoked_by_signing_key_id,
+            signature: body.signature.clone(),
+        })
+        .expect("IdentitySigningKeyRevokedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
-        version: 1,
+        version: 2,
         identity_chain: None,
     };
     crate::identity_chain::assign(&mut tx, &mut event).await?;
@@ -582,36 +609,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn approval_signing_bytes_are_stable_and_deterministic() {
-        let grant_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
-        let key = vec![1u8, 2, 3, 4];
-        let a = device_grant_approval_signing_bytes(grant_id, identity_id, &key);
-        let b = device_grant_approval_signing_bytes(grant_id, identity_id, &key);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn approval_signing_bytes_differ_for_a_different_grant() {
-        let identity_id = Uuid::new_v4();
-        let key = vec![1u8, 2, 3, 4];
-        let a = device_grant_approval_signing_bytes(Uuid::new_v4(), identity_id, &key);
-        let b = device_grant_approval_signing_bytes(Uuid::new_v4(), identity_id, &key);
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn approval_signing_bytes_differ_for_a_different_requested_key() {
-        let grant_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
-        let a = device_grant_approval_signing_bytes(grant_id, identity_id, &[1, 2, 3]);
-        let b = device_grant_approval_signing_bytes(grant_id, identity_id, &[4, 5, 6]);
-        assert_ne!(a, b);
-    }
-
-    #[test]
     fn identity_ref_namespaces_by_identity_and_verb() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let global_id = identity_ref(id, "signing_key_added");
         assert_eq!(
             global_id.as_str(),

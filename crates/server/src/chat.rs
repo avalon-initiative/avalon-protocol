@@ -5,6 +5,7 @@
 //! `avalon-docs/architecture/communication.md` for the
 //! freshness-tier policy and why chat/DMs are push, not poll.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -174,7 +175,7 @@ enum ChatServerMessage {
     NodeInfo { base_url: Option<String> },
 }
 
-async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
+async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: IdentityId) {
     // Issue #583: one `InterestGuard` per subscribed channel/conversation,
     // registering this connection's interest in the DHT (when enabled) for
     // as long as it's held. Dropping the whole map when this function

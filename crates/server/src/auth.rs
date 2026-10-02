@@ -21,7 +21,6 @@
 //! replace: opaque CSPRNG bearer tokens, not JWTs, so a session can be
 //! revoked by deleting its row rather than waiting out an embedded expiry.
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::Rng;
 use webauthn_rs::prelude::{Url, Webauthn, WebauthnBuilder};
 
@@ -52,14 +51,14 @@ pub fn verify_event_signature(
     let Ok(key_array) = <[u8; 32]>::try_from(public_key_bytes) else {
         return false;
     };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
+    let Some(verifying_key) = avalon_protocol::ed25519_key::parse_ed25519_public_key(&key_array)
+    else {
         return false;
     };
     let Ok(sig_array) = <[u8; 64]>::try_from(signature_bytes) else {
         return false;
     };
-    let signature = Signature::from_bytes(&sig_array);
-    verifying_key.verify(message, &signature).is_ok()
+    avalon_protocol::ed25519_key::verify_strict_signature(&verifying_key, message, &sig_array)
 }
 
 /// 32 bytes of CSPRNG output, base64url-encoded (no padding) — carries no

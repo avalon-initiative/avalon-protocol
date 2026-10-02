@@ -3768,7 +3768,7 @@ mod tests {
         network_id: &str,
         seq: i64,
         kind: &str,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         payload: Option<serde_json::Value>,
     ) -> mirror::MirroredEntry {
         let who = format!(
@@ -3803,7 +3803,7 @@ mod tests {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
     }
 
-    fn created_payload(identity_id: Uuid, name: &str) -> serde_json::Value {
+    fn created_payload(identity_id: IdentityId, name: &str) -> serde_json::Value {
         serde_json::json!({ "identity_id": identity_id, "display_name": name })
     }
 

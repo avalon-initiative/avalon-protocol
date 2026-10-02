@@ -33,6 +33,7 @@
 //! "any current member may post." Toggled via `PATCH .../channels/{cid}`,
 //! gated the same as a rename (`manage_channels`, resource-aware).
 
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
     GuildChannelArchivedPayload, GuildChannelCreatedPayload, GuildChannelRenamedPayload,
 };
@@ -64,7 +65,7 @@ const CHANNEL_NAME_MAX_CHARS: usize = 100;
 /// single line, not a paragraph.
 const CHANNEL_TOPIC_MAX_CHARS: usize = 200;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -72,7 +73,7 @@ fn channel_ref(channel_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("guild_channel", &channel_id.to_string(), "self", verb)
 }
 
-pub(crate) async fn guild_owner(state: &AppState, guild_id: Uuid) -> Result<Uuid, AppError> {
+pub(crate) async fn guild_owner(state: &AppState, guild_id: Uuid) -> Result<IdentityId, AppError> {
     let row = sqlx::query("SELECT owner FROM guilds WHERE id = $1")
         .bind(guild_id)
         .fetch_optional(&state.pool)
@@ -85,7 +86,7 @@ pub(crate) async fn guild_owner(state: &AppState, guild_id: Uuid) -> Result<Uuid
 pub(crate) async fn is_guild_member(
     state: &AppState,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<bool, AppError> {
     Ok(
         avalon_indexer::projections::guild_rosters::is_member(&state.pool, guild_id, identity_id)
@@ -96,7 +97,7 @@ pub(crate) async fn is_guild_member(
 pub(crate) async fn require_member(
     state: &AppState,
     guild_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     if is_guild_member(state, guild_id, actor).await? {
         Ok(())
@@ -115,7 +116,7 @@ pub(crate) async fn require_member(
 pub(crate) async fn is_member_of_channel(
     state: &AppState,
     channel_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<bool, AppError> {
     let guild_id: Option<Uuid> =
         sqlx::query_scalar("SELECT guild_id FROM guild_channels WHERE id = $1")
@@ -131,7 +132,7 @@ pub(crate) async fn is_member_of_channel(
 async fn require_manage_channels(
     state: &AppState,
     guild_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let permissions = actor_permissions(state, guild_id, actor).await?;
@@ -149,7 +150,7 @@ pub(crate) async fn require_manage_channel_resource(
     state: &AppState,
     guild_id: Uuid,
     channel_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let allowed = has_resource_permission(

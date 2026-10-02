@@ -9,6 +9,12 @@ pub enum AppError {
     Unauthorized,
     #[error("identity id already taken")]
     IdentityIdTaken,
+    #[error("identity id is not the id derived from the signing key")]
+    IdentityIdMismatch,
+    #[error("malformed identity id or signing key")]
+    InvalidIdentityId,
+    #[error("display name must not look like an identity id")]
+    InvalidDisplayName,
     #[error("webauthn ceremony not found or already used")]
     CeremonyNotFound,
     #[error("webauthn ceremony expired")]
@@ -494,6 +500,9 @@ impl AppError {
         match self {
             AppError::Unauthorized => "UNAUTHORIZED",
             AppError::IdentityIdTaken => "IDENTITY_ID_TAKEN",
+            AppError::IdentityIdMismatch => "IDENTITY_ID_MISMATCH",
+            AppError::InvalidIdentityId => "INVALID_IDENTITY_ID",
+            AppError::InvalidDisplayName => "INVALID_DISPLAY_NAME",
             AppError::CeremonyNotFound => "CEREMONY_NOT_FOUND",
             AppError::CeremonyExpired => "CEREMONY_EXPIRED",
             AppError::WebauthnFailed => "WEBAUTHN_FAILED",
@@ -693,7 +702,11 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::IdentityIdTaken => StatusCode::CONFLICT,
-            AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
+            AppError::CeremonyNotFound
+            | AppError::CeremonyExpired
+            | AppError::IdentityIdMismatch
+            | AppError::InvalidIdentityId
+            | AppError::InvalidDisplayName => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
             AppError::SelfFriendRequest

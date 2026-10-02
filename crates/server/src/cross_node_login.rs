@@ -29,6 +29,7 @@
 //! — see [`resolve_signing_key_cross_shard`]'s own doc comment for the
 //! shard-id simplification this relies on.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 
 use avalon_indexer::projections::identity_signing_keys;
@@ -37,6 +38,8 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use ed25519_dalek::VerifyingKey;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -512,7 +515,7 @@ fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
 /// local lookup's own `revoked_at IS NULL` condition.
 async fn resolve_signing_key_cross_shard(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
 ) -> Option<Vec<u8>> {
     let locations = crate::identity_locator::resolve(state, identity_id).await;
@@ -596,7 +599,7 @@ async fn resolve_signing_key_cross_shard(
 /// identity with the same `display_name` (the one real collision case here
 /// — cross-shard `display_name` uniqueness isn't and can't be enforced
 /// globally by a single node's unique index).
-async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
+async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId) {
     let already_local = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
         .bind(identity_id)
         .fetch_optional(&state.pool)
@@ -626,10 +629,22 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
         else {
             continue;
         };
-        let Some(display_name) = created
-            .first()
-            .and_then(|entry| entry.payload.get("display_name"))
+        let Some(first) = created.first() else {
+            continue;
+        };
+        let Some(display_name) = first.payload.get("display_name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(inception_key) = first
+            .payload
+            .get("public_key")
             .and_then(|v| v.as_str())
+            .and_then(|b64| BASE64.decode(b64).ok())
+            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+            .filter(|key| {
+                avalon_protocol::ed25519_key::parse_ed25519_public_key(key).is_some()
+                    && identity_id.matches_key(key)
+            })
         else {
             continue;
         };
@@ -637,8 +652,11 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
         let Ok(mut tx) = state.pool.begin().await else {
             return;
         };
-        if sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(identity_id)
+        if sqlx::query(
+            "INSERT INTO identities (id, inception_public_key) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(identity_id)
+        .bind(inception_key.as_slice())
             .execute(&mut *tx)
             .await
             .is_err()
@@ -672,7 +690,7 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
 /// failure is [`AppError::Unauthorized`], same undifferentiated posture
 /// `crate::continuation::verify`'s own doc comment already establishes for
 /// the same reason (never reveal *why* a bearer credential didn't verify).
-async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<Uuid, AppError> {
+async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<IdentityId, AppError> {
     let now = OffsetDateTime::now_utc();
     if grant.expires_at < now || grant.issued_at > now + CLOCK_SKEW_ALLOWANCE {
         return Err(AppError::Unauthorized);

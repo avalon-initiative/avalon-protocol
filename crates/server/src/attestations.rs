@@ -27,6 +27,7 @@
 //! not built — see [`avalon_protocol::achievements::AttestationStatus`]'s
 //! own doc comment for why.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
@@ -129,7 +130,7 @@ pub struct AttestationHistoryEntry {
 pub struct AttestationReadResponse {
     pub id: Uuid,
     pub issuer: String,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub achievement: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -174,7 +175,7 @@ struct AttestationRowData {
     id: Uuid,
     integrator_id: Uuid,
     issuer: String,
-    subject: Uuid,
+    subject: IdentityId,
     achievement: String,
     issued_at: OffsetDateTime,
     proof_key_id: Uuid,
@@ -235,7 +236,7 @@ fn assemble_attestation_response(
                 avalon_protocol::ids::IntegratorId(data.integrator_id),
             ),
         },
-        subject: avalon_protocol::ids::IdentityId(data.subject),
+        subject: data.subject,
         achievement: global_id_from_str(&data.achievement).ok_or(AppError::AttestationNotFound)?,
         issued_at: data.issued_at,
         proof: avalon_protocol::achievements::Signature {
@@ -367,7 +368,7 @@ pub struct ListMyAchievementsResponse {
 /// actually filtered on — the common, unfiltered case stays the same
 /// single-table scan it always was.
 fn build_my_achievements_query(
-    subject: Uuid,
+    subject: IdentityId,
     integrator_id: Option<Uuid>,
     claim_kind: Option<ClaimKindFilter>,
     before: Option<Uuid>,

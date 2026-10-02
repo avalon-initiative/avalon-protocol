@@ -20,6 +20,7 @@
 //! stand-in, attributed to the acting identity via `issuer` rather than to
 //! the node, since the request already proves the actor's session.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_indexer::projections::friendships as friendship_reads;
@@ -42,7 +43,7 @@ use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -53,12 +54,12 @@ fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
 /// the full per-resource scope granularity.
 pub(crate) async fn friend_partners(
     state: &AppState,
-    caller: Uuid,
-) -> Result<HashSet<Uuid>, AppError> {
+    caller: IdentityId,
+) -> Result<HashSet<IdentityId>, AppError> {
     Ok(friendship_reads::partners_of(&state.pool, caller).await?)
 }
 
-fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
+fn ordered_pair(x: IdentityId, y: IdentityId) -> (IdentityId, IdentityId) {
     if x < y {
         (x, y)
     } else {
@@ -68,7 +69,7 @@ fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
 
 #[derive(Serialize, ToSchema)]
 pub struct ResolveHandleResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 /// Resolves a `display_name` handle (a globally-unique, case-insensitive
@@ -106,14 +107,14 @@ pub async fn resolve_handle(
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateFriendRequestRequest {
-    pub to: Uuid,
+    pub to: IdentityId,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct FriendRequestResponse {
     pub id: Uuid,
-    pub from: Uuid,
-    pub to: Uuid,
+    pub from: IdentityId,
+    pub to: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub requested_at: OffsetDateTime,
@@ -212,8 +213,8 @@ pub async fn create_friend_request(
 }
 
 struct PendingRequest {
-    from: Uuid,
-    to: Uuid,
+    from: IdentityId,
+    to: IdentityId,
 }
 
 async fn fetch_pending_request(
@@ -235,8 +236,8 @@ async fn fetch_pending_request(
 
 #[derive(Serialize, ToSchema)]
 pub struct FriendshipResponse {
-    pub a: Uuid,
-    pub b: Uuid,
+    pub a: IdentityId,
+    pub b: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub since: OffsetDateTime,
@@ -346,13 +347,13 @@ pub async fn decline_or_withdraw_friend_request(
     delete,
     path = "/friends/{identity_id}",
     tag = "friends",
-    params(("identity_id" = Uuid, Path)),
+    params(("identity_id" = IdentityId, Path)),
     responses((status = 200, description = "Friendship removed")),
 )]
 pub async fn remove_friend(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(other_identity_id): Path<Uuid>,
+    Path(other_identity_id): Path<IdentityId>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let (a, b) = ordered_pair(actor, other_identity_id);
@@ -458,8 +459,8 @@ mod tests {
 
     #[test]
     fn ordered_pair_is_stable_regardless_of_argument_order() {
-        let x = Uuid::new_v4();
-        let y = Uuid::new_v4();
+        let x = IdentityId::random_for_tests();
+        let y = IdentityId::random_for_tests();
         assert_eq!(ordered_pair(x, y), ordered_pair(y, x));
         let (a, b) = ordered_pair(x, y);
         assert!(a < b);
@@ -467,7 +468,7 @@ mod tests {
 
     #[test]
     fn identity_ref_namespaces_by_identity_and_verb() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let global_id = identity_ref(id, "friend_requested");
         assert_eq!(
             global_id.as_str(),

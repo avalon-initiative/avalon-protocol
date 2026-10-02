@@ -34,6 +34,7 @@
 //! interest in a specific thing via the DHT, and the owner looks up who's
 //! interested instead of broadcasting" for a different scope kind.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -209,7 +210,7 @@ pub enum InterestScope {
     /// whatever it actually fetches from a resolved location independently,
     /// so a false or stale registration here only ever wastes
     /// a lookup, never a security bypass.
-    Identity(Uuid),
+    Identity(IdentityId),
 }
 
 /// Fixed, arbitrary namespace UUID used only to derive
@@ -781,7 +782,7 @@ pub async fn verify_claim(
     state: &AppState,
     wire: &str,
     expected_scope: InterestScope,
-    expected_identity: Uuid,
+    expected_identity: IdentityId,
 ) -> Option<InterestClaim> {
     let claim = verify_claim_signature(state, wire, expected_scope).await?;
     if claim.identity_id != expected_identity {
@@ -1066,7 +1067,7 @@ mod tests {
     #[test]
     fn an_identity_location_is_never_a_p2p_address() {
         let (registry, _rx) = InterestRegistry::new();
-        let scope = InterestScope::Identity(Uuid::new_v4());
+        let scope = InterestScope::Identity(IdentityId::random_for_tests());
         let (_, own) = own_p2p();
         assert_eq!(registry.dht_value(scope, &own), None);
         assert_eq!(
@@ -1319,15 +1320,17 @@ mod tests {
             tx
         }
 
-        async fn seed_identity_with_signing_key(pool: &PgPool) -> (Uuid, Uuid, SigningKey) {
-            let identity_id = Uuid::new_v4();
-            sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+        async fn seed_identity_with_signing_key(pool: &PgPool) -> (IdentityId, Uuid, SigningKey) {
+            let signing_key = SigningKey::generate(&mut rand::rng());
+            let public_key = signing_key.verifying_key().to_bytes();
+            let identity_id = avalon_protocol::identity_id::derive_identity_id(&public_key);
+            sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
                 .bind(identity_id)
+                .bind(public_key.to_vec())
                 .execute(pool)
                 .await
                 .expect("failed to seed identity");
 
-            let signing_key = SigningKey::generate(&mut rand::rng());
             let signing_key_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO indexer_identity_signing_keys \
@@ -1335,7 +1338,7 @@ mod tests {
             )
             .bind(signing_key_id)
             .bind(identity_id)
-            .bind(signing_key.verifying_key().to_bytes().to_vec())
+            .bind(public_key.to_vec())
             .execute(pool)
             .await
             .expect("failed to seed signing key");
@@ -1344,9 +1347,11 @@ mod tests {
         }
 
         async fn seed_guild_channel(pool: &PgPool) -> (Uuid, Uuid) {
-            let owner_id = Uuid::new_v4();
-            sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+            let owner_key = SigningKey::generate(&mut rand::rng()).verifying_key().to_bytes();
+            let owner_id = avalon_protocol::identity_id::derive_identity_id(&owner_key);
+            sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
                 .bind(owner_id)
+                .bind(owner_key.to_vec())
                 .execute(pool)
                 .await
                 .expect("failed to seed guild owner identity");
@@ -1378,7 +1383,7 @@ mod tests {
             (guild_id, channel_id)
         }
 
-        async fn add_member(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
+        async fn add_member(pool: &PgPool, guild_id: Uuid, identity_id: IdentityId) {
             sqlx::query(
                 "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
                  VALUES ($1, $2, 0, now())",
@@ -1391,7 +1396,7 @@ mod tests {
         }
 
         fn mint_claim(
-            identity_id: Uuid,
+            identity_id: IdentityId,
             signing_key_id: Uuid,
             signing_key: &SigningKey,
             channel_id: Uuid,

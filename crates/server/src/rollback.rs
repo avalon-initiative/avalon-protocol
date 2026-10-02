@@ -14,6 +14,7 @@
 //! addition (friendship, membership) and restoring a voluntary guild leave
 //! into a currently open guild.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_indexer::projections::{friendships as friendship_reads, guild_rosters};
 use avalon_protocol::event_payloads::{
     FriendRelationshipReversedPayload, GuildMembershipReversedPayload,
@@ -99,14 +100,14 @@ pub struct LedgerEvent {
 /// [`assess`] needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    Friend { counterparty: Uuid },
+    Friend { counterparty: IdentityId },
     Guild { guild_id: Uuid },
 }
 
 /// The compensating action to apply for a reversible candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReversalPlan {
-    RemoveFriendship { counterparty: Uuid },
+    RemoveFriendship { counterparty: IdentityId },
     RemoveMembership { guild_id: Uuid },
     RestoreMembership { guild_id: Uuid },
 }
@@ -115,7 +116,7 @@ pub enum ReversalPlan {
 /// means the guild no longer exists.
 #[derive(Debug, Clone, Copy)]
 pub struct GuildContext {
-    pub owner: Uuid,
+    pub owner: IdentityId,
     pub join_open: bool,
 }
 
@@ -138,12 +139,16 @@ pub struct Assessment {
 }
 
 /// Identity id embedded in an `identity:<id>:self:<verb>` issuer string.
-pub fn issuer_identity(issuer: &str) -> Option<Uuid> {
+pub fn issuer_identity(issuer: &str) -> Option<IdentityId> {
     let mut parts = issuer.split(':');
     if parts.next()? != "identity" {
         return None;
     }
-    Uuid::parse_str(parts.next()?).ok()
+    IdentityId::parse(parts.next()?).ok()
+}
+
+fn payload_identity(payload: &serde_json::Value, key: &str) -> Option<IdentityId> {
+    IdentityId::parse(payload.get(key)?.as_str()?).ok()
 }
 
 fn payload_uuid(payload: &serde_json::Value, key: &str) -> Option<Uuid> {
@@ -154,7 +159,7 @@ fn payload_uuid(payload: &serde_json::Value, key: &str) -> Option<Uuid> {
 /// (authorship, window, and kind-specific shape) and what it touches.
 /// `None` means the event is not listed.
 pub fn extract_target(
-    identity: Uuid,
+    identity: IdentityId,
     window: &RollbackWindow,
     event: &LedgerEvent,
 ) -> Option<Target> {
@@ -164,25 +169,25 @@ pub fn extract_target(
     let payload = &event.payload;
     match event.kind.as_str() {
         KIND_FRIEND_ACCEPTED => {
-            let from = payload_uuid(payload, "from")?;
-            let to = payload_uuid(payload, "to")?;
-            if payload_uuid(payload, "actor")? != identity {
+            let from = payload_identity(payload, "from")?;
+            let to = payload_identity(payload, "to")?;
+            if payload_identity(payload, "actor")? != identity {
                 return None;
             }
             let counterparty = if from == identity { to } else { from };
             (counterparty != identity).then_some(Target::Friend { counterparty })
         }
         KIND_FRIEND_REMOVED => {
-            let a = payload_uuid(payload, "a")?;
-            let b = payload_uuid(payload, "b")?;
-            if payload_uuid(payload, "actor")? != identity {
+            let a = payload_identity(payload, "a")?;
+            let b = payload_identity(payload, "b")?;
+            if payload_identity(payload, "actor")? != identity {
                 return None;
             }
             let counterparty = if a == identity { b } else { a };
             Some(Target::Friend { counterparty })
         }
         KIND_MEMBER_ADDED => {
-            if payload_uuid(payload, "identity_id")? != identity {
+            if payload_identity(payload, "identity_id")? != identity {
                 return None;
             }
             Some(Target::Guild {
@@ -190,8 +195,8 @@ pub fn extract_target(
             })
         }
         KIND_MEMBER_REMOVED => {
-            if payload_uuid(payload, "identity_id")? != identity
-                || payload_uuid(payload, "actor")? != identity
+            if payload_identity(payload, "identity_id")? != identity
+                || payload_identity(payload, "actor")? != identity
                 || payload.get("reason")?.as_str()? != "left"
             {
                 return None;
@@ -226,7 +231,7 @@ fn reversible(summary: String, plan: ReversalPlan) -> Assessment {
 
 /// Decides whether an eligible candidate can be reversed against current
 /// state, and how.
-pub fn assess(identity: Uuid, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
+pub fn assess(identity: IdentityId, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
     let mut assessment = assess_inner(identity, event, target, ctx);
     if ctx.already_reversed {
         assessment.reversible = false;
@@ -237,7 +242,7 @@ pub fn assess(identity: Uuid, event: &LedgerEvent, target: Target, ctx: &Context
     assessment
 }
 
-fn assess_inner(identity: Uuid, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
+fn assess_inner(identity: IdentityId, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
     match (event.kind.as_str(), target) {
         (KIND_FRIEND_ACCEPTED, Target::Friend { counterparty }) => {
             let summary = format!("Became friends with {counterparty}");
@@ -295,7 +300,7 @@ struct CompletedRecovery {
 
 async fn latest_completed_recovery(
     conn: &mut PgConnection,
-    identity: Uuid,
+    identity: IdentityId,
 ) -> Result<CompletedRecovery, AppError> {
     let row = sqlx::query(
         "SELECT id, completed_at FROM recovery_requests \
@@ -350,7 +355,7 @@ async fn already_reversed(conn: &mut PgConnection, event_id: Uuid) -> Result<boo
 
 async fn load_context(
     conn: &mut PgConnection,
-    identity: Uuid,
+    identity: IdentityId,
     event_id: Uuid,
     target: Target,
 ) -> Result<Context, AppError> {
@@ -382,7 +387,7 @@ async fn load_context(
     Ok(ctx)
 }
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -660,7 +665,7 @@ pub async fn reverse_event(
 /// guild the identity is being removed from, so it never dangles.
 async fn main_guild_clear_event(
     conn: &mut PgConnection,
-    identity: Uuid,
+    identity: IdentityId,
     guild_id: Uuid,
 ) -> Result<Option<ProtocolEvent>, AppError> {
     let current: Option<Uuid> =
@@ -715,7 +720,7 @@ mod tests {
     }
 
     fn event(
-        identity: Uuid,
+        identity: IdentityId,
         kind: &str,
         at: OffsetDateTime,
         payload: serde_json::Value,
@@ -729,7 +734,7 @@ mod tests {
         }
     }
 
-    fn friend_accepted(me: Uuid, other: Uuid, at: OffsetDateTime) -> LedgerEvent {
+    fn friend_accepted(me: IdentityId, other: IdentityId, at: OffsetDateTime) -> LedgerEvent {
         event(
             me,
             "friend.accepted",
@@ -738,7 +743,7 @@ mod tests {
         )
     }
 
-    fn joined(me: Uuid, guild: Uuid, at: OffsetDateTime) -> LedgerEvent {
+    fn joined(me: IdentityId, guild: Uuid, at: OffsetDateTime) -> LedgerEvent {
         event(
             me,
             "guild.member_added",
@@ -747,7 +752,7 @@ mod tests {
         )
     }
 
-    fn left(me: Uuid, guild: Uuid, at: OffsetDateTime) -> LedgerEvent {
+    fn left(me: IdentityId, guild: Uuid, at: OffsetDateTime) -> LedgerEvent {
         event(
             me,
             "guild.member_removed",
@@ -775,7 +780,7 @@ mod tests {
 
     #[test]
     fn issuer_identity_parses_identity_refs_only() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         assert_eq!(issuer_identity(&format!("identity:{id}:self:v")), Some(id));
         assert_eq!(issuer_identity(&format!("guild:{id}:self:v")), None);
         assert_eq!(issuer_identity("identity:not-a-uuid:self:v"), None);
@@ -783,7 +788,7 @@ mod tests {
 
     #[test]
     fn events_outside_the_window_are_not_candidates() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
         for at in [t(99), t(200), t(500)] {
             assert_eq!(
                 extract_target(me, &window(), &friend_accepted(me, other, at)),
@@ -800,7 +805,7 @@ mod tests {
 
     #[test]
     fn events_authored_by_someone_else_are_not_candidates() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
         let mut ev = friend_accepted(me, other, t(150));
         ev.issuer = format!("identity:{other}:self:x");
         assert_eq!(extract_target(me, &window(), &ev), None);
@@ -808,7 +813,7 @@ mod tests {
 
     #[test]
     fn friend_accepted_reversible_only_while_friends() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
         let ev = friend_accepted(me, other, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let ok = assess(
@@ -833,7 +838,7 @@ mod tests {
 
     #[test]
     fn friend_removed_is_never_restorable() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
         let ev = event(
             me,
             "friend.removed",
@@ -858,13 +863,13 @@ mod tests {
 
     #[test]
     fn member_added_reversible_when_member_and_not_owner() {
-        let (me, guild) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, guild) = (IdentityId::random_for_tests(), Uuid::new_v4());
         let ev = joined(me, guild, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let ctx = Context {
             is_member_now: true,
             guild: Some(GuildContext {
-                owner: Uuid::new_v4(),
+                owner: IdentityId::random_for_tests(),
                 join_open: false,
             }),
             ..Context::default()
@@ -878,7 +883,7 @@ mod tests {
 
     #[test]
     fn member_added_refused_for_guild_owner_missing_guild_or_non_member() {
-        let (me, guild) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, guild) = (IdentityId::random_for_tests(), Uuid::new_v4());
         let ev = joined(me, guild, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let as_owner = Context {
@@ -900,7 +905,7 @@ mod tests {
         assert!(!assess(me, &ev, target, &no_guild).reversible);
         let not_member = Context {
             guild: Some(GuildContext {
-                owner: Uuid::new_v4(),
+                owner: IdentityId::random_for_tests(),
                 join_open: true,
             }),
             ..Context::default()
@@ -910,12 +915,12 @@ mod tests {
 
     #[test]
     fn voluntary_leave_restorable_only_into_open_guild_when_not_a_member() {
-        let (me, guild) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, guild) = (IdentityId::random_for_tests(), Uuid::new_v4());
         let ev = left(me, guild, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let guild_ctx = |join_open| {
             Some(GuildContext {
-                owner: Uuid::new_v4(),
+                owner: IdentityId::random_for_tests(),
                 join_open,
             })
         };
@@ -944,7 +949,7 @@ mod tests {
 
     #[test]
     fn removal_by_another_party_is_not_a_candidate() {
-        let (me, guild, officer) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let (me, guild, officer) = (IdentityId::random_for_tests(), Uuid::new_v4(), IdentityId::random_for_tests());
         let ev = event(
             me,
             "guild.member_removed",
@@ -963,7 +968,7 @@ mod tests {
 
     #[test]
     fn already_reversed_overrides_reversibility_and_drops_the_plan() {
-        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
         let ev = friend_accepted(me, other, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let a = assess(
@@ -981,7 +986,7 @@ mod tests {
 
     #[test]
     fn unrelated_kinds_are_not_candidates() {
-        let me = Uuid::new_v4();
+        let me = IdentityId::random_for_tests();
         let ev = event(me, "profile.updated", t(150), json!({}));
         assert_eq!(extract_target(me, &window(), &ev), None);
     }

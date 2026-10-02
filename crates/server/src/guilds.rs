@@ -3,6 +3,7 @@
 //! not an integrator's. See `avalon-docs/protocol/guilds.md` for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
+use avalon_protocol::ids::IdentityId;
 use avalon_indexer::projections::guild_rosters;
 use avalon_protocol::event_payloads::{
     GuildCreatedPayload, GuildFavoriteGamesUpdatedPayload, GuildGameAssociatedPayload,
@@ -37,7 +38,7 @@ use crate::state::AppState;
 /// dance with a different canonical message.
 async fn require_guild_action_signature(
     state: &AppState,
-    actor: Uuid,
+    actor: IdentityId,
     action_tag: &str,
     fields: &[&str],
     signing_key_id: Option<Uuid>,
@@ -98,7 +99,7 @@ const MAX_DISCOVER_PAGE_SIZE: i64 = 100;
 /// `MAX_ROLE_DESCRIPTION_LEN`.
 const MAX_JOIN_REQUEST_MESSAGE_LEN: usize = 300;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -114,8 +115,8 @@ fn guild_ref(guild_id: Uuid, verb: &str) -> GlobalId {
 /// [`actor_role_permissions`]. `pub(crate)` so `channels.rs`/`guild_messages.rs`
 /// can reuse it for `manage_channels` checks.
 pub(crate) fn has_guild_permission(
-    guild_owner: Uuid,
-    actor: Uuid,
+    guild_owner: IdentityId,
+    actor: IdentityId,
     actor_permissions: &[String],
     permission: GuildPermission,
 ) -> bool {
@@ -157,7 +158,7 @@ pub(crate) fn resolve_resource_permission(
 pub(crate) async fn actor_role(
     state: &AppState,
     guild_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<Option<(i32, Vec<String>)>, AppError> {
     // Issue #506: the membership half reads `indexer_guild_members` via the
     // read model; `guild_roles` (role definitions/permissions) stays
@@ -221,8 +222,8 @@ async fn fetch_override(
 pub(crate) async fn has_resource_permission(
     state: &AppState,
     guild_id: Uuid,
-    guild_owner: Uuid,
-    actor: Uuid,
+    guild_owner: IdentityId,
+    actor: IdentityId,
     resource_kind: GuildResourceKind,
     resource_id: Uuid,
     permission: GuildPermission,
@@ -302,8 +303,8 @@ pub(crate) fn resolve_view_permission(
 pub(crate) async fn has_view_permission(
     state: &AppState,
     guild_id: Uuid,
-    guild_owner: Uuid,
-    actor: Uuid,
+    guild_owner: IdentityId,
+    actor: IdentityId,
     resource_kind: GuildResourceKind,
     resource_id: Uuid,
     resource_public: bool,
@@ -529,7 +530,7 @@ struct GuildRow {
     name: String,
     tag: String,
     description: String,
-    owner: Uuid,
+    owner: IdentityId,
     created_at: OffsetDateTime,
     join_policy: JoinPolicy,
     /// Issue #153.
@@ -616,7 +617,7 @@ pub struct GuildResponse {
     pub name: String,
     pub tag: String,
     pub description: String,
-    pub owner: Uuid,
+    pub owner: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -1065,7 +1066,7 @@ pub async fn update_guild(
 pub(crate) async fn actor_role_permissions(
     state: &AppState,
     guild_id: Uuid,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<Vec<String>, AppError> {
     Ok(actor_role(state, guild_id, actor)
         .await?
@@ -1562,7 +1563,7 @@ pub struct PermissionOverrideResponse {
 async fn require_manage_roles(
     state: &AppState,
     guild: &GuildRow,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let actor_permissions = actor_role_permissions(state, guild.id, actor).await?;
     if has_guild_permission(
@@ -1791,7 +1792,7 @@ pub async fn delete_permission_override(
 
 #[derive(Deserialize, ToSchema)]
 pub struct TransferOwnershipRequest {
-    pub to: Uuid,
+    pub to: IdentityId,
     /// #704's gap #2 / #697/#698: permanently hands another identity full
     /// ownership — signature-required.
     pub signing_key_id: Option<Uuid>,
@@ -1969,14 +1970,14 @@ pub async fn associate_integrator(
 
 /// True if `actor` may leave a guild owned by `guild_owner` without first
 /// transferring ownership away — false only for the owner themself.
-fn can_leave(actor: Uuid, guild_owner: Uuid) -> bool {
+fn can_leave(actor: IdentityId, guild_owner: IdentityId) -> bool {
     actor != guild_owner
 }
 
 /// True if `target` may be removed from a guild owned by `guild_owner` at
 /// all — never the owner, regardless of who's asking or what permissions
 /// they hold.
-fn can_be_removed(target: Uuid, guild_owner: Uuid) -> bool {
+fn can_be_removed(target: IdentityId, guild_owner: IdentityId) -> bool {
     target != guild_owner
 }
 
@@ -1987,8 +1988,8 @@ fn can_be_removed(target: Uuid, guild_owner: Uuid) -> bool {
 /// `manage_roles`, so role authority alone can't be used to purge a peer at
 /// the same tier.
 fn can_remove_member(
-    guild_owner: Uuid,
-    actor: Uuid,
+    guild_owner: IdentityId,
+    actor: IdentityId,
     actor_permissions: &[String],
     target_role_index: i32,
 ) -> bool {
@@ -2021,7 +2022,7 @@ pub(crate) fn can_join_directly(join_policy: JoinPolicy) -> bool {
 #[derive(Serialize, ToSchema)]
 pub struct GuildMemberResponse {
     pub guild_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub role_index: i32,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -2031,7 +2032,7 @@ pub struct GuildMemberResponse {
 async fn member_role_index(
     state: &AppState,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<i32, AppError> {
     guild_rosters::role_index_for(&state.pool, guild_id, identity_id)
         .await?
@@ -2040,15 +2041,15 @@ async fn member_role_index(
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateGuildInviteRequest {
-    pub to: Uuid,
+    pub to: IdentityId,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct GuildInviteResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
-    pub to: Uuid,
-    pub from: Uuid,
+    pub to: IdentityId,
+    pub from: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -2145,7 +2146,7 @@ pub struct MyGuildInviteResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
     pub guild_name: String,
-    pub from: Uuid,
+    pub from: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -2197,7 +2198,7 @@ pub async fn my_guild_invites(
 }
 
 struct PendingGuildInvite {
-    to: Uuid,
+    to: IdentityId,
 }
 
 async fn fetch_pending_invite(
@@ -2235,9 +2236,9 @@ async fn add_member(
     indexer: &crate::state::IndexerHandle,
     tx: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     role_index: i32,
-    actor: Uuid,
+    actor: IdentityId,
     via: &str,
 ) -> Result<(OffsetDateTime, ProtocolEvent), AppError> {
     if guild_rosters::is_member(&mut **tx, guild_id, identity_id).await? {
@@ -2517,13 +2518,13 @@ pub async fn leave_guild(
     delete,
     path = "/guilds/{id}/members/{identity_id}",
     tag = "guilds",
-    params(("id" = Uuid, Path), ("identity_id" = Uuid, Path)),
+    params(("id" = Uuid, Path), ("identity_id" = IdentityId, Path)),
     responses((status = 200, description = "Member removed")),
 )]
 pub async fn remove_member(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((guild_id, identity_id)): Path<(Uuid, Uuid)>,
+    Path((guild_id, identity_id)): Path<(Uuid, IdentityId)>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -2599,7 +2600,7 @@ pub struct CreateJoinRequestRequest {
 pub struct GuildJoinRequestResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
-    pub applicant: Uuid,
+    pub applicant: IdentityId,
     pub message: Option<String>,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -2608,7 +2609,7 @@ pub struct GuildJoinRequestResponse {
     #[serde(with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = "date-time")]
     pub decided_at: Option<OffsetDateTime>,
-    pub decided_by: Option<Uuid>,
+    pub decided_by: Option<IdentityId>,
 }
 
 fn join_request_response(
@@ -2805,7 +2806,7 @@ pub async fn my_join_request(
 }
 
 struct PendingJoinRequest {
-    applicant: Uuid,
+    applicant: IdentityId,
 }
 
 async fn fetch_pending_join_request(
@@ -2994,14 +2995,14 @@ pub struct UpdateGuildMemberRequest {
     patch,
     path = "/guilds/{id}/members/{identity_id}",
     tag = "guilds",
-    params(("id" = Uuid, Path), ("identity_id" = Uuid, Path)),
+    params(("id" = Uuid, Path), ("identity_id" = IdentityId, Path)),
     request_body = UpdateGuildMemberRequest,
     responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn update_member_role(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((guild_id, identity_id)): Path<(Uuid, Uuid)>,
+    Path((guild_id, identity_id)): Path<(Uuid, IdentityId)>,
     Json(body): Json<UpdateGuildMemberRequest>,
 ) -> Result<Json<GuildMemberResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
@@ -3275,7 +3276,7 @@ pub struct DiscoverGuildsResponse {
 fn build_discover_query(
     query: &DiscoverGuildsQuery,
     sort: DiscoverSort,
-    actor: Uuid,
+    actor: IdentityId,
     limit: i64,
 ) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
@@ -3459,8 +3460,8 @@ pub struct GameBreakdownResponse {
 /// which case anyone (including a non-member) may view it. Pure and
 /// unit-testable independent of any query.
 fn can_view_game_breakdown(
-    guild_owner: Uuid,
-    actor: Uuid,
+    guild_owner: IdentityId,
+    actor: IdentityId,
     actor_permissions: &[String],
     game_breakdown_public: bool,
 ) -> bool {

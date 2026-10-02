@@ -45,13 +45,13 @@
 //! correctly this module advertises and resolves it. Sequenced alongside
 //! #629, not blocked on it landing first — see epic #623's own scope note.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
-use uuid::Uuid;
 
 use crate::interest::{InterestGuard, InterestRegistry, InterestScope};
 use crate::state::AppState;
@@ -91,7 +91,7 @@ const REGISTRATION_STAGGER: Duration = Duration::from_millis(100);
 /// registered scope and keeps re-`PutRecord`ing it, exactly as it already
 /// does for `InterestScope::Network`.
 pub async fn run_worker(pool: sqlx::PgPool, registry: InterestRegistry) {
-    let mut guards: HashMap<Uuid, InterestGuard> = HashMap::new();
+    let mut guards: HashMap<IdentityId, InterestGuard> = HashMap::new();
     let mut tick = tokio::time::interval(scan_interval());
     loop {
         tick.tick().await;
@@ -114,8 +114,8 @@ pub async fn run_worker(pool: sqlx::PgPool, registry: InterestRegistry) {
 /// [`run_worker`]'s loop body so it's directly unit-testable without a real
 /// Postgres pool.
 async fn register_new(
-    identity_ids: Vec<Uuid>,
-    guards: &mut HashMap<Uuid, InterestGuard>,
+    identity_ids: Vec<IdentityId>,
+    guards: &mut HashMap<IdentityId, InterestGuard>,
     registry: &InterestRegistry,
 ) {
     for identity_id in identity_ids {
@@ -137,7 +137,7 @@ async fn register_new(
 /// shared Layer-1 shard's own registration never reflects). `None` from
 /// `state.dht_commands` (no DHT identity configured) resolves to an empty
 /// list, same degenerate case `interest::lookup` already documents.
-pub async fn resolve(state: &AppState, identity_id: Uuid) -> Vec<String> {
+pub async fn resolve(state: &AppState, identity_id: IdentityId) -> Vec<String> {
     let Some(dht_commands) = &state.dht_commands else {
         return Vec::new();
     };
@@ -167,12 +167,12 @@ pub struct LocationsResponse {
     get,
     path = "/identities/{id}/locations",
     tag = "identity",
-    params(("id" = Uuid, Path)),
+    params(("id" = IdentityId, Path)),
     responses((status = 200, description = "The locations", body = LocationsResponse)),
 )]
 pub async fn get_locations(
     State(state): State<AppState>,
-    Path(identity_id): Path<Uuid>,
+    Path(identity_id): Path<IdentityId>,
 ) -> Json<LocationsResponse> {
     Json(LocationsResponse {
         locations: resolve(&state, identity_id).await,
@@ -192,8 +192,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn registrations_found_in_one_scan_are_staggered_not_simultaneous() {
         let (registry, _newly_active) = InterestRegistry::new();
-        let ids = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let mut guards: HashMap<Uuid, InterestGuard> = HashMap::new();
+        let ids = vec![IdentityId::random_for_tests(), IdentityId::random_for_tests(), IdentityId::random_for_tests()];
+        let mut guards: HashMap<IdentityId, InterestGuard> = HashMap::new();
 
         let start = tokio::time::Instant::now();
         register_new(ids.clone(), &mut guards, &registry).await;
@@ -215,8 +215,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_already_registered_identity_is_never_re_registered() {
         let (registry, _newly_active) = InterestRegistry::new();
-        let id = Uuid::new_v4();
-        let mut guards: HashMap<Uuid, InterestGuard> = HashMap::new();
+        let id = IdentityId::random_for_tests();
+        let mut guards: HashMap<IdentityId, InterestGuard> = HashMap::new();
         guards.insert(id, registry.register(InterestScope::Identity(id)));
 
         let start = tokio::time::Instant::now();
