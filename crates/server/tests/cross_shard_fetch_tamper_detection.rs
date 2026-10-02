@@ -28,7 +28,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use avalon_chain::{hash_entry, merkle, EntryContent};
 use avalon_protocol::sth::sign_tree_head;
-use avalon_server::cross_shard_fetch::{fetch_verified_entries, CrossShardFetchError};
+use avalon_server::cross_shard_fetch::{fetch_verified_entries_with, CrossShardFetchError};
+use avalon_server::node_http::NodeClient;
+use avalon_server::outbound_policy::OutboundPolicy;
 
 const NETWORK_ID: &str = "avalon-tamper-test";
 
@@ -187,7 +189,8 @@ async fn an_honestly_served_payload_verifies() {
     let (server, signing_key) = mock_remote_node(&real, &real.payload).await;
     let verify_keys = HashMap::from([("core".to_string(), signing_key.verifying_key())]);
 
-    let entries = fetch_verified_entries(
+    let entries = fetch_verified_entries_with(
+        &NodeClient::guarded_with(OutboundPolicy::new(true)),
         &lazy_pool(),
         NETWORK_ID,
         "core",
@@ -226,7 +229,8 @@ async fn a_forged_payload_alongside_a_valid_unrelated_proof_is_rejected() {
     let (server, signing_key) = mock_remote_node(&real, &forged_payload).await;
     let verify_keys = HashMap::from([("core".to_string(), signing_key.verifying_key())]);
 
-    let result = fetch_verified_entries(
+    let result = fetch_verified_entries_with(
+        &NodeClient::guarded_with(OutboundPolicy::new(true)),
         &lazy_pool(),
         NETWORK_ID,
         "core",

@@ -26,7 +26,9 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use avalon_server::cross_shard_fetch::{fetch_verified_entries, CrossShardFetchError};
+use avalon_server::cross_shard_fetch::{fetch_verified_entries_with, CrossShardFetchError};
+use avalon_server::node_http::NodeClient;
+use avalon_server::outbound_policy::OutboundPolicy;
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -156,7 +158,8 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
     let deadline = std::time::Instant::now() + wait;
     let entries;
     loop {
-        let attempt = fetch_verified_entries(
+        let attempt = fetch_verified_entries_with(
+            &NodeClient::guarded_with(OutboundPolicy::new(true)),
             &pool,
             &network_id(),
             "core",
@@ -201,7 +204,8 @@ async fn an_unknown_subject_returns_no_entries() {
     let pool = test_pool().await;
     let subject = format!("identity:{}:self:signing_key_added", Uuid::new_v4());
 
-    let entries = fetch_verified_entries(
+    let entries = fetch_verified_entries_with(
+        &NodeClient::guarded_with(OutboundPolicy::new(true)),
         &pool,
         &network_id(),
         "core",
@@ -227,7 +231,8 @@ async fn a_shard_with_no_resolvable_verify_key_fails_closed() {
     let pool = test_pool().await;
     let (_identity_id, subject) = register_identity(&http, &base).await;
 
-    let result = fetch_verified_entries(
+    let result = fetch_verified_entries_with(
+        &NodeClient::guarded_with(OutboundPolicy::new(true)),
         &pool,
         &network_id(),
         "core",
@@ -260,7 +265,8 @@ async fn a_wrong_verify_key_fails_closed() {
     let wrong_key = SigningKey::generate(&mut rand::rng()).verifying_key();
     let wrong_keys = HashMap::from([("core".to_string(), wrong_key)]);
 
-    let result = fetch_verified_entries(
+    let result = fetch_verified_entries_with(
+        &NodeClient::guarded_with(OutboundPolicy::new(true)),
         &pool,
         &network_id(),
         "core",
