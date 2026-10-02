@@ -103,7 +103,7 @@ async fn unknown_ids_are_omitted_not_errors() {
     let base = server_url();
     let alice_name = format!("alice-unknown-id-test-{}", Uuid::new_v4());
     let (alice_id, alice_token) = seed_identity_session(&pool, &alice_name).await;
-    let missing_id = Uuid::new_v4();
+    let missing_id = avalon_protocol::ids::IdentityId::random_for_tests();
 
     let response = auth(
         http.get(format!(

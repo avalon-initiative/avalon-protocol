@@ -20,20 +20,32 @@ CREATE TEMP TABLE identity_plain_cols (tbl text, col text) ON COMMIT DROP;
 INSERT INTO identity_plain_cols VALUES
     ('guild_messages_replica', 'author'),
     ('conversation_messages_replica', 'author'),
-    ('indexer_game_bindings', 'identity_id'),
-    ('indexer_game_data_instances', 'subject'),
+    ('indexer_integrator_bindings', 'identity_id'),
+    ('indexer_integrator_data_instances', 'subject'),
     ('identity_chain_events', 'identity_id'),
     ('identity_chain_state', 'identity_id');
 
+CREATE TEMP TABLE identity_check_defs ON COMMIT DROP AS
+SELECT DISTINCT c.conrelid::regclass::text AS tbl, c.conname AS conname,
+       pg_get_constraintdef(c.oid) AS def
+FROM pg_constraint c
+JOIN (SELECT tbl, col FROM identity_fk_cols UNION SELECT tbl, col FROM identity_plain_cols) ic
+  ON ic.tbl = c.conrelid::regclass::text
+JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = ic.col
+WHERE c.contype = 'c' AND a.attnum = ANY (c.conkey) AND c.conname NOT LIKE '%\_hex\_chk';
+
 TRUNCATE identities CASCADE;
-TRUNCATE guild_messages_replica, conversation_messages_replica, indexer_game_bindings,
-         indexer_game_data_instances, identity_chain_events, identity_chain_state;
+TRUNCATE guild_messages_replica, conversation_messages_replica, indexer_integrator_bindings,
+         indexer_integrator_data_instances, identity_chain_events, identity_chain_state;
 
 DO $$
 DECLARE
     r record;
 BEGIN
     FOR r IN SELECT * FROM identity_fk_cols LOOP
+        EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.tbl, r.conname);
+    END LOOP;
+    FOR r IN SELECT * FROM identity_check_defs LOOP
         EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.tbl, r.conname);
     END LOOP;
 
@@ -49,6 +61,10 @@ BEGIN
             'ALTER TABLE %s ADD CONSTRAINT %I CHECK (%I ~ ''^[0-9a-f]{64}$'')',
             r.tbl, r.tbl || '_' || r.col || '_hex_chk', r.col
         );
+    END LOOP;
+
+    FOR r IN SELECT * FROM identity_check_defs LOOP
+        EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.tbl, r.conname, r.def);
     END LOOP;
 
     FOR r IN SELECT * FROM identity_fk_cols LOOP

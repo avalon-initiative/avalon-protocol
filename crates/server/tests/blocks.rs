@@ -102,7 +102,7 @@ async fn a_friend_request_from_a_blocked_identity_fails_identically_to_a_nonexis
     let blocked_body: serde_json::Value = blocked_attempt.json().await.unwrap();
 
     let nonexistent_attempt = auth(http.post(format!("{base}/friends/requests")), &bob_token)
-        .json(&serde_json::json!({ "to": Uuid::new_v4() }))
+        .json(&serde_json::json!({ "to": avalon_protocol::ids::IdentityId::random_for_tests() }))
         .send()
         .await
         .unwrap();

@@ -362,9 +362,21 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
     // Revoking your own only signing key is allowed (unilateral, per
     // `devices::revoke_device`'s own doc comment) — the identity still has
     // its passkey for normal login, just no active signing key.
+    let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+        &identity_id,
+        signing_key_id,
+        signing_key_id,
+    );
     let revoke_status = http
         .post(format!("{base}/me/devices/{signing_key_id}/revoke"))
         .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "revoked_by_signing_key_id": signing_key_id,
+            "signature": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                signing_key.sign(&revoke_bytes).to_bytes(),
+            ),
+        }))
         .send()
         .await
         .unwrap()

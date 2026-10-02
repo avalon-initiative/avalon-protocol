@@ -438,7 +438,10 @@ async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
     let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
 
     let response = http
-        .get(format!("{base}/identities/{}/profile", Uuid::new_v4()))
+        .get(format!(
+            "{base}/identities/{}/profile",
+            avalon_protocol::ids::IdentityId::random_for_tests()
+        ))
         .bearer_auth(&viewer_token)
         .send()
         .await

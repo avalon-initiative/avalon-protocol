@@ -101,10 +101,11 @@ async fn the_signer_column_is_required_on_a_fresh_database() {
     assert!(has_signer_column(&s.pool).await);
     let missing = sqlx::query(
         "INSERT INTO guild_messages_replica (id, channel_id, author, body, sent_at) \
-         VALUES ($1, $2, $2, 'x', now())",
+         VALUES ($1, $2, $3, 'x', now())",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
+    .bind(avalon_protocol::ids::IdentityId::random_for_tests())
     .execute(&s.pool)
     .await;
     assert!(missing.is_err(), "a row without a signer was accepted");
@@ -115,9 +116,13 @@ async fn the_signer_column_is_required_on_a_fresh_database() {
 #[ignore]
 async fn the_migration_applies_to_populated_replicas_and_leaves_old_rows_undeletable() {
     let s = Scratch::new("populated").await;
-    migrate::migrate_down_one(&s.pool, MigrationSource::Embedded)
-        .await
-        .unwrap();
+    // The identity-id migration sits above the signer one; revert both, then replay the signer
+    // migration's own SQL against the populated tables.
+    for _ in 0..2 {
+        migrate::migrate_down_one(&s.pool, MigrationSource::Embedded)
+            .await
+            .unwrap();
+    }
     assert!(
         !has_signer_column(&s.pool).await,
         "the latest migration is not the signer one"
@@ -131,7 +136,7 @@ async fn the_migration_applies_to_populated_replicas_and_leaves_old_rows_undelet
     )
     .bind(old.id)
     .bind(channel)
-    .bind(old.author)
+    .bind(Uuid::new_v4())
     .bind(&old.body)
     .bind(old.sent_at)
     .execute(&s.pool)
@@ -147,9 +152,12 @@ async fn the_migration_applies_to_populated_replicas_and_leaves_old_rows_undelet
     .await
     .unwrap();
 
-    migrate::migrate_up(&s.pool, MigrationSource::Embedded)
-        .await
-        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../db/migrations/0082_chat_replica_signer/up.sql"
+    ))
+    .execute(&s.pool)
+    .await
+    .unwrap();
     assert!(has_signer_column(&s.pool).await);
     let unsigned: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM guild_messages_replica WHERE replicated_by = '') \

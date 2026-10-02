@@ -18,8 +18,8 @@ async fn test_pool() -> PgPool {
 const UNREFERENCED_IDENTITY_COLUMNS: &[(&str, &str)] = &[
     ("guild_messages_replica", "author"),
     ("conversation_messages_replica", "author"),
-    ("indexer_game_bindings", "identity_id"),
-    ("indexer_game_data_instances", "subject"),
+    ("indexer_integrator_bindings", "identity_id"),
+    ("indexer_integrator_data_instances", "subject"),
     ("identity_chain_events", "identity_id"),
     ("identity_chain_state", "identity_id"),
 ];

@@ -192,11 +192,15 @@ async fn a_integrator_with_activity_below_the_floor_reports_coarsened_not_exact_
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let issuer = format!("game:{slug}");
-    let holder_valid = Uuid::new_v4();
-    let holder_revoked = Uuid::new_v4();
-    for holder in [holder_valid, holder_revoked] {
-        sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(holder)
+    let holder_valid_who = avalon_protocol::identity_id::TestIdentity::new();
+    let holder_revoked_who = avalon_protocol::identity_id::TestIdentity::new();
+    let (holder_valid, holder_revoked) = (holder_valid_who.id, holder_revoked_who.id);
+    for who in [&holder_valid_who, &holder_revoked_who] {
+        sqlx::query(
+            "INSERT INTO identities (id, inception_public_key) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+            .bind(who.id)
+            .bind(who.public_key().to_vec())
             .execute(&pool)
             .await
             .unwrap();

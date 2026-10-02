@@ -105,3 +105,21 @@ async fn a_display_name_shaped_like_an_identity_id_is_rejected() {
     assert_eq!(status, 400);
     assert_eq!(body["code"], "INVALID_DISPLAY_NAME");
 }
+
+#[tokio::test]
+#[ignore]
+async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
+    let http = reqwest::Client::new();
+    for bad in [
+        "00000000-0000-0000-0000-000000000000",
+        "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+        "short",
+    ] {
+        let response = http
+            .get(format!("{}/identities/{bad}/locations", server_url()))
+            .send()
+            .await
+            .expect("request failed — is `make start` running?");
+        assert_eq!(response.status().as_u16(), 400, "{bad}");
+    }
+}

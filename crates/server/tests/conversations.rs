@@ -563,7 +563,7 @@ async fn nonexistent_and_unrelated_participant_get_identical_rejection() {
     let client = reqwest::Client::new();
     let (_alice_id, alice_token) = seed_identity_session(&pool).await;
     let (unrelated_id, _unrelated_token) = seed_identity_session(&pool).await;
-    let nonexistent_id = Uuid::new_v4();
+    let nonexistent_id = avalon_protocol::ids::IdentityId::random_for_tests();
 
     let unrelated_response = auth(
         client.post(format!("{}/conversations", server_url())),

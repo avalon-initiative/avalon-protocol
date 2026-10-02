@@ -171,7 +171,7 @@ async fn missing_presence_reads_as_offline() {
     let http = reqwest::Client::new();
     let base = server_url();
     let (_alice_id, alice_token) = seed_identity_session(&pool).await;
-    let never_published = Uuid::new_v4();
+    let never_published = avalon_protocol::ids::IdentityId::random_for_tests();
 
     let read: serde_json::Value = auth(
         http.get(format!("{base}/presence?ids={never_published}")),
