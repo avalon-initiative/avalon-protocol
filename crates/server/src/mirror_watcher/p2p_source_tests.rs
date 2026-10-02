@@ -232,7 +232,7 @@ async fn head_for(
     shard: &str,
     bounds: &crate::self_certifying_keys::MirrorBounds,
 ) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
-    head_for_with(s, pool, NETWORK, shard, bounds, &mut BTreeSet::new()).await
+    head_for_with(s, pool, NETWORK, shard, bounds, &BTreeSet::new()).await
 }
 
 async fn head_for_with(
@@ -241,9 +241,10 @@ async fn head_for_with(
     network: &str,
     shard: &str,
     bounds: &crate::self_certifying_keys::MirrorBounds,
-    admitted_new: &mut BTreeSet<String>,
+    admitted_new: &BTreeSet<String>,
 ) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
-    let fetched = fetch_source_head(&s.client, &s.source, shard).await?;
+    let fetched =
+        fetch_source_head(&s.client, &s.source, shard, SELF_CERTIFYING_FETCH_DEADLINE).await?;
     verify_configured_head(
         pool,
         network,
@@ -524,7 +525,7 @@ async fn a_core_shard_over_a_stream_is_verified_against_the_trust_anchor() {
         let (client, source) = (served.client.clone(), served.source.clone());
         let (pool, anchors, bounds) = (pool.clone(), anchors.clone(), bounds);
         async move {
-            let fetched = fetch_source_head(&client, &source, "core").await?;
+            let fetched = fetch_source_head(&client, &source, "core", CORE_FETCH_DEADLINE).await?;
             verify_configured_head(
                 &pool,
                 NETWORK,
@@ -533,7 +534,7 @@ async fn a_core_shard_over_a_stream_is_verified_against_the_trust_anchor() {
                 &source,
                 fetched,
                 &bounds,
-                &mut BTreeSet::new(),
+                &BTreeSet::new(),
             )
             .await
         }
@@ -593,14 +594,20 @@ fn a_hostile_retry_after_is_clamped() {
     assert_eq!(retry_wait(Some("5")), Duration::from_secs(5));
 }
 
+/// A source that keeps answering 429 with the longest `Retry-After` drives the retry loop past
+/// the deadline, which only the outer deadline in `fetch_source_head` can cut off.
 #[tokio::test(start_paused = true)]
-async fn a_silent_source_is_cut_off_at_the_fetch_deadline() {
+async fn a_rate_limiting_source_is_cut_off_at_the_fetch_deadline() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    // Accepts the request and never answers.
-    let held = tokio::spawn(async move {
-        let mut keep = Vec::new();
+    tokio::spawn(async move {
         while let Some(c) = rx.recv().await {
-            keep.push(c);
+            if let crate::dht::DhtCommand::HttpRequest { respond_to, .. } = c {
+                let _ = respond_to.send(Ok(crate::node_http::NodeHttpResponse {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "86400".into())],
+                    body: vec![],
+                }));
+            }
         }
     });
     let client = crate::node_http::NodeClient::new().with_stream(crate::node_http::StreamHandle {
@@ -610,14 +617,27 @@ async fn a_silent_source_is_cut_off_at_the_fetch_deadline() {
     });
     let source = crate::node_http::p2p_base_url(&libp2p::PeerId::random());
     let started = tokio::time::Instant::now();
-    let r = fetch_source_head(&client, &source, "node:x").await;
+    let r = fetch_source_head(&client, &source, "node:x", SELF_CERTIFYING_FETCH_DEADLINE).await;
     assert!(
         matches!(&r, Err(e) if is_unreachable(e)),
         "{:?}",
         r.err().map(|e| e.to_string())
     );
-    assert!(started.elapsed() <= SOURCE_FETCH_DEADLINE + Duration::from_secs(1));
-    held.abort();
+    assert!(started.elapsed() <= SELF_CERTIFYING_FETCH_DEADLINE + Duration::from_secs(1));
+    assert!(started.elapsed() >= SELF_CERTIFYING_FETCH_DEADLINE);
+}
+
+#[test]
+fn core_sources_get_a_longer_deadline_than_node_shard_sources() {
+    let node = avalon_protocol::shard_identity::derive_self_certifying_id(
+        &SigningKey::from_bytes(&[2; 32]).verifying_key(),
+    );
+    assert_eq!(
+        configured_fetch_deadline(&node),
+        SELF_CERTIFYING_FETCH_DEADLINE
+    );
+    assert_eq!(configured_fetch_deadline("core"), CORE_FETCH_DEADLINE);
+    assert!(CORE_FETCH_DEADLINE > SELF_CERTIFYING_FETCH_DEADLINE);
 }
 
 #[tokio::test]
@@ -650,7 +670,7 @@ async fn a_head_for_another_network_is_refused_on_either_transport() {
             "some-other-network",
             &shard,
             &Default::default(),
-            &mut BTreeSet::new(),
+            &BTreeSet::new(),
         )
         .await;
         assert!(
@@ -662,87 +682,160 @@ async fn a_head_for_another_network_is_refused_on_either_transport() {
 
 #[tokio::test]
 #[ignore]
-async fn the_new_shard_budget_is_shared_charged_on_success_and_never_double_counted() {
+async fn refused_and_held_heads_spend_no_admit_slot_and_only_a_pin_does() {
     let pool = live_pool().await;
     let bounds = crate::self_certifying_keys::MirrorBounds {
         max_new_per_tick: 2,
+        max_shards_per_source: 1,
         ..Default::default()
     };
     let mut admitted = BTreeSet::new();
-    // An offline source and a refused head spend nothing.
     let offline = Served {
         client: crate::node_http::NodeClient::new(),
         source: crate::node_http::p2p_base_url(&libp2p::PeerId::random()),
         _http: None,
     };
-    for _ in 0..4 {
+    // Offline, bad-signature, wrong-network and can_admit-refused heads charge nothing.
+    for _ in 0..3 {
         let o = origin(1);
-        let r = head_for_with(
-            &offline,
-            &pool,
-            NETWORK,
-            &shard_id(&o),
-            &bounds,
-            &mut admitted,
-        )
-        .await;
+        let r = head_for_with(&offline, &pool, NETWORK, &shard_id(&o), &bounds, &admitted).await;
         assert!(r.is_err());
     }
-    assert!(admitted.is_empty());
-
-    let (a, b, c) = (origin(1), origin(1), origin(1));
-    let on_stream = serve(&a, Transport::Stream).await;
-    let on_http = serve(&a, Transport::Http).await;
-    for served in [&on_stream, &on_http] {
-        // The same shard from a second source is one charge, not two.
-        let got = head_for_with(
-            served,
-            &pool,
-            NETWORK,
-            &shard_id(&a),
-            &bounds,
-            &mut admitted,
-        )
+    let bad = origin(1);
+    bad.lock().unwrap().corrupt_signature = true;
+    let sbad = serve(&bad, Transport::Stream).await;
+    assert!(
+        head_for_with(&sbad, &pool, NETWORK, &shard_id(&bad), &bounds, &admitted)
+            .await
+            .is_err()
+    );
+    let good = origin(1);
+    let sgood = serve(&good, Transport::Stream).await;
+    assert!(head_for_with(
+        &sgood,
+        &pool,
+        "other-net",
+        &shard_id(&good),
+        &bounds,
+        &admitted
+    )
+    .await
+    .is_err());
+    let capped = origin(1);
+    let scap = serve(&capped, Transport::Stream).await;
+    let squatter = origin(1);
+    let key = squatter.lock().unwrap().signing.verifying_key();
+    crate::self_certifying_keys::pin_key(&pool, &shard_id(&squatter), &key, &scap.source, &bounds)
         .await
         .unwrap();
-        assert!(got.is_some());
-    }
-    assert_eq!(admitted.len(), 1);
-    let sb = serve(&b, Transport::Stream).await;
+    assert!(head_for_with(
+        &scap,
+        &pool,
+        NETWORK,
+        &shard_id(&capped),
+        &bounds,
+        &admitted
+    )
+    .await
+    .is_err());
+    assert!(admitted.is_empty());
+
+    // A verified head that is held (unpinned) spends nothing; pinning it does, once.
+    let a = origin(1);
+    let sa = serve(&a, Transport::Stream).await;
+    let shard_a = shard_id(&a);
+    let was = is_admitted(&pool, &shard_a).await;
+    assert!(!was);
     assert!(
-        head_for_with(&sb, &pool, NETWORK, &shard_id(&b), &bounds, &mut admitted)
+        head_for_with(&sa, &pool, NETWORK, &shard_a, &bounds, &admitted)
             .await
             .unwrap()
             .is_some()
     );
-    // The budget of 2 is spent: a third new shard is skipped (Ok(None)), stores nothing.
+    charge_admission(&pool, &shard_a, was, &mut admitted).await;
+    assert!(admitted.is_empty(), "unpinned head must not spend a slot");
+    let key = a.lock().unwrap().signing.verifying_key();
+    crate::self_certifying_keys::pin_key(&pool, &shard_a, &key, &sa.source, &bounds)
+        .await
+        .unwrap();
+    charge_admission(&pool, &shard_a, was, &mut admitted).await;
+    charge_admission(&pool, &shard_a, was, &mut admitted).await;
+    assert_eq!(admitted.len(), 1);
+    // A shard that was already pinned never counts.
+    charge_admission(&pool, &shard_a, true, &mut BTreeSet::new()).await;
+
+    // With the budget spent, a new unpinned shard is skipped (Ok(None)) and stores nothing;
+    // from a non-zero starting set one slot is left.
+    let full = BTreeSet::from(["node:x".to_string(), "node:y".to_string()]);
+    let c = origin(1);
     let sc = serve(&c, Transport::Stream).await;
     assert!(
-        head_for_with(&sc, &pool, NETWORK, &shard_id(&c), &bounds, &mut admitted)
+        head_for_with(&sc, &pool, NETWORK, &shard_id(&c), &bounds, &full)
             .await
             .unwrap()
             .is_none()
     );
-    assert!(!admitted.contains(&shard_id(&c)));
     assert_eq!(stored(&pool, &shard_id(&c)).await, 0);
-    // Starting from a non-zero count (a prior charge) leaves one slot.
-    let mut prior = BTreeSet::from(["node:someone-else".to_string()]);
-    let d = origin(1);
-    let sd = serve(&d, Transport::Stream).await;
+    let one_left = BTreeSet::from(["node:x".to_string()]);
     assert!(
-        head_for_with(&sd, &pool, NETWORK, &shard_id(&d), &bounds, &mut prior)
+        head_for_with(&sc, &pool, NETWORK, &shard_id(&c), &bounds, &one_left)
             .await
             .unwrap()
             .is_some()
     );
-    let e = origin(1);
-    let se = serve(&e, Transport::Stream).await;
-    assert!(
-        head_for_with(&se, &pool, NETWORK, &shard_id(&e), &bounds, &mut prior)
-            .await
-            .unwrap()
-            .is_none()
-    );
+}
+
+/// Dead discovered `node:` shards cost at most `max_new_per_tick` fetches a tick, and the
+/// attempts rotate so different shards get their turn.
+#[tokio::test]
+#[ignore]
+async fn discovery_fetch_attempts_per_tick_are_capped_and_rotate() {
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    let pool = live_pool().await;
+    let bounds = crate::self_certifying_keys::MirrorBounds::default();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let registry = crate::nodes::ShardRegistry::new();
+    for i in 0..32u8 {
+        let mut seed = [i; 32];
+        seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+        let id = avalon_protocol::shard_identity::derive_self_certifying_id(
+            &SigningKey::from_bytes(&seed).verifying_key(),
+        );
+        registry.record_own(&id, &server.uri(), OffsetDateTime::now_utc());
+    }
+    let tick = || async {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let found = discover_and_verify_shard_peers(
+            &crate::node_http::NodeClient::new(),
+            &pool,
+            NETWORK,
+            &registry,
+            None,
+            &BTreeSet::new(),
+            &bounds,
+            &BTreeSet::new(),
+        )
+        .await;
+        assert!(found.is_empty());
+        let mut asked = BTreeSet::new();
+        for r in server.received_requests().await.unwrap() {
+            asked.insert(r.url.query().unwrap_or_default().to_string());
+        }
+        (server.received_requests().await.unwrap().len(), asked)
+    };
+    let (n1, first) = tick().await;
+    let (n2, second) = tick().await;
+    assert!(n1 <= bounds.max_new_per_tick && n1 > 0, "{n1}");
+    assert!(n2 <= bounds.max_new_per_tick, "{n2}");
+    assert_ne!(first, second, "attempts must rotate between ticks");
 }
 
 #[tokio::test]

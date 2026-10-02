@@ -277,10 +277,20 @@ async fn discover_and_verify_shard_peers(
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
     bounds: &crate::self_certifying_keys::MirrorBounds,
-    new_self_certifying: &mut BTreeSet<String>,
+    admitted_new: &BTreeSet<String>,
 ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
-    for shard_id in shard_registry.known_shard_ids() {
+    // Fetch attempts for unpinned self-certifying shards this tick, counted before the fetch.
+    let mut attempts = 0usize;
+    let mut shard_ids: Vec<String> = shard_registry.known_shard_ids().into_iter().collect();
+    // Rotate the start so a few hostile shards cannot hold the attempts every tick.
+    static TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tick = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !shard_ids.is_empty() {
+        let by = tick % shard_ids.len();
+        shard_ids.rotate_left(by);
+    }
+    for shard_id in shard_ids {
         if already_configured.contains(&shard_id) {
             continue;
         }
@@ -315,7 +325,8 @@ async fn discover_and_verify_shard_peers(
                 &shard_id,
                 &url,
                 bounds,
-                new_self_certifying,
+                admitted_new,
+                &mut attempts,
             )
             .await
             {
@@ -334,7 +345,7 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
-        match fetch_latest_sth(client, &url, Some(&shard_id)).await {
+        match fetch_source_head(client, &url, &shard_id, SELF_CERTIFYING_FETCH_DEADLINE).await {
             Ok((dto, _)) => {
                 let head: CosignedTreeHead = dto.into();
                 let now = OffsetDateTime::now_utc();
@@ -380,7 +391,10 @@ fn log_auto_mirror(shard_id: &str, url: &str) {
 }
 
 /// Fetches a self-certifying shard's head from `source` (http(s) or `p2p://`) and verifies it
-/// with [`verify_fetched_self_certifying_head`].
+/// with [`verify_fetched_self_certifying_head`]. An unpinned shard costs one of
+/// `bounds.max_new_per_tick` fetch `attempts` per tick, counted before the fetch whatever the
+/// outcome, so hostile or dead sources cannot cause unbounded work.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_and_verify_self_certifying_sth(
     client: &crate::node_http::NodeClient,
     pool: &PgPool,
@@ -388,13 +402,25 @@ async fn fetch_and_verify_self_certifying_sth(
     shard_id: &str,
     source: &str,
     bounds: &crate::self_certifying_keys::MirrorBounds,
-    admitted_new: &mut BTreeSet<String>,
+    admitted_new: &BTreeSet<String>,
+    attempts: &mut usize,
 ) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
     if budget_spent(pool, shard_id, bounds, admitted_new).await {
         log_budget_skip(shard_id, source);
         return Ok(None);
     }
-    let fetched = fetch_source_head(client, source, shard_id).await?;
+    if crate::self_certifying_keys::pinned_key(pool, shard_id)
+        .await
+        .is_none()
+    {
+        if *attempts >= bounds.max_new_per_tick {
+            log_budget_skip(shard_id, source);
+            return Ok(None);
+        }
+        *attempts += 1;
+    }
+    let fetched =
+        fetch_source_head(client, source, shard_id, SELF_CERTIFYING_FETCH_DEADLINE).await?;
     verify_fetched_self_certifying_head(
         pool,
         network_id,
@@ -407,7 +433,7 @@ async fn fetch_and_verify_self_certifying_sth(
     .await
 }
 
-/// Whether `shard_id` is unpinned and this tick already accepted `max_new_per_tick` other
+/// Whether `shard_id` is unpinned and this tick already admitted `max_new_per_tick` other
 /// new shards. The same shard from a second source is never counted twice.
 async fn budget_spent(
     pool: &PgPool,
@@ -422,10 +448,31 @@ async fn budget_spent(
             .is_none()
 }
 
+/// Whether `shard_id` is already pinned, or is not self-certifying and so never admitted.
+async fn is_admitted(pool: &PgPool, shard_id: &str) -> bool {
+    !avalon_protocol::shard_identity::is_self_certifying(shard_id)
+        || crate::self_certifying_keys::pinned_key(pool, shard_id)
+            .await
+            .is_some()
+}
+
+/// Charges the admit budget once `shard_id` is actually pinned after being unpinned. A head
+/// that was refused or is held for majority leaves the shard unpinned and spends no slot.
+async fn charge_admission(
+    pool: &PgPool,
+    shard_id: &str,
+    was_admitted: bool,
+    admitted_new: &mut BTreeSet<String>,
+) {
+    if !was_admitted && is_admitted(pool, shard_id).await {
+        admitted_new.insert(shard_id.to_string());
+    }
+}
+
 /// Verifies an already fetched head of a self-certifying shard: the shard's own key, never a
 /// trust anchor, vouches for it. `Ok(None)` when an unpinned shard is skipped because
-/// `admitted_new` already holds `bounds.max_new_per_tick` shards. The budget is charged only
-/// for a head that verified, so offline or hostile sources cannot spend it.
+/// `admitted_new` already holds `bounds.max_new_per_tick` shards. Nothing is charged here:
+/// the admit budget is charged by [`charge_admission`] only when the shard gets pinned.
 async fn verify_fetched_self_certifying_head(
     pool: &PgPool,
     network_id: &str,
@@ -433,7 +480,7 @@ async fn verify_fetched_self_certifying_head(
     source: &str,
     fetched: (SignedTreeHeadDto, String),
     bounds: &crate::self_certifying_keys::MirrorBounds,
-    admitted_new: &mut BTreeSet<String>,
+    admitted_new: &BTreeSet<String>,
 ) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
     let (dto, peer_protocol_version) = fetched;
     if budget_spent(pool, shard_id, bounds, admitted_new).await {
@@ -450,9 +497,6 @@ async fn verify_fetched_self_certifying_head(
     let now = OffsetDateTime::now_utc();
     let matched = cosign_verify::verify_cosigned_against_any_key([key], &head, &[], now)
         .ok_or(MirrorWatcherError::InvalidSignature)?;
-    if pinned.is_none() {
-        admitted_new.insert(shard_id.to_string());
-    }
     Ok(Some((head, matched)))
 }
 
@@ -725,7 +769,13 @@ pub async fn run_worker(
                     (
                         shard_id,
                         peer,
-                        fetch_source_head(client, peer, shard_id).await,
+                        fetch_source_head(
+                            client,
+                            peer,
+                            shard_id,
+                            configured_fetch_deadline(shard_id),
+                        )
+                        .await,
                     )
                 }))
                 .await,
@@ -742,7 +792,7 @@ pub async fn run_worker(
                         peer,
                         fetched,
                         &self_certifying_bounds,
-                        &mut admitted_new,
+                        &admitted_new,
                     )
                     .await
                 }
@@ -750,6 +800,7 @@ pub async fn run_worker(
             };
             match verified {
                 Ok(Some((head, author_key))) => {
+                    let was_admitted = is_admitted(&pool, shard_id).await;
                     record_verified_head(
                         &pool,
                         &chain,
@@ -767,6 +818,7 @@ pub async fn run_worker(
                         &mut held_logged,
                     )
                     .await;
+                    charge_admission(&pool, shard_id, was_admitted, &mut admitted_new).await;
                 }
                 Ok(None) => {}
                 Err(err) => log_source_failure(shard_id, peer, &err),
@@ -782,7 +834,7 @@ pub async fn run_worker(
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
                 &self_certifying_bounds,
-                &mut admitted_new,
+                &admitted_new,
             )
             .await;
             for (shard_id, peer, head, author_key) in discovered {
@@ -792,6 +844,11 @@ pub async fn run_worker(
                 // existence is not the same as this node committing to
                 // keep watching it the way an explicit
                 // `AVALON_MIRROR_PEERS` entry does.
+                if budget_spent(&pool, &shard_id, &self_certifying_bounds, &admitted_new).await {
+                    log_budget_skip(&shard_id, &peer);
+                    continue;
+                }
+                let was_admitted = is_admitted(&pool, &shard_id).await;
                 record_verified_head(
                     &pool,
                     &chain,
@@ -809,6 +866,7 @@ pub async fn run_worker(
                     &mut held_logged,
                 )
                 .await;
+                charge_admission(&pool, &shard_id, was_admitted, &mut admitted_new).await;
             }
         }
 
@@ -1042,30 +1100,40 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
     })
 }
 
-/// Longest a configured source may take to answer a head request.
-const SOURCE_FETCH_DEADLINE: Duration = Duration::from_secs(30);
+/// Longest a `node:` shard source (configured or discovered) may take to answer a head request.
+const SELF_CERTIFYING_FETCH_DEADLINE: Duration = Duration::from_secs(30);
+/// Longest a core or trust-anchor source may take: longer, because such a peer may be honestly
+/// rate-limited and operators depend on it; a `node:` shard operator is untrusted.
+const CORE_FETCH_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The head-fetch deadline for a configured source of `shard_id`.
+fn configured_fetch_deadline(shard_id: &str) -> Duration {
+    if avalon_protocol::shard_identity::is_self_certifying(shard_id) {
+        SELF_CERTIFYING_FETCH_DEADLINE
+    } else {
+        CORE_FETCH_DEADLINE
+    }
+}
 /// Configured sources fetched at once, so dead ones cannot stack their waits.
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 8;
 
-/// Fetches `source`'s latest head for `shard_id` within [`SOURCE_FETCH_DEADLINE`].
+/// Fetches `source`'s latest head for `shard_id` within `deadline`, retries included.
 async fn fetch_source_head(
     client: &crate::node_http::NodeClient,
     source: &str,
     shard_id: &str,
+    deadline: Duration,
 ) -> Result<(SignedTreeHeadDto, String), MirrorWatcherError> {
-    tokio::time::timeout(
-        SOURCE_FETCH_DEADLINE,
-        fetch_latest_sth(client, source, Some(shard_id)),
-    )
-    .await
-    .unwrap_or_else(|_| {
-        Err(MirrorWatcherError::Http(
-            crate::node_http::NodeHttpError::Stream {
-                kind: crate::node_http::StreamErrorKind::Timeout,
-                message: "source did not answer in time".into(),
-            },
-        ))
-    })
+    tokio::time::timeout(deadline, fetch_latest_sth(client, source, Some(shard_id)))
+        .await
+        .unwrap_or_else(|_| {
+            Err(MirrorWatcherError::Http(
+                crate::node_http::NodeHttpError::Stream {
+                    kind: crate::node_http::StreamErrorKind::Timeout,
+                    message: "source did not answer in time".into(),
+                },
+            ))
+        })
 }
 
 /// Verifies one configured source's fetched head. A self-certifying shard (`node:<hash>`) is
@@ -1081,7 +1149,7 @@ async fn verify_configured_head(
     source: &str,
     fetched: (SignedTreeHeadDto, String),
     bounds: &crate::self_certifying_keys::MirrorBounds,
-    admitted_new: &mut BTreeSet<String>,
+    admitted_new: &BTreeSet<String>,
 ) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
     if avalon_protocol::shard_identity::is_self_certifying(shard_id) {
         return verify_fetched_self_certifying_head(
@@ -2903,7 +2971,7 @@ mod tests {
             None,
             &BTreeSet::new(),
             bounds,
-            &mut BTreeSet::new(),
+            &BTreeSet::new(),
         )
         .await
     }
@@ -3022,7 +3090,7 @@ mod tests {
             None,
             &BTreeSet::new(),
             &bounds,
-            &mut BTreeSet::new(),
+            &BTreeSet::new(),
         )
         .await;
         assert_eq!(found.len(), 2);
