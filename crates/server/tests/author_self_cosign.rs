@@ -10,7 +10,7 @@ use avalon_protocol::events::{EventBatch, ProtocolEvent};
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::witness::verify_witness_cosignature;
 use avalon_server::nodes::HeadGossipTracker;
-use avalon_server::witness_cosign::{cosign_own_latest_head, WitnessCosignConfig};
+use avalon_server::witness_cosign::{cosign_own_latest_head, CosignOutcome, WitnessCosignConfig};
 use ed25519_dalek::SigningKey;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -85,22 +85,58 @@ impl Author {
             .unwrap();
     }
 
-    async fn cosign(&self) {
+    async fn cosign(&self) -> CosignOutcome {
+        self.cosign_shard(&self.shard).await
+    }
+
+    async fn cosign_shard(&self, shard: &str) -> CosignOutcome {
         cosign_own_latest_head(
             &self.chain,
             &self.pool,
             Some(&self.config),
             &self.tracker,
-            &self.shard,
+            shard,
         )
-        .await;
+        .await
     }
 
     async fn stored(&self, size: i64) -> Vec<avalon_protocol::witness::WitnessCosignature> {
+        self.stored_for(&self.shard, size).await
+    }
+
+    async fn stored_for(
+        &self,
+        shard: &str,
+        size: i64,
+    ) -> Vec<avalon_protocol::witness::WitnessCosignature> {
         self.chain
-            .list_witness_cosignatures(&self.network_id, &self.shard, size)
+            .list_witness_cosignatures(&self.network_id, shard, size)
             .await
             .unwrap()
+    }
+
+    fn fresh_shard() -> String {
+        format!("game:self-cosign-{}", Uuid::new_v4().simple())
+    }
+
+    async fn checkpoint(&self, shard: &str) -> Option<(i64, String)> {
+        witness_checkpoint_for(&self.pool, &self.network_id, shard)
+            .await
+            .unwrap()
+            .map(|c| (c.tree_size, c.root_hash))
+    }
+
+    async fn set_checkpoint(&self, shard: &str, size: i64, root: &str) {
+        record_witness_checkpoint(
+            &self.pool,
+            &self.network_id,
+            shard,
+            size,
+            root,
+            self.config.key_id(),
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -109,7 +145,7 @@ impl Author {
 async fn the_authoring_node_cosigns_its_new_head_and_it_counts_toward_majority() {
     let a = Author::new().await;
     a.commit(3).await;
-    a.cosign().await;
+    assert_eq!(a.cosign().await, CosignOutcome::Cosigned);
 
     let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
     let stored = a.stored(sth.tree_size).await;
@@ -189,39 +225,64 @@ async fn a_restart_cosigns_the_existing_head_and_later_heads_extend_it() {
 
 #[tokio::test]
 #[ignore]
-async fn a_smaller_or_forked_checkpoint_blocks_cosigning_the_head() {
+async fn a_checkpoint_ahead_of_the_head_is_not_forward() {
     let a = Author::new().await;
     a.commit(4).await;
     let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
-    let id = a.config.key_id();
-    let record = |size: i64, root: String| {
-        let (pool, net, shard, id) = (
-            a.pool.clone(),
-            a.network_id.clone(),
-            a.shard.clone(),
-            id.to_string(),
-        );
-        async move {
-            record_witness_checkpoint(&pool, &net, &shard, size, &root, &id)
-                .await
-                .unwrap()
-        }
-    };
+    // Control: a shard with no checkpoint cosigns this very head.
+    assert_eq!(
+        a.cosign_shard(&Author::fresh_shard()).await,
+        CosignOutcome::Cosigned
+    );
 
-    // Checkpoint ahead of the head: never cosign a smaller size.
-    record(sth.tree_size + 10, "aa".repeat(32)).await;
-    a.cosign().await;
+    let ahead = (sth.tree_size + 10, "aa".repeat(32));
+    a.set_checkpoint(&a.shard, ahead.0, &ahead.1).await;
+    assert_eq!(a.cosign().await, CosignOutcome::NotForward);
     assert!(a.stored(sth.tree_size).await.is_empty());
+    assert_eq!(a.checkpoint(&a.shard).await, Some(ahead));
+}
 
-    // Same size, different root: the double-cosign guard holds.
-    record(sth.tree_size, "bb".repeat(32)).await;
-    a.cosign().await;
-    assert!(a.stored(sth.tree_size).await.is_empty());
+#[tokio::test]
+#[ignore]
+async fn a_different_root_at_the_checkpointed_size_is_a_double_cosign_conflict() {
+    let a = Author::new().await;
+    a.commit(4).await;
+    let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
+    assert_eq!(
+        a.cosign_shard(&Author::fresh_shard()).await,
+        CosignOutcome::Cosigned
+    );
 
-    // An earlier checkpoint whose root is not a prefix of this ledger: consistency fails.
-    record(1, "cc".repeat(32)).await;
-    a.cosign().await;
+    let other = "bb".repeat(32);
+    a.set_checkpoint(&a.shard, sth.tree_size, &other).await;
+    assert_eq!(a.cosign().await, CosignOutcome::ConflictingRoot);
     assert!(a.stored(sth.tree_size).await.is_empty());
+    assert_eq!(a.checkpoint(&a.shard).await, Some((sth.tree_size, other)));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_checkpoint_that_is_not_a_prefix_of_the_ledger_fails_the_consistency_check() {
+    let a = Author::new().await;
+    a.commit(2).await;
+    let early = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
+    a.commit(3).await;
+    let head = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
+    assert!(head.tree_size > early.tree_size);
+
+    // Control: a checkpoint holding this ledger's true earlier root extends cleanly.
+    let honest = Author::fresh_shard();
+    a.set_checkpoint(&honest, early.tree_size, &early.root_hash)
+        .await;
+    assert_eq!(a.cosign_shard(&honest).await, CosignOutcome::Cosigned);
+    assert_eq!(a.stored_for(&honest, head.tree_size).await.len(), 1);
+
+    // Same size, wrong root: the own-ledger proof cannot verify against it.
+    let bogus = "cc".repeat(32);
+    a.set_checkpoint(&a.shard, early.tree_size, &bogus).await;
+    assert_eq!(a.cosign().await, CosignOutcome::ConsistencyFailed);
+    assert!(a.stored(head.tree_size).await.is_empty());
+    assert_eq!(a.checkpoint(&a.shard).await, Some((early.tree_size, bogus)));
 }
 
 #[tokio::test]
@@ -229,9 +290,18 @@ async fn a_smaller_or_forked_checkpoint_blocks_cosigning_the_head() {
 async fn no_config_or_an_equivocating_shard_means_no_self_cosignature() {
     let a = Author::new().await;
     a.commit(2).await;
-    cosign_own_latest_head(&a.chain, &a.pool, None, &a.tracker, &a.shard).await;
-    a.tracker.mark_equivocating(&a.shard);
-    a.cosign().await;
     let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
+
+    let none = cosign_own_latest_head(&a.chain, &a.pool, None, &a.tracker, &a.shard).await;
+    assert_eq!(none, CosignOutcome::Disabled);
+
+    // Control: an unmarked shard cosigns this head; the marked one does not.
+    assert_eq!(
+        a.cosign_shard(&Author::fresh_shard()).await,
+        CosignOutcome::Cosigned
+    );
+    a.tracker.mark_equivocating(&a.shard);
+    assert_eq!(a.cosign().await, CosignOutcome::Equivocating);
     assert!(a.stored(sth.tree_size).await.is_empty());
+    assert_eq!(a.checkpoint(&a.shard).await, None);
 }

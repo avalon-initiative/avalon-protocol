@@ -110,6 +110,11 @@ is_2xx() { [[ "$1" == 2* ]]; }
 known_list_has_at_least() { [ "$(known_list_size "$1")" -ge "$2" ]; }
 peer_table_has_at_least() { [ "$(peer_count "$1")" -ge "$2" ]; }
 proc_gone() { ! kill -0 "$1" 2>/dev/null; }
+# serves_own_cosignature <port> <witness-key-hex>: the node's latest head carries its own witness cosignature.
+serves_own_cosignature() {
+  curl -sf "http://127.0.0.1:$1/ledger/sth/latest?witnesses=1" \
+    | jq -e --arg k "$2" '[.cosignatures[]?.witness_key_id] | index($k) != null' >/dev/null 2>&1
+}
 known_list_contains() { known_list_ids_sorted "$1" | grep -qx "$2"; }
 known_list_lacks() { ! known_list_contains "$1" "$2"; }
 # ids_only_removed <data-dir> <ids-before> <removed-id>: the list now holds
@@ -167,6 +172,10 @@ scenario_lifecycle() {
 
   # A alone: single-signer-equivalent, known list empty or self only.
   check "A alone answers /nodes/status" alive "$port_a"
+  # The author cosigns its own head with its own witness key.
+  check "A accepts a write" is_2xx "$(register_integrator "$port_a" drill-lifecycle-a)"
+  wait_until "A serves its own witness key's cosignature of its head" 20 \
+    serves_own_cosignature "$port_a" "$key_a"
 
   node b "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
   local port_b="$LAST_PORT" data_b="$LAST_DATA_DIR"
@@ -330,8 +339,8 @@ scenario_long_offline() {
 # (mirror_watcher::check_equivocation -> equivocation_findings), which does
 # not depend on witness cosigning. Part two adds a gossip-only node that
 # mirrors nothing and only learns both heads through announce gossip; both
-# authors are bare (no mirror, no cosignatures), so it must confirm the fork
-# from the two author signatures alone
+# authors mirror nothing, so it must confirm the fork from the two author
+# signatures alone (each author also cosigns its own head with its own witness key)
 # (crate::equivocation::confirm_and_record) and store author-level evidence.
 # ---------------------------------------------------------------------------
 scenario_fork() {

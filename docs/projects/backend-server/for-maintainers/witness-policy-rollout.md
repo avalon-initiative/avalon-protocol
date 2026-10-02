@@ -51,7 +51,11 @@ Do the author last. Every step is reversible, see Rollback.
    `AVALON_WITNESS_SIGNING_KEY=<32-byte hex seed>` (a node that authors a shard can rely
    on its settlement key instead). Keep `AVALON_MIRROR_PEERS` pointed at the authorities
    whose heads it should cosign; a node cosigns the heads it mirrors, plus every new head of the
-   shard it authors itself (the author counts as a witness of its own log).
+   shard it authors itself (the author counts as a witness of its own log). The author's
+   witness key counts toward the known list's majority but shares the author's operator: a
+   forking author can sign both forks with it, so for fork prevention N known witnesses
+   means about N-1 independent ones, and with {author, other} the other is the only
+   independent check. Detection is unchanged. List enough independent witnesses.
 3. **Let the known lists fill.** Each node admits peers that prove a witness key in their
    own announce response, with a 30-minute probation before a new slot counts. Nothing to
    configure; the bundled seed nodes are anchors. Watch `known_list` log lines
@@ -131,3 +135,12 @@ sign a head that does not extend it.
   witness is not counted for about half an hour.
 - Client-side cosignature verification and a witness list in the trust-anchor entry are
   not shipped; both need the coordinated SDK release.
+
+## Recovering a refused node
+
+A node whose ledger was restored or reset while its `witness_checkpoints` table was kept
+refuses its own heads (`witness_double_cosign_refused` or `witness_consistency_check_failed`
+in the log, repeated at most every five minutes). Delete that shard's checkpoint row
+(`DELETE FROM witness_checkpoints WHERE network_id = $1 AND shard_id = $2`) and it cosigns
+again from the next head; `make db-reset` wipes the table. Known gap: a witness key that was
+rotated is not re-attested for checkpoints recorded under the old key id.
