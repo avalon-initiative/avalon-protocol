@@ -22,16 +22,14 @@
 //! plain HTTP.
 //!
 //! **Never trusted content.** A receiving node's `POST /mirror/notify`
-//! handler ([`notify`]) does nothing with the reported `network_id`/
-//! `tree_size` beyond logging — it exists purely to wake
-//! `mirror_watcher::run_worker`'s loop early so it re-polls (and
-//! re-corroborates, per #300/#316's still-unweakened gate) every
-//! configured peer for that network right away, instead of waiting out
-//! the rest of the current poll interval. Every actual verification step
+//! handler ([`notify`]) acts only for one of its own configured mirror
+//! sources, on its own network, announcing a tree size beyond what it has
+//! observed from that source; even then it only wakes
+//! `mirror_watcher::run_worker`'s loop early. Every actual verification step
 //! is exactly `mirror_watcher`'s existing signature/inclusion-proof
 //! pipeline, run on this node's own initiative against its own
 //! configured peers — a push notification is a prompt to look, never
-//! something looked at directly.
+//! something looked at directly, and a non-source's never causes any work.
 //!
 //! **Additive to tier 1.** A node with `AVALON_DHT_ENABLED` unset (or one
 //! nobody has registered interest for) gets no pushes at all and mirrors
@@ -149,23 +147,79 @@ pub async fn notify_peers(config: &MirrorPushConfig, network_id: &str, tree_size
     }
 }
 
-/// `POST /mirror/notify` — see this module's own doc comment for the full
-/// "never trusted content" invariant. Always `202 Accepted`, even for a
-/// node not currently mirroring anything at all (a stray or
-/// misconfigured push from an unrelated peer is harmless noise, not an
-/// error) — `state.mirror_wake.notify_one()` is a no-op with nobody
-/// listening.
+/// The configured `(shard, url)` mirror sources that `signer` is: peers it is bound to in the
+/// peer table whose URL names a source. Empty means `signer` is not one of this node's sources.
+pub fn sources_of_signer(
+    peers: &crate::nodes::PeerTable,
+    sources: &crate::settlement::ShardMirrorSources,
+    signer: &libp2p::PeerId,
+) -> Vec<(String, String)> {
+    let id = signer.to_string();
+    let origins: Vec<String> = peers
+        .list_all()
+        .iter()
+        .filter(|p| p.identity_bound && p.libp2p_peer_id.as_deref() == Some(id.as_str()))
+        .filter_map(|p| crate::node_auth::normalized_origin(&p.base_url))
+        .collect();
+    sources
+        .entries()
+        .into_iter()
+        .filter(|(_, url)| {
+            crate::node_auth::normalized_origin(url).is_some_and(|o| origins.contains(&o))
+        })
+        .collect()
+}
+
+/// Whether `tree_size` is beyond what this node has observed from any of `sources` for
+/// `network_id`, i.e. whether polling again could find anything new.
+pub async fn exceeds_observed(
+    pool: &sqlx::PgPool,
+    sources: &[(String, String)],
+    network_id: &str,
+    tree_size: i64,
+) -> Result<bool, avalon_chain::SettlementError> {
+    for (shard_id, url) in sources {
+        let observed =
+            avalon_chain::mirror::latest_observed_tree_size(pool, url, network_id, shard_id)
+                .await?;
+        if tree_size > observed {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `POST /mirror/notify` — see this module's own doc comment for the full "never trusted
+/// content" invariant. The signer must be one of this node's configured mirror sources (403),
+/// the network id must be this node's (400), and the announced tree size must exceed what this
+/// node has already observed from that source; only then is the mirror watcher woken. A stale
+/// size is acknowledged (202) without waking it. Nothing here starts outbound work itself.
 pub async fn notify(
     axum::extract::State(state): axum::extract::State<AppState>,
+    crate::node_auth::AuthenticatedNode(signer): crate::node_auth::AuthenticatedNode,
     axum::Json(body): axum::Json<MirrorNotifyRequest>,
 ) -> axum::http::StatusCode {
-    tracing::info!(
-        network_id = %body.network_id,
-        tree_size = body.tree_size,
-        "mirror-push: received a push notification — waking the mirror-watcher early"
-    );
-    state.mirror_wake.notify_one();
-    axum::http::StatusCode::ACCEPTED
+    use axum::http::StatusCode;
+    let sources = sources_of_signer(&state.peers, &state.shard_mirror_sources, &signer);
+    if sources.is_empty() {
+        return StatusCode::FORBIDDEN;
+    }
+    if body.network_id != state.chain.network_id() || body.tree_size <= 0 {
+        return StatusCode::BAD_REQUEST;
+    }
+    match exceeds_observed(&state.pool, &sources, &body.network_id, body.tree_size).await {
+        Ok(true) => {
+            tracing::info!(
+                network_id = %body.network_id,
+                tree_size = body.tree_size,
+                "mirror-push: received a push notification — waking the mirror-watcher early"
+            );
+            state.mirror_wake.notify_one();
+            StatusCode::ACCEPTED
+        }
+        Ok(false) => StatusCode::ACCEPTED,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 #[cfg(test)]
@@ -182,5 +236,43 @@ mod tests {
         let decoded: MirrorNotifyRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded.network_id, body.network_id);
         assert_eq!(decoded.tree_size, body.tree_size);
+    }
+
+    fn entry(id: &libp2p::PeerId, url: &str, bound: bool) -> crate::nodes::PeerInfo {
+        crate::nodes::PeerInfo {
+            base_url: url.into(),
+            roles: vec![],
+            protocol_version: "0.1.0".into(),
+            network_id: "n".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(id.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: bound,
+        }
+    }
+
+    #[test]
+    fn only_a_bound_peer_at_a_configured_source_url_is_a_source() {
+        let (src, other, unbound) = (
+            libp2p::PeerId::random(),
+            libp2p::PeerId::random(),
+            libp2p::PeerId::random(),
+        );
+        let peers = crate::nodes::PeerTable::new();
+        peers.upsert(entry(&src, "http://Src.test:80/", true));
+        peers.upsert(entry(&other, "http://other.test", true));
+        peers.upsert(entry(&unbound, "http://unbound.test", false));
+        let sources = crate::settlement::ShardMirrorSources::from_raw(
+            "http://src.test,aux=http://unbound.test",
+        );
+        assert_eq!(
+            sources_of_signer(&peers, &sources, &src),
+            vec![("core".to_string(), "http://src.test".to_string())]
+        );
+        assert!(sources_of_signer(&peers, &sources, &other).is_empty());
+        assert!(sources_of_signer(&peers, &sources, &unbound).is_empty());
+        assert!(sources_of_signer(&peers, &sources, &libp2p::PeerId::random()).is_empty());
     }
 }

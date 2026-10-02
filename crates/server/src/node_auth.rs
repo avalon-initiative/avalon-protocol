@@ -12,8 +12,8 @@
 //! request budget. A credential grants no authority beyond what the route itself checks.
 //!
 //! Over HTTP the signature is verified before the body is read (the header carries the body
-//! hash, the signature covers it). Standing is free until per-route scope checks exist, so a
-//! stranger cannot make the node read a body but any node with standing can; that read is
+//! hash, the signature covers it). Standing is cheap to get, so a stranger cannot make the node
+//! read a body but any node with standing can; that read is
 //! bounded by the route cap, a short read timeout, a per-signer in-flight cap, the signer's
 //! request budget and a global limit on concurrent reads. A source IP that keeps sending
 //! expensive failures (bad signature, wrong body hash, oversize body) is only answered 429 for
@@ -400,7 +400,7 @@ impl ReplayCache {
 }
 
 /// Events per key in the current minute.
-struct Budget<K> {
+pub(crate) struct Budget<K> {
     windows: HashMap<K, (i64, u32)>,
     per_minute: u32,
     max_keys: usize,
@@ -409,7 +409,7 @@ struct Budget<K> {
 }
 
 impl<K: Hash + Eq + Copy> Budget<K> {
-    fn new(per_minute: u32, max_keys: usize, evict_when_full: bool) -> Self {
+    pub(crate) fn new(per_minute: u32, max_keys: usize, evict_when_full: bool) -> Self {
         Self {
             windows: HashMap::new(),
             per_minute,
@@ -425,7 +425,7 @@ impl<K: Hash + Eq + Copy> Budget<K> {
             .is_some_and(|(m, n)| *m == now.div_euclid(60) && *n >= self.per_minute)
     }
 
-    fn charge(&mut self, key: K, now: i64) -> bool {
+    pub(crate) fn charge(&mut self, key: K, now: i64) -> bool {
         self.charge_units(key, 1, now)
     }
 

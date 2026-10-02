@@ -322,6 +322,30 @@ pub struct InterestRegistry {
     /// (once per newly-active scope, not once per subscriber) that an
     /// unbounded channel's usual downside doesn't apply here.
     newly_active: mpsc::UnboundedSender<InterestScope>,
+    /// Open subscriptions per scope, claimed or not; what a relayed event is checked against.
+    local: Arc<Mutex<HashMap<InterestScope, usize>>>,
+}
+
+/// Holds one local subscription of a scope open until dropped.
+pub struct LocalSubscriber {
+    registry: InterestRegistry,
+    scope: InterestScope,
+}
+
+impl Drop for LocalSubscriber {
+    fn drop(&mut self) {
+        let mut local = self
+            .registry
+            .local
+            .lock()
+            .expect("interest registry lock poisoned");
+        if let Some(n) = local.get_mut(&self.scope) {
+            *n -= 1;
+            if *n == 0 {
+                local.remove(&self.scope);
+            }
+        }
+    }
 }
 
 /// Holds one scope's refcount up by one for as long as this guard lives —
@@ -377,6 +401,7 @@ impl InterestRegistry {
                 counts: Arc::new(Mutex::new(HashMap::new())),
                 claims: Arc::new(Mutex::new(HashMap::new())),
                 newly_active,
+                local: Arc::new(Mutex::new(HashMap::new())),
             },
             receiver,
         )
@@ -417,6 +442,28 @@ impl InterestRegistry {
             .expect("interest registry lock poisoned")
             .insert(scope, claim);
         self.bump(scope)
+    }
+
+    /// Counts one open local subscription of `scope` until the returned guard drops.
+    pub fn track_local(&self, scope: InterestScope) -> LocalSubscriber {
+        *self
+            .local
+            .lock()
+            .expect("interest registry lock poisoned")
+            .entry(scope)
+            .or_insert(0) += 1;
+        LocalSubscriber {
+            registry: self.clone(),
+            scope,
+        }
+    }
+
+    /// Whether any connection on this node is subscribed to `scope`.
+    pub fn has_local_subscriber(&self, scope: InterestScope) -> bool {
+        self.local
+            .lock()
+            .expect("interest registry lock poisoned")
+            .contains_key(&scope)
     }
 
     fn bump(&self, scope: InterestScope) -> InterestGuard {
@@ -1028,6 +1075,9 @@ mod tests {
                     None,
                 ),
                 own_witness: None,
+                replica_intake: crate::chat_replication::ReplicaIntake::new(
+                    &crate::nodes::node_roles(),
+                ),
             }
         }
 

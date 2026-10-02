@@ -1130,6 +1130,7 @@ mod node_auth_wiring {
                 None,
             ),
             own_witness: None,
+            replica_intake: chat_replication::ReplicaIntake::new(&nodes::node_roles()),
         }
     }
 
@@ -1316,6 +1317,140 @@ mod node_auth_wiring {
         assert_ne!(
             send("/mirror/notify", [6; 16]).await,
             StatusCode::UNAUTHORIZED
+        );
+    }
+
+    fn bound_entry(node: &libp2p::PeerId, base_url: String) -> nodes::PeerInfo {
+        nodes::PeerInfo {
+            base_url,
+            roles: vec![],
+            protocol_version: "0.1.0".into(),
+            network_id: "avalon-test".into(),
+            last_announced_at: time::OffsetDateTime::now_utc(),
+            libp2p_peer_id: Some(node.to_string()),
+            libp2p_listen_addrs: vec![],
+            witness: None,
+            connectivity: None,
+            identity_bound: true,
+        }
+    }
+
+    async fn stream_post(
+        app: &Router,
+        path: &str,
+        node: libp2p::PeerId,
+        body: serde_json::Value,
+    ) -> StatusCode {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(node_http::RemotePeer(node));
+        with_addr(&mut req);
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    fn channel_message(channel_id: uuid::Uuid, body: &str) -> serde_json::Value {
+        serde_json::json!({"type": "channel_message", "data": {
+            "id": uuid::Uuid::new_v4(), "channel_id": channel_id, "author": uuid::Uuid::new_v4(),
+            "body": body, "sent_at": "2026-01-01T00:00:00Z"}})
+    }
+
+    #[tokio::test]
+    async fn relay_refuses_a_scope_with_no_local_subscriber_and_an_oversize_message() {
+        let node = libp2p::PeerId::random();
+        let state = lazy_state();
+        state
+            .peers
+            .upsert(bound_entry(&node, node_http::p2p_base_url(&node)));
+        let interest = state.interest.clone();
+        let app = router(state, None);
+        let channel = uuid::Uuid::new_v4();
+        let hi = channel_message(channel, "hi");
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, hi.clone()).await,
+            StatusCode::FORBIDDEN
+        );
+        let _sub = interest.track_local(interest::InterestScope::Channel(channel));
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, hi).await,
+            StatusCode::NO_CONTENT
+        );
+        let long = channel_message(
+            channel,
+            &"a".repeat(guild_messages::MESSAGE_BODY_MAX_CHARS + 1),
+        );
+        assert_eq!(
+            stream_post(&app, "/nodes/relay", node, long).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn replication_needs_a_storage_role_and_a_sane_message() {
+        let node = libp2p::PeerId::random();
+        let build = |roles: &[&str]| {
+            let mut state = lazy_state();
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            state.replica_intake = chat_replication::ReplicaIntake::new(&roles);
+            state
+                .peers
+                .upsert(bound_entry(&node, node_http::p2p_base_url(&node)));
+            router(state, None)
+        };
+        let msg = channel_message(uuid::Uuid::new_v4(), "hi");
+        let path = "/nodes/replicate-chat";
+        assert_eq!(
+            stream_post(&build(&["gateway"]), path, node, msg.clone()).await,
+            StatusCode::FORBIDDEN
+        );
+        let storing = build(&["indexer"]);
+        let long = channel_message(
+            uuid::Uuid::new_v4(),
+            &"a".repeat(guild_messages::MESSAGE_BODY_MAX_CHARS + 1),
+        );
+        assert_eq!(
+            stream_post(&storing, path, node, long).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut future = msg;
+        future["data"]["sent_at"] = "2999-01-01T00:00:00Z".into();
+        assert_eq!(
+            stream_post(&storing, path, node, future).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn a_notification_from_a_non_source_or_for_another_network_never_wakes_the_watcher() {
+        let (source, stranger) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let mut state = lazy_state();
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw("http://src.test:8080");
+        state
+            .peers
+            .upsert(bound_entry(&source, "http://src.test:8080".into()));
+        state
+            .peers
+            .upsert(bound_entry(&stranger, "http://other.test:8080".into()));
+        let wake = state.mirror_wake.clone();
+        let app = router(state, None);
+        let path = "/mirror/notify";
+        let note = |network: &str| serde_json::json!({"network_id": network, "tree_size": 9});
+        assert_eq!(
+            stream_post(&app, path, stranger, note("avalon-test")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            stream_post(&app, path, source, note("elsewhere")).await,
+            StatusCode::BAD_REQUEST
+        );
+        let woken = tokio::time::timeout(std::time::Duration::from_millis(50), wake.notified());
+        assert!(
+            woken.await.is_err(),
+            "a refused notification woke the watcher"
         );
     }
 }

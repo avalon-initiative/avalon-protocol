@@ -17,7 +17,7 @@ use crate::conversations;
 use crate::error::AppError;
 use crate::guild_messages;
 use crate::handlers::authenticate_token;
-use crate::interest::{InterestGuard, InterestScope};
+use crate::interest::{InterestGuard, InterestScope, LocalSubscriber};
 use crate::state::AppState;
 
 /// Same rationale as `presence::UPDATE_CHANNEL_CAPACITY`: bounded so a burst
@@ -191,8 +191,10 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
     // (unaffected — it never depended on `crate::interest` to begin with),
     // it just never becomes reachable via another node's relay for this
     // scope. See `ChatClientMessage`'s own doc comment.
-    let mut subscribed_channels: HashMap<Uuid, Option<InterestGuard>> = HashMap::new();
-    let mut subscribed_conversations: HashMap<Uuid, Option<InterestGuard>> = HashMap::new();
+    let mut subscribed_channels: HashMap<Uuid, (LocalSubscriber, Option<InterestGuard>)> =
+        HashMap::new();
+    let mut subscribed_conversations: HashMap<Uuid, (LocalSubscriber, Option<InterestGuard>)> =
+        HashMap::new();
     let mut updates = state.chat.subscribe();
 
     let hello = serde_json::to_string(&ChatServerMessage::NodeInfo {
@@ -249,7 +251,7 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                                     }
                                     None => None,
                                 };
-                                subscribed_channels.insert(channel_id, guard);
+                                subscribed_channels.insert(channel_id, (state.interest.track_local(scope), guard));
                             }
                             ChatClientMessage::SubscribeConversation { conversation_id, claim } => {
                                 if subscribed_conversations.contains_key(&conversation_id) {
@@ -272,7 +274,7 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                                     }
                                     None => None,
                                 };
-                                subscribed_conversations.insert(conversation_id, guard);
+                                subscribed_conversations.insert(conversation_id, (state.interest.track_local(scope), guard));
                             }
                         }
                     }

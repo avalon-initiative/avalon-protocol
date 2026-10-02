@@ -619,6 +619,7 @@ pub async fn run_with_tracing(
         dht_commands,
         reachability,
         own_witness: witness_signer.clone(),
+        replica_intake: crate::chat_replication::ReplicaIntake::new(&node_roles),
         own_base_url: announce_config.own_base_url.clone(),
         own_libp2p_peer_id: Some(dht_identity.peer_id.clone()),
         interest_redis_fast_path,

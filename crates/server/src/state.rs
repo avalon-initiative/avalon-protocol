@@ -329,6 +329,8 @@ pub struct AppState {
     /// This node's witness signing identity, when it cosigns; used to prove
     /// possession of its witness key in announce responses.
     pub own_witness: Option<crate::nodes::WitnessSigner>,
+    /// Whether this node stores chat replicas, and the per-signer rate limit on writing them.
+    pub replica_intake: crate::chat_replication::ReplicaIntake,
 }
 
 impl AppState {
