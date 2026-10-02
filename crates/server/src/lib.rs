@@ -1508,6 +1508,96 @@ mod node_auth_wiring {
         );
     }
 
+    #[tokio::test]
+    async fn a_p2p_source_is_accepted_only_for_its_own_authenticated_stream() {
+        let (source, stranger) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let mut state = lazy_state();
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw(&format!("p2p://{source}/"));
+        // A table entry claiming the source's address for another node confers nothing.
+        let peers = state.peers.clone();
+        peers.upsert(bound_entry(&stranger, node_http::p2p_base_url(&source)));
+        let app = router(state, None);
+        let path = "/mirror/notify";
+        let note = |network: &str| serde_json::json!({"network_id": network, "tree_size": 9});
+        assert_eq!(
+            stream_post(&app, path, stranger, note("avalon-test")).await,
+            StatusCode::FORBIDDEN
+        );
+        // A configured source that never announced has no standing: still refused.
+        assert_eq!(
+            stream_post(&app, path, source, note("elsewhere")).await,
+            StatusCode::FORBIDDEN
+        );
+        peers.upsert(bound_entry(&source, node_http::p2p_base_url(&source)));
+        // Past the source check, a wrong network is a 400. The 202 for a larger tree size
+        // needs the DB (`exceeds_observed`), which the ignored test below adds for HTTP sources.
+        assert_eq!(
+            stream_post(&app, path, source, note("elsewhere")).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            stream_post(&app, path, stranger, note("elsewhere")).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn a_p2p_source_is_also_matched_for_an_http_credentialed_request() {
+        use avalon_protocol::node_request::{
+            encode_node_request_header, sign_node_request, NodeRequestTarget,
+        };
+        let keys = [
+            libp2p::identity::Keypair::generate_ed25519(),
+            libp2p::identity::Keypair::generate_ed25519(),
+        ];
+        let ids = keys.clone().map(|k| libp2p::PeerId::from(k.public()));
+        let mut state = lazy_state();
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw(&format!("p2p://{}", ids[0]));
+        for id in &ids {
+            state
+                .peers
+                .upsert(bound_entry(id, format!("http://{id}.test")));
+        }
+        let app = router(state, None);
+        let body = serde_json::json!({"network_id": "elsewhere", "tree_size": 9}).to_string();
+        let send = |n: usize| {
+            let ed = keys[n].clone().try_into_ed25519().unwrap();
+            let seed: [u8; 32] = ed.secret().as_ref().try_into().unwrap();
+            let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let target = NodeRequestTarget {
+                method: "POST",
+                path: "/mirror/notify",
+                body: body.as_bytes(),
+                network_id: "avalon-test",
+            };
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            let auth = sign_node_request(
+                &signing,
+                &ids[n].to_string(),
+                &target,
+                "12D3KooWTestOwnPeerId",
+                now,
+                [n as u8 + 1; 16],
+            )
+            .unwrap();
+            let mut req = Request::builder()
+                .method("POST")
+                .uri("/mirror/notify")
+                .header("content-type", "application/json")
+                .header("x-avalon-node-auth", encode_node_request_header(&auth))
+                .body(Body::from(body.clone()))
+                .unwrap();
+            with_addr(&mut req);
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        // The configured id passes the source check (then 400 for the other network).
+        assert_eq!(send(0).await, StatusCode::BAD_REQUEST);
+        assert_eq!(send(1).await, StatusCode::FORBIDDEN);
+    }
+
     /// Needs `DATABASE_URL` (a throwaway database): only a larger tree size wakes the watcher.
     #[tokio::test]
     #[ignore]

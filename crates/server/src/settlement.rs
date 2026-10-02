@@ -82,7 +82,8 @@ use crate::state::AppState;
 /// a read handler can scope its mirror query to the one peer actually
 /// responsible for the requested shard instead of every mirrored row this
 /// node happens to hold under the same `network_id`. Built once at
-/// startup (`main.rs`), held in [`AppState`].
+/// startup (`main.rs`), held in [`AppState`]. A source URL may be a canonical
+/// `p2p://<peer id>` (see `parse_mirror_peers`).
 #[derive(Clone, Default)]
 pub struct ShardMirrorSources {
     sources: Vec<(String, String)>,
@@ -94,7 +95,7 @@ impl ShardMirrorSources {
     }
 
     pub(crate) fn from_raw(raw: &str) -> Self {
-        let mut sources = crate::mirror_watcher::parse_mirror_peers(raw);
+        let mut sources = crate::mirror_watcher::parse_mirror_peers(raw, false);
         sources.sort();
         sources.dedup();
         Self { sources }
