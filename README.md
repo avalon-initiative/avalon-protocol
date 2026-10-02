@@ -166,6 +166,9 @@ mainnet), and `avalon-mainnet-N` (the real, independently growing/shrinking
 set of nodes) — see the
 [trust anchor list](https://github.com/avalon-initiative/avalon-docs/blob/main/protocol/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
+The procedure for bringing a tier up or down, and for adding a network to the
+list, is in
+[`docs/maintainers/environments.md`](docs/maintainers/environments.md).
 
 The SDKs fetch this same file at runtime from its raw GitHub URL and report
 the network as unreachable if it cannot be fetched. Avalon Hub uses that to
