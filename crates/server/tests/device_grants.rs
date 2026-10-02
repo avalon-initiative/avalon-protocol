@@ -463,8 +463,22 @@ async fn two_keys_revoking_each_other_concurrently_leave_one_active() {
     )
     .json(&revoke_body(identity_id, key_a_id, key_b_id, &key_b))
     .send();
+    // Release the lock only once both requests are observed waiting on it.
+    let waiting_pool = pool.clone();
     let release = async {
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        for _ in 0..200 {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE wait_event_type = 'Lock' AND query ILIKE '%identity_signing_keys%'",
+            )
+            .fetch_one(&waiting_pool)
+            .await
+            .unwrap();
+            if waiting >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         blocker.commit().await.unwrap();
     };
     let (first, second, ()) = tokio::join!(a_revokes_b, b_revokes_a, release);

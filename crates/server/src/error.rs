@@ -1034,22 +1034,37 @@ where
     T: serde::de::DeserializeOwned + Send,
     S: Send + Sync,
 {
-    type Rejection = AppError;
+    type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
         state: &S,
     ) -> Result<Self, Self::Rejection> {
-        axum::extract::Path::<T>::from_request_parts(parts, state)
-            .await
-            .map(|axum::extract::Path(value)| IdPath(value))
-            .map_err(|rejection| {
-                if rejection.body_text().contains("identity id must be") {
+        use axum::extract::path::ErrorKind;
+        use axum::extract::rejection::PathRejection;
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Path(value)) => Ok(IdPath(value)),
+            // A route without the expected parameters is a server bug, not a bad request.
+            Err(rejection @ PathRejection::MissingPathParams(_)) => Err(rejection.into_response()),
+            Err(PathRejection::FailedToDeserializePathParams(failure)) => {
+                let identity_failure = match failure.kind() {
+                    ErrorKind::DeserializeError { message, .. } | ErrorKind::Message(message) => {
+                        use avalon_protocol::identity_id::IdentityIdParseError as E;
+                        [E::WrongLength, E::NotLowercaseHex]
+                            .iter()
+                            .any(|e| message.contains(&e.to_string()))
+                    }
+                    _ => false,
+                };
+                Err(if identity_failure {
                     AppError::InvalidIdentityId
                 } else {
                     AppError::InvalidPathParameter
                 }
-            })
+                .into_response())
+            }
+            Err(other) => Err(other.into_response()),
+        }
     }
 }
 
