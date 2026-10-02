@@ -4221,7 +4221,13 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("pruned");
-        let pruned = mk_entry(&network_id, 1, "identity.created", IdentityId::random_for_tests(), None);
+        let pruned = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            IdentityId::random_for_tests(),
+            None,
+        );
         insert_legacy_pruned_row(&pool, &pruned).await;
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
