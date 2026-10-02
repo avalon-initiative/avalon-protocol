@@ -419,3 +419,51 @@ async fn a_signing_key_id_cannot_be_occupied_by_another_identity_and_early_revoc
         .is_none()
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn an_early_passkey_revocation_sticks_and_a_repeat_keeps_the_first_time() {
+    let pool = test_pool().await;
+    let indexer = PostgresIndexer::new(pool.clone());
+    let a = seed_identity(&pool).await;
+    let passkey_id = Uuid::new_v4();
+    let at = |secs: i64| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs);
+    let event = |kind: &str, payload: serde_json::Value, ts: OffsetDateTime| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: kind.to_string(),
+        issuer: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
+        subject: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
+        payload,
+        timestamp: ts,
+        version: 1,
+        identity_chain: None,
+    };
+    let revoke = serde_json::json!({ "passkey_id": passkey_id, "identity_id": a.id });
+    indexer
+        .apply(&event("identity.passkey_revoked", revoke.clone(), at(100)))
+        .await
+        .unwrap();
+    indexer
+        .apply(&event(
+            "identity.passkey_registered",
+            serde_json::json!({
+                "passkey_id": passkey_id, "identity_id": a.id, "credential_id": "AAAA",
+                "passkey_data": {"k": 1}, "label": null,
+            }),
+            at(50),
+        ))
+        .await
+        .unwrap();
+    indexer
+        .apply(&event("identity.passkey_revoked", revoke, at(200)))
+        .await
+        .unwrap();
+    let revoked: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
+    )
+    .bind(passkey_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revoked, Some(at(100)));
+}

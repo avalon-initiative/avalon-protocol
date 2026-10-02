@@ -83,6 +83,7 @@ BEGIN
     END LOOP;
 
     DROP TABLE indexer_identity_signing_key_revocations;
+    DROP TABLE indexer_identity_passkey_revocations;
     ALTER TABLE indexer_identity_signing_keys DROP CONSTRAINT indexer_identity_signing_keys_pkey;
     ALTER TABLE indexer_identity_signing_keys ADD PRIMARY KEY (signing_key_id);
 

@@ -124,7 +124,7 @@ pub async fn apply(
         } => {
             sqlx::query(
                 "UPDATE indexer_identity_signing_keys SET revoked_at = $3 \
-                 WHERE signing_key_id = $1 AND identity_id = $2",
+                 WHERE signing_key_id = $1 AND identity_id = $2 AND revoked_at IS NULL",
             )
             .bind(signing_key_id)
             .bind(identity_id)

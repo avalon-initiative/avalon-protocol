@@ -54,6 +54,7 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_passkeys",
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
+    "indexer_identity_passkey_revocations",
     "identity_chain_events",
     "identity_chain_state",
 ];

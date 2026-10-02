@@ -87,7 +87,9 @@ pub async fn apply(
             let written = sqlx::query(
                 "INSERT INTO indexer_identity_passkeys AS k \
                  (passkey_id, identity_id, credential_id, passkey_data, label, added_at, revoked_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, NULL) \
+                 VALUES ($1, $2, $3, $4, $5, $6, \
+                         (SELECT revoked_at FROM indexer_identity_passkey_revocations \
+                          WHERE identity_id = $2 AND passkey_id = $1)) \
                  ON CONFLICT (passkey_id) DO UPDATE SET \
                      label = EXCLUDED.label, added_at = EXCLUDED.added_at \
                  WHERE k.identity_id = EXCLUDED.identity_id \
@@ -115,11 +117,23 @@ pub async fn apply(
         } => {
             sqlx::query(
                 "UPDATE indexer_identity_passkeys SET revoked_at = $2 \
-                 WHERE passkey_id = $1 AND identity_id = $3",
+                 WHERE passkey_id = $1 AND identity_id = $3 AND revoked_at IS NULL",
             )
             .bind(passkey_id)
             .bind(revoked_at)
             .bind(identity_id)
+            .execute(&mut **tx)
+            .await?;
+            // Recorded even when it arrives before the registration, so that registration
+            // comes up revoked.
+            sqlx::query(
+                "INSERT INTO indexer_identity_passkey_revocations \
+                 (identity_id, passkey_id, revoked_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(identity_id)
+            .bind(passkey_id)
+            .bind(revoked_at)
             .execute(&mut **tx)
             .await?;
         }

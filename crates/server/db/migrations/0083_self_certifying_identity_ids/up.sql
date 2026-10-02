@@ -101,6 +101,12 @@ BEGIN
         revoked_at TIMESTAMPTZ NOT NULL,
         PRIMARY KEY (identity_id, signing_key_id)
     );
+    CREATE TABLE indexer_identity_passkey_revocations (
+        identity_id TEXT NOT NULL CHECK (identity_id ~ '^[0-9a-f]{64}$'),
+        passkey_id UUID NOT NULL,
+        revoked_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (identity_id, passkey_id)
+    );
 
     FOR r IN SELECT * FROM identity_fk_cols LOOP
         EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.tbl, r.conname, r.def);
