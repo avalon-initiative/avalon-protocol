@@ -48,15 +48,24 @@ impl reqwest::dns::Resolve for GuardedResolver {
         Box::pin(async move {
             let addrs: Vec<SocketAddr> =
                 tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            if addrs.is_empty() {
-                return Err(PolicyError::Resolve.into());
-            }
-            for a in &addrs {
-                policy.check_ip(a.ip())?;
-            }
+            let addrs = check_answer(policy, addrs)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
+}
+
+/// The resolver's answer when every address passes `policy`; one forbidden address refuses all.
+fn check_answer(
+    policy: OutboundPolicy,
+    addrs: Vec<SocketAddr>,
+) -> Result<Vec<SocketAddr>, PolicyError> {
+    if addrs.is_empty() {
+        return Err(PolicyError::Resolve);
+    }
+    for a in &addrs {
+        policy.check_ip(a.ip())?;
+    }
+    Ok(addrs)
 }
 
 /// [`peer_client`] whose hostname lookups are checked against `policy` at connect time. IP
@@ -355,6 +364,43 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn one_forbidden_address_among_several_refuses_the_whole_answer() {
+        let sa = |a: &str| SocketAddr::new(ip(a), 80);
+        let p = OutboundPolicy::new(true);
+        assert!(check_answer(p, vec![sa("93.184.216.34"), sa("169.254.169.254")]).is_err());
+        assert!(check_answer(p, vec![sa("169.254.169.254"), sa("93.184.216.34")]).is_err());
+        assert!(check_answer(p, vec![sa("93.184.216.34"), sa("10.0.0.1")]).is_ok());
+        assert!(check_answer(
+            OutboundPolicy::new(false),
+            vec![sa("93.184.216.34"), sa("10.0.0.1")]
+        )
+        .is_err());
+        assert_eq!(check_answer(p, vec![]), Err(PolicyError::Resolve));
+    }
+
+    #[test]
+    fn odd_ipv4_forms_and_mapped_ipv6_literals_are_refused() {
+        let strict = OutboundPolicy::new(false);
+        let lax = OutboundPolicy::new(true);
+        for u in [
+            "http://2130706433/x",
+            "http://0x7f.1/x",
+            "http://127.1/x",
+            "http://[::ffff:127.0.0.1]/x",
+        ] {
+            assert!(strict.check_url_literal(u).is_err(), "{u}");
+        }
+        for u in [
+            "http://[::ffff:a9fe:a9fe]/x",
+            "http://0xa9fea9fe/x",
+            "http://2852039166/x",
+        ] {
+            assert!(strict.check_url_literal(u).is_err(), "{u}");
+            assert!(lax.check_url_literal(u).is_err(), "{u}");
+        }
     }
 
     #[test]

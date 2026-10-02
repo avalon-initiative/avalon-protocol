@@ -2402,7 +2402,8 @@ mod tests {
             assert!(strict.post(&url).send().await.is_err(), "{url}");
         }
         for url in ["http://169.254.169.254/x", "http://[fe80::1]/x"] {
-            assert!(lax.post(url).send().await.is_err(), "{url}");
+            let err = lax.post(url).send().await.err().unwrap();
+            assert!(matches!(err, NodeHttpError::Invalid(_)), "{url}: {err:?}");
         }
         assert_eq!(hits_of(&hits), 0);
     }
