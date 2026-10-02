@@ -364,6 +364,46 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
     // Revoking your own only signing key is allowed (unilateral, per
     // `devices::revoke_device`'s own doc comment) — the identity still has
     // its passkey for normal login, just no active signing key.
+    // The last active key cannot be revoked, so add a second device first.
+    let second_key = SigningKey::generate(&mut rand::rng());
+    let second_public = second_key.verifying_key().to_bytes();
+    let grant: serde_json::Value = http
+        .post(format!("{base}/me/devices/grants"))
+        .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "requested_signing_public_key": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                second_public,
+            ),
+            "device_label": "second",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let grant_id: uuid::Uuid = grant["id"].as_str().unwrap().parse().unwrap();
+    let approval = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+        grant_id,
+        &identity_id,
+        &second_public,
+    );
+    let approved = http
+        .post(format!("{base}/me/devices/grants/{grant_id}/approve"))
+        .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "approver_signing_key_id": signing_key_id,
+            "signature": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                signing_key.sign(&approval).to_bytes(),
+            ),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(approved.status().is_success(), "{:?}", approved.status());
+
     let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
         &identity_id,
         signing_key_id,

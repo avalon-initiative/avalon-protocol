@@ -331,15 +331,16 @@ pub async fn approve_device_grant(
     let identity_id = authenticate(&state, &headers).await?;
     let grant = fetch_pending_grant(&state, identity_id, grant_id).await?;
 
-    let approver_row = sqlx::query(
-        "SELECT public_key FROM identity_signing_keys WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
-    )
-    .bind(body.approver_signing_key_id)
-    .bind(identity_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::ApproverKeyInvalid)?;
-    let approver_public_key: Vec<u8> = approver_row.try_get("public_key")?;
+    let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
+    // Locks every active key of the identity, so a concurrent revocation commits before or after
+    // this approval, never between the approver check and the insert.
+    let active_keys = lock_active_signing_keys(&mut tx, identity_id).await?;
+    let approver_public_key = active_keys
+        .iter()
+        .find(|(id, _)| *id == body.approver_signing_key_id)
+        .map(|(_, key)| key.clone())
+        .ok_or(AppError::ApproverKeyInvalid)?;
 
     let signature_bytes = BASE64
         .decode(&body.signature)
@@ -354,9 +355,6 @@ pub async fn approve_device_grant(
     if !verify_event_signature(&approver_public_key, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidGrantSignature);
     }
-
-    let mut tx = state.pool.begin().await?;
-    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     let new_key_row = sqlx::query(
         "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
@@ -518,9 +516,27 @@ pub struct RevokeDeviceRequest {
     pub signature: String,
 }
 
+/// The identity's active signing keys as `(id, public key)`, row-locked for the transaction.
+async fn lock_active_signing_keys(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    identity_id: IdentityId,
+) -> Result<Vec<(Uuid, Vec<u8>)>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, public_key FROM identity_signing_keys \
+         WHERE identity_id = $1 AND revoked_at IS NULL ORDER BY id FOR UPDATE",
+    )
+    .bind(identity_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.try_get("id")?, row.try_get("public_key")?)))
+        .collect()
+}
+
 /// `POST /me/devices/:id/revoke` — any authenticated session for the identity can
 /// revoke any of its signing keys (including the signer's own, for self-rotation), provided
-/// the request carries a valid signature from an active key of the same identity.
+/// the request carries a valid signature from an active key of the same identity. The last
+/// active key cannot be revoked (409 `LAST_SIGNING_KEY`).
 #[utoipa::path(
     post,
     path = "/me/devices/{id}/revoke",
@@ -539,16 +555,20 @@ pub async fn revoke_device(
 
     let mut tx = state.pool.begin().await?;
     crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
-
-    let revoker_row = sqlx::query(
-        "SELECT public_key FROM identity_signing_keys WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
-    )
-    .bind(body.revoked_by_signing_key_id)
-    .bind(identity_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::ApproverKeyInvalid)?;
-    let revoker_public_key: Vec<u8> = revoker_row.try_get("public_key")?;
+    // Locking every active key serialises concurrent revocations (two keys revoking each other).
+    let active_keys = lock_active_signing_keys(&mut tx, identity_id).await?;
+    let revoker_public_key = active_keys
+        .iter()
+        .find(|(id, _)| *id == body.revoked_by_signing_key_id)
+        .map(|(_, key)| key.clone())
+        .ok_or(AppError::ApproverKeyInvalid)?;
+    if !active_keys.iter().any(|(id, _)| *id == signing_key_id) {
+        return Err(AppError::SigningKeyNotFound);
+    }
+    // Recovery cannot add a signing key, so revoking the last one would lock the identity out.
+    if active_keys.len() == 1 {
+        return Err(AppError::LastSigningKey);
+    }
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidEventSignature)?;

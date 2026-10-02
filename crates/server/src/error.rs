@@ -106,6 +106,8 @@ pub enum AppError {
     DeviceGrantExpired,
     #[error("approving signing key is unknown or has been revoked")]
     ApproverKeyInvalid,
+    #[error("the last active signing key cannot be revoked")]
+    LastSigningKey,
     #[error("grant approval signature verification failed")]
     InvalidGrantSignature,
     /// Issue #698: this action is in #697's signature-required tier, and
@@ -544,6 +546,7 @@ impl AppError {
             AppError::DeviceGrantNotFound => "DEVICE_GRANT_NOT_FOUND",
             AppError::DeviceGrantExpired => "DEVICE_GRANT_EXPIRED",
             AppError::ApproverKeyInvalid => "APPROVER_KEY_INVALID",
+            AppError::LastSigningKey => "LAST_SIGNING_KEY",
             AppError::InvalidGrantSignature => "INVALID_GRANT_SIGNATURE",
             AppError::NoRegisteredSigningKey => "NO_REGISTERED_SIGNING_KEY",
             AppError::FreshSignatureRequired => "FRESH_SIGNATURE_REQUIRED",
@@ -747,7 +750,8 @@ impl IntoResponse for AppError {
             AppError::InvalidRollbackWindow => StatusCode::BAD_REQUEST,
             AppError::RollbackNoCompletedRecovery
             | AppError::RollbackNotReversible(_)
-            | AppError::RollbackAlreadyReversed => StatusCode::CONFLICT,
+            | AppError::RollbackAlreadyReversed
+            | AppError::LastSigningKey => StatusCode::CONFLICT,
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
                 StatusCode::UNAUTHORIZED

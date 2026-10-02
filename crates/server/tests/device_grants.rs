@@ -410,3 +410,66 @@ async fn a_revocation_signed_by_another_identitys_key_or_a_revoked_key_is_refuse
     .unwrap();
     assert!(own.status().is_success(), "{:?}", own.status());
 }
+
+#[tokio::test]
+#[ignore]
+async fn the_last_active_signing_key_cannot_be_revoked() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (key_id, key) = seed_signing_key(&pool, identity_id).await;
+    let response = auth(
+        http.post(format!("{base}/me/devices/{key_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(identity_id, key_id, key_id, &key))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["code"], "LAST_SIGNING_KEY");
+}
+
+#[tokio::test]
+#[ignore]
+async fn two_keys_revoking_each_other_concurrently_leave_one_active() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (key_a_id, key_a) = seed_signing_key(&pool, identity_id).await;
+    let (key_b_id, key_b) = seed_signing_key(&pool, identity_id).await;
+
+    let a_revokes_b = auth(
+        http.post(format!("{base}/me/devices/{key_b_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(identity_id, key_b_id, key_a_id, &key_a))
+    .send();
+    let b_revokes_a = auth(
+        http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(identity_id, key_a_id, key_b_id, &key_b))
+    .send();
+    let (first, second) = tokio::join!(a_revokes_b, b_revokes_a);
+    let statuses = [first.unwrap().status(), second.unwrap().status()];
+    assert_eq!(
+        statuses.iter().filter(|s| s.is_success()).count(),
+        1,
+        "exactly one revocation may win: {statuses:?}"
+    );
+
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identity_signing_keys WHERE identity_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(identity_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 1);
+}
