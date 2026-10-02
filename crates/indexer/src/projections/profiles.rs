@@ -35,7 +35,9 @@
 //! client burns a whole WebAuthn ceremony on a name that's already gone) —
 //! it is never the actual correctness guarantee.
 
+use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -54,7 +56,7 @@ use crate::IndexError;
 /// a list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileWrite {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: Option<String>,
     pub avatar_url: Option<Option<String>>,
     pub bio: Option<Option<String>>,
@@ -81,7 +83,7 @@ pub struct ProfileWrite {
 /// `GlobalId` (see `crates/protocol/src/ids.rs`) — `profile.updated`'s
 /// payload never repeats the identity id itself (only the changed fields),
 /// so it has to come from the event envelope instead.
-fn identity_id_from_global_id(id: &avalon_protocol::ids::GlobalId) -> Option<Uuid> {
+fn identity_id_from_global_id(id: &avalon_protocol::ids::GlobalId) -> Option<IdentityId> {
     let mut parts = id.as_str().splitn(4, ':');
     let namespace = parts.next()?;
     let owner = parts.next()?;
@@ -94,8 +96,13 @@ fn identity_id_from_global_id(id: &avalon_protocol::ids::GlobalId) -> Option<Uui
 pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
     match event.kind.as_str() {
         "identity.created" => {
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
-            let display_name = event.payload.get("display_name")?.as_str()?.to_string();
+            if event.version != 2 {
+                return None;
+            }
+            let created: IdentityCreatedPayload =
+                serde_json::from_value(event.payload.clone()).ok()?;
+            let identity_id = created.identity_id;
+            let display_name = created.display_name;
             Some(ProfileWrite {
                 identity_id,
                 display_name: Some(display_name),
@@ -406,7 +413,10 @@ const PROFILE_VIEW_SELECT: &str = r#"
 /// callers on that path map it to the same `RowNotFound`-shaped error
 /// `fetch_one` used to produce directly. `get_identity_profile`, reading a
 /// caller-supplied id, treats `None` as an ordinary not-found instead.
-pub async fn fetch<'e, E>(executor: E, identity_id: Uuid) -> Result<Option<ProfileView>, IndexError>
+pub async fn fetch<'e, E>(
+    executor: E,
+    identity_id: IdentityId,
+) -> Result<Option<ProfileView>, IndexError>
 where
     E: PgExecutor<'e>,
 {
@@ -441,7 +451,7 @@ where
 /// /identities/profiles`'s batch-resolve endpoint.
 #[derive(Debug, Clone)]
 pub struct ProfileSummary {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: String,
     pub avatar_url: Option<String>,
 }
@@ -451,7 +461,7 @@ pub struct ProfileSummary {
 /// bad id 500 the whole batch.
 pub async fn fetch_many<'e, E>(
     executor: E,
-    identity_ids: &[Uuid],
+    identity_ids: &[IdentityId],
 ) -> Result<Vec<ProfileSummary>, IndexError>
 where
     E: PgExecutor<'e>,
@@ -483,14 +493,14 @@ where
 pub async fn is_display_name_taken<'e, E>(
     executor: E,
     display_name: &str,
-    exclude_identity_id: Option<Uuid>,
+    exclude_identity_id: Option<IdentityId>,
 ) -> Result<bool, IndexError>
 where
     E: PgExecutor<'e>,
 {
     let taken: Option<i32> = sqlx::query_scalar(
         "SELECT 1 FROM profiles WHERE lower(display_name) = lower($1) \
-         AND ($2::uuid IS NULL OR identity_id <> $2)",
+         AND ($2::text IS NULL OR identity_id <> $2)",
     )
     .bind(display_name)
     .bind(exclude_identity_id)
@@ -506,7 +516,7 @@ mod tests {
 
     use super::*;
 
-    fn identity_created_event(identity_id: Uuid) -> ProtocolEvent {
+    fn identity_created_event(identity_id: IdentityId) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "identity.created".to_string(),
@@ -515,14 +525,16 @@ mod tests {
             payload: serde_json::json!({
                 "identity_id": identity_id,
                 "display_name": "nova",
+                "public_key": "a2V5",
+                "signature": "c2ln",
             }),
             timestamp: OffsetDateTime::now_utc(),
-            version: 1,
+            version: 2,
             identity_chain: None,
         }
     }
 
-    fn profile_updated_event(identity_id: Uuid, payload: serde_json::Value) -> ProtocolEvent {
+    fn profile_updated_event(identity_id: IdentityId, payload: serde_json::Value) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "profile.updated".to_string(),
@@ -546,8 +558,15 @@ mod tests {
     }
 
     #[test]
+    fn identity_created_v1_is_rejected() {
+        let mut event = identity_created_event(IdentityId::random_for_tests());
+        event.version = 1;
+        assert_eq!(decode(&event), None);
+    }
+
+    #[test]
     fn decodes_identity_created_into_a_full_write() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let write = decode(&identity_created_event(identity_id)).unwrap();
         assert_eq!(write.identity_id, identity_id);
         assert_eq!(write.display_name.as_deref(), Some("nova"));
@@ -556,7 +575,7 @@ mod tests {
 
     #[test]
     fn decodes_profile_updated_display_name_only() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event =
             profile_updated_event(identity_id, serde_json::json!({ "display_name": "vega" }));
         let write = decode(&event).unwrap();
@@ -567,7 +586,7 @@ mod tests {
 
     #[test]
     fn decodes_a_cleared_avatar_as_some_none() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "avatar_url": null }));
         let write = decode(&event).unwrap();
         assert_eq!(write.avatar_url, Some(None));
@@ -576,7 +595,7 @@ mod tests {
 
     #[test]
     fn decodes_a_set_avatar() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(
             identity_id,
             serde_json::json!({ "avatar_url": "https://example.com/a.png" }),
@@ -590,7 +609,7 @@ mod tests {
 
     #[test]
     fn unrecognized_kind_decodes_to_none() {
-        let event = profile_updated_event(Uuid::new_v4(), serde_json::json!({}));
+        let event = profile_updated_event(IdentityId::random_for_tests(), serde_json::json!({}));
         let mut other = event.clone();
         other.kind = "guild.created".to_string();
         assert!(decode(&other).is_none());
@@ -604,7 +623,7 @@ mod tests {
 
     #[test]
     fn decodes_a_cleared_bio() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "bio": null }));
         let write = decode(&event).unwrap();
         assert_eq!(write.bio, Some(None));
@@ -612,7 +631,7 @@ mod tests {
 
     #[test]
     fn decodes_a_set_bio() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hello there" }));
         let write = decode(&event).unwrap();
         assert_eq!(write.bio, Some(Some("hello there".to_string())));
@@ -620,7 +639,7 @@ mod tests {
 
     #[test]
     fn decodes_favorite_genres_as_a_full_replace() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(
             identity_id,
             serde_json::json!({ "favorite_genres": ["rpg", "puzzle"] }),
@@ -634,7 +653,7 @@ mod tests {
 
     #[test]
     fn decodes_favorite_genres_cleared_to_empty() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event =
             profile_updated_event(identity_id, serde_json::json!({ "favorite_genres": [] }));
         let write = decode(&event).unwrap();
@@ -643,7 +662,7 @@ mod tests {
 
     #[test]
     fn untouched_favorite_genres_decodes_to_none() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hi" }));
         let write = decode(&event).unwrap();
         assert_eq!(write.favorite_genres, None);
@@ -651,7 +670,7 @@ mod tests {
 
     #[test]
     fn decodes_a_cleared_main_guild() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "main_guild": null }));
         let write = decode(&event).unwrap();
         assert_eq!(write.main_guild, Some(None));
@@ -659,7 +678,7 @@ mod tests {
 
     #[test]
     fn decodes_a_set_main_guild() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let guild_id = Uuid::new_v4();
         let event = profile_updated_event(
             identity_id,
@@ -671,7 +690,7 @@ mod tests {
 
     #[test]
     fn untouched_main_guild_decodes_to_none() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hi" }));
         let write = decode(&event).unwrap();
         assert_eq!(write.main_guild, None);
@@ -679,7 +698,7 @@ mod tests {
 
     #[test]
     fn decodes_a_cleared_pronouns() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let event = profile_updated_event(identity_id, serde_json::json!({ "pronouns": null }));
         let write = decode(&event).unwrap();
         assert_eq!(write.pronouns, Some(None));
@@ -687,7 +706,7 @@ mod tests {
 
     #[test]
     fn identity_id_from_global_id_parses_the_owner_segment() {
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let global_id = GlobalId::new(
             "identity",
             &identity_id.to_string(),

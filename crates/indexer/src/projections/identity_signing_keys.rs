@@ -10,7 +10,9 @@
 //! since that node's own writes are dual-written here too (same pattern
 //! `recognitions.rs` already uses).
 
+use avalon_protocol::event_payloads::IdentitySigningKeyAddedPayload;
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -21,7 +23,7 @@ use crate::IndexError;
 pub enum SigningKeyWrite {
     Added {
         signing_key_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         public_key: Vec<u8>,
         label: Option<String>,
         added_at: OffsetDateTime,
@@ -35,25 +37,28 @@ pub enum SigningKeyWrite {
 pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
     match event.kind.as_str() {
         "identity.signing_key_added" => {
-            let signing_key_id = super::uuid_field(&event.payload, "signing_key_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
-            let public_key_b64 = event.payload.get("public_key")?.as_str()?;
-            let public_key =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, public_key_b64)
-                    .ok()?;
-            let label = event
-                .payload
-                .get("device_label")
-                .and_then(|v| v.as_str().map(str::to_string));
+            if event.version != 2 {
+                return None;
+            }
+            let added: IdentitySigningKeyAddedPayload =
+                serde_json::from_value(event.payload.clone()).ok()?;
+            let public_key = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &added.public_key,
+            )
+            .ok()?;
             Some(SigningKeyWrite::Added {
-                signing_key_id,
-                identity_id,
+                signing_key_id: added.signing_key_id,
+                identity_id: added.identity_id,
                 public_key,
-                label,
+                label: added.device_label,
                 added_at: event.timestamp,
             })
         }
         "identity.signing_key_revoked" => {
+            if event.version != 2 {
+                return None;
+            }
             let signing_key_id = super::uuid_field(&event.payload, "signing_key_id")?;
             Some(SigningKeyWrite::Revoked {
                 signing_key_id,
@@ -111,7 +116,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigningKeyRow {
     pub signing_key_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub public_key: Vec<u8>,
 }
 
@@ -142,7 +147,7 @@ pub async fn find_active_by_id(
 /// identities whose only key is revoked (their history is still real and
 /// still worth locating), so this is "identities this node knows about,"
 /// not "identities this node can currently authenticate."
-pub async fn distinct_identity_ids(pool: &sqlx::PgPool) -> Result<Vec<Uuid>, IndexError> {
+pub async fn distinct_identity_ids(pool: &sqlx::PgPool) -> Result<Vec<IdentityId>, IndexError> {
     let rows = sqlx::query("SELECT DISTINCT identity_id FROM indexer_identity_signing_keys")
         .fetch_all(pool)
         .await?;
@@ -165,7 +170,11 @@ mod tests {
 
     use super::*;
 
-    fn event(kind: &str, issuer_identity_id: Uuid, payload: serde_json::Value) -> ProtocolEvent {
+    fn event(
+        kind: &str,
+        issuer_identity_id: IdentityId,
+        payload: serde_json::Value,
+    ) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
@@ -183,7 +192,7 @@ mod tests {
             ),
             payload,
             timestamp: OffsetDateTime::now_utc(),
-            version: 1,
+            version: 2,
             identity_chain: None,
         }
     }
@@ -191,7 +200,7 @@ mod tests {
     #[test]
     fn decodes_an_added_event() {
         let signing_key_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.signing_key_added",
             identity_id,
@@ -201,6 +210,7 @@ mod tests {
                 "device_label": "Pixel 9",
                 "approved_by_signing_key_id": signing_key_id,
                 "identity_id": identity_id,
+                "kind": "inception",
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -221,7 +231,7 @@ mod tests {
         let signing_key_id = Uuid::new_v4();
         let source_event = event(
             "identity.signing_key_revoked",
-            Uuid::new_v4(),
+            IdentityId::random_for_tests(),
             serde_json::json!({ "signing_key_id": signing_key_id }),
         );
         let write = decode(&source_event).unwrap();
@@ -235,11 +245,31 @@ mod tests {
     }
 
     #[test]
+    fn v1_added_event_is_rejected() {
+        let id = IdentityId::random_for_tests();
+        let mut e = event(
+            "identity.signing_key_added",
+            id,
+            serde_json::json!({
+                "signing_key_id": Uuid::new_v4(),
+                "public_key": "AAAA",
+                "device_label": null,
+                "approved_by_signing_key_id": Uuid::new_v4(),
+                "identity_id": id,
+                "kind": "inception",
+            }),
+        );
+        assert!(decode(&e).is_some());
+        e.version = 1;
+        assert_eq!(decode(&e), None);
+    }
+
+    #[test]
     fn unrecognized_kind_decodes_to_none() {
         assert_eq!(
             decode(&event(
                 "guild.created",
-                Uuid::new_v4(),
+                IdentityId::random_for_tests(),
                 serde_json::json!({})
             )),
             None
@@ -251,7 +281,7 @@ mod tests {
         assert_eq!(
             decode(&event(
                 "identity.signing_key_added",
-                Uuid::new_v4(),
+                IdentityId::random_for_tests(),
                 serde_json::json!({
                     "signing_key_id": Uuid::new_v4(),
                     "public_key": "not valid base64!!",

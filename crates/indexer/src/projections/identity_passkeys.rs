@@ -7,6 +7,7 @@
 //! `avalon-docs/protocol/identity.md`'s durability table.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -17,7 +18,7 @@ use crate::IndexError;
 pub enum PasskeyWrite {
     Registered {
         passkey_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         credential_id: Vec<u8>,
         passkey_data: serde_json::Value,
         label: Option<String>,
@@ -33,7 +34,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<PasskeyWrite> {
     match event.kind.as_str() {
         "identity.passkey_registered" => {
             let passkey_id = super::uuid_field(&event.payload, "passkey_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             let credential_id_b64 = event.payload.get("credential_id")?.as_str()?;
             let credential_id = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
@@ -115,7 +116,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq)]
 pub struct PasskeyRow {
     pub passkey_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub credential_id: Vec<u8>,
     pub passkey_data: serde_json::Value,
     pub label: Option<String>,
@@ -174,7 +175,7 @@ mod tests {
     #[test]
     fn decodes_a_registered_event() {
         let passkey_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.passkey_registered",
             serde_json::json!({
@@ -202,7 +203,7 @@ mod tests {
     #[test]
     fn decodes_a_registered_event_with_no_label() {
         let passkey_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.passkey_registered",
             serde_json::json!({
@@ -234,7 +235,7 @@ mod tests {
             "identity.passkey_revoked",
             serde_json::json!({
                 "passkey_id": passkey_id,
-                "identity_id": Uuid::new_v4(),
+                "identity_id": IdentityId::random_for_tests(),
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -259,7 +260,7 @@ mod tests {
                 "identity.passkey_registered",
                 serde_json::json!({
                     "passkey_id": Uuid::new_v4(),
-                    "identity_id": Uuid::new_v4(),
+                    "identity_id": IdentityId::random_for_tests(),
                     "credential_id": "not valid base64!!",
                     "passkey_data": {},
                 }),

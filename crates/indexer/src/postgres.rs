@@ -18,6 +18,7 @@
 //!   writing `profiles` themselves.
 
 use async_trait::async_trait;
+use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -108,19 +109,31 @@ impl PostgresIndexer {
             if event.kind != "identity.created" {
                 continue;
             }
-            let Some(identity_id) = event
-                .payload
-                .get("identity_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<uuid::Uuid>().ok())
+            if event.version != 2 {
+                continue;
+            }
+            let Ok(created) =
+                serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
             else {
                 continue;
             };
+            let Some(public_key) = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &created.public_key,
+            )
+            .ok()
+            .and_then(|k| <[u8; 32]>::try_from(k).ok())
+            .filter(|k| created.identity_id.matches_key(k)) else {
+                continue;
+            };
+            let identity_id = created.identity_id;
             sqlx::query(
-                "INSERT INTO identities (id, created_at) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
+                 ON CONFLICT (id) DO NOTHING",
             )
             .bind(identity_id)
             .bind(event.timestamp)
+            .bind(public_key.to_vec())
             .execute(&mut *tx)
             .await?;
         }

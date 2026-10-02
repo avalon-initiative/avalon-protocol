@@ -21,6 +21,7 @@
 use std::collections::HashSet;
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -31,7 +32,7 @@ use crate::IndexError;
 pub enum IntegratorBindingWrite {
     Establish {
         id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         integrator_id: Uuid,
         established_at: OffsetDateTime,
     },
@@ -45,7 +46,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<IntegratorBindingWrite> {
     match event.kind.as_str() {
         "game.binding_established" => {
             let id = super::uuid_field(&event.payload, "binding_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             let integrator_id = super::uuid_field(&event.payload, "game_id")?;
             Some(IntegratorBindingWrite::Establish {
                 id,
@@ -111,7 +112,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingState {
     pub integrator_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub active: bool,
 }
 
@@ -202,7 +203,12 @@ mod tests {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
-            issuer: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+            issuer: GlobalId::new(
+                "identity",
+                &IdentityId::random_for_tests().to_string(),
+                "self",
+                "x",
+            ),
             subject: GlobalId::new("game", "ashen-realms", "self", "x"),
             payload,
             timestamp: OffsetDateTime::now_utc(),
@@ -211,7 +217,11 @@ mod tests {
         }
     }
 
-    fn established(binding_id: Uuid, identity_id: Uuid, integrator_id: Uuid) -> ProtocolEvent {
+    fn established(
+        binding_id: Uuid,
+        identity_id: IdentityId,
+        integrator_id: Uuid,
+    ) -> ProtocolEvent {
         event(
             "game.binding_established",
             serde_json::json!({
@@ -233,7 +243,7 @@ mod tests {
     #[test]
     fn decodes_binding_established() {
         let binding_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let integrator_id = Uuid::new_v4();
         let source_event = established(binding_id, identity_id, integrator_id);
         let write = decode(&source_event).unwrap();
@@ -276,9 +286,9 @@ mod tests {
     fn players_and_total_players_ever_metrics_from_a_fixture_event_stream() {
         let integrator_id = Uuid::new_v4();
         let other_integrator_id = Uuid::new_v4();
-        let player_a = Uuid::new_v4();
-        let player_b = Uuid::new_v4();
-        let player_c = Uuid::new_v4();
+        let player_a = IdentityId::random_for_tests();
+        let player_b = IdentityId::random_for_tests();
+        let player_c = IdentityId::random_for_tests();
         let binding_a = Uuid::new_v4();
         let binding_b = Uuid::new_v4();
         let binding_c = Uuid::new_v4();
@@ -306,7 +316,7 @@ mod tests {
     #[test]
     fn rebuilding_from_the_same_events_twice_reproduces_the_same_values() {
         let integrator_id = Uuid::new_v4();
-        let player_a = Uuid::new_v4();
+        let player_a = IdentityId::random_for_tests();
         let binding_a = Uuid::new_v4();
         let events = [established(binding_a, player_a, integrator_id)];
 

@@ -15,6 +15,7 @@
 //! metadata resolved via `integrator_schemas::get_visibility`.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -26,7 +27,7 @@ pub struct IntegratorDataPublished {
     pub id: String,
     pub schema_id: String,
     pub integrator_id: Uuid,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub instance: serde_json::Value,
     pub published_at: OffsetDateTime,
     /// The immediately-prior instance's id for this `(schema, subject)`
@@ -41,7 +42,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<IntegratorDataPublished> {
     let id = event.payload.get("id")?.as_str()?.to_string();
     let schema_id = event.payload.get("schema")?.as_str()?.to_string();
     let integrator_id = super::uuid_field(&event.payload, "game_id")?;
-    let subject = super::uuid_field(&event.payload, "subject")?;
+    let subject = super::identity_field(&event.payload, "subject")?;
     let instance = event.payload.get("instance")?.clone();
     let supersedes = event
         .payload
@@ -164,7 +165,7 @@ pub struct IntegratorDataInstanceRow {
 /// crate's read models use.
 pub async fn list_current_for_subject(
     pool: &PgPool,
-    subject: Uuid,
+    subject: IdentityId,
 ) -> Result<Vec<IntegratorDataInstanceRow>, IndexError> {
     let rows = sqlx::query(
         "SELECT id, schema_id, integrator_id, instance, published_at \
@@ -211,7 +212,7 @@ mod tests {
     #[test]
     fn decodes_a_first_publication_with_no_supersedes() {
         let integrator_id = Uuid::new_v4();
-        let subject = Uuid::new_v4();
+        let subject = IdentityId::random_for_tests();
         let source_event = event(
             "game_data.published",
             serde_json::json!({
@@ -254,7 +255,7 @@ mod tests {
                 "instance_id": "game:ashen-realms:schema:1:data:1",
                 "schema": "game:ashen-realms:schema:1",
                 "game_id": Uuid::new_v4(),
-                "subject": Uuid::new_v4(),
+                "subject": IdentityId::random_for_tests(),
                 "reason_code": "deleted",
                 "reason": "character deleted by player",
             }),

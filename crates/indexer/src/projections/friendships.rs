@@ -21,15 +21,15 @@
 //! current-relationship state, and was never in this projection's scope.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use crate::IndexError;
 
 /// `a < b` always — mirrors `crates/server/src/friends.rs::ordered_pair` so
 /// a pair is stored once regardless of who requested whom.
-fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
+fn ordered_pair(x: IdentityId, y: IdentityId) -> (IdentityId, IdentityId) {
     if x < y {
         (x, y)
     } else {
@@ -40,21 +40,21 @@ fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FriendshipWrite {
     Upsert {
-        a: Uuid,
-        b: Uuid,
+        a: IdentityId,
+        b: IdentityId,
         since: OffsetDateTime,
     },
     Remove {
-        a: Uuid,
-        b: Uuid,
+        a: IdentityId,
+        b: IdentityId,
     },
 }
 
 pub fn decode(event: &ProtocolEvent) -> Option<FriendshipWrite> {
     match event.kind.as_str() {
         "friend.accepted" => {
-            let from = super::uuid_field(&event.payload, "from")?;
-            let to = super::uuid_field(&event.payload, "to")?;
+            let from = super::identity_field(&event.payload, "from")?;
+            let to = super::identity_field(&event.payload, "to")?;
             let (a, b) = ordered_pair(from, to);
             Some(FriendshipWrite::Upsert {
                 a,
@@ -63,13 +63,13 @@ pub fn decode(event: &ProtocolEvent) -> Option<FriendshipWrite> {
             })
         }
         "friend.removed" => {
-            let a = super::uuid_field(&event.payload, "a")?;
-            let b = super::uuid_field(&event.payload, "b")?;
+            let a = super::identity_field(&event.payload, "a")?;
+            let b = super::identity_field(&event.payload, "b")?;
             Some(FriendshipWrite::Remove { a, b })
         }
         "friend.relationship_reversed" => {
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
-            let counterparty_id = super::uuid_field(&event.payload, "counterparty_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
+            let counterparty_id = super::identity_field(&event.payload, "counterparty_id")?;
             let (a, b) = ordered_pair(identity_id, counterparty_id);
             Some(FriendshipWrite::Remove { a, b })
         }
@@ -105,7 +105,11 @@ pub async fn apply(
 }
 
 /// Whether `x`/`y` (in either order) are currently friends.
-pub async fn are_friends<'e, E>(executor: E, x: Uuid, y: Uuid) -> Result<bool, IndexError>
+pub async fn are_friends<'e, E>(
+    executor: E,
+    x: IdentityId,
+    y: IdentityId,
+) -> Result<bool, IndexError>
 where
     E: PgExecutor<'e>,
 {
@@ -122,15 +126,15 @@ where
 /// One current friendship, from [`list_for`].
 #[derive(Debug, Clone)]
 pub struct FriendshipRow {
-    pub a: Uuid,
-    pub b: Uuid,
+    pub a: IdentityId,
+    pub b: IdentityId,
     pub since: OffsetDateTime,
 }
 
 /// Every current friendship involving `identity_id`.
 pub async fn list_for<'e, E>(
     executor: E,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Vec<FriendshipRow>, IndexError>
 where
     E: PgExecutor<'e>,
@@ -157,8 +161,8 @@ where
 /// `(a, b)` pairs [`list_for`] returns.
 pub async fn partners_of<'e, E>(
     executor: E,
-    identity_id: Uuid,
-) -> Result<std::collections::HashSet<Uuid>, IndexError>
+    identity_id: IdentityId,
+) -> Result<std::collections::HashSet<IdentityId>, IndexError>
 where
     E: PgExecutor<'e>,
 {
@@ -187,8 +191,8 @@ where
 /// rather than issuing an `ANY($1)` query with an empty array.
 pub async fn friends_of_any<'e, E>(
     executor: E,
-    identity_ids: &[Uuid],
-) -> Result<std::collections::HashSet<Uuid>, IndexError>
+    identity_ids: &[IdentityId],
+) -> Result<std::collections::HashSet<IdentityId>, IndexError>
 where
     E: PgExecutor<'e>,
 {
@@ -217,13 +221,24 @@ mod tests {
     use avalon_protocol::ids::GlobalId;
 
     use super::*;
+    use uuid::Uuid;
 
     fn event(kind: &str, payload: serde_json::Value) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
-            issuer: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
-            subject: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+            issuer: GlobalId::new(
+                "identity",
+                &IdentityId::random_for_tests().to_string(),
+                "self",
+                "x",
+            ),
+            subject: GlobalId::new(
+                "identity",
+                &IdentityId::random_for_tests().to_string(),
+                "self",
+                "x",
+            ),
             payload,
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -233,8 +248,8 @@ mod tests {
 
     #[test]
     fn decodes_friend_accepted_into_an_ordered_upsert() {
-        let x = Uuid::new_v4();
-        let y = Uuid::new_v4();
+        let x = IdentityId::random_for_tests();
+        let y = IdentityId::random_for_tests();
         let source_event = event(
             "friend.accepted",
             serde_json::json!({ "from": x, "to": y, "actor": y }),
@@ -253,8 +268,8 @@ mod tests {
 
     #[test]
     fn decodes_friend_removed_into_a_remove() {
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = IdentityId::random_for_tests();
+        let b = IdentityId::random_for_tests();
         let write = decode(&event(
             "friend.removed",
             serde_json::json!({ "a": a, "b": b, "actor": a }),
@@ -267,7 +282,7 @@ mod tests {
     fn friend_requested_has_no_current_state_effect() {
         let write = decode(&event(
             "friend.requested",
-            serde_json::json!({ "from": Uuid::new_v4(), "to": Uuid::new_v4() }),
+            serde_json::json!({ "from": IdentityId::random_for_tests(), "to": IdentityId::random_for_tests() }),
         ));
         assert_eq!(write, None);
     }
@@ -290,8 +305,8 @@ mod tests {
 
     #[test]
     fn decodes_friend_relationship_reversed_into_an_ordered_remove() {
-        let x = Uuid::new_v4();
-        let y = Uuid::new_v4();
+        let x = IdentityId::random_for_tests();
+        let y = IdentityId::random_for_tests();
         let source_event = event(
             "friend.relationship_reversed",
             serde_json::json!({

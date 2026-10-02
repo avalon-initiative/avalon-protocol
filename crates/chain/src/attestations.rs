@@ -171,7 +171,7 @@ mod tests {
         let key_id = Uuid::new_v4();
         let issued_at = OffsetDateTime::now_utc();
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         let attestation = signed_attestation(
             &signing_key,
@@ -199,7 +199,7 @@ mod tests {
         let key_id = Uuid::new_v4();
         let issued_at = OffsetDateTime::now_utc();
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         // Signed by other_key, but claims to be key_id (which is
         // registered as signing_key's public half below).
@@ -228,7 +228,7 @@ mod tests {
         let key_id = Uuid::new_v4();
         let issued_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(5);
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         let attestation = signed_attestation(
             &signing_key,
@@ -261,7 +261,7 @@ mod tests {
         let revoked_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(10);
         let issued_at = revoked_at + time::Duration::hours(1); // after revocation
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         let attestation = signed_attestation(
             &signing_key,
@@ -291,7 +291,7 @@ mod tests {
         let key_id = Uuid::new_v4();
         let issued_at = OffsetDateTime::now_utc();
         let achievement = GlobalId::new("app", "wallet-app", "milestone", "onboarded");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         // Signed as a milestone...
         let attestation = signed_attestation(
@@ -318,7 +318,7 @@ mod tests {
         let key_id = Uuid::new_v4();
         let issued_at = OffsetDateTime::now_utc();
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
 
         let attestation = signed_attestation(
             &signing_key,

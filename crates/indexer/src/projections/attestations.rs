@@ -16,6 +16,7 @@
 use std::collections::HashSet;
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -27,7 +28,7 @@ pub enum AttestationWrite {
     Issue {
         id: Uuid,
         issuer: String,
-        subject: Uuid,
+        subject: IdentityId,
         achievement: String,
         issued_at: OffsetDateTime,
     },
@@ -42,7 +43,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<AttestationWrite> {
         "achievement.issued" => {
             let id = super::uuid_field(&event.payload, "id")?;
             let issuer = event.payload.get("issuer")?.as_str()?.to_string();
-            let subject = super::uuid_field(&event.payload, "subject")?;
+            let subject = super::identity_field(&event.payload, "subject")?;
             let achievement = event.payload.get("achievement")?.as_str()?.to_string();
             Some(AttestationWrite::Issue {
                 id,
@@ -111,7 +112,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttestationState {
     pub issuer: String,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -241,7 +242,12 @@ mod tests {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
             issuer: GlobalId::new("game", &Uuid::new_v4().to_string(), "self", "x"),
-            subject: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+            subject: GlobalId::new(
+                "identity",
+                &IdentityId::random_for_tests().to_string(),
+                "self",
+                "x",
+            ),
             payload,
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -252,7 +258,7 @@ mod tests {
     #[test]
     fn decodes_achievement_issued() {
         let id = Uuid::new_v4();
-        let subject = Uuid::new_v4();
+        let subject = IdentityId::random_for_tests();
         let source_event = event(
             "achievement.issued",
             serde_json::json!({
@@ -314,10 +320,10 @@ mod tests {
     fn achievement_metrics_from_a_fixture_event_stream() {
         let issuer = "game:ashen-realms";
         let other_issuer = "game:other-integrator";
-        let subject_x = Uuid::new_v4();
-        let subject_y = Uuid::new_v4();
+        let subject_x = IdentityId::random_for_tests();
+        let subject_y = IdentityId::random_for_tests();
 
-        let issue = |id: Uuid, issuer: &str, subject: Uuid| {
+        let issue = |id: Uuid, issuer: &str, subject: IdentityId| {
             event(
                 "achievement.issued",
                 serde_json::json!({
@@ -366,7 +372,7 @@ mod tests {
     #[test]
     fn future_revoked_at_still_counts_as_a_valid_holder() {
         let issuer = "game:ashen-realms";
-        let subject = Uuid::new_v4();
+        let subject = IdentityId::random_for_tests();
         let attestation_id = Uuid::new_v4();
         let now = OffsetDateTime::now_utc();
         let future = now + time::Duration::days(7);
@@ -406,7 +412,7 @@ mod tests {
     #[test]
     fn rebuilding_from_the_same_events_twice_reproduces_the_same_values() {
         let issuer = "game:ashen-realms";
-        let subject = Uuid::new_v4();
+        let subject = IdentityId::random_for_tests();
         let attestation_id = Uuid::new_v4();
         let events = [event(
             "achievement.issued",
