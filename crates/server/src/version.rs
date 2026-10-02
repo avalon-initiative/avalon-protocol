@@ -64,7 +64,7 @@ pub fn effective_min_peer_version() -> &'static semver::Version {
 /// floor. An unparseable or missing version is never given the benefit of
 /// the doubt — treated as unsupported, distinctly logged from a
 /// well-formed-but-below-floor version by callers (see
-/// `mirror_watcher::fetch_and_verify_sth`, `nodes::announce`).
+/// `mirror_watcher::verify_head_against_anchors`, `nodes::announce`).
 pub fn is_supported(raw: &str) -> bool {
     match parse(raw) {
         Some(v) => &v >= effective_min_peer_version(),
