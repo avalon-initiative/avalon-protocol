@@ -4646,7 +4646,7 @@
         "tags": [
           "devices"
         ],
-        "summary": "`POST /me/devices/:id/revoke` — any authenticated session for the identity can\nrevoke any of its signing keys (including the signer's own, for self-rotation), provided\nthe request carries a valid signature from an active key of the same identity.",
+        "summary": "`POST /me/devices/:id/revoke` — any authenticated session for the identity can\nrevoke any of its signing keys (including the signer's own, for self-rotation), provided\nthe request carries a valid signature from an active key of the same identity. The last\nactive key cannot be revoked (409 `LAST_SIGNING_KEY`).",
         "operationId": "revoke_device",
         "parameters": [
           {
@@ -4672,6 +4672,9 @@
         "responses": {
           "200": {
             "description": "Signing key revoked"
+          },
+          "409": {
+            "description": "LAST_SIGNING_KEY: the last active signing key cannot be revoked"
           }
         }
       }
@@ -9588,7 +9591,7 @@
           },
           "event_signature": {
             "type": "string",
-            "description": "Base64-encoded Ed25519 signature over\n`avalon_protocol::identity_id::identity_created_signing_bytes_v2`."
+            "description": "Base64-encoded Ed25519 signature over\n`avalon_protocol::identity_id::identity_created_signing_bytes_v2`, which covers this\nceremony's `ticket_id` and the `network_id` returned by `register/start`."
           },
           "ticket_id": {
             "type": "string",
@@ -9663,12 +9666,17 @@
         "type": "object",
         "required": [
           "ticket_id",
+          "network_id",
           "challenge"
         ],
         "properties": {
           "challenge": {
             "type": "object",
             "description": "`webauthn-rs`'s own WebAuthn creation-challenge type — opaque here\nsince it's an external crate's type with no `ToSchema` impl of its\nown; the real, authoritative shape is `webauthn-rs`'s\n`CreationChallengeResponse`, not this placeholder."
+          },
+          "network_id": {
+            "type": "string",
+            "description": "The ledger network id; the client signs it, with the ticket, into `identity.created`."
           },
           "ticket_id": {
             "type": "string",

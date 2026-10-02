@@ -543,7 +543,10 @@ async fn lock_active_signing_keys(
     tag = "devices",
     params(("id" = Uuid, Path)),
     request_body = RevokeDeviceRequest,
-    responses((status = 200, description = "Signing key revoked")),
+    responses(
+        (status = 200, description = "Signing key revoked"),
+        (status = 409, description = "LAST_SIGNING_KEY: the last active signing key cannot be revoked"),
+    ),
 )]
 pub async fn revoke_device(
     State(state): State<AppState>,
