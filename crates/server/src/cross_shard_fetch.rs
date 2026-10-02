@@ -316,7 +316,7 @@ pub async fn fetch_verified_entries_with(
         let Some(payload) = entry.payload.clone() else {
             continue;
         };
-        verified.push(verify_one_entry(&client, base_url, shard_id, &sth, entry, payload).await?);
+        verified.push(verify_one_entry(client, base_url, shard_id, &sth, entry, payload).await?);
     }
     Ok(verified)
 }
