@@ -24,6 +24,12 @@
 //! equivocation detection sound in the first place rather than merely
 //! likely.
 //!
+//! **The authoring node cosigns its own heads.** A node does not mirror the shard it
+//! authors, so [`cosign_own_latest_head`] (driven by [`run_self_cosign_worker`]) feeds its own
+//! newest head through the same decision, with the consistency proof computed from its own
+//! ledger instead of fetched from a peer. Without it a known list holding only the author
+//! and one other witness could never reach majority (#1122).
+//!
 //! **Check 4, not from the design doc's numbered list but load-bearing
 //! anyway:** a shard already marked equivocating
 //! (`crate::nodes::HeadGossipTracker::is_equivocating`) gets no further
@@ -46,6 +52,7 @@ use crate::nodes::HeadGossipTracker;
 /// cosign with, or has opted out entirely; a node in either state still
 /// verifies everything `mirror_watcher` already does, it just never
 /// produces a cosignature of its own.
+#[derive(Clone)]
 pub struct WitnessCosignConfig {
     signing_key: SigningKey,
     witness_key_id: String,
@@ -158,6 +165,18 @@ fn classify_against_checkpoint(
         std::cmp::Ordering::Less => CheckpointDecision::NotForward,
         std::cmp::Ordering::Greater => CheckpointDecision::NeedsConsistencyProof,
     }
+}
+
+/// Where the consistency proof for a larger head comes from.
+#[derive(Clone, Copy)]
+enum ProofSource<'a> {
+    /// Fetched from, and bound to the roots of, the peer the head came from.
+    Peer {
+        client: &'a crate::node_http::NodeClient,
+        base_url: &'a str,
+    },
+    /// Computed from this node's own ledger, for the shard it authors.
+    OwnLedger,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +293,36 @@ async fn verify_consistency_extends_checkpoint(
     )
 }
 
+/// Verifies, from this node's own ledger, that `root_hash` at `tree_size` extends `checkpoint`.
+async fn own_ledger_extends_checkpoint(
+    chain: &PostgresSettlementProvider,
+    checkpoint: &WitnessCheckpoint,
+    tree_size: i64,
+    root_hash: &str,
+) -> bool {
+    let (Some(old_root), Some(new_root)) =
+        (decode_root(&checkpoint.root_hash), decode_root(root_hash))
+    else {
+        return false;
+    };
+    match chain
+        .consistency_proof(checkpoint.tree_size, tree_size)
+        .await
+    {
+        Ok(proof) => merkle::verify_consistency_proof(
+            checkpoint.tree_size as usize,
+            tree_size as usize,
+            &proof,
+            &old_root,
+            &new_root,
+        ),
+        Err(err) => {
+            tracing::warn!(error = %err, "witness-cosign: no own-ledger proof, not cosigning");
+            false
+        }
+    }
+}
+
 /// The cosigning decision itself — called by `mirror_watcher` right after
 /// a head has been independently verified (author signature + majority
 /// cosignature of whatever's currently known). `config` being `None` means
@@ -293,6 +342,71 @@ pub async fn decide_and_cosign(
     config: Option<&WitnessCosignConfig>,
     head_gossip: &HeadGossipTracker,
     peer_base_url: &str,
+    shard_id: &str,
+    head: &CosignedTreeHead,
+) {
+    let proof = ProofSource::Peer {
+        client,
+        base_url: peer_base_url,
+    };
+    decide(chain, pool, config, head_gossip, proof, shard_id, head).await;
+}
+
+/// Cosigns this node's own newest head of the shard it authors, through the same checkpoint,
+/// consistency and equivocation guards as a mirrored head. `config` being `None` or no head yet
+/// is a no-op; the author signature needs no re-check because this node signed the head itself.
+pub async fn cosign_own_latest_head(
+    chain: &PostgresSettlementProvider,
+    pool: &PgPool,
+    config: Option<&WitnessCosignConfig>,
+    head_gossip: &HeadGossipTracker,
+    own_shard_id: &str,
+) {
+    if config.is_none() {
+        return;
+    }
+    let sth = match chain.latest_signed_tree_head().await {
+        Ok(Some(sth)) => sth,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::error!(error = %err, "witness-cosign: failed to read own latest head");
+            return;
+        }
+    };
+    let head = CosignedTreeHead {
+        sth,
+        cosignatures: Vec::new(),
+    };
+    let proof = ProofSource::OwnLedger;
+    decide(chain, pool, config, head_gossip, proof, own_shard_id, &head).await;
+}
+
+/// How often the authoring node looks for a new head of its own to cosign.
+pub const SELF_COSIGN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs [`cosign_own_latest_head`] on a fixed interval, starting immediately so a restarted node
+/// cosigns its existing head right away. Never returns.
+pub async fn run_self_cosign_worker(
+    chain: PostgresSettlementProvider,
+    pool: PgPool,
+    config: WitnessCosignConfig,
+    head_gossip: HeadGossipTracker,
+    own_shard_id: String,
+) {
+    let mut ticker = tokio::time::interval(SELF_COSIGN_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        cosign_own_latest_head(&chain, &pool, Some(&config), &head_gossip, &own_shard_id).await;
+    }
+}
+
+async fn decide(
+    chain: &PostgresSettlementProvider,
+    pool: &PgPool,
+    config: Option<&WitnessCosignConfig>,
+    head_gossip: &HeadGossipTracker,
+    proof: ProofSource<'_>,
     shard_id: &str,
     head: &CosignedTreeHead,
 ) {
@@ -360,15 +474,23 @@ pub async fn decide_and_cosign(
             let Some(checkpoint) = checkpoint else {
                 return;
             };
-            let extends = verify_consistency_extends_checkpoint(
-                client,
-                peer_base_url,
-                shard_id,
-                &checkpoint,
-                head.sth.tree_size,
-                &head.sth.root_hash,
-            )
-            .await;
+            let (size, root) = (head.sth.tree_size, &head.sth.root_hash);
+            let extends = match proof {
+                ProofSource::Peer { client, base_url } => {
+                    verify_consistency_extends_checkpoint(
+                        client,
+                        base_url,
+                        shard_id,
+                        &checkpoint,
+                        size,
+                        root,
+                    )
+                    .await
+                }
+                ProofSource::OwnLedger => {
+                    own_ledger_extends_checkpoint(chain, &checkpoint, size, root).await
+                }
+            };
             if extends {
                 cosign_and_record(chain, pool, config, &network_id, shard_id, head).await;
             } else {
