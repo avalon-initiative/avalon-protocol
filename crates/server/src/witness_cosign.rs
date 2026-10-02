@@ -30,6 +30,14 @@
 //! ledger instead of fetched from a peer. Without it a known list holding only the author
 //! and one other witness could never reach majority (#1122).
 //!
+//! **Independence consequence.** The author's witness key counts as one of the N known
+//! witnesses but shares the author's operator, so a forking author can cosign fork A and fork B
+//! with it, and each fork can reach majority with honest witnesses that each saw one head. For
+//! fork *prevention*, N witnesses means about N-1 independent ones (with {author, other}, the
+//! other is the only independent check), so list enough independent witnesses. *Detection* is
+//! unchanged: the two author-signed heads at one size still prove equivocation, and honest code
+//! never double-cosigns because of the checkpoint guard above.
+//!
 //! **Check 4, not from the design doc's numbered list but load-bearing
 //! anyway:** a shard already marked equivocating
 //! (`crate::nodes::HeadGossipTracker::is_equivocating`) gets no further
@@ -167,6 +175,67 @@ fn classify_against_checkpoint(
     }
 }
 
+/// What one cosigning decision did; lets callers and tests tell the guard branches apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CosignOutcome {
+    /// No witness key or cosigning is turned off.
+    Disabled,
+    /// No head to consider yet.
+    NoHead,
+    /// The shard has a recorded equivocation, so nothing is cosigned.
+    Equivocating,
+    /// A new cosignature was produced (or a missing one for the checkpointed head repaired).
+    Cosigned,
+    /// This exact head was already cosigned.
+    AlreadyCosigned,
+    /// A different root at an already-cosigned size.
+    ConflictingRoot,
+    /// A size behind the checkpoint.
+    NotForward,
+    /// A larger head that does not extend the checkpoint.
+    ConsistencyFailed,
+    /// A storage read or write failed; retried next tick.
+    StorageError,
+}
+
+/// How long a repeated, unchanged refusal stays silent before it is logged again.
+const REFUSAL_REMINDER: std::time::Duration = std::time::Duration::from_secs(300);
+/// Bound on remembered shards so a hostile shard list cannot grow the map without limit.
+const REFUSAL_LOG_MAX_SHARDS: usize = 4096;
+
+/// Remembers the last refusal logged per shard so a persistent refusal logs once per change.
+#[derive(Default)]
+struct RefusalLog {
+    last: std::collections::HashMap<String, (String, std::time::Instant)>,
+}
+
+impl RefusalLog {
+    /// Whether `(shard, state)` should be logged now: first sight, a changed state, or a reminder.
+    fn due(&mut self, shard: &str, state: String, now: std::time::Instant) -> bool {
+        if self.last.len() >= REFUSAL_LOG_MAX_SHARDS && !self.last.contains_key(shard) {
+            self.last.clear();
+        }
+        match self.last.get(shard) {
+            Some((seen, at)) if *seen == state && now.duration_since(*at) < REFUSAL_REMINDER => {
+                false
+            }
+            _ => {
+                self.last.insert(shard.to_string(), (state, now));
+                true
+            }
+        }
+    }
+}
+
+fn refusal_due(shard: &str, state: String) -> bool {
+    static LOG: std::sync::OnceLock<std::sync::Mutex<RefusalLog>> = std::sync::OnceLock::new();
+    let mut log = LOG
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    log.due(shard, state, std::time::Instant::now())
+}
+
 /// Where the consistency proof for a larger head comes from.
 #[derive(Clone, Copy)]
 enum ProofSource<'a> {
@@ -300,27 +369,37 @@ async fn own_ledger_extends_checkpoint(
     tree_size: i64,
     root_hash: &str,
 ) -> bool {
-    let (Some(old_root), Some(new_root)) =
-        (decode_root(&checkpoint.root_hash), decode_root(root_hash))
-    else {
-        return false;
-    };
     match chain
         .consistency_proof(checkpoint.tree_size, tree_size)
         .await
     {
-        Ok(proof) => merkle::verify_consistency_proof(
-            checkpoint.tree_size as usize,
-            tree_size as usize,
-            &proof,
-            &old_root,
-            &new_root,
-        ),
+        Ok(proof) => proof_extends_checkpoint(checkpoint, tree_size, root_hash, &proof),
         Err(err) => {
             tracing::warn!(error = %err, "witness-cosign: no own-ledger proof, not cosigning");
             false
         }
     }
+}
+
+/// Whether `proof` shows `root_hash` at `tree_size` extends `checkpoint`'s own recorded root.
+fn proof_extends_checkpoint(
+    checkpoint: &WitnessCheckpoint,
+    tree_size: i64,
+    root_hash: &str,
+    proof: &[[u8; 32]],
+) -> bool {
+    let (Some(old_root), Some(new_root)) =
+        (decode_root(&checkpoint.root_hash), decode_root(root_hash))
+    else {
+        return false;
+    };
+    merkle::verify_consistency_proof(
+        checkpoint.tree_size as usize,
+        tree_size as usize,
+        proof,
+        &old_root,
+        &new_root,
+    )
 }
 
 /// The cosigning decision itself — called by `mirror_watcher` right after
@@ -349,7 +428,7 @@ pub async fn decide_and_cosign(
         client,
         base_url: peer_base_url,
     };
-    decide(chain, pool, config, head_gossip, proof, shard_id, head).await;
+    let _ = decide(chain, pool, config, head_gossip, proof, shard_id, head).await;
 }
 
 /// Cosigns this node's own newest head of the shard it authors, through the same checkpoint,
@@ -361,16 +440,16 @@ pub async fn cosign_own_latest_head(
     config: Option<&WitnessCosignConfig>,
     head_gossip: &HeadGossipTracker,
     own_shard_id: &str,
-) {
+) -> CosignOutcome {
     if config.is_none() {
-        return;
+        return CosignOutcome::Disabled;
     }
     let sth = match chain.latest_signed_tree_head().await {
         Ok(Some(sth)) => sth,
-        Ok(None) => return,
+        Ok(None) => return CosignOutcome::NoHead,
         Err(err) => {
             tracing::error!(error = %err, "witness-cosign: failed to read own latest head");
-            return;
+            return CosignOutcome::StorageError;
         }
     };
     let head = CosignedTreeHead {
@@ -378,7 +457,7 @@ pub async fn cosign_own_latest_head(
         cosignatures: Vec::new(),
     };
     let proof = ProofSource::OwnLedger;
-    decide(chain, pool, config, head_gossip, proof, own_shard_id, &head).await;
+    decide(chain, pool, config, head_gossip, proof, own_shard_id, &head).await
 }
 
 /// How often the authoring node looks for a new head of its own to cosign.
@@ -397,7 +476,8 @@ pub async fn run_self_cosign_worker(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        cosign_own_latest_head(&chain, &pool, Some(&config), &head_gossip, &own_shard_id).await;
+        let _ =
+            cosign_own_latest_head(&chain, &pool, Some(&config), &head_gossip, &own_shard_id).await;
     }
 }
 
@@ -409,20 +489,23 @@ async fn decide(
     proof: ProofSource<'_>,
     shard_id: &str,
     head: &CosignedTreeHead,
-) {
+) -> CosignOutcome {
     let Some(config) = config else {
-        return;
+        return CosignOutcome::Disabled;
     };
+    let (size, root) = (head.sth.tree_size, &head.sth.root_hash);
 
     if head_gossip.is_equivocating(shard_id) {
-        tracing::warn!(
-            network_id = %head.sth.network_id,
-            shard_id,
-            tree_size = head.sth.tree_size,
-            "witness-cosign: shard has a confirmed equivocation on record — refusing to cosign \
-             anything for it until a human resolves the dispute",
-        );
-        return;
+        if refusal_due(shard_id, format!("equivocating:{size}:{root}")) {
+            tracing::warn!(
+                network_id = %head.sth.network_id,
+                shard_id,
+                tree_size = size,
+                "witness-cosign: shard has a confirmed equivocation on record — refusing to \
+                 cosign anything for it until a human resolves the dispute",
+            );
+        }
+        return CosignOutcome::Equivocating;
     }
 
     let network_id = head.sth.network_id.clone();
@@ -436,45 +519,51 @@ async fn decide(
                 "witness-cosign: failed to read this node's own last-cosigned checkpoint — not \
                  cosigning this tick",
             );
-            return;
+            return CosignOutcome::StorageError;
         }
     };
 
-    match classify_against_checkpoint(checkpoint.as_ref(), head.sth.tree_size, &head.sth.root_hash)
-    {
+    match classify_against_checkpoint(checkpoint.as_ref(), size, root) {
         CheckpointDecision::AlreadyCosigned => {
             ensure_own_cosignature_stored(chain, config, &network_id, shard_id, head).await;
+            CosignOutcome::AlreadyCosigned
         }
         CheckpointDecision::ConflictingRootAtSameSize => {
-            tracing::error!(
-                event = "witness_double_cosign_refused",
-                network_id = %network_id,
-                shard_id,
-                tree_size = head.sth.tree_size,
-                new_root_hash = %head.sth.root_hash,
-                previously_cosigned_root_hash = checkpoint.as_ref().map(|c| c.root_hash.as_str()).unwrap_or_default(),
-                "witness-cosign: refusing to cosign a different root at a tree_size this node \
-                 already cosigned — this is exactly the no-double-cosign guarantee holding",
-            );
+            if refusal_due(shard_id, format!("conflict:{size}:{root}")) {
+                tracing::error!(
+                    event = "witness_double_cosign_refused",
+                    network_id = %network_id,
+                    shard_id,
+                    tree_size = size,
+                    new_root_hash = %root,
+                    previously_cosigned_root_hash = checkpoint.as_ref().map(|c| c.root_hash.as_str()).unwrap_or_default(),
+                    "witness-cosign: refusing to cosign a different root at a tree_size this node \
+                     already cosigned — this is exactly the no-double-cosign guarantee holding",
+                );
+            }
+            CosignOutcome::ConflictingRoot
         }
         CheckpointDecision::NotForward => {
-            tracing::warn!(
-                network_id = %network_id,
-                shard_id,
-                tree_size = head.sth.tree_size,
-                checkpoint_tree_size = checkpoint.as_ref().map(|c| c.tree_size).unwrap_or_default(),
-                "witness-cosign: observed head's tree_size is behind this node's own checkpoint \
-                 — stale observation, not cosigning",
-            );
+            let checkpoint_size = checkpoint.as_ref().map(|c| c.tree_size).unwrap_or_default();
+            if refusal_due(shard_id, format!("behind:{size}:{root}:{checkpoint_size}")) {
+                tracing::warn!(
+                    network_id = %network_id,
+                    shard_id,
+                    tree_size = size,
+                    checkpoint_tree_size = checkpoint_size,
+                    "witness-cosign: observed head's tree_size is behind this node's own \
+                     checkpoint — stale observation, not cosigning",
+                );
+            }
+            CosignOutcome::NotForward
         }
         CheckpointDecision::Bootstrap => {
-            cosign_and_record(chain, pool, config, &network_id, shard_id, head).await;
+            cosign_and_record(chain, pool, config, &network_id, shard_id, head).await
         }
         CheckpointDecision::NeedsConsistencyProof => {
             let Some(checkpoint) = checkpoint else {
-                return;
+                return CosignOutcome::StorageError;
             };
-            let (size, root) = (head.sth.tree_size, &head.sth.root_hash);
             let extends = match proof {
                 ProofSource::Peer { client, base_url } => {
                     verify_consistency_extends_checkpoint(
@@ -492,18 +581,21 @@ async fn decide(
                 }
             };
             if extends {
-                cosign_and_record(chain, pool, config, &network_id, shard_id, head).await;
-            } else {
+                return cosign_and_record(chain, pool, config, &network_id, shard_id, head).await;
+            }
+            let state = format!("inconsistent:{size}:{root}:{}", checkpoint.tree_size);
+            if refusal_due(shard_id, state) {
                 tracing::error!(
                     event = "witness_consistency_check_failed",
                     network_id = %network_id,
                     shard_id,
                     checkpoint_tree_size = checkpoint.tree_size,
-                    tree_size = head.sth.tree_size,
+                    tree_size = size,
                     "witness-cosign: new head did not consistency-proof-extend this node's own \
                      last-cosigned checkpoint — refusing to cosign",
                 );
             }
+            CosignOutcome::ConsistencyFailed
         }
     }
 }
@@ -522,7 +614,7 @@ async fn cosign_and_record(
     network_id: &str,
     shard_id: &str,
     head: &CosignedTreeHead,
-) {
+) -> CosignOutcome {
     if let Err(err) = mirror::record_witness_checkpoint(
         pool,
         network_id,
@@ -540,9 +632,13 @@ async fn cosign_and_record(
             error = %err,
             "witness-cosign: failed to advance this node's own checkpoint — not cosigning",
         );
-        return;
+        return CosignOutcome::StorageError;
     }
-    ensure_own_cosignature_stored(chain, config, network_id, shard_id, head).await;
+    if ensure_own_cosignature_stored(chain, config, network_id, shard_id, head).await {
+        CosignOutcome::Cosigned
+    } else {
+        CosignOutcome::StorageError
+    }
 }
 
 /// Signs and stores this node's cosignature over `head` unless one is
@@ -555,7 +651,7 @@ async fn ensure_own_cosignature_stored(
     network_id: &str,
     shard_id: &str,
     head: &CosignedTreeHead,
-) {
+) -> bool {
     match chain
         .list_witness_cosignatures(network_id, shard_id, head.sth.tree_size)
         .await
@@ -565,7 +661,7 @@ async fn ensure_own_cosignature_stored(
                 .iter()
                 .any(|c| c.witness_key_id == config.witness_key_id)
             {
-                return;
+                return true;
             }
         }
         Err(err) => {
@@ -575,7 +671,7 @@ async fn ensure_own_cosignature_stored(
                 error = %err,
                 "witness-cosign: failed to read stored cosignatures — not cosigning this tick",
             );
-            return;
+            return false;
         }
     }
 
@@ -596,7 +692,7 @@ async fn ensure_own_cosignature_stored(
             error = %err,
             "witness-cosign: failed to durably store this node's own cosignature",
         );
-        return;
+        return false;
     }
     tracing::info!(
         event = "witness_cosigned",
@@ -607,6 +703,7 @@ async fn ensure_own_cosignature_stored(
         witness_key_id = %config.witness_key_id,
         "witness-cosign: cosigned a newly-verified head",
     );
+    true
 }
 
 /// How often this witness re-attests its current head; a third of the cosignature freshness
@@ -921,6 +1018,43 @@ mod tests {
             &known,
             now - window,
             now
+        ));
+    }
+
+    #[test]
+    fn own_ledger_proof_accepts_an_extension_and_refuses_a_fork() {
+        let leaves: Vec<String> = (0u8..12).map(|i| hex::encode([i; 32])).collect();
+        let root = |n: usize| hex::encode(merkle::mth_of_hex_hashes(&leaves[..n]).unwrap());
+        let cp = checkpoint(5, &root(5));
+        let proof = merkle::consistency_proof_of_hex_hashes(5, &leaves[..12]).unwrap();
+        assert!(proof_extends_checkpoint(&cp, 12, &root(12), &proof));
+
+        let mut forked = leaves.clone();
+        forked[2] = hex::encode([0xEEu8; 32]);
+        let forked_root = hex::encode(merkle::mth_of_hex_hashes(&forked[..12]).unwrap());
+        assert!(!proof_extends_checkpoint(&cp, 12, &forked_root, &proof));
+        assert!(!proof_extends_checkpoint(
+            &checkpoint(5, "zz"),
+            12,
+            &root(12),
+            &proof
+        ));
+    }
+
+    #[test]
+    fn a_persistent_refusal_logs_once_then_only_as_a_reminder_or_on_change() {
+        use std::time::{Duration, Instant};
+        let mut log = RefusalLog::default();
+        let t0 = Instant::now();
+        assert!(log.due("core", "behind:5".into(), t0));
+        assert!(!log.due("core", "behind:5".into(), t0 + Duration::from_secs(2)));
+        assert!(log.due("core", "behind:6".into(), t0 + Duration::from_secs(4)));
+        assert!(log.due("other", "behind:6".into(), t0 + Duration::from_secs(4)));
+        assert!(!log.due("core", "behind:6".into(), t0 + Duration::from_secs(60)));
+        assert!(log.due(
+            "core",
+            "behind:6".into(),
+            t0 + REFUSAL_REMINDER + Duration::from_secs(5)
         ));
     }
 
