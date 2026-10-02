@@ -8,7 +8,7 @@ description = "Avalon's network-facing API/auth/realtime service. The backend th
 default-run = "avalon-server"
 
 [dependencies]
-avalon-protocol = { path = "../protocol" }
+avalon-protocol = { path = "../protocol", features = ["sqlx"] }
 avalon-chain = { path = "../chain" }
 avalon-indexer = { path = "../indexer" }
 async-trait.workspace = true

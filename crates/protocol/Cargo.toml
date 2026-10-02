@@ -27,5 +27,11 @@ hex.workspace = true
 # RFC 6962 Merkle hashing.
 sha2 = "0.11"
 
+# Optional sqlx Type/Encode/Decode for `IdentityId` (TEXT column), enabled by crates that talk to Postgres.
+sqlx = { workspace = true, optional = true }
+
+[features]
+sqlx = ["dep:sqlx"]
+
 [dev-dependencies]
 rand.workspace = true

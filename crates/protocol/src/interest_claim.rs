@@ -33,6 +33,7 @@
 //! two-questions-not-one split `avalon-docs/protocol/achievements-and-attestations.md`'s
 //! authenticity-vs-validity distinction already establishes for a
 //! different kind of signed claim.
+use crate::identity_id::IdentityId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -67,7 +68,7 @@ pub const DEFAULT_TTL_SECONDS: i64 = 24 * 60 * 60;
 /// to `base_url`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InterestClaim {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub signing_key_id: Uuid,
     pub scope: ClaimedScope,
     pub base_url: String,
@@ -94,7 +95,7 @@ pub struct InterestClaim {
 /// against a different identity, key, scope, destination, or validity
 /// window than the one it was actually produced for.
 pub fn signing_bytes(
-    identity_id: Uuid,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
     scope: ClaimedScope,
     base_url: &str,
@@ -133,10 +134,11 @@ impl InterestClaim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity_id::derive_identity_id;
 
     fn sample() -> InterestClaim {
         InterestClaim {
-            identity_id: Uuid::nil(),
+            identity_id: derive_identity_id(&[1u8; 32]),
             signing_key_id: Uuid::nil(),
             scope: ClaimedScope::Channel {
                 channel_id: Uuid::nil(),
@@ -202,7 +204,7 @@ mod tests {
         let base_bytes = base.signing_bytes();
 
         let mut different_identity = base.clone();
-        different_identity.identity_id = Uuid::from_u128(1);
+        different_identity.identity_id = derive_identity_id(&[2u8; 32]);
         assert_ne!(different_identity.signing_bytes(), base_bytes);
 
         let mut different_expiry = base.clone();

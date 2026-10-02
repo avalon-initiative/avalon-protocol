@@ -27,6 +27,7 @@
 //! so a bearer-token-shaped `Authorization` header can carry either kind
 //! and a verifier can tell which one it's holding before doing any crypto.
 
+use crate::identity_id::IdentityId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -46,7 +47,7 @@ pub const DEFAULT_TTL_SECONDS: i64 = 60;
 /// A self-signed session-continuation assertion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContinuationToken {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     /// Which of the identity's (possibly several) signing keys minted
     /// this — same multi-key model `identity_signing_keys`/`devices.rs`
     /// already supports, so a continuation token names its key explicitly
@@ -74,7 +75,7 @@ pub struct ContinuationToken {
 /// identity, key, nonce, or validity window than the one it was actually
 /// produced for.
 pub fn signing_bytes(
-    identity_id: Uuid,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
     nonce: Uuid,
     issued_at: OffsetDateTime,
@@ -127,10 +128,11 @@ impl ContinuationToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity_id::derive_identity_id;
 
     fn sample() -> ContinuationToken {
         ContinuationToken {
-            identity_id: Uuid::nil(),
+            identity_id: derive_identity_id(&[1u8; 32]),
             signing_key_id: Uuid::nil(),
             nonce: Uuid::nil(),
             issued_at: OffsetDateTime::from_unix_timestamp(1_000_000_000).unwrap(),
@@ -165,7 +167,7 @@ mod tests {
         assert_ne!(different_nonce.signing_bytes(), base_bytes);
 
         let mut different_identity = base.clone();
-        different_identity.identity_id = Uuid::from_u128(1);
+        different_identity.identity_id = derive_identity_id(&[2u8; 32]);
         assert_ne!(different_identity.signing_bytes(), base_bytes);
 
         let mut different_expiry = base.clone();

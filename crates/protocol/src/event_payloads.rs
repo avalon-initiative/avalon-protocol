@@ -21,6 +21,12 @@
 //! permanently — a future field removal needs its own decision issue, not
 //! a citation of #510 as precedent.
 //!
+//! **Second deliberate exception, issue #1129/#1134**: `identity.created` and
+//! `identity.signing_key_added` moved to payload version 2 (self-certifying identity
+//! ids) and decoders reject v1 outright; `identity.signing_key_revoked` gained the
+//! revoker's signature. Same grounds as above: there is no deployed network whose
+//! history must stay decodable.
+//!
 //! A double-`Option` field (`Option<Option<T>>`) is this repo's existing
 //! "clear vs. untouched" convention (`crate::guilds::UpdateGuildRequest::motd`
 //! and friends): the outer `None` means the key is entirely absent from the
@@ -34,37 +40,58 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::guilds::GuildLink;
+use crate::identity_id::IdentityId;
 
 // --- identity.* -----------------------------------------------------------
 
+/// `identity.created` v2: the inception key and the self-signature over
+/// `identity_created_signing_bytes_v2`, so a mirror can verify the id offline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityCreatedPayload {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub display_name: String,
+    /// Inception Ed25519 public key, standard base64.
+    pub public_key: String,
+    /// Signature over the v2 signing bytes, standard base64.
+    pub signature: String,
 }
 
+/// What authorised a signing key to act for an identity.
+pub const SIGNING_KEY_KIND_INCEPTION: &str = "inception";
+/// A key added by an approving device grant.
+pub const SIGNING_KEY_KIND_DEVICE_GRANT: &str = "device_grant";
+/// A key added by completed social recovery.
+pub const SIGNING_KEY_KIND_RECOVERY: &str = "recovery";
+
+/// `identity.signing_key_added` v2. The inception key is valid iff
+/// `derive_identity_id(public_key) == identity_id`; a device key carries the
+/// approving device's signature (`grant_id` and `approval_signature`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentitySigningKeyAddedPayload {
     pub signing_key_id: Uuid,
     pub public_key: String,
     pub device_label: Option<String>,
     pub approved_by_signing_key_id: Uuid,
-    /// Issue #525 — the identity this key belongs to. Every emitter already
-    /// knows it (it's `issuer`/`subject`'s own owner segment), but
-    /// `GlobalId` has no public accessor to pull it back out of an
-    /// already-built `ProtocolEvent`, so a decoder that needs it
-    /// (`avalon_indexer::projections::identity_signing_keys`) needs it
-    /// carried explicitly, same as `IdentityCreatedPayload`/
-    /// `IdentityPasskeyRegisteredPayload` already do. A historical event
-    /// emitted before this field existed simply won't decode into that
-    /// (also brand-new) projection — harmless, since `identity_signing_keys`
-    /// itself, this node's own local source of truth, was never missing it.
-    pub identity_id: Uuid,
+    /// The identity this key belongs to.
+    pub identity_id: IdentityId,
+    /// One of the `SIGNING_KEY_KIND_*` constants.
+    pub kind: String,
+    /// Device grant that authorised this key (device-grant keys only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_id: Option<Uuid>,
+    /// Approving device's signature over the grant bytes, standard base64 (device-grant keys only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_signature: Option<String>,
 }
 
+/// `identity.signing_key_revoked` v2: signed by an active key of the same identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentitySigningKeyRevokedPayload {
+    pub identity_id: IdentityId,
     pub signing_key_id: Uuid,
+    pub revoked_by_signing_key_id: Uuid,
+    /// Signature over `signing_key_revoked_signing_bytes_v2`, standard base64.
+    pub signature: String,
 }
 
 /// Issue #523: a WebAuthn passkey's *public* credential material only —
@@ -81,7 +108,7 @@ pub struct IdentitySigningKeyRevokedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityPasskeyRegisteredPayload {
     pub passkey_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub credential_id: String,
     pub passkey_data: serde_json::Value,
     pub label: Option<String>,
@@ -94,12 +121,12 @@ pub struct IdentityPasskeyRegisteredPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityPasskeyRevokedPayload {
     pub passkey_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityRecoveryConfiguredPayload {
-    pub guardian_ids: Vec<Uuid>,
+    pub guardian_ids: Vec<IdentityId>,
     pub threshold: i32,
 }
 
@@ -112,7 +139,7 @@ pub struct IdentityRecoveryRequestedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityRecoveryApprovedPayload {
     pub request_id: Uuid,
-    pub guardian_id: Uuid,
+    pub guardian_id: IdentityId,
     pub approvals_count: i64,
     pub threshold: i32,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -122,7 +149,7 @@ pub struct IdentityRecoveryApprovedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityRecoveryCancelledPayload {
     pub request_id: Uuid,
-    pub cancelled_by: Uuid,
+    pub cancelled_by: IdentityId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -243,7 +270,7 @@ pub struct GameRegisteredPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameBindingEstablishedPayload {
     pub binding_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub game_id: Uuid,
     pub slug: String,
 }
@@ -251,7 +278,7 @@ pub struct GameBindingEstablishedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameBindingEndedPayload {
     pub binding_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub game_id: Uuid,
     pub slug: String,
 }
@@ -259,7 +286,7 @@ pub struct GameBindingEndedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionGrantedPayload {
     pub binding_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub game_id: Uuid,
     pub capability: String,
 }
@@ -270,7 +297,7 @@ pub struct PermissionGrantedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionRevokedPayload {
     pub binding_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub game_id: Uuid,
     pub capability: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,23 +358,23 @@ pub struct IssuerKeyRevokedPayload {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FriendRequestedPayload {
-    pub from: Uuid,
-    pub to: Uuid,
-    pub actor: Uuid,
+    pub from: IdentityId,
+    pub to: IdentityId,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FriendAcceptedPayload {
-    pub from: Uuid,
-    pub to: Uuid,
-    pub actor: Uuid,
+    pub from: IdentityId,
+    pub to: IdentityId,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FriendRemovedPayload {
-    pub a: Uuid,
-    pub b: Uuid,
-    pub actor: Uuid,
+    pub a: IdentityId,
+    pub b: IdentityId,
+    pub actor: IdentityId,
 }
 
 /// Compensating event: supersedes the effect of `reverses_event_id` after a
@@ -357,8 +384,8 @@ pub struct FriendRemovedPayload {
 pub struct FriendRelationshipReversedPayload {
     pub reverses_event_id: Uuid,
     pub recovery_request_id: Uuid,
-    pub identity_id: Uuid,
-    pub counterparty_id: Uuid,
+    pub identity_id: IdentityId,
+    pub counterparty_id: IdentityId,
     pub effect: String,
 }
 
@@ -370,7 +397,7 @@ pub struct GuildCreatedPayload {
     pub name: String,
     pub tag: String,
     pub description: String,
-    pub owner: Uuid,
+    pub owner: IdentityId,
 }
 
 /// Full-replace, same convention `guilds::UpdateGuildRequest` itself uses —
@@ -390,7 +417,7 @@ pub struct GuildUpdatedPayload {
     pub game_breakdown_public: bool,
     pub join_policy: String,
     pub roster_visibility: String,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -408,24 +435,24 @@ pub struct GuildRoleDefinedPayload {
     pub permissions: Vec<String>,
     pub description: String,
     pub badge: GuildRoleBadgePayload,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildRoleDeletedPayload {
     pub guild_id: Uuid,
     pub name_index: i32,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildMemberAddedPayload {
     pub guild_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub role_index: i32,
     /// e.g. `"invite"` / `"join_request"` / `"direct_join"`.
     pub via: String,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 /// Shared by `leave_guild` (`reason: "left"`) and `remove_member`
@@ -433,9 +460,9 @@ pub struct GuildMemberAddedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildMemberRemovedPayload {
     pub guild_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub reason: String,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 /// Compensating event: supersedes the effect of `reverses_event_id` after a
@@ -448,7 +475,7 @@ pub struct GuildMembershipReversedPayload {
     pub reverses_event_id: Uuid,
     pub recovery_request_id: Uuid,
     pub guild_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub effect: String,
     pub role_index: i32,
 }
@@ -456,30 +483,30 @@ pub struct GuildMembershipReversedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildRoleChangedPayload {
     pub guild_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub role_index: i32,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildOwnerTransferredPayload {
     pub guild_id: Uuid,
-    pub from: Uuid,
-    pub to: Uuid,
+    pub from: IdentityId,
+    pub to: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildGameAssociatedPayload {
     pub guild_id: Uuid,
     pub game_id: Uuid,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildFavoriteGamesUpdatedPayload {
     pub guild_id: Uuid,
     pub game_ids: Vec<Uuid>,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -487,7 +514,7 @@ pub struct GuildChannelCreatedPayload {
     pub guild_id: Uuid,
     pub channel_id: Uuid,
     pub name: String,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -500,14 +527,14 @@ pub struct GuildChannelRenamedPayload {
     pub topic: Option<String>,
     /// Issue #458.
     pub public: bool,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuildChannelArchivedPayload {
     pub guild_id: Uuid,
     pub channel_id: Uuid,
-    pub actor: Uuid,
+    pub actor: IdentityId,
 }
 
 // --- game_schema.* / game_schema_mapping.* / game_data.* --------------------
@@ -541,7 +568,7 @@ pub struct GameDataPublishedPayload {
     pub id: String,
     pub schema: String,
     pub game_id: Uuid,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub instance: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
@@ -563,7 +590,7 @@ pub struct GameDataDeletedPayload {
     pub instance_id: String,
     pub schema: String,
     pub game_id: Uuid,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub reason_code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -662,7 +689,7 @@ pub fn evidence_byte_size(evidence: &Option<serde_json::Value>) -> usize {
 pub struct ClaimIssuedPayload {
     pub id: Uuid,
     pub issuer: String,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub achievement: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<serde_json::Value>,
@@ -676,7 +703,7 @@ impl ClaimIssuedPayload {
     pub fn new(
         id: Uuid,
         issuer: String,
-        subject: Uuid,
+        subject: IdentityId,
         achievement: String,
         evidence: Option<serde_json::Value>,
         proof: ClaimProofPayload,
@@ -737,16 +764,25 @@ mod tests {
     //! shipped referencing it (see this module's own doc comment on the
     //! versioning policy).
     use super::*;
+    use crate::identity_id::derive_identity_id;
+
+    fn test_id() -> IdentityId {
+        derive_identity_id(&[7u8; 32])
+    }
 
     #[test]
     fn identity_created_round_trips() {
         let payload = IdentityCreatedPayload {
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             display_name: "Aria".to_string(),
+            public_key: "base64key".to_string(),
+            signature: "base64sig".to_string(),
         };
         let json = serde_json::json!({
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "display_name": "Aria",
+            "public_key": "base64key",
+            "signature": "base64sig",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -756,20 +792,37 @@ mod tests {
     }
 
     #[test]
+    fn identity_created_rejects_a_uuid_identity_id() {
+        let json = serde_json::json!({
+            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "display_name": "Aria",
+            "public_key": "k",
+            "signature": "s",
+        });
+        assert!(serde_json::from_value::<IdentityCreatedPayload>(json).is_err());
+    }
+
+    #[test]
     fn identity_signing_key_added_round_trips() {
         let payload = IdentitySigningKeyAddedPayload {
             signing_key_id: Uuid::nil(),
             public_key: "base64key".to_string(),
             device_label: Some("Pixel 9".to_string()),
             approved_by_signing_key_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
+            kind: SIGNING_KEY_KIND_DEVICE_GRANT.to_string(),
+            grant_id: Some(Uuid::nil()),
+            approval_signature: Some("base64sig".to_string()),
         };
         let json = serde_json::json!({
             "signing_key_id": "00000000-0000-0000-0000-000000000000",
             "public_key": "base64key",
             "device_label": "Pixel 9",
             "approved_by_signing_key_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
+            "kind": "device_grant",
+            "grant_id": "00000000-0000-0000-0000-000000000000",
+            "approval_signature": "base64sig",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -781,9 +834,17 @@ mod tests {
     #[test]
     fn identity_signing_key_revoked_round_trips() {
         let payload = IdentitySigningKeyRevokedPayload {
+            identity_id: test_id(),
             signing_key_id: Uuid::nil(),
+            revoked_by_signing_key_id: Uuid::nil(),
+            signature: "base64sig".to_string(),
         };
-        let json = serde_json::json!({ "signing_key_id": "00000000-0000-0000-0000-000000000000" });
+        let json = serde_json::json!({
+            "identity_id": test_id().to_string(),
+            "signing_key_id": "00000000-0000-0000-0000-000000000000",
+            "revoked_by_signing_key_id": "00000000-0000-0000-0000-000000000000",
+            "signature": "base64sig",
+        });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
             serde_json::from_value::<IdentitySigningKeyRevokedPayload>(json).unwrap(),
@@ -795,14 +856,14 @@ mod tests {
     fn identity_passkey_registered_round_trips() {
         let payload = IdentityPasskeyRegisteredPayload {
             passkey_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             credential_id: "base64credentialid".to_string(),
             passkey_data: serde_json::json!({"cred": "data"}),
             label: Some("Work laptop".to_string()),
         };
         let json = serde_json::json!({
             "passkey_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "credential_id": "base64credentialid",
             "passkey_data": {"cred": "data"},
             "label": "Work laptop",
@@ -818,11 +879,11 @@ mod tests {
     fn identity_passkey_revoked_round_trips() {
         let payload = IdentityPasskeyRevokedPayload {
             passkey_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
         };
         let json = serde_json::json!({
             "passkey_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -834,11 +895,11 @@ mod tests {
     #[test]
     fn identity_recovery_configured_round_trips() {
         let payload = IdentityRecoveryConfiguredPayload {
-            guardian_ids: vec![Uuid::nil()],
+            guardian_ids: vec![test_id()],
             threshold: 2,
         };
         let json = serde_json::json!({
-            "guardian_ids": ["00000000-0000-0000-0000-000000000000"],
+            "guardian_ids": [test_id().to_string()],
             "threshold": 2,
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
@@ -869,14 +930,14 @@ mod tests {
     fn identity_recovery_approved_round_trips_with_and_without_delay() {
         let with_delay = IdentityRecoveryApprovedPayload {
             request_id: Uuid::nil(),
-            guardian_id: Uuid::nil(),
+            guardian_id: test_id(),
             approvals_count: 1,
             threshold: 2,
             delay_ends_at: Some(OffsetDateTime::UNIX_EPOCH),
         };
         let json = serde_json::json!({
             "request_id": "00000000-0000-0000-0000-000000000000",
-            "guardian_id": "00000000-0000-0000-0000-000000000000",
+            "guardian_id": test_id().to_string(),
             "approvals_count": 1,
             "threshold": 2,
             "delay_ends_at": "1970-01-01T00:00:00Z",
@@ -900,12 +961,12 @@ mod tests {
     fn identity_recovery_cancelled_round_trips() {
         let payload = IdentityRecoveryCancelledPayload {
             request_id: Uuid::nil(),
-            cancelled_by: Uuid::nil(),
+            cancelled_by: test_id(),
             reason: Some("owner vetoed".to_string()),
         };
         let json = serde_json::json!({
             "request_id": "00000000-0000-0000-0000-000000000000",
-            "cancelled_by": "00000000-0000-0000-0000-000000000000",
+            "cancelled_by": test_id().to_string(),
             "reason": "owner vetoed",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
@@ -1016,13 +1077,13 @@ mod tests {
     fn game_binding_established_round_trips() {
         let payload = GameBindingEstablishedPayload {
             binding_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             game_id: Uuid::nil(),
             slug: "ashen-realms".to_string(),
         };
         let json = serde_json::json!({
             "binding_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "game_id": "00000000-0000-0000-0000-000000000000",
             "slug": "ashen-realms",
         });
@@ -1037,13 +1098,13 @@ mod tests {
     fn game_binding_ended_round_trips() {
         let payload = GameBindingEndedPayload {
             binding_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             game_id: Uuid::nil(),
             slug: "ashen-realms".to_string(),
         };
         let json = serde_json::json!({
             "binding_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "game_id": "00000000-0000-0000-0000-000000000000",
             "slug": "ashen-realms",
         });
@@ -1058,13 +1119,13 @@ mod tests {
     fn permission_granted_round_trips() {
         let payload = PermissionGrantedPayload {
             binding_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             game_id: Uuid::nil(),
             capability: "achievements.issue".to_string(),
         };
         let json = serde_json::json!({
             "binding_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "game_id": "00000000-0000-0000-0000-000000000000",
             "capability": "achievements.issue",
         });
@@ -1079,14 +1140,14 @@ mod tests {
     fn permission_revoked_round_trips_with_and_without_reason() {
         let with_reason = PermissionRevokedPayload {
             binding_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             game_id: Uuid::nil(),
             capability: "achievements.issue".to_string(),
             reason: Some("binding_ended".to_string()),
         };
         let json = serde_json::json!({
             "binding_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "game_id": "00000000-0000-0000-0000-000000000000",
             "capability": "achievements.issue",
             "reason": "binding_ended",
@@ -1200,14 +1261,14 @@ mod tests {
     #[test]
     fn friend_requested_round_trips() {
         let payload = FriendRequestedPayload {
-            from: Uuid::nil(),
-            to: Uuid::nil(),
-            actor: Uuid::nil(),
+            from: test_id(),
+            to: test_id(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
-            "from": "00000000-0000-0000-0000-000000000000",
-            "to": "00000000-0000-0000-0000-000000000000",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "from": test_id().to_string(),
+            "to": test_id().to_string(),
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1219,14 +1280,14 @@ mod tests {
     #[test]
     fn friend_accepted_round_trips() {
         let payload = FriendAcceptedPayload {
-            from: Uuid::nil(),
-            to: Uuid::nil(),
-            actor: Uuid::nil(),
+            from: test_id(),
+            to: test_id(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
-            "from": "00000000-0000-0000-0000-000000000000",
-            "to": "00000000-0000-0000-0000-000000000000",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "from": test_id().to_string(),
+            "to": test_id().to_string(),
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1238,14 +1299,14 @@ mod tests {
     #[test]
     fn friend_removed_round_trips() {
         let payload = FriendRemovedPayload {
-            a: Uuid::nil(),
-            b: Uuid::nil(),
-            actor: Uuid::nil(),
+            a: test_id(),
+            b: test_id(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
-            "a": "00000000-0000-0000-0000-000000000000",
-            "b": "00000000-0000-0000-0000-000000000000",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "a": test_id().to_string(),
+            "b": test_id().to_string(),
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1261,14 +1322,14 @@ mod tests {
             name: "Dragon Hunters".to_string(),
             tag: "DRGN".to_string(),
             description: "a guild".to_string(),
-            owner: Uuid::nil(),
+            owner: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "name": "Dragon Hunters",
             "tag": "DRGN",
             "description": "a guild",
-            "owner": "00000000-0000-0000-0000-000000000000",
+            "owner": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1293,7 +1354,7 @@ mod tests {
             game_breakdown_public: false,
             join_policy: "open".to_string(),
             roster_visibility: "guild_members".to_string(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
@@ -1309,7 +1370,7 @@ mod tests {
             "game_breakdown_public": false,
             "join_policy": "open",
             "roster_visibility": "guild_members",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1330,7 +1391,7 @@ mod tests {
                 icon: "shield".to_string(),
                 color: "gold".to_string(),
             },
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
@@ -1339,7 +1400,7 @@ mod tests {
             "permissions": ["manage_members"],
             "description": "Keeps order",
             "badge": { "icon": "shield", "color": "gold" },
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1353,12 +1414,12 @@ mod tests {
         let payload = GuildRoleDeletedPayload {
             guild_id: Uuid::nil(),
             name_index: 3,
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "name_index": 3,
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1371,17 +1432,17 @@ mod tests {
     fn guild_member_added_round_trips() {
         let payload = GuildMemberAddedPayload {
             guild_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             role_index: 2,
             via: "invite".to_string(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "role_index": 2,
             "via": "invite",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1395,16 +1456,16 @@ mod tests {
         let payload = FriendRelationshipReversedPayload {
             reverses_event_id: Uuid::nil(),
             recovery_request_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
-            counterparty_id: Uuid::nil(),
+            identity_id: test_id(),
+            counterparty_id: test_id(),
             effect: "friendship_removed".to_string(),
         };
         let z = "00000000-0000-0000-0000-000000000000";
         let json = serde_json::json!({
             "reverses_event_id": z,
             "recovery_request_id": z,
-            "identity_id": z,
-            "counterparty_id": z,
+            "identity_id": test_id().to_string(),
+            "counterparty_id": test_id().to_string(),
             "effect": "friendship_removed",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
@@ -1420,7 +1481,7 @@ mod tests {
             reverses_event_id: Uuid::nil(),
             recovery_request_id: Uuid::nil(),
             guild_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             effect: "membership_restored".to_string(),
             role_index: 1,
         };
@@ -1429,7 +1490,7 @@ mod tests {
             "reverses_event_id": z,
             "recovery_request_id": z,
             "guild_id": z,
-            "identity_id": z,
+            "identity_id": test_id().to_string(),
             "effect": "membership_restored",
             "role_index": 1,
         });
@@ -1444,15 +1505,15 @@ mod tests {
     fn guild_member_removed_round_trips() {
         let payload = GuildMemberRemovedPayload {
             guild_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             reason: "left".to_string(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "reason": "left",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1465,15 +1526,15 @@ mod tests {
     fn guild_role_changed_round_trips() {
         let payload = GuildRoleChangedPayload {
             guild_id: Uuid::nil(),
-            identity_id: Uuid::nil(),
+            identity_id: test_id(),
             role_index: 1,
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
-            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": test_id().to_string(),
             "role_index": 1,
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1486,13 +1547,13 @@ mod tests {
     fn guild_owner_transferred_round_trips() {
         let payload = GuildOwnerTransferredPayload {
             guild_id: Uuid::nil(),
-            from: Uuid::nil(),
-            to: Uuid::nil(),
+            from: test_id(),
+            to: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
-            "from": "00000000-0000-0000-0000-000000000000",
-            "to": "00000000-0000-0000-0000-000000000000",
+            "from": test_id().to_string(),
+            "to": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1506,12 +1567,12 @@ mod tests {
         let payload = GuildGameAssociatedPayload {
             guild_id: Uuid::nil(),
             game_id: Uuid::nil(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "game_id": "00000000-0000-0000-0000-000000000000",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1525,12 +1586,12 @@ mod tests {
         let payload = GuildFavoriteGamesUpdatedPayload {
             guild_id: Uuid::nil(),
             game_ids: vec![Uuid::nil()],
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "game_ids": ["00000000-0000-0000-0000-000000000000"],
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1545,13 +1606,13 @@ mod tests {
             guild_id: Uuid::nil(),
             channel_id: Uuid::nil(),
             name: "general".to_string(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "channel_id": "00000000-0000-0000-0000-000000000000",
             "name": "general",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1569,7 +1630,7 @@ mod tests {
             announcement_only: false,
             topic: Some("chat about the game".to_string()),
             public: false,
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
@@ -1578,7 +1639,7 @@ mod tests {
             "announcement_only": false,
             "topic": "chat about the game",
             "public": false,
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1592,12 +1653,12 @@ mod tests {
         let payload = GuildChannelArchivedPayload {
             guild_id: Uuid::nil(),
             channel_id: Uuid::nil(),
-            actor: Uuid::nil(),
+            actor: test_id(),
         };
         let json = serde_json::json!({
             "guild_id": "00000000-0000-0000-0000-000000000000",
             "channel_id": "00000000-0000-0000-0000-000000000000",
-            "actor": "00000000-0000-0000-0000-000000000000",
+            "actor": test_id().to_string(),
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -1667,7 +1728,7 @@ mod tests {
             id: "instance:1".to_string(),
             schema: "schema:a".to_string(),
             game_id: Uuid::nil(),
-            subject: Uuid::nil(),
+            subject: test_id(),
             instance: serde_json::json!({ "level": 5 }),
             supersedes: None,
         };
@@ -1675,7 +1736,7 @@ mod tests {
             "id": "instance:1",
             "schema": "schema:a",
             "game_id": "00000000-0000-0000-0000-000000000000",
-            "subject": "00000000-0000-0000-0000-000000000000",
+            "subject": test_id().to_string(),
             "instance": { "level": 5 },
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
@@ -1772,7 +1833,7 @@ mod tests {
         let payload = ClaimIssuedPayload {
             id: Uuid::nil(),
             issuer: "game:ashen-realms".to_string(),
-            subject: Uuid::nil(),
+            subject: test_id(),
             achievement: "game:ashen-realms:achievement:dragon_slayer".to_string(),
             evidence: None,
             proof: ClaimProofPayload {
@@ -1784,7 +1845,7 @@ mod tests {
         let json = serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000000",
             "issuer": "game:ashen-realms",
-            "subject": "00000000-0000-0000-0000-000000000000",
+            "subject": test_id().to_string(),
             "achievement": "game:ashen-realms:achievement:dragon_slayer",
             "proof": {
                 "key_id": "00000000-0000-0000-0000-000000000000",
@@ -1823,7 +1884,7 @@ mod tests {
         let err = ClaimIssuedPayload::new(
             Uuid::nil(),
             "game:ashen-realms".to_string(),
-            Uuid::nil(),
+            test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
             Some(evidence_of_size(MAX_EVIDENCE_BYTES + 1)),
             sample_proof(),
@@ -1838,7 +1899,7 @@ mod tests {
         let payload = ClaimIssuedPayload::new(
             Uuid::nil(),
             "game:ashen-realms".to_string(),
-            Uuid::nil(),
+            test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
             Some(evidence_of_size(MAX_EVIDENCE_BYTES)),
             sample_proof(),
@@ -1852,7 +1913,7 @@ mod tests {
         ClaimIssuedPayload::new(
             Uuid::nil(),
             "game:ashen-realms".to_string(),
-            Uuid::nil(),
+            test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
             None,
             sample_proof(),
