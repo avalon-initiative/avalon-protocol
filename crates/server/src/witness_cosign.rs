@@ -924,6 +924,60 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_two_witness_list_trusts_the_head_only_once_the_author_cosigns_it() {
+        use crate::cosign_gather::{resolve_majority, HeadVerdict};
+        use avalon_protocol::sth::sign_tree_head;
+
+        let author = SigningKey::from_bytes(&[1u8; 32]);
+        // A separate witness key, as on a node whose witness key is not its settlement key.
+        let author_witness = SigningKey::from_bytes(&[3u8; 32]);
+        let author_cfg = {
+            let id = hex::encode(author_witness.verifying_key().to_bytes());
+            WitnessCosignConfig::new(author_witness.clone(), id)
+        };
+        let other = SigningKey::from_bytes(&[2u8; 32]);
+        let other_id = hex::encode(other.verifying_key().to_bytes());
+        let known = vec![
+            (other_id.clone(), other.verifying_key()),
+            (
+                author_cfg.witness_key_id.clone(),
+                author_witness.verifying_key(),
+            ),
+        ];
+        let now = OffsetDateTime::now_utc();
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now);
+        let cosign = |k: &SigningKey, id: &str| {
+            sign_witness_cosignature(
+                k,
+                id,
+                sth.tree_size,
+                &sth.root_hash,
+                &sth.network_id,
+                sth.created_at,
+                now,
+            )
+        };
+        let resolve = |cosignatures| {
+            let head = CosignedTreeHead {
+                sth: sth.clone(),
+                cosignatures,
+            };
+            let policy = crate::outbound_policy::OutboundPolicy::new(true);
+            let (key, known) = (author.verifying_key(), &known);
+            async move { resolve_majority(policy, &key, head, known, &[], "core").await }
+        };
+
+        let without_author = vec![cosign(&other, &other_id)];
+        assert!(matches!(
+            resolve(without_author.clone()).await,
+            HeadVerdict::Held
+        ));
+        let mut both = without_author;
+        both.push(cosign(&author_cfg.signing_key, &author_cfg.witness_key_id));
+        assert!(matches!(resolve(both).await, HeadVerdict::Trusted(_)));
+    }
+
     #[test]
     fn reattest_interval_defaults_to_a_third_of_the_freshness_window() {
         let _env = crate::test_env::guard();
