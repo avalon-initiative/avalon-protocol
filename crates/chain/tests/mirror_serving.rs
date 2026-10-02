@@ -36,8 +36,8 @@ fn unique_network_id(label: &str) -> String {
     format!("avalon-test-{label}-{}", Uuid::new_v4())
 }
 
-fn mirrored_entry(network_id: &str, seq: i64, entry_hash: &str, subject: &str) -> MirroredEntry {
-    MirroredEntry {
+fn mirrored_entry(network_id: &str, seq: i64, subject: &str) -> MirroredEntry {
+    let mut entry = MirroredEntry {
         source_url: "http://peer".to_string(),
         network_id: network_id.to_string(),
         shard_id: CORE_SHARD_ID.to_string(),
@@ -50,14 +50,12 @@ fn mirrored_entry(network_id: &str, seq: i64, entry_hash: &str, subject: &str) -
         event_timestamp: OffsetDateTime::UNIX_EPOCH,
         version: 1,
         prev_hash: "aa".repeat(32),
-        entry_hash: entry_hash.to_string(),
+        entry_hash: String::new(),
         batch_id: Uuid::new_v4(),
         verified_tree_size: seq,
-    }
-}
-
-fn leaf_hash_hex(n: u8) -> String {
-    hex::encode([n; 32])
+    };
+    entry.entry_hash = entry.recomputed_hash().expect("payload present");
+    entry
 }
 
 /// `mirrored_entries_since` returns entries strictly after `since_seq`,
@@ -72,12 +70,9 @@ async fn mirrored_entries_since_paginates_and_filters_by_subject() {
     let subject_b = "identity:22222222-2222-2222-2222-222222222222:self:created";
 
     for (seq, subject) in [(1i64, subject_a), (2, subject_b), (3, subject_a)] {
-        mirror::insert_mirrored_entry(
-            &pool,
-            &mirrored_entry(&network_id, seq, &leaf_hash_hex(seq as u8), subject),
-        )
-        .await
-        .expect("insert_mirrored_entry failed");
+        mirror::insert_mirrored_entry(&pool, &mirrored_entry(&network_id, seq, subject))
+            .await
+            .expect("insert_mirrored_entry failed");
     }
 
     let all = mirror::mirrored_entries_since(&pool, &network_id, CORE_SHARD_ID, 0, 100, None, None)
@@ -145,21 +140,18 @@ async fn mirrored_entries_since_on_an_empty_network_is_an_empty_list() {
 async fn mirrored_entry_hashes_up_to_reproduces_the_verified_tree() {
     let pool = test_pool().await;
     let network_id = unique_network_id("hashes-up-to");
-    let hashes: Vec<String> = (1..=5u8).map(leaf_hash_hex).collect();
+    let mut hashes: Vec<String> = Vec::new();
 
-    for (i, hash) in hashes.iter().enumerate() {
-        let seq = (i + 1) as i64;
-        mirror::insert_mirrored_entry(
-            &pool,
-            &mirrored_entry(
-                &network_id,
-                seq,
-                hash,
-                "identity:11111111-1111-1111-1111-111111111111:self:created",
-            ),
-        )
-        .await
-        .expect("insert_mirrored_entry failed");
+    for seq in 1..=5i64 {
+        let entry = mirrored_entry(
+            &network_id,
+            seq,
+            "identity:11111111-1111-1111-1111-111111111111:self:created",
+        );
+        hashes.push(entry.entry_hash.clone());
+        mirror::insert_mirrored_entry(&pool, &entry)
+            .await
+            .expect("insert_mirrored_entry failed");
     }
 
     let up_to_three =
@@ -198,7 +190,6 @@ async fn mirrored_leaf_index_for_seq_ranks_entries_zero_indexed() {
             &mirrored_entry(
                 &network_id,
                 seq,
-                &leaf_hash_hex(seq as u8),
                 "identity:11111111-1111-1111-1111-111111111111:self:created",
             ),
         )

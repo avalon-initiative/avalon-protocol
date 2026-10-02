@@ -56,6 +56,16 @@ first-run failures. Beyond that:
 - If your node watches peers (`AVALON_MIRROR_PEERS` set) and its
   mirror-watcher reports equivocation, see
   [`equivocation-response.md`](../for-maintainers/equivocation-response.md).
+- If the mirror-watcher logs an entry as "refused": a mirror stores an entry
+  only after checking the head signature (or pin), the entry's inclusion
+  proof, that the entry's content hashes to the proven hash, that its
+  `prev_hash` links to the previous verified entry, and that its `seq`
+  increases. A source serving altered content, a broken link, a bad `seq` or
+  a pruned payload is refused, nothing from that entry is stored, and the
+  mirror retries the same entries from the next configured source in that
+  tick. The shard stalls (and the error repeats each tick) only when every
+  listed source fails, so list at least one source that keeps full history; a
+  source that has pruned payloads cannot be mirrored from.
 - If the node that authors a shard has failed and a mirror has to take over,
   see [`authority-promotion.md`](../for-maintainers/authority-promotion.md).
 - To rotate the settlement signing key itself — routine hygiene or a
