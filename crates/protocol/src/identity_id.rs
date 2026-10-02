@@ -462,15 +462,46 @@ mod tests {
             assert!(display_name_permitted(&ok), "{ok:?}");
         }
         for gap in [
-            '\u{00AD}', '\u{034F}', '\u{061C}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}',
-            '\u{180B}', '\u{180F}', '\u{200B}', '\u{200F}', '\u{2028}', '\u{2029}', '\u{202A}',
-            '\u{202E}', '\u{2060}', '\u{206F}', '\u{3164}', '\u{FE00}', '\u{FE0F}', '\u{FEFF}',
-            '\u{FFA0}', '\u{1BCA0}', '\u{1BCA3}', '\u{1D173}', '\u{1D17A}', '\u{E0000}',
-            '\u{E0FFF}', '\u{2003}', '\u{00A0}',
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{061C}',
+            '\u{115F}',
+            '\u{1160}',
+            '\u{17B4}',
+            '\u{17B5}',
+            '\u{180B}',
+            '\u{180F}',
+            '\u{200B}',
+            '\u{200F}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{202A}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{206F}',
+            '\u{3164}',
+            '\u{FE00}',
+            '\u{FE0F}',
+            '\u{FEFF}',
+            '\u{FFA0}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{1D173}',
+            '\u{1D17A}',
+            '\u{E0000}',
+            '\u{E0FFF}',
+            '\u{2003}',
+            '\u{00A0}',
         ] {
             let interior = format!("{}{gap}{}", &lower[..30], &lower[30..]);
-            assert!(!display_name_permitted(&format!("{lower}{gap}")), "suffix {gap:?}");
-            assert!(!display_name_permitted(&format!("{gap}{lower}")), "prefix {gap:?}");
+            assert!(
+                !display_name_permitted(&format!("{lower}{gap}")),
+                "suffix {gap:?}"
+            );
+            assert!(
+                !display_name_permitted(&format!("{gap}{lower}")),
+                "prefix {gap:?}"
+            );
             // Interior visible whitespace is a visibly different name; only invisible gaps hide.
             if !gap.is_whitespace() || is_invisible(gap) {
                 assert!(!display_name_permitted(&interior), "interior {gap:?}");

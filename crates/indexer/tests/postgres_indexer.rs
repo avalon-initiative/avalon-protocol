@@ -244,3 +244,93 @@ async fn a_signing_key_row_cannot_be_repointed_to_another_identity_or_key() {
     .unwrap();
     assert_eq!(owner, a.id.to_string());
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
+    use base64::Engine as _;
+    let pool = test_pool().await;
+    let indexer = PostgresIndexer::new(pool.clone());
+    let (a, b) = (seed_identity(&pool).await, seed_identity(&pool).await);
+    let passkey_id = Uuid::new_v4();
+    let credential = base64::engine::general_purpose::STANDARD.encode(Uuid::new_v4().as_bytes());
+    let registered = |who: &TestIdentity, credential: &str| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.passkey_registered".to_string(),
+        issuer: GlobalId::new(
+            "identity",
+            &who.id.to_string(),
+            "self",
+            "passkey_registered",
+        ),
+        subject: GlobalId::new(
+            "identity",
+            &who.id.to_string(),
+            "self",
+            "passkey_registered",
+        ),
+        payload: serde_json::json!({
+            "passkey_id": passkey_id,
+            "identity_id": who.id,
+            "credential_id": credential,
+            "passkey_data": {"k": 1},
+            "label": null,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+        identity_chain: None,
+    };
+    indexer.apply(&registered(&a, &credential)).await.unwrap();
+    // The same registration delivered again (new event id) stays idempotent.
+    indexer.apply(&registered(&a, &credential)).await.unwrap();
+    let to_other_identity = indexer.apply(&registered(&b, &credential)).await;
+    assert!(
+        matches!(
+            to_other_identity,
+            Err(avalon_indexer::IndexError::Rejected(_))
+        ),
+        "{to_other_identity:?}"
+    );
+    let other_credential =
+        base64::engine::general_purpose::STANDARD.encode(Uuid::new_v4().as_bytes());
+    let to_other_credential = indexer.apply(&registered(&a, &other_credential)).await;
+    assert!(
+        matches!(
+            to_other_credential,
+            Err(avalon_indexer::IndexError::Rejected(_))
+        ),
+        "{to_other_credential:?}"
+    );
+
+    let revoke = |who: &TestIdentity| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.passkey_revoked".to_string(),
+        issuer: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
+        subject: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
+        payload: serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+        identity_chain: None,
+    };
+    indexer.apply(&revoke(&b)).await.unwrap();
+    let revoked: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
+    )
+    .bind(passkey_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        revoked.is_none(),
+        "another identity must not revoke the passkey"
+    );
+    indexer.apply(&revoke(&a)).await.unwrap();
+    let revoked: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
+    )
+    .bind(passkey_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(revoked.is_some());
+}

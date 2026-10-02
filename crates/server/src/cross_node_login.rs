@@ -614,6 +614,28 @@ async fn resolve_signing_key_cross_shard(
 /// identity with the same `display_name` (the one real collision case here
 /// — cross-shard `display_name` uniqueness isn't and can't be enforced
 /// globally by a single node's unique index).
+/// The display name and inception key of the first well-formed v2 `identity.created` entry for
+/// `identity_id`: id derived from the key, acceptable key, permitted display name.
+fn valid_creation(
+    created: &[crate::cross_shard_fetch::VerifiedEntry],
+    identity_id: IdentityId,
+) -> Option<(String, [u8; 32])> {
+    created.iter().find_map(|entry| {
+        let payload: avalon_protocol::event_payloads::IdentityCreatedPayload =
+            serde_json::from_value(entry.payload.clone()).ok()?;
+        if entry.version != 2
+            || payload.identity_id != identity_id
+            || !avalon_protocol::identity_id::display_name_permitted(&payload.display_name)
+        {
+            return None;
+        }
+        let key = <[u8; 32]>::try_from(BASE64.decode(&payload.public_key).ok()?).ok()?;
+        (avalon_protocol::ed25519_key::parse_ed25519_public_key(&key).is_some()
+            && identity_id.matches_key(&key))
+        .then_some((payload.display_name, key))
+    })
+}
+
 async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId) {
     let already_local = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
         .bind(identity_id)
@@ -644,25 +666,10 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId
         else {
             continue;
         };
-        let Some(first) = created.first() else {
+        let Some((display_name, inception_key)) = valid_creation(&created, identity_id) else {
             continue;
         };
-        let Some(display_name) = first.payload.get("display_name").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(inception_key) = first
-            .payload
-            .get("public_key")
-            .and_then(|v| v.as_str())
-            .and_then(|b64| BASE64.decode(b64).ok())
-            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-            .filter(|key| {
-                avalon_protocol::ed25519_key::parse_ed25519_public_key(key).is_some()
-                    && identity_id.matches_key(key)
-            })
-        else {
-            continue;
-        };
+        let display_name = display_name.as_str();
 
         let Ok(mut tx) = state.pool.begin().await else {
             return;
@@ -982,5 +989,41 @@ mod tests {
             "avalon-mainnet-1",
             &anchors,
         ));
+    }
+
+    fn entry(
+        who: &avalon_protocol::identity_id::TestIdentity,
+        name: &str,
+        version: i32,
+    ) -> crate::cross_shard_fetch::VerifiedEntry {
+        crate::cross_shard_fetch::VerifiedEntry {
+            event_id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: String::new(),
+            subject: String::new(),
+            payload: serde_json::to_value(who.created_payload(name)).unwrap(),
+            event_timestamp: OffsetDateTime::now_utc(),
+            version,
+        }
+    }
+
+    #[test]
+    fn a_remote_creation_is_accepted_only_when_well_formed_and_permitted() {
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let other = avalon_protocol::identity_id::TestIdentity::new();
+        let ok = valid_creation(&[entry(&who, "Nova", 2)], who.id).unwrap();
+        assert_eq!(ok.0, "Nova");
+        assert_eq!(ok.1, who.public_key());
+        assert!(valid_creation(&[entry(&who, "Nova", 1)], who.id).is_none());
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], other.id).is_none());
+        for bad in [
+            other.id.to_string().to_uppercase(),
+            "a\u{202E}b".to_string(),
+        ] {
+            assert!(
+                valid_creation(&[entry(&who, &bad, 2)], who.id).is_none(),
+                "{bad:?}"
+            );
+        }
     }
 }
