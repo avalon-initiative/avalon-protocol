@@ -145,6 +145,17 @@ async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["code"], "INVALID_IDENTITY_ID", "{bad}");
     }
+
+    // A valid identity id with a malformed non-identity part is a different error code.
+    let (_, id) = fresh_key();
+    let response = http
+        .delete(format!("{}/guilds/not-a-uuid/members/{id}", server_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["code"], "INVALID_PATH_PARAMETER");
 }
 
 #[tokio::test]

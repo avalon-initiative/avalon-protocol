@@ -13,6 +13,8 @@ pub enum AppError {
     IdentityIdMismatch,
     #[error("malformed identity id or signing key")]
     InvalidIdentityId,
+    #[error("malformed path parameter")]
+    InvalidPathParameter,
     #[error("display name must not look like an identity id")]
     InvalidDisplayName,
     #[error("webauthn ceremony not found or already used")]
@@ -504,6 +506,7 @@ impl AppError {
             AppError::IdentityIdTaken => "IDENTITY_ID_TAKEN",
             AppError::IdentityIdMismatch => "IDENTITY_ID_MISMATCH",
             AppError::InvalidIdentityId => "INVALID_IDENTITY_ID",
+            AppError::InvalidPathParameter => "INVALID_PATH_PARAMETER",
             AppError::InvalidDisplayName => "INVALID_DISPLAY_NAME",
             AppError::CeremonyNotFound => "CEREMONY_NOT_FOUND",
             AppError::CeremonyExpired => "CEREMONY_EXPIRED",
@@ -709,6 +712,7 @@ impl IntoResponse for AppError {
             | AppError::CeremonyExpired
             | AppError::IdentityIdMismatch
             | AppError::InvalidIdentityId
+            | AppError::InvalidPathParameter
             | AppError::InvalidDisplayName => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
@@ -1021,8 +1025,8 @@ impl IntoResponse for AppError {
     }
 }
 
-/// `Path` that reports a malformed identity id (or other path part) as the JSON
-/// `INVALID_IDENTITY_ID` error instead of axum's plain-text rejection.
+/// `Path` that reports a malformed path as JSON instead of axum's plain text: a bad identity id is
+/// `INVALID_IDENTITY_ID`, any other malformed part `INVALID_PATH_PARAMETER`.
 pub struct IdPath<T>(pub T);
 
 impl<T, S> axum::extract::FromRequestParts<S> for IdPath<T>
@@ -1039,7 +1043,13 @@ where
         axum::extract::Path::<T>::from_request_parts(parts, state)
             .await
             .map(|axum::extract::Path(value)| IdPath(value))
-            .map_err(|_| AppError::InvalidIdentityId)
+            .map_err(|rejection| {
+                if rejection.body_text().contains("identity id must be") {
+                    AppError::InvalidIdentityId
+                } else {
+                    AppError::InvalidPathParameter
+                }
+            })
     }
 }
 
