@@ -23,6 +23,7 @@ const UNREFERENCED_IDENTITY_COLUMNS: &[(&str, &str)] = &[
     ("identity_chain_events", "identity_id"),
     ("identity_chain_state", "identity_id"),
     ("indexer_identity_signing_key_revocations", "identity_id"),
+    ("indexer_identity_passkey_revocations", "identity_id"),
 ];
 
 /// UUID column names that never hold an identity id, wherever they appear.
