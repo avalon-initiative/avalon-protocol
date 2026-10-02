@@ -1,0 +1,43 @@
+{
+  "$schema": "./SCHEMA.md#signing-key-revoked",
+  "description": "Signing-key revocation signing bytes (avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2): UTF-8 of 'avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}'. The signature is Ed25519 by the revoking (already-active) key over the bytes. Key ids are UUID text (lowercase hyphenated), so no ':' can appear in them and swapping the two ids changes the bytes.",
+  "generation": "Deterministic: signingKeySeedHex is the Ed25519 seed of the revoking key.",
+  "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "notSupported": {
+    "csharp": "no identity-id implementation yet",
+    "typescript": "no identity-id implementation yet"
+  },
+  "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+  "supportedIn": [
+    "rust"
+  ],
+  "vectors": [
+    {
+      "expected": {
+        "signatureHex": "ab2c8851ced7a97a2240d102d28680ac53ba58d1a2f88a0de0caea2b940b64489e0a7f779d1f1725536da9eaa775fd915c759258aa76ca35902c51d3422a6c08",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e7369676e696e675f6b65795f7265766f6b65643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a33663262386331612d396434652d346636612d386237632d3061316232633364346535663a61316232633364342d653566362d343738392d386162632d646566303132333435363738",
+        "signingBytesUtf8": "avalon:identity.signing_key_revoked:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f:a1b2c3d4-e5f6-4789-8abc-def012345678"
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "revokedBySigningKeyId": "a1b2c3d4-e5f6-4789-8abc-def012345678",
+        "signingKeyId": "3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f"
+      },
+      "name": "first key revoked by second"
+    },
+    {
+      "expected": {
+        "signatureHex": "3da71ab8e7bd68ea0572a713fead9ad0dece701bae1baae5226f5143da054e9eb457577d80a198b3e03b21e762a7b8f94bb4d184ea8a8dfffd40dc917b3e680e",
+        "signingBytesHex": "6176616c6f6e3a6964656e746974792e7369676e696e675f6b65795f7265766f6b65643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a61316232633364342d653566362d343738392d386162632d6465663031323334353637383a33663262386331612d396434652d346636612d386237632d306131623263336434653566",
+        "signingBytesUtf8": "avalon:identity.signing_key_revoked:v2:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9:a1b2c3d4-e5f6-4789-8abc-def012345678:3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f"
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "revokedBySigningKeyId": "3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f",
+        "signingKeyId": "a1b2c3d4-e5f6-4789-8abc-def012345678"
+      },
+      "name": "ids swapped give different bytes"
+    }
+  ]
+}

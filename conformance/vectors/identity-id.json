@@ -1,0 +1,444 @@
+{
+  "$schema": "./SCHEMA.md#identity-id",
+  "description": "Self-certifying identity id (avalon_protocol::identity_id): identity_id = lowercase_hex(SHA-256(domain tag || ed25519 public key, 32 raw bytes)), the full 256 bits as exactly 64 characters of [0-9a-f] with no prefix. The domain tag is the UTF-8 bytes of 'avalon-identity-id-v1'. Parsing is strict and never normalises: uppercase, any other length (63, 65), 'id:' or 'node:' prefixes and UUID text are rejected. Key acceptability (kind key_acceptability) is the shared Ed25519 policy: canonical encoding and not of small order; a torsion-component key such as y = 3 is accepted. The id differs from the node: shard id for the same key (kind distinct_from_shard_id). Encodings: a public key is lowercase HEX inside signing bytes and standard BASE64 on the wire.",
+  "domainTagHex": "6176616c6f6e2d6964656e746974792d69642d7631",
+  "domainTagUtf8": "avalon-identity-id-v1",
+  "generation": "Deterministic. Seeds are Ed25519 seeds (all bytes equal); publicKeyHex is the derived public key; preimageHex is domainTagHex followed by the key bytes.",
+  "notSupported": {
+    "csharp": "no identity-id implementation yet",
+    "typescript": "no identity-id implementation yet"
+  },
+  "supportedIn": [
+    "rust"
+  ],
+  "vectors": [
+    {
+      "expected": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "preimageHex": "6176616c6f6e2d6964656e746974792d69642d7631d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48"
+      },
+      "input": {
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+        "seedHex": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "kind": "derive",
+      "name": "derive: fixed seed 44..44"
+    },
+    {
+      "expected": {
+        "identityId": "115f83cfdda474a882627a5e68464846c2ffd2a000164ea0e994f5d893fb957b",
+        "preimageHex": "6176616c6f6e2d6964656e746974792d69642d7631c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242"
+      },
+      "input": {
+        "publicKeyHex": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242",
+        "seedHex": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "kind": "derive",
+      "name": "derive: fixed seed 55..55"
+    },
+    {
+      "expected": {
+        "valid": true
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: canonical id"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7C26A0E34260B2C5BB6A795E29CDFE878C907DF4BF8C7425C5A8CE00235558E9"
+      },
+      "kind": "parse",
+      "name": "parse: uppercase hex"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e"
+      },
+      "kind": "parse",
+      "name": "parse: 63 characters"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e90"
+      },
+      "kind": "parse",
+      "name": "parse: 65 characters"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "id:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: id: prefix"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "node:7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: node: prefix"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
+      },
+      "kind": "parse",
+      "name": "parse: UUID text"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": " c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: leading space, 64 characters"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": ""
+      },
+      "kind": "parse",
+      "name": "parse: empty"
+    },
+    {
+      "expected": {
+        "acceptable": true
+      },
+      "input": {
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48"
+      },
+      "kind": "key_acceptability",
+      "name": "key: honest key"
+    },
+    {
+      "expected": {
+        "acceptable": true
+      },
+      "input": {
+        "publicKeyHex": "0300000000000000000000000000000000000000000000000000000000000000"
+      },
+      "kind": "key_acceptability",
+      "name": "key: y = 3 (torsion component, accepted)"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      "kind": "key_acceptability",
+      "name": "key: non-canonical y = 3 + p"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000000"
+      },
+      "kind": "key_acceptability",
+      "name": "key: identity point"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-2 point (y = p - 1)"
+    },
+    {
+      "expected": {
+        "equal": false,
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "nodeShardId": "node:b14705888f4a68391a09aa5968dd25d16c3bba7bb3b6d15bf354d8dcaae85a47"
+      },
+      "input": {
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48"
+      },
+      "kind": "distinct_from_shard_id",
+      "name": "identity id differs from the node: shard id for the same key"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9 "
+      },
+      "kind": "parse",
+      "name": "parse: trailing space after 64 characters"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9\n"
+      },
+      "kind": "parse",
+      "name": "parse: trailing newline after 64 characters"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e\n"
+      },
+      "kind": "parse",
+      "name": "parse: trailing newline replacing the last character"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e\u0000"
+      },
+      "kind": "parse",
+      "name": "parse: NUL replacing the last character"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce0023555０"
+      },
+      "kind": "parse",
+      "name": "parse: fullwidth digit zero in a 64-byte string"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558٠"
+      },
+      "kind": "parse",
+      "name": "parse: arabic-indic digit in a 64-byte string"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "7C26A0E34260B2C5BB6A795E29CDFE878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: mixed case"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "identityId": "0x7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558"
+      },
+      "kind": "parse",
+      "name": "parse: 0x prefix with 62 hex characters"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000080"
+      },
+      "kind": "key_acceptability",
+      "name": "key: identity point with sign bit"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-2 point with sign bit"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-4 point y = 0"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "0000000000000000000000000000000000000000000000000000000000000080"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-4 point y = 0 with sign bit"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-8 point 1"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-8 point 1 other sign"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-8 point 2"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"
+      },
+      "kind": "key_acceptability",
+      "name": "key: order-8 point 2 other sign"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      "kind": "key_acceptability",
+      "name": "key: non-canonical identity y = p + 1"
+    },
+    {
+      "expected": {
+        "acceptable": false
+      },
+      "input": {
+        "publicKeyHex": "0200000000000000000000000000000000000000000000000000000000000000"
+      },
+      "kind": "key_acceptability",
+      "name": "key: y fails decompression"
+    },
+    {
+      "expected": {
+        "valid": true
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616765",
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+        "signatureHex": "fd2c24eec868d470dd021c95a719cd3ddcdf9113d635d570d6ad83522e046ea67accd8824575500f167fe347ad264fd5dd5f9fd41a79707669e4e6c03d45f203"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: valid signature"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616766",
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+        "signatureHex": "fd2c24eec868d470dd021c95a719cd3ddcdf9113d635d570d6ad83522e046ea67accd8824575500f167fe347ad264fd5dd5f9fd41a79707669e4e6c03d45f203"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: tampered message"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616765",
+        "publicKeyHex": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242",
+        "signatureHex": "fd2c24eec868d470dd021c95a719cd3ddcdf9113d635d570d6ad83522e046ea67accd8824575500f167fe347ad264fd5dd5f9fd41a79707669e4e6c03d45f203"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: wrong key"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616765",
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+        "signatureHex": "fd2c24eec868d470dd021c95a719cd3ddcdf9113d635d570d6ad83522e046ea667a0cedf5fd86267ec1bdbea8b202eeadd5f9fd41a79707669e4e6c03d45f213"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: S + L malleated (S >= L)"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616765",
+        "publicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+        "signatureHex": "01000000000000000000000000000000000000000000000000000000000000007accd8824575500f167fe347ad264fd5dd5f9fd41a79707669e4e6c03d45f203"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: small-order R with an honest key"
+    },
+    {
+      "expected": {
+        "valid": false
+      },
+      "input": {
+        "messageHex": "73747269637420766572696669636174696f6e206d657373616765",
+        "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000000",
+        "signatureHex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "kind": "strict_verify",
+      "name": "strict verify: small-order key and small-order R, S = 0 (non-strict accepts)"
+    }
+  ]
+}

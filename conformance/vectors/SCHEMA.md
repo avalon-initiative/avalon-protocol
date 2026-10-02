@@ -167,6 +167,34 @@ Each file has this shape:
   resolved chain in order and `expected.forkedAtSeq` the fork position or
   null). Every ordering of a case's events must resolve identically. Rust
   only today.
+- `identity-id.json` — self-certifying identity ids
+  (`avalon_protocol::identity_id`): `identity_id = lowercase_hex(SHA-256("avalon-identity-id-v1"
+  || ed25519_public_key_32_bytes))`, the full 256 bits as exactly 64 characters of `[0-9a-f]`
+  with no prefix. Vectors carry a `kind`: `derive` (`seedHex`, `publicKeyHex`; expected
+  `preimageHex` and `identityId`), `parse` (strict: uppercase, 63 and 65 characters, `id:` and
+  `node:` prefixes, UUID text and surrounding whitespace are all rejected, never normalised),
+  `key_acceptability` (canonical encoding and not small-order, the same policy as the `node:`
+  shard key; y = 3 is accepted) and `distinct_from_shard_id` (the identity id differs from the
+  `node:` id of the same key). A public key is lowercase HEX inside signing bytes and standard
+  BASE64 on the wire.
+- `identity-created-signing.json` — `identity.created` v2 signing bytes
+  `avalon:identity.created:v2:{identity_id}:{public_key_hex}:{display_name}` (display name
+  last; `:` and multi-byte UTF-8 in it are taken as-is), as UTF-8 and hex, with the
+  deterministic Ed25519 signature (verified strictly).
+- `device-grant-approval.json` — device grant approval bytes
+  `avalon:device_grant.approved:v2:{grant_id}:{identity_id}:{requested_public_key_hex}` and
+  signature.
+- `signing-key-revoked.json` — signing-key revocation bytes
+  `avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}`
+  and signature; key ids are UUID text, so no `:` can occur in them. These four files are asserted
+  by the protocol runner only so far (`supportedIn` is `["rust"]`, meaning the protocol crate; the
+  SDK runners gate on this field and skip the rest). `identity-id.json` also has `strict_verify`
+  vectors: Ed25519 verification must be strict (S below the group order L, and no small-order R
+  or key), and `identity-created-signing.json` has `domainSeparationVectors` showing the v1 and
+  v2 bytes differ. For the next slice: the server's existing non-strict verify sites
+  (`auth.rs` `verify_event_signature` and similar) accept a small-order R that `verify_strict`
+  rejects, so the server switches identity-bound verification to
+  `ed25519_key::verify_strict_signature`, and the SDKs must reject small-order R and S >= L.
 
 ## Both sides of the wire
 
