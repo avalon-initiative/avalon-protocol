@@ -5,6 +5,17 @@
 -- and replica tables that carry identity ids without an FK.
 SET LOCAL lock_timeout = '10s';
 
+-- Refuses to run over existing identities: this migration deletes them.
+DO $guard$
+BEGIN
+    IF EXISTS (SELECT 1 FROM identities)
+       AND coalesce(current_setting('avalon.allow_identity_wipe', true), '') <> 'on' THEN
+        RAISE EXCEPTION 'migration 0083 deletes every identity and all identity-keyed rows (the ledger is not touched). On a dev database run `make db-reset`. On any other database export or back it up first, then re-run with PGOPTIONS="-c avalon.allow_identity_wipe=on".';
+    END IF;
+END
+$guard$;
+
+
 CREATE TEMP TABLE identity_fk_cols ON COMMIT DROP AS
 SELECT c.conrelid::regclass::text AS tbl,
        c.conname AS conname,
