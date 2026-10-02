@@ -29,10 +29,6 @@ fn webauthn_origin() -> String {
     std::env::var("AVALON_WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
-fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<u8> {
-    format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
-}
-
 /// #697/#698: `signing_key`/`signing_key_id` let a caller sign a later
 /// signature-required action (e.g. `POST /integrations/{slug}/connect`)
 /// with the same key `register_finish` just registered as this identity's
@@ -48,12 +44,13 @@ async fn register_and_login(
     base: &str,
     display_name: &str,
 ) -> RegisteredIdentity {
-    let identity_id = Uuid::new_v4();
     let origin_url = url::Url::parse(&webauthn_origin()).expect("bad webauthn origin");
 
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
-    let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let event_signing_public_key = BASE64.encode(public_key);
+    let identity_id = avalon_protocol::identity_id::derive_identity_id(&public_key);
 
     let store = MemoryStore::new();
     let user_mock = MockUserValidationMethod::verified_user(2);
@@ -62,7 +59,11 @@ async fn register_and_login(
 
     let start: serde_json::Value = http
         .post(format!("{base}/identities/register/start"))
-        .json(&json!({ "identity_id": identity_id, "display_name": display_name }))
+        .json(&json!({
+            "identity_id": identity_id,
+            "event_signing_public_key": event_signing_public_key,
+            "display_name": display_name,
+        }))
         .send()
         .await
         .expect("register/start failed — is `make start` running?")
@@ -81,13 +82,18 @@ async fn register_and_login(
         .await
         .unwrap();
 
-    let signature = signing_key.sign(&identity_created_signing_bytes(identity_id, display_name));
+    let signature = signing_key.sign(
+        &avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            &identity_id,
+            &public_key,
+            display_name,
+        ),
+    );
     let finish = http
         .post(format!("{base}/identities/register/finish"))
         .json(&json!({
             "ticket_id": ticket_id,
             "webauthn_credential": webauthn_credential,
-            "event_signing_public_key": event_signing_public_key,
             "event_signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()

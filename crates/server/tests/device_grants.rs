@@ -86,19 +86,34 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
     request.bearer_auth(token)
 }
 
-/// Mirrors `crates/server/src/devices.rs`'s private
-/// `device_grant_approval_signing_bytes` exactly — duplicated here since
-/// this test doesn't depend on `avalon-server`'s internals.
 fn device_grant_approval_signing_bytes(
     grant_id: Uuid,
     identity_id: avalon_protocol::ids::IdentityId,
-    requested_signing_public_key: &[u8],
+    requested_signing_public_key: &[u8; 32],
 ) -> Vec<u8> {
-    format!(
-        "avalon:device_grant.approved:v1:{grant_id}:{identity_id}:{}",
-        BASE64.encode(requested_signing_public_key)
+    avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+        grant_id,
+        &identity_id,
+        requested_signing_public_key,
     )
-    .into_bytes()
+}
+
+/// The signed body `POST /me/devices/{id}/revoke` requires.
+fn revoke_body(
+    identity_id: avalon_protocol::ids::IdentityId,
+    target_key_id: Uuid,
+    revoker_key_id: Uuid,
+    revoker_key: &SigningKey,
+) -> serde_json::Value {
+    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+        &identity_id,
+        target_key_id,
+        revoker_key_id,
+    );
+    serde_json::json!({
+        "revoked_by_signing_key_id": revoker_key_id,
+        "signature": BASE64.encode(revoker_key.sign(&bytes).to_bytes()),
+    })
 }
 
 #[tokio::test]
@@ -248,12 +263,13 @@ async fn revoking_one_device_does_not_affect_another() {
 
     let (identity_id, token) = seed_identity_session(&pool).await;
     let (key_a_id, _key_a) = seed_signing_key(&pool, identity_id).await;
-    let (key_b_id, _key_b) = seed_signing_key(&pool, identity_id).await;
+    let (key_b_id, key_b) = seed_signing_key(&pool, identity_id).await;
 
     let revoke = auth(
         http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
         &token,
     )
+    .json(&revoke_body(identity_id, key_a_id, key_b_id, &key_b))
     .send()
     .await
     .unwrap();
@@ -284,6 +300,7 @@ async fn revoking_one_device_does_not_affect_another() {
         http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
         &token,
     )
+    .json(&revoke_body(identity_id, key_a_id, key_b_id, &key_b))
     .send()
     .await
     .unwrap();
@@ -335,4 +352,61 @@ async fn a_device_can_be_renamed_and_the_rename_is_scoped_to_its_own_identity() 
         cross_identity_rename.status(),
         reqwest::StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_revocation_signed_by_another_identitys_key_or_a_revoked_key_is_refused() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (key_a_id, key_a) = seed_signing_key(&pool, identity_id).await;
+    let (key_b_id, key_b) = seed_signing_key(&pool, identity_id).await;
+    let (other_identity, _other_token) = seed_identity_session(&pool).await;
+    let (outsider_key_id, outsider_key) = seed_signing_key(&pool, other_identity).await;
+
+    let by_outsider = auth(
+        http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(
+        identity_id,
+        key_a_id,
+        outsider_key_id,
+        &outsider_key,
+    ))
+    .send()
+    .await
+    .unwrap();
+    assert!(
+        by_outsider.status().is_client_error(),
+        "{:?}",
+        by_outsider.status()
+    );
+
+    let wrong_signature = auth(
+        http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(identity_id, key_b_id, key_b_id, &key_b))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(
+        wrong_signature.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a signature over a different target must not authorize this revocation"
+    );
+
+    let own = auth(
+        http.post(format!("{base}/me/devices/{key_a_id}/revoke")),
+        &token,
+    )
+    .json(&revoke_body(identity_id, key_a_id, key_a_id, &key_a))
+    .send()
+    .await
+    .unwrap();
+    assert!(own.status().is_success(), "{:?}", own.status());
 }

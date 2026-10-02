@@ -79,8 +79,13 @@ async fn create_identity_and_log_in(http: &reqwest::Client, base: &str) -> Strin
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signature = signing_key
-        .sign(format!("avalon:identity.created:v1:{identity_id}:{display_name}").as_bytes());
+    let signature = signing_key.sign(
+        &avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        ),
+    );
     http.post(format!("{base}/identities/register/finish"))
         .json(&serde_json::json!({
             "ticket_id": ticket_id,

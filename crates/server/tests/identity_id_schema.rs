@@ -95,25 +95,34 @@ async fn the_database_refuses_an_identity_not_derived_from_its_key() {
         .await
         .expect("a derived id must be accepted");
 
-    let mismatched = sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
-        .bind(other.id)
-        .bind(honest.public_key().to_vec())
-        .execute(&pool)
-        .await;
-    assert!(mismatched.is_err(), "an id not derived from the key must be refused");
+    let mismatched =
+        sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
+            .bind(other.id)
+            .bind(honest.public_key().to_vec())
+            .execute(&pool)
+            .await;
+    assert!(
+        mismatched.is_err(),
+        "an id not derived from the key must be refused"
+    );
 
-    let malformed = sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
-        .bind("not-a-self-certifying-id")
-        .bind(other.public_key().to_vec())
-        .execute(&pool)
-        .await;
+    let malformed =
+        sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
+            .bind("not-a-self-certifying-id")
+            .bind(other.public_key().to_vec())
+            .execute(&pool)
+            .await;
     assert!(malformed.is_err(), "a malformed id must be refused");
 
-    let uppercase = sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, 'x')")
-        .bind(honest.id.to_string().to_uppercase())
-        .execute(&pool)
-        .await;
-    assert!(uppercase.is_err(), "the shape check refuses non-lowercase ids");
+    let uppercase =
+        sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, 'x')")
+            .bind(honest.id.to_string().to_uppercase())
+            .execute(&pool)
+            .await;
+    assert!(
+        uppercase.is_err(),
+        "the shape check refuses non-lowercase ids"
+    );
 
     sqlx::query("DELETE FROM identities WHERE id = $1")
         .bind(honest.id)

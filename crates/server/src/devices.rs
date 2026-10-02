@@ -537,6 +537,9 @@ pub async fn revoke_device(
 ) -> Result<(), AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
+    let mut tx = state.pool.begin().await?;
+    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
+
     let revoker_row = sqlx::query(
         "SELECT public_key FROM identity_signing_keys WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
     )
@@ -557,9 +560,6 @@ pub async fn revoke_device(
     if !verify_event_signature(&revoker_public_key, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidEventSignature);
     }
-
-    let mut tx = state.pool.begin().await?;
-    crate::identity_chain::ensure_not_forked(&mut *tx, identity_id).await?;
 
     let revoked = sqlx::query(
         "UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",

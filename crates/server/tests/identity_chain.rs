@@ -123,7 +123,10 @@ async fn a_forked_identity_refuses_key_dependent_operations_but_allows_profile_e
     let revoke_device = http
         .post(format!("{base}/me/devices/{}/revoke", Uuid::new_v4()))
         .bearer_auth(&token)
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({
+            "revoked_by_signing_key_id": Uuid::new_v4(),
+            "signature": "",
+        }))
         .send()
         .await
         .unwrap();
