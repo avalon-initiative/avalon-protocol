@@ -29,10 +29,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -60,7 +62,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// the actual private key, so the test can sign a genuine grant approval
 /// with it — exercising `devices::approve_device_grant`'s real
 /// `verify_event_signature` check, not a bypass.
-async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
 
@@ -86,7 +88,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 /// this test doesn't depend on `avalon-server`'s internals.
 fn device_grant_approval_signing_bytes(
     grant_id: Uuid,
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
     requested_signing_public_key: &[u8],
 ) -> Vec<u8> {
     format!(

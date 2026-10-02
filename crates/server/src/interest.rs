@@ -923,8 +923,9 @@ mod tests {
 
     #[test]
     fn identity_scope_keys_never_collide_with_another_variant_of_the_same_uuid() {
-        let id = Uuid::new_v4();
-        let identity_key = InterestScope::Identity(id).dht_key();
+        let identity = IdentityId::random_for_tests();
+        let id = identity.webauthn_user_handle();
+        let identity_key = InterestScope::Identity(identity).dht_key();
         assert_ne!(identity_key, InterestScope::Channel(id).dht_key());
         assert_ne!(identity_key, InterestScope::Conversation(id).dht_key());
         assert_ne!(identity_key, InterestScope::Network(id).dht_key());

@@ -102,8 +102,8 @@ mod tests {
         signing_key: &SigningKey,
         issued_at: OffsetDateTime,
         expires_at: OffsetDateTime,
-    ) -> (ContinuationToken, Uuid) {
-        let identity_id = Uuid::new_v4();
+    ) -> (ContinuationToken, IdentityId) {
+        let identity_id = IdentityId::random_for_tests();
         let signing_key_id = Uuid::new_v4();
         let nonce = Uuid::new_v4();
         let bytes = signing_bytes(identity_id, signing_key_id, nonce, issued_at, expires_at);
@@ -141,7 +141,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let (mut token, _identity_id) =
             signed_token(&signing_key, now, now + Duration::seconds(30));
-        token.identity_id = Uuid::new_v4(); // tampered after signing
+        token.identity_id = IdentityId::random_for_tests(); // tampered after signing
 
         let signature_bytes = hex::decode(&token.signature).unwrap();
         assert!(!verify_event_signature(

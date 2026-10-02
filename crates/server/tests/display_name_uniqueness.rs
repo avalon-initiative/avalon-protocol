@@ -52,11 +52,17 @@ fn new_virtual_client(expected_checks: usize) -> VirtualClient {
 async fn register_start(
     http: &reqwest::Client,
     base: &str,
-    identity_id: Uuid,
+    signing_key: &SigningKey,
     display_name: &str,
 ) -> reqwest::Response {
+    let public_key = signing_key.verifying_key().to_bytes();
+    let identity_id = avalon_protocol::identity_id::derive_identity_id(&public_key);
     http.post(format!("{base}/identities/register/start"))
-        .json(&serde_json::json!({ "identity_id": identity_id, "display_name": display_name }))
+        .json(&serde_json::json!({
+            "identity_id": identity_id,
+            "event_signing_public_key": BASE64.encode(public_key),
+            "display_name": display_name,
+        }))
         .send()
         .await
         .expect("register/start failed — is `make start` running?")
@@ -77,9 +83,11 @@ async fn register(
     base: &str,
     display_name: &str,
     expected_checks: usize,
-) -> (Uuid, Option<VirtualClient>, StatusResult) {
-    let identity_id = Uuid::new_v4();
-    let start_response = register_start(http, base, identity_id, display_name).await;
+) -> (avalon_protocol::ids::IdentityId, Option<VirtualClient>, StatusResult) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
+    let start_response = register_start(http, base, &signing_key, display_name).await;
     if !start_response.status().is_success() {
         return (
             identity_id,
@@ -99,9 +107,11 @@ async fn register(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let signing_bytes =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        display_name,
+    );
     let signature = signing_key.sign(&signing_bytes);
 
     let finish_response = http
@@ -109,7 +119,6 @@ async fn register(
         .json(&serde_json::json!({
             "ticket_id": ticket_id,
             "webauthn_credential": credential,
-            "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
             "event_signature": BASE64.encode(signature.to_bytes()),
             "device_label": null,
         }))
@@ -138,7 +147,7 @@ enum StatusResult {
 async fn login(
     http: &reqwest::Client,
     base: &str,
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
     client: &mut VirtualClient,
 ) -> String {
     let start: serde_json::Value = http
@@ -187,8 +196,8 @@ async fn registering_a_taken_display_name_is_rejected_at_register_start() {
     );
 
     // Same name, different case — case-insensitive uniqueness.
-    let second_id = Uuid::new_v4();
-    let response = register_start(&http, &base, second_id, &name.to_uppercase()).await;
+    let second_key = SigningKey::generate(&mut rand::rng());
+    let response = register_start(&http, &base, &second_key, &name.to_uppercase()).await;
     assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["code"], "DISPLAY_NAME_TAKEN");

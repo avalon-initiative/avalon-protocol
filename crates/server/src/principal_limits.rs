@@ -123,8 +123,12 @@ mod tests {
     async fn identity_and_integrator_ids_do_not_share_a_bucket() {
         let limiter = PrincipalLimiter::with_limit(None, 1);
         let id = IdentityId::random_for_tests();
+        let integrator_id = Uuid::new_v4();
         assert!(limiter.check(Principal::Identity(id)).await.is_ok());
-        assert!(limiter.check(Principal::Integrator(id)).await.is_ok());
+        assert!(limiter
+            .check(Principal::Integrator(integrator_id))
+            .await
+            .is_ok());
         assert!(limiter.check(Principal::Identity(id)).await.is_err());
     }
 }

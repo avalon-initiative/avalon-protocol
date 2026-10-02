@@ -3795,7 +3795,7 @@ mod tests {
 
     #[test]
     fn owner_always_has_every_permission_regardless_of_role() {
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         assert!(has_guild_permission(
             owner,
             owner,
@@ -3806,8 +3806,8 @@ mod tests {
 
     #[test]
     fn non_owner_without_manage_roles_is_rejected() {
-        let owner = Uuid::new_v4();
-        let actor = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let actor = IdentityId::random_for_tests();
         assert!(!has_guild_permission(
             owner,
             actor,
@@ -3824,8 +3824,8 @@ mod tests {
 
     #[test]
     fn non_owner_with_the_specific_permission_is_allowed() {
-        let owner = Uuid::new_v4();
-        let actor = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let actor = IdentityId::random_for_tests();
         assert!(has_guild_permission(
             owner,
             actor,
@@ -3864,7 +3864,7 @@ mod tests {
 
     #[test]
     fn identity_ref_namespaces_by_identity_and_verb() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let global_id = identity_ref(id, "guild_created");
         assert_eq!(
             global_id.as_str(),
@@ -3881,24 +3881,24 @@ mod tests {
 
     #[test]
     fn owner_cannot_leave_without_transferring() {
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         assert!(!can_leave(owner, owner));
-        let member = Uuid::new_v4();
+        let member = IdentityId::random_for_tests();
         assert!(can_leave(member, owner));
     }
 
     #[test]
     fn owner_cannot_be_removed() {
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         assert!(!can_be_removed(owner, owner));
-        let member = Uuid::new_v4();
+        let member = IdentityId::random_for_tests();
         assert!(can_be_removed(member, owner));
     }
 
     #[test]
     fn officer_with_manage_members_can_remove_a_plain_member() {
-        let owner = Uuid::new_v4();
-        let officer = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let officer = IdentityId::random_for_tests();
         assert!(can_remove_member(
             owner,
             officer,
@@ -3909,8 +3909,8 @@ mod tests {
 
     #[test]
     fn officer_cannot_remove_another_officer_without_manage_roles() {
-        let owner = Uuid::new_v4();
-        let officer = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let officer = IdentityId::random_for_tests();
         assert!(!can_remove_member(
             owner,
             officer,
@@ -3927,7 +3927,7 @@ mod tests {
 
     #[test]
     fn owner_can_remove_an_officer_without_holding_manage_roles_explicitly() {
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         // `has_guild_permission`'s structural owner check makes this true
         // even with an empty permission list.
         assert!(can_remove_member(owner, owner, &[], OFFICER_ROLE_INDEX));
@@ -3935,8 +3935,8 @@ mod tests {
 
     #[test]
     fn removal_requires_manage_members_regardless_of_target_role() {
-        let owner = Uuid::new_v4();
-        let actor = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let actor = IdentityId::random_for_tests();
         assert!(!can_remove_member(owner, actor, &[], MEMBER_ROLE_INDEX));
     }
 
@@ -4270,7 +4270,7 @@ mod tests {
     #[test]
     fn omitted_recruiting_filter_falls_back_to_recruiting_or_member() {
         let query = empty_discover_query();
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
@@ -4284,7 +4284,7 @@ mod tests {
         // plain exact filter with no membership subquery.
         let mut query = empty_discover_query();
         query.recruiting = Some(true);
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
@@ -4301,7 +4301,7 @@ mod tests {
     fn explicit_recruiting_false_stays_membership_gated_not_a_bulk_leak() {
         let mut query = empty_discover_query();
         query.recruiting = Some(false);
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
@@ -4314,7 +4314,7 @@ mod tests {
     fn text_search_matches_name_tag_and_description() {
         let mut query = empty_discover_query();
         query.q = Some("dragons".to_string());
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
@@ -4327,14 +4327,14 @@ mod tests {
     fn blank_search_term_is_dropped_rather_than_matching_everything() {
         let mut query = empty_discover_query();
         query.q = Some("   ".to_string());
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(!builder.sql().as_str().contains("ILIKE"));
     }
 
     #[test]
     fn tag_filter_is_present_only_when_given() {
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let without_tag =
             build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
         assert!(!without_tag.sql().as_str().contains("g.tag ILIKE"));
@@ -4349,7 +4349,7 @@ mod tests {
     fn integrator_filter_adds_association_exists_clause() {
         let mut query = empty_discover_query();
         query.integrator = Some(Uuid::new_v4());
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(builder
             .sql()
@@ -4359,7 +4359,7 @@ mod tests {
 
     #[test]
     fn sort_selects_expected_order_by_clause() {
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let query = empty_discover_query();
 
         let newest = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
@@ -4385,7 +4385,7 @@ mod tests {
     fn cursor_adds_keyset_pagination_clause_matching_the_active_sort() {
         let mut query = empty_discover_query();
         query.cursor = Some(Uuid::new_v4());
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
 
         let newest = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(newest
@@ -4403,7 +4403,7 @@ mod tests {
     #[test]
     fn no_cursor_means_no_keyset_pagination_clause() {
         let query = empty_discover_query();
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(!builder.sql().as_str().contains("WHERE id ="));
     }
@@ -4414,7 +4414,7 @@ mod tests {
     /// them without a second round trip.
     #[test]
     fn select_list_includes_banner_and_icon() {
-        let actor = Uuid::new_v4();
+        let actor = IdentityId::random_for_tests();
         let builder =
             build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
@@ -4453,14 +4453,14 @@ mod tests {
 
     #[test]
     fn owner_can_always_view_breakdown_even_when_not_public() {
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         assert!(can_view_game_breakdown(owner, owner, &[], false));
     }
 
     #[test]
     fn manage_guild_holder_can_view_breakdown_even_when_not_public() {
-        let owner = Uuid::new_v4();
-        let officer = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let officer = IdentityId::random_for_tests();
         assert!(can_view_game_breakdown(
             owner,
             officer,
@@ -4471,8 +4471,8 @@ mod tests {
 
     #[test]
     fn plain_member_without_manage_guild_cannot_view_a_non_public_breakdown() {
-        let owner = Uuid::new_v4();
-        let member = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let member = IdentityId::random_for_tests();
         assert!(!can_view_game_breakdown(
             owner,
             member,
@@ -4483,8 +4483,8 @@ mod tests {
 
     #[test]
     fn a_non_member_can_view_the_breakdown_once_the_guild_makes_it_public() {
-        let owner = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
         assert!(can_view_game_breakdown(owner, stranger, &[], true));
     }
 

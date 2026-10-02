@@ -2767,6 +2767,7 @@ mod tests {
     }
 
     use super::*;
+    use avalon_protocol::identity_id::TestIdentity;
 
     #[test]
     fn a_peer_at_the_current_protocol_version_passes() {

@@ -330,7 +330,7 @@ mod tests {
         // `Ok(())` before `capability_authorized` (a `Caller::Integrator`-only
         // helper) is ever called — this documents that shape rather than
         // calling the helper with meaningless inputs.
-        let caller = Caller::User(Uuid::new_v4());
+        let caller = Caller::User(IdentityId::random_for_tests());
         assert!(matches!(caller, Caller::User(_)));
     }
 }
@@ -436,9 +436,11 @@ mod live_tests {
     /// since this test isn't going over HTTP at all (see module doc
     /// comment).
     async fn seed(pool: &PgPool) -> Seeded {
-        let identity_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let identity_id = who.id;
+        sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
             .bind(identity_id)
+            .bind(who.public_key().to_vec())
             .execute(pool)
             .await
             .expect("failed to seed identity");

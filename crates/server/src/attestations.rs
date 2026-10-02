@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn no_filters_stays_a_single_table_scan() {
-        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        let builder = build_my_achievements_query(IdentityId::random_for_tests(), None, None, None, 50);
         let sql = builder.sql();
         let sql = sql.as_str();
         assert!(sql.contains("FROM achievement_attestations WHERE subject ="));
@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn integrator_filter_adds_a_column_check_without_joining() {
         let builder =
-            build_my_achievements_query(Uuid::new_v4(), Some(Uuid::new_v4()), None, None, 50);
+            build_my_achievements_query(IdentityId::random_for_tests(), Some(Uuid::new_v4()), None, None, 50);
         let sql = builder.sql();
         let sql = sql.as_str();
         assert!(sql.contains("AND integrator_id ="));
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn claim_kind_filter_joins_integrators_and_checks_category() {
         let achievement = build_my_achievements_query(
-            Uuid::new_v4(),
+            IdentityId::random_for_tests(),
             None,
             Some(ClaimKindFilter::Achievement),
             None,
@@ -801,7 +801,7 @@ mod tests {
         assert!(sql.contains("AND i.category ="));
 
         let milestone = build_my_achievements_query(
-            Uuid::new_v4(),
+            IdentityId::random_for_tests(),
             None,
             Some(ClaimKindFilter::Milestone),
             None,
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn cursor_adds_keyset_pagination_clause() {
         let builder =
-            build_my_achievements_query(Uuid::new_v4(), None, None, Some(Uuid::new_v4()), 50);
+            build_my_achievements_query(IdentityId::random_for_tests(), None, None, Some(Uuid::new_v4()), 50);
         assert!(builder.sql().as_str().contains(
             "AND (issued_at, id) < (SELECT issued_at, id \
               FROM achievement_attestations WHERE id ="
@@ -822,13 +822,13 @@ mod tests {
 
     #[test]
     fn no_cursor_means_no_keyset_pagination_clause() {
-        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        let builder = build_my_achievements_query(IdentityId::random_for_tests(), None, None, None, 50);
         assert!(!builder.sql().as_str().contains("WHERE id ="));
     }
 
     #[test]
     fn limit_fetches_one_extra_row_to_detect_a_next_page() {
-        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        let builder = build_my_achievements_query(IdentityId::random_for_tests(), None, None, None, 50);
         assert!(builder.sql().as_str().contains(" LIMIT "));
     }
 }

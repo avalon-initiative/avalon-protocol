@@ -7,7 +7,8 @@
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::identity_id::TestIdentity;
+use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -21,28 +22,29 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity(pool: &PgPool) -> Uuid {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity(pool: &PgPool) -> TestIdentity {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
-    identity_id
+    who
 }
 
-fn identity_created_event(identity_id: Uuid) -> ProtocolEvent {
+fn identity_created_event(who: &TestIdentity) -> ProtocolEvent {
+    let identity_id = who.id;
     ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "identity.created".to_string(),
         issuer: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
         subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
-        payload: serde_json::json!({
-            "identity_id": identity_id,
-            "display_name": format!("indexer-test-{identity_id}"),
-        }),
+        payload: serde_json::to_value(who.created_payload(&format!("indexer-test-{identity_id}")))
+            .unwrap(),
         timestamp: OffsetDateTime::now_utc(),
-        version: 1,
+        version: 2,
         identity_chain: None,
     }
 }
@@ -52,8 +54,9 @@ fn identity_created_event(identity_id: Uuid) -> ProtocolEvent {
 async fn apply_is_idempotent_per_projection() {
     let pool = test_pool().await;
     let indexer = PostgresIndexer::new(pool.clone());
-    let identity_id = seed_identity(&pool).await;
-    let event = identity_created_event(identity_id);
+    let who = seed_identity(&pool).await;
+    let identity_id = who.id;
+    let event = identity_created_event(&who);
 
     indexer.apply(&event).await.expect("first apply failed");
     indexer.apply(&event).await.expect("second apply failed");
@@ -81,8 +84,8 @@ async fn unknown_kind_is_skipped_not_error() {
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "some.future.kind".to_string(),
-        issuer: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
-        subject: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+        issuer: GlobalId::new("identity", &IdentityId::random_for_tests().to_string(), "self", "x"),
+        subject: GlobalId::new("identity", &IdentityId::random_for_tests().to_string(), "self", "x"),
         payload: serde_json::json!({ "anything": "at all" }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,

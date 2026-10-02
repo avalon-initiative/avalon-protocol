@@ -50,11 +50,13 @@ async fn create_identity_and_log_in(http: &reqwest::Client, base: &str) -> Strin
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
 
-    let identity_id = Uuid::new_v4();
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("principal-limit-test-{identity_id}");
     let start: serde_json::Value = http
         .post(format!("{base}/identities/register/start"))
-        .json(&serde_json::json!({ "identity_id": identity_id, "display_name": display_name }))
+        .json(&serde_json::json!({ "identity_id": identity_id, "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()), "display_name": display_name }))
         .send()
         .await
         .expect("register/start failed — is `make start` running?")
@@ -77,14 +79,12 @@ async fn create_identity_and_log_in(http: &reqwest::Client, base: &str) -> Strin
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signature = signing_key
         .sign(format!("avalon:identity.created:v1:{identity_id}:{display_name}").as_bytes());
     http.post(format!("{base}/identities/register/finish"))
         .json(&serde_json::json!({
             "ticket_id": ticket_id,
             "webauthn_credential": credential,
-            "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
             "event_signature": BASE64.encode(signature.to_bytes()),
             "device_label": null,
         }))

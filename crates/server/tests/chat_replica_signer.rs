@@ -62,7 +62,7 @@ fn message(channel_id: Uuid, body: &str) -> ChannelMessage {
     ChannelMessage {
         id: Uuid::new_v4(),
         channel_id,
-        author: Uuid::new_v4(),
+        author: avalon_protocol::ids::IdentityId::random_for_tests(),
         body: body.to_string(),
         sent_at: OffsetDateTime::now_utc(),
     }
@@ -244,7 +244,7 @@ async fn a_conversation_replica_keeps_the_first_signer() {
     let m = avalon_server::conversations::MessageResponse {
         id: Uuid::new_v4(),
         conversation_id,
-        author: Uuid::new_v4(),
+        author: avalon_protocol::ids::IdentityId::random_for_tests(),
         body: "dm".into(),
         sent_at: OffsetDateTime::now_utc(),
     };

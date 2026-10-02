@@ -77,13 +77,15 @@ fn new_virtual_client() -> VirtualClient {
 async fn register_and_login(
     http: &reqwest::Client,
     base: &str,
-) -> (Uuid, String, SigningKey, Uuid) {
-    let identity_id = Uuid::new_v4();
+) -> (avalon_protocol::ids::IdentityId, String, SigningKey, Uuid) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("rebuild-test-{identity_id}");
 
     let start: serde_json::Value = http
         .post(format!("{base}/identities/register/start"))
-        .json(&serde_json::json!({ "identity_id": identity_id, "display_name": display_name }))
+        .json(&serde_json::json!({ "identity_id": identity_id, "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()), "display_name": display_name }))
         .send()
         .await
         .expect("register/start failed — is `make start` running?")
@@ -101,16 +103,18 @@ async fn register_and_login(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes);
 
     http.post(format!("{base}/identities/register/finish"))
         .json(&serde_json::json!({
             "ticket_id": ticket_id,
             "webauthn_credential": credential,
-            "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
             "event_signature": BASE64.encode(signature.to_bytes()),
             "device_label": null,
         }))
@@ -631,7 +635,7 @@ async fn rebuild_reproduces_projections_exactly() {
     // `indexer_friendships`/`indexer_guild_members` have no live writer to
     // diff against before #44 — assert the rebuilt rows directly instead
     // (see this file's module doc).
-    let friendship_rows: Vec<(Uuid, Uuid)> =
+    let friendship_rows: Vec<(avalon_protocol::ids::IdentityId, avalon_protocol::ids::IdentityId)> =
         sqlx::query("SELECT a, b FROM indexer_friendships WHERE a = $1 OR a = $2")
             .bind(alice_id.min(bob_id))
             .bind(alice_id.max(bob_id))
@@ -653,7 +657,7 @@ async fn rebuild_reproduces_projections_exactly() {
     // alice's owner membership (implied by that event's own `owner` field,
     // never a separate `guild.member_added`) lands here alongside bob's
     // real `guild.member_added` from `/join`.
-    let guild_member_ids: Vec<Uuid> = sqlx::query(
+    let guild_member_ids: Vec<avalon_protocol::ids::IdentityId> = sqlx::query(
         "SELECT identity_id FROM indexer_guild_members WHERE guild_id = $1 ORDER BY identity_id",
     )
     .bind(Uuid::parse_str(&guild_id).unwrap())
@@ -837,7 +841,7 @@ async fn rebuild_reproduces_rollback_reversals() {
         snapshot_table(&pool, "indexer_guild_members").await,
     );
 
-    let members = |guild: &str| -> Vec<Uuid> {
+    let members = |guild: &str| -> Vec<avalon_protocol::ids::IdentityId> {
         let guild: Uuid = guild.parse().unwrap();
         rebuilt
             .1

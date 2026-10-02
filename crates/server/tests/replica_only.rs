@@ -85,7 +85,8 @@ async fn replica_serves_reads_appears_in_discovery_and_refuses_writes() {
     let resp = http
         .post(format!("{replica}/identities/register/start"))
         .json(&serde_json::json!({
-            "identity_id": uuid::Uuid::new_v4(),
+            "identity_id": avalon_protocol::ids::IdentityId::random_for_tests(),
+            "event_signing_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "display_name": "replica-refusal-check",
         }))
         .send()

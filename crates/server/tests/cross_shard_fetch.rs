@@ -79,12 +79,15 @@ fn new_virtual_client() -> VirtualClient {
 /// `crate::devices::identity_ref` produces server-side), and the real
 /// `SigningKey` used for `identity.created` — enough to produce a real,
 /// durable `identity.signing_key_added` ledger entry to fetch and verify.
-async fn register_identity(http: &reqwest::Client, base: &str) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
+async fn register_identity(http: &reqwest::Client, base: &str) -> (avalon_protocol::ids::IdentityId, String) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("cross-shard-fetch-test-{identity_id}");
 
     let start_body = serde_json::json!({
         "identity_id": identity_id,
+        "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()),
         "display_name": display_name,
     });
     let start: serde_json::Value = http
@@ -107,9 +110,12 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> (Uuid, String)
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes_for_creation =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -118,7 +124,6 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> (Uuid, String)
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
         "webauthn_credential": credential,
-        "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
         "event_signature": BASE64.encode(signature.to_bytes()),
         "device_label": null,
     });

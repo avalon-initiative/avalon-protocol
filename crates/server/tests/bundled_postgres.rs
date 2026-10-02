@@ -94,11 +94,13 @@ fn new_virtual_client() -> VirtualClient {
 async fn before_restart() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let identity_id = Uuid::new_v4();
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
 
     let start_response = http
         .post(format!("{base}/identities/register/start"))
-        .json(&serde_json::json!({ "identity_id": identity_id, "display_name": DISPLAY_NAME }))
+        .json(&serde_json::json!({ "identity_id": identity_id, "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()), "display_name": DISPLAY_NAME }))
         .send()
         .await
         .expect("register/start failed — is avalon-server-bundled running?");
@@ -122,9 +124,12 @@ async fn before_restart() {
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes =
-        format!("avalon:identity.created:v1:{identity_id}:{DISPLAY_NAME}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        DISPLAY_NAME,
+    );
     let signature = signing_key.sign(&signing_bytes);
 
     let finish_response = http
@@ -132,7 +137,6 @@ async fn before_restart() {
         .json(&serde_json::json!({
             "ticket_id": ticket_id,
             "webauthn_credential": credential,
-            "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
             "event_signature": BASE64.encode(signature.to_bytes()),
             "device_label": null,
         }))
@@ -155,11 +159,13 @@ async fn before_restart() {
 async fn after_restart() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let identity_id = Uuid::new_v4();
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
 
     let start_response = http
         .post(format!("{base}/identities/register/start"))
-        .json(&serde_json::json!({ "identity_id": identity_id, "display_name": DISPLAY_NAME }))
+        .json(&serde_json::json!({ "identity_id": identity_id, "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()), "display_name": DISPLAY_NAME }))
         .send()
         .await
         .expect("register/start failed — is avalon-server-bundled running again?");

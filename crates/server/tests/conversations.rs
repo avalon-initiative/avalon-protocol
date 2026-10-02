@@ -22,10 +22,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -55,7 +57,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 
 /// Seeds an accepted friendship directly into `friendships`, which requires
 /// `a < b` — ordered here rather than trusting caller order.
-async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+async fn seed_friendship(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon_protocol::ids::IdentityId) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
@@ -66,7 +68,7 @@ async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
 }
 
 /// Opts `identity_id` into global discoverability.
-async fn seed_discoverable(pool: &PgPool, identity_id: Uuid) {
+async fn seed_discoverable(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) {
     sqlx::query("INSERT INTO discovery_preferences (identity_id, discoverable) VALUES ($1, true)")
         .bind(identity_id)
         .execute(pool)
@@ -95,7 +97,7 @@ async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
 }
 
 /// Seeds an `indexer_guild_members` row directly at the `member` role (index 2).
-async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
+async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: avalon_protocol::ids::IdentityId) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, 2, now())",

@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn presence_has_no_interest_scope() {
         let event = RelayEvent::Presence(PresenceResponse {
-            identity_id: Uuid::new_v4(),
+            identity_id: avalon_protocol::ids::IdentityId::random_for_tests(),
             status: avalon_protocol::social::PresenceStatus::Online,
             active_in: None,
             updated_at: sample_time(),
@@ -418,7 +418,7 @@ mod tests {
         let event = RelayEvent::ChannelMessage(guild_messages::MessageResponse {
             id: Uuid::new_v4(),
             channel_id,
-            author: Uuid::new_v4(),
+            author: avalon_protocol::ids::IdentityId::random_for_tests(),
             body: "hi".to_string(),
             sent_at: sample_time(),
         });
@@ -447,7 +447,7 @@ mod tests {
         let event = RelayEvent::ConversationMessage(conversations::MessageResponse {
             id: Uuid::new_v4(),
             conversation_id,
-            author: Uuid::new_v4(),
+            author: avalon_protocol::ids::IdentityId::random_for_tests(),
             body: "hi".to_string(),
             sent_at: sample_time(),
         });
@@ -486,7 +486,7 @@ mod tests {
             RelayEvent::ChannelMessage(guild_messages::MessageResponse {
                 id: Uuid::new_v4(),
                 channel_id,
-                author: Uuid::new_v4(),
+                author: avalon_protocol::ids::IdentityId::random_for_tests(),
                 body,
                 sent_at: sample_time(),
             })
@@ -510,7 +510,7 @@ mod tests {
         let other = RelayEvent::ConversationMessage(conversations::MessageResponse {
             id: Uuid::new_v4(),
             conversation_id: channel_id,
-            author: Uuid::new_v4(),
+            author: avalon_protocol::ids::IdentityId::random_for_tests(),
             body: "hi".into(),
             sent_at: sample_time(),
         });
@@ -524,7 +524,7 @@ mod tests {
             Err(RelayRefusal::NoLocalSubscriber)
         );
         let presence = RelayEvent::Presence(PresenceResponse {
-            identity_id: Uuid::new_v4(),
+            identity_id: avalon_protocol::ids::IdentityId::random_for_tests(),
             status: avalon_protocol::social::PresenceStatus::Online,
             active_in: None,
             updated_at: sample_time(),
