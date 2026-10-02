@@ -149,12 +149,30 @@ impl PostgresIndexer {
                 Ok(()) => savepoint.commit().await?,
                 // Refused by a validity rule, not a storage fault: the same event is refused on
                 // every replay, so it must not abort the whole rebuild.
-                Err(IndexError::DisplayNameNotPermitted | IndexError::Rejected(_)) => {
+                Err(
+                    IndexError::DisplayNameNotPermitted
+                    | IndexError::DisplayNameTaken
+                    | IndexError::Rejected(_),
+                ) => {
                     eprintln!(
                         "indexer: skipping refused event {} ({})",
                         event.id, event.kind
                     );
                     savepoint.rollback().await?;
+                    // The first pass created this identity's row; without its profile it must go.
+                    if event.kind == "identity.created" {
+                        if let Ok(created) =
+                            serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
+                        {
+                            sqlx::query(
+                                "DELETE FROM identities WHERE id = $1 \
+                                 AND NOT EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)",
+                            )
+                            .bind(created.identity_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
                 }
                 Err(other) => return Err(other),
             }

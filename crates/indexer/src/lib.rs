@@ -102,6 +102,15 @@ impl From<sqlx::Error> for IndexError {
         if is_display_name_conflict {
             return IndexError::DisplayNameTaken;
         }
+        // A child event whose parent identity was never created (or was refused) is invalid, not a
+        // storage fault.
+        if err
+            .as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| code == "23503")
+        {
+            return IndexError::Rejected(format!("references a missing parent row: {err}"));
+        }
         if is_unavailable(&err) {
             return IndexError::Unavailable(err.to_string());
         }
