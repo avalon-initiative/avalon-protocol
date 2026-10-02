@@ -40,11 +40,12 @@ Needs root, `ip netns`, nftables, `jq`, `curl`, `xxd`, a `.env` with a reachable
 | `outbound-only` | A node behind a no-inbound NAT with no relay available reports `outbound_only` and no reservation. | no |
 | `url-less-admission` | A node behind a no-inbound NAT with no `AVALON_NODE_URL`, and reachability verification on everywhere, announces as `p2p://<peer id>`: both neighbors list it in `/nodes/discover`, the seed's topology describes it, and a `p2p://` announce for the relay's id over plain HTTP stores nothing. | no |
 | `url-less-participation` | Three public nodes (relay, seed, a shard authority) and a url-less node behind a no-inbound NAT, verification on everywhere. Neighbors measure a latency to it and list it in `/nodes/peers`; `POST /nodes/probe` from the seed and `POST /nodes/trace` from the relay reach `p2p://<peer id>` over the stream and report a path; the url-less node mirrors the seed's shard with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` and serves a head that matches the seed's, whose key hashes to the shard id and verifies with `verify_sth`; and a write it authors for `game:urllessapp` lands in the shard authority's ledger over outbound HTTP. | no |
+| `url-less-credential` | A relay and a seed with reachability verification on, a url-less node behind a no-inbound NAT, and a throwaway keypair (the `node_request` example) on its own public host. The keypair is refused 403 `node_auth_no_standing` on `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` over both a stream and signed HTTP, and 401 `node_auth_missing` over HTTP with no header. It then announces as `p2p://<its peer id>` over a stream and is accepted: `/nodes/replicate-chat` answers 204 on both transports and a replica row on the seed carries its key, while the relay and notify routes get past the credential and answer their own scope refusals (422, 403 with no `code`). The url-less node then sends a chat message that its neighbors store as a replica tagged with its own key. Mutation check: with the standing check disabled the first expectation fails (the keypair gets 422, 204 and 403 instead of the refusal). | `url-less-credential` |
 | `relay-failover` | A node holds a reservation on one of two relays; the relay is stopped and the reservation moves to the other. | no |
 | `relay-ranking` | Three discovered relays with 150, 60 and 5 ms of added delay (`tc netem`). Once the node lists all three under their libp2p ids with a measured round trip, the relay holding its reservation is stopped and the reservation must move to the nearest of the other two. The node announces without a node URL so the verifying relays admit it. Passed three consecutive lab runs. The lab's public segment is one /24, so prefix diversity is covered by unit and loopback tests, not here. | no |
 | `relay-reselect` | A node with a short hold time (`AVALON_RELAY_RESELECT_HOLD_SECS=30`) reserves on a discovered relay while its operator-listed relay is down. The listed relay then starts; the node must still hold the first reservation after a third of the hold time, move to the listed relay only after the hold time, and the first relay's `/nodes/peers` must list the circuit address through the new relay within a minute although the announce interval is 600 s. Not yet run in the lab: the restart of the listed relay under the same identity key, the timings and the `/nodes/peers` check are unverified. | no |
 
-A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt. CI runs `punch-port-restricted` (with `public` and `relayed-symmetric`); `punch-symmetric-fallback` is not in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
+A hole punch depends on two SYNs crossing inside two NAT filters, so it can take more than one attempt. CI runs `punch-port-restricted` (with `public`, `relayed-symmetric` and `url-less-credential`); `punch-symmetric-fallback` is not in CI. A punch takes about a minute: the node with the higher peer id waits before dialing a peer that
 is reachable only through a relay, then hole punching makes up to three attempts.
 
 ## Known limitations
@@ -61,9 +62,15 @@ is reachable only through a relay, then hole punching makes up to three attempts
   default, so it is found through gossip and confirmed over libp2p. A node with no
   `AVALON_NODE_URL` announces as `p2p://<peer id>` and is admitted with the check on, see
   `url-less-admission` and `url-less-participation`. Such a node can call the routes
-  `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors (its stream is its
-  credential and its `p2p://` entry gives it standing), but those routes do not check scope yet;
-  the scenarios do not cover them.
+  `/nodes/relay`, `/nodes/replicate-chat` and `/mirror/notify` on its neighbors under its node
+  credential; `url-less-credential` covers the credential and chat replication.
+- **A mirror push by a url-less node is not run in the lab.** `/mirror/notify` is accepted only
+  from a configured mirror source, and a source needs an HTTP URL, so a url-less node's push is
+  always refused by scope. Triggering one also needs a receiver that registered mirror interest,
+  which only a statically configured source verified under a bundled trust anchor does, and a
+  lab-authored shard cannot be. The scenario covers the route with a direct call instead.
+- **Delivery by the real url-less node is observed through its effect** (the replica row), not
+  the transport that carried it; the throwaway keypair covers both transports directly.
 - **The url-less probe and trace report `direct`.** The node's own outbound connection to the seed
   carries them. A `relayed` or `traversed` path to a url-less node needs a peer it has no direct
   connection with, for example a second url-less node, and is not covered.

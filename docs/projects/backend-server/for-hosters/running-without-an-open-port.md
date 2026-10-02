@@ -86,6 +86,10 @@ everywhere and the node behind a no-inbound NAT:
   push: the relay only for scopes with a local subscriber, chat replication only on a node with a
   storage role and within the signer's rate, and mirror notifications only from a configured
   mirror source.
+- The credential and its rollout are described in
+  [`standalone-binary.md`](standalone-binary.md#credential-format-and-rollout). The NAT lab
+  scenario `url-less-credential` shows a node with no URL replicating chat to a neighbor, and a
+  keypair that never announced refused on all three routes over a stream and over HTTP.
 - It registers mirror interest under its `p2p://` address, so its mirror sources push to it over
   its stream and it still polls as the fallback. A source must have an HTTP URL to be matched.
   It receives no chat: it is not a replication target, because a `p2p://` entry's roles are

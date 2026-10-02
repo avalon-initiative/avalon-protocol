@@ -5,8 +5,8 @@
 # usage: sudo scripts/nat-scenarios.sh [scenario ...]     (default: all scenarios)
 #   scenarios: public full-cone-direct relayed-port-restricted relayed-restricted-cone
 #              relayed-symmetric relayed-no-inbound punch-port-restricted punch-symmetric-fallback
-#              outbound-only url-less-admission url-less-participation relay-failover relay-ranking
-#              relay-reselect
+#              outbound-only url-less-admission url-less-participation url-less-credential
+#              relay-failover relay-ranking relay-reselect
 #
 # See docs/projects/backend-server/for-maintainers/nat-scenarios.md for what each
 # scenario proves and how to run the suite as a live drill.
@@ -399,6 +399,88 @@ scenario_url-less-participation() {
   echo "    mirrored $shard to seq $(lab_get home1 "http://10.1.0.2:8080/ledger/mirror-progress?network_id=avalon-dev-lan&shard_id=$shard" | jq .last_seq); shard authority holds home1's write"
 }
 
+# expect_call <output> <phase> <transport> <path> <status> [code]: the prober printed that result.
+expect_call() {
+  local want="$2 $3 $4 $5 ${6:--}"
+  grep -qxF "$want" <<<"$1" || { echo "    expected '$want' from the prober" >&2; return 1; }
+}
+
+# A node's write routes (relay, chat replication, mirror notify) accept a node with standing and
+# refuse a free keypair, over a stream and over signed HTTP. A node with no URL delivers a chat
+# replication to a neighbor under its own credential.
+scenario_url-less-credential() {
+  "$LAB" up home1 no-inbound >/dev/null || return 1
+  "$LAB" up-public relay 10.99.0.101 >/dev/null && "$LAB" up-public seed 10.99.0.102 >/dev/null \
+    && "$LAB" up-public free 10.99.0.104 >/dev/null || return 1
+  local verify=AVALON_ANNOUNCE_VERIFY_REACHABILITY=true
+  node relay relay 10.99.0.101 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.101/tcp/4001 "$verify"
+  node seed seed 10.99.0.102 AVALON_LIBP2P_EXTERNAL_ADDR=/ip4/10.99.0.102/tcp/4001 \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080 RUST_LOG=info,avalon_server::node_auth=debug "$verify"
+  ready relay 10.99.0.101 && ready seed 10.99.0.102 || return 1
+  (cd "$ROOT" && cargo build -q -p avalon-server --example node_request --example live_seed) || return 1
+
+  # A keypair that never announced is refused on every route over both transports; the same
+  # keypair is accepted once a stream announce gives it standing.
+  local out seed_id
+  seed_id=$(peer_id seed) || return 1
+  out=$("$LAB" exec free -- "$ROOT/target/debug/examples/node_request" avalon-dev-lan \
+    /ip4/10.99.0.104/tcp/4001 "$seed_id" "/ip4/10.99.0.102/tcp/4001/p2p/$seed_id" http://10.99.0.102:8080) \
+    || { echo "    the prober failed: $out" >&2; return 1; }
+  echo "$out" | sed 's/^/    /'
+  local route
+  for route in /nodes/relay /nodes/replicate-chat /mirror/notify; do
+    expect_call "$out" free stream "$route" 403 node_auth_no_standing || return 1
+    expect_call "$out" free http-signed "$route" 403 node_auth_no_standing || return 1
+    expect_call "$out" free http-unsigned "$route" 401 node_auth_missing || return 1
+  done
+  expect_call "$out" announce stream /nodes/announce 200 || return 1
+  expect_call "$out" standing stream /nodes/replicate-chat 204 || return 1
+  expect_call "$out" standing http-signed /nodes/replicate-chat 204 || return 1
+  # The other two routes get past the credential and are then refused by their own scope checks.
+  for route in /nodes/relay /mirror/notify; do
+    grep -E "^standing (stream|http-signed) $route " <<<"$out" | grep -qE ' node_auth_|( 401 )' \
+      && { echo "    $route refused the credential of a node with standing" >&2; return 1; }
+  done
+  expect_call "$out" standing http-unsigned /nodes/replicate-chat 401 node_auth_missing || return 1
+  # Both deliveries carry one message id, so one replica row, tagged with the caller's key; the
+  # stranger's calls left none.
+  local caller rows
+  caller=$(awk '$1 == "caller" {print $2}' <<<"$out")
+  rows=$(cd "$ROOT" && DATABASE_URL="$BASE_DB_URL" target/debug/examples/live_seed replicas live_nat_seed)
+  [ "$(grep -c " $caller\$" <<<"$rows")" = 1 ] && [ "$(wc -l <<<"$rows")" = 1 ] \
+    || { echo "    seed replica rows: $rows" >&2; return 1; }
+
+  # A real node with no URL: its chat replication reaches a neighbor, with its key on the replica row.
+  node home1 home1 10.1.0.2 AVALON_NODE_URL= "$verify" \
+    AVALON_BOOTSTRAP_PEERS=http://10.99.0.101:8080,http://10.99.0.102:8080
+  wait_status home1 10.1.0.2 '.connectivity == "outbound_only"' "home1 to report outbound_only" || return 1
+  local id token guild channel
+  id=$(status home1 10.1.0.2 | jq -r .libp2p_peer_id)
+  wait_json "the seed to list home1" "[.peers[] | select(.base_url == \"p2p://$id\")] | length == 1" discover seed 10.99.0.102 || return 1
+  token=$(cd "$ROOT" && DATABASE_URL="$BASE_DB_URL" target/debug/examples/live_seed session live_nat_home1) || return 1
+  guild=$(authed home1 10.1.0.2 POST /guilds '{"name":"Credential Lab","tag":"CLAB1","description":"lab"}' "$token" | jq -r .id)
+  channel=$(authed home1 10.1.0.2 GET "/guilds/$guild/channels" '' "$token" | jq -r '.[] | select(.name == "general") | .id')
+  [ -n "$channel" ] && [ "$channel" != null ] || { echo "    no channel on home1" >&2; return 1; }
+  authed home1 10.1.0.2 POST "/guilds/$guild/channels/$channel/messages" '{"body":"from a node with no url"}' "$token" \
+    | jq -e .id >/dev/null || { echo "    sending the message failed" >&2; return 1; }
+  local i found=""
+  for i in $(seq 1 $((WAIT / 2))); do
+    found=$(cd "$ROOT" && for s in live_nat_relay live_nat_seed; do
+      DATABASE_URL="$BASE_DB_URL" target/debug/examples/live_seed replicas $s
+    done | grep -c " $id\$")
+    [ "$found" = 1 ] && break
+    sleep 2
+  done
+  [ "$found" = 1 ] || { echo "    no replica of home1's message on a neighbor" >&2; return 1; }
+  echo "    home1 ($id) replicated its message to a neighbor"
+}
+
+# authed <ns> <ip> <method> <path> <body> <token>: a bearer-authenticated request to that node.
+authed() {
+  "$LAB" exec "$1" -- curl -s -m 15 -X "$3" -H "authorization: Bearer $6" -H 'content-type: application/json' \
+    ${5:+-d "$5"} "http://$2:8080$4"
+}
+
 # Losing the relay a node reserved on moves it to a second relay.
 scenario_relay-failover() {
   "$LAB" up home1 symmetric >/dev/null || return 1
@@ -531,7 +613,7 @@ dump_logs() {
 
 # --- runner ------------------------------------------------------------------------
 
-ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation relay-failover relay-ranking"
+ALL="public full-cone-direct relayed-restricted-cone punch-port-restricted punch-symmetric-fallback relayed-port-restricted relayed-symmetric relayed-no-inbound outbound-only url-less-admission url-less-participation url-less-credential relay-failover relay-ranking"
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -gt 0 ] || read -r -a SCENARIOS <<<"$ALL"
 

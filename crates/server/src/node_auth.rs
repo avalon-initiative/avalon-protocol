@@ -9,7 +9,8 @@
 //!   the signing key must hash to the claimed peer id.
 //!
 //! Either way the peer must have standing ([`PeerTable::standing`]) and stays within a per-key
-//! request budget. A credential grants no authority beyond what the route itself checks.
+//! request budget. A credential grants no authority beyond what the route itself checks. A key
+//! gets standing by announcing as `p2p://<its peer id>` over its own stream, so standing is cheap.
 //!
 //! Over HTTP the signature is verified before the body is read (the header carries the body
 //! hash, the signature covers it). Standing is cheap to get, so a stranger cannot make the node
