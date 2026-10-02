@@ -75,33 +75,55 @@ use crate::witness_cosign::{self, WitnessCosignConfig};
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
 
+/// Most `p2p://` entries `AVALON_MIRROR_PEERS` may name; further ones are dropped.
+pub(crate) const MAX_P2P_MIRROR_SOURCES: usize = 16;
+
 /// Issue #573: `AVALON_MIRROR_PEERS` entries can now be either a bare URL
 /// (implicitly the `"core"` shard, preserving every pre-#573 config
 /// byte-for-byte) or `shard_id=url` — the same bare-vs-keyed convention
 /// `AVALON_SETTLEMENT_REMOTE_URLS`/`AVALON_KNOWN_SHARDS` already use.
+/// A URL may also be `p2p://<peer id>` (issue #1146), canonicalised to
+/// `p2p_base_url`'s form; malformed ones are dropped, at most
+/// [`MAX_P2P_MIRROR_SOURCES`] are kept, and only the notify match uses them so far.
 /// Shared by [`MirrorWatcherConfig::from_env`] (which only needs the bare
 /// URL list to poll) and `crate::settlement::ShardMirrorSources` (which
 /// needs the shard_id mapping too, to scope reads correctly — see its own
 /// doc comment for why this matters).
 pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
-    raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
-            }
-            let (shard_id, url) = match entry.split_once('=') {
-                Some((shard_id, url)) => (shard_id.trim().to_string(), url.trim()),
-                None => ("core".to_string(), entry),
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut p2p_sources = 0;
+    for entry in raw.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (shard_id, url) = match entry.split_once('=') {
+            Some((shard_id, url)) => (shard_id.trim().to_string(), url.trim()),
+            None => ("core".to_string(), entry),
+        };
+        let url = if crate::node_http::is_p2p_url(url) {
+            // The canonical string is also the DB key for this source's rows.
+            let Some(peer) = crate::node_http::parse_p2p_base(url) else {
+                tracing::warn!(entry, "mirror peers: dropping a malformed p2p:// source");
+                continue;
             };
-            let url = url.trim_end_matches('/').to_string();
-            if url.is_empty() {
-                None
-            } else {
-                Some((shard_id, url))
+            crate::node_http::p2p_base_url(&peer)
+        } else {
+            url.trim_end_matches('/').to_string()
+        };
+        if url.is_empty() || out.iter().any(|(s, u)| *s == shard_id && *u == url) {
+            continue;
+        }
+        if crate::node_http::is_p2p_url(&url) {
+            if p2p_sources >= MAX_P2P_MIRROR_SOURCES {
+                tracing::warn!(entry, "mirror peers: too many p2p:// sources, dropping");
+                continue;
             }
-        })
-        .collect()
+            p2p_sources += 1;
+        }
+        out.push((shard_id, url));
+    }
+    out
 }
 
 static DEFAULT_CORE_MIRROR_PEERS: std::sync::OnceLock<String> = std::sync::OnceLock::new();

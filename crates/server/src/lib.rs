@@ -1508,6 +1508,35 @@ mod node_auth_wiring {
         );
     }
 
+    #[tokio::test]
+    async fn a_p2p_source_is_accepted_only_for_its_own_authenticated_stream() {
+        let (source, stranger) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let mut state = lazy_state();
+        state.shard_mirror_sources =
+            settlement::ShardMirrorSources::from_raw(&format!("p2p://{source}/"));
+        // A table entry claiming the source's address for another node confers nothing.
+        let peers = state.peers.clone();
+        peers.upsert(bound_entry(&stranger, node_http::p2p_base_url(&source)));
+        let app = router(state, None);
+        let path = "/mirror/notify";
+        let note = |network: &str| serde_json::json!({"network_id": network, "tree_size": 9});
+        assert_eq!(
+            stream_post(&app, path, stranger, note("avalon-test")).await,
+            StatusCode::FORBIDDEN
+        );
+        // A configured source that never announced has no standing: still refused.
+        assert_eq!(
+            stream_post(&app, path, source, note("elsewhere")).await,
+            StatusCode::FORBIDDEN
+        );
+        peers.upsert(bound_entry(&source, node_http::p2p_base_url(&source)));
+        // Past the source check, a wrong network is a 400.
+        assert_eq!(
+            stream_post(&app, path, source, note("elsewhere")).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
     /// Needs `DATABASE_URL` (a throwaway database): only a larger tree size wakes the watcher.
     #[tokio::test]
     #[ignore]

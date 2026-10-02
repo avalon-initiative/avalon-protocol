@@ -165,8 +165,10 @@ async fn push_one(
     }
 }
 
-/// The configured `(shard, url)` mirror sources that `signer` is: peers it is bound to in the
-/// peer table whose URL names a source. Empty means `signer` is not one of this node's sources.
+/// The configured `(shard, url)` mirror sources that `signer` is. An HTTP source matches a peer
+/// bound to it in the peer table by origin; a `p2p://<id>` source matches only when `id` is the
+/// authenticated `signer` itself, so peer-table data never makes a `p2p://` source. Empty means
+/// `signer` is not one of this node's sources.
 pub fn sources_of_signer(
     peers: &crate::nodes::PeerTable,
     sources: &crate::settlement::ShardMirrorSources,
@@ -183,7 +185,11 @@ pub fn sources_of_signer(
         .entries()
         .into_iter()
         .filter(|(_, url)| {
-            crate::node_auth::normalized_origin(url).is_some_and(|o| origins.contains(&o))
+            if crate::node_http::is_p2p_url(url) {
+                crate::node_http::parse_p2p_base(url).as_ref() == Some(signer)
+            } else {
+                crate::node_auth::normalized_origin(url).is_some_and(|o| origins.contains(&o))
+            }
         })
         .collect()
 }
@@ -211,7 +217,7 @@ pub async fn exceeds_observed(
 /// content" invariant. The signer must be one of this node's configured mirror sources (403),
 /// the network id must be this node's (400), and the announced tree size must exceed what this
 /// node has already observed from that source; only then is the mirror watcher woken. A stale
-/// size is acknowledged (202) without waking it. A source matches by URL origin, so one
+/// size is acknowledged (202) without waking it. An HTTP source matches by URL origin, so one
 /// configured by hostname but announced by IP (or the reverse) is refused and polling covers it. Nothing here starts outbound work itself.
 pub async fn notify(
     axum::extract::State(state): axum::extract::State<AppState>,
@@ -327,6 +333,62 @@ mod tests {
         assert!(!source_of("http://[::1]:8080", "http://[::2]:8080"));
         // A p2p entry names no origin, so it is never a source.
         assert!(!source_of("p2p://somepeer", "http://src.test"));
+    }
+
+    #[test]
+    fn a_p2p_source_matches_only_its_own_authenticated_id() {
+        let (src, other) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let peers = crate::nodes::PeerTable::new();
+        // A table entry claiming the source's p2p address for another peer confers nothing.
+        peers.upsert(entry(&other, &crate::node_http::p2p_base_url(&src), true));
+        let sources = crate::settlement::ShardMirrorSources::from_raw(&format!(
+            "node:abc=p2p://{src}, http://src.test"
+        ));
+        assert_eq!(
+            sources_of_signer(&crate::nodes::PeerTable::new(), &sources, &src),
+            vec![("node:abc".to_string(), format!("p2p://{src}"))]
+        );
+        assert!(sources_of_signer(&peers, &sources, &other).is_empty());
+        let by_id = crate::settlement::ShardMirrorSources::from_raw(&format!("p2p://{other}"));
+        assert!(sources_of_signer(&peers, &by_id, &src).is_empty());
+    }
+
+    #[test]
+    fn p2p_source_spellings_canonicalise_to_one_source() {
+        let id = libp2p::PeerId::random();
+        let canonical = format!("p2p://{id}");
+        let sources = crate::settlement::ShardMirrorSources::from_raw(&format!(
+            " p2p://{id}/ , core=p2p://{id}, node:x= p2p://{id}// "
+        ));
+        assert_eq!(
+            sources.entries(),
+            vec![
+                ("core".to_string(), canonical.clone()),
+                ("node:x".to_string(), canonical.clone())
+            ]
+        );
+        assert_eq!(sources.source_url_for("node:x"), Some(canonical.as_str()));
+    }
+
+    #[test]
+    fn malformed_and_excess_p2p_sources_are_dropped() {
+        let ids: Vec<_> = (0..crate::mirror_watcher::MAX_P2P_MIRROR_SOURCES + 2)
+            .map(|_| libp2p::PeerId::random())
+            .collect();
+        let raw = ids.iter().map(|i| format!("p2p://{i}")).collect::<Vec<_>>();
+        let sources = crate::settlement::ShardMirrorSources::from_raw(&format!(
+            "p2p://nope,p2p://,p2p://{0}/x,aux=p2p://{0}?q=1,http://h.test,{1}",
+            ids[0],
+            raw.join(",")
+        ));
+        let entries = sources.entries();
+        let p2p = entries.iter().filter(|(_, u)| u.starts_with("p2p://"));
+        assert_eq!(p2p.count(), crate::mirror_watcher::MAX_P2P_MIRROR_SOURCES);
+        assert!(entries.iter().any(|(_, u)| u == "http://h.test"));
+        assert!(!entries.iter().any(|(s, _)| s == "aux"));
+        assert!(!entries
+            .iter()
+            .any(|(_, u)| u == "p2p://nope" || u == "p2p://"));
     }
 
     /// A mock swarm: answers the interest lookup with `values` and every stream push with 202,

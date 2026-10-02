@@ -91,7 +91,12 @@ everywhere and the node behind a no-inbound NAT:
   scenario `url-less-credential` shows a node with no URL replicating chat to a neighbor, and a
   keypair that never announced refused on all three routes over a stream and over HTTP.
 - It registers mirror interest under its `p2p://` address, so its mirror sources push to it over
-  its stream and it still polls as the fallback. A source must have an HTTP URL to be matched.
+  its stream and it still polls as the fallback. A source can be named by peer id in `AVALON_MIRROR_PEERS` (`p2p://<peer id>`, or
+  `node:<hash>=p2p://<peer id>`; at most 16, malformed ones are dropped with a warning), and
+  its notifications are accepted only over a stream authenticated as that peer id, after it
+  has announced; a peer table entry never makes a source. Pulling a statically configured
+  `node:` shard from a `p2p://` source is not implemented yet, so the node still polls HTTP
+  sources only.
   It receives no chat: it is not a replication target, because a `p2p://` entry's roles are
   self-reported, and channel and conversation interest is only registered by nodes with an HTTP
   URL.
