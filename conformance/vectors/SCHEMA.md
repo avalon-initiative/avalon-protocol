@@ -178,11 +178,12 @@ Each file has this shape:
   `node:` id of the same key). A public key is lowercase HEX inside signing bytes and standard
   BASE64 on the wire.
 - `identity-created-signing.json` — `identity.created` v2 signing bytes
-  `avalon:identity.created:v2:{network_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
-  (ticket id = the server-issued `register/start` ticket, network id = the ledger network; display
-  name last; `:` and multi-byte UTF-8 in it are taken as-is), as UTF-8 and hex, with the
-  deterministic Ed25519 signature (verified strictly). `replayVectors` list signatures that must NOT
-  verify when the ticket or network differs.
+  `avalon:identity.created:v2:{len(network_id)}:{network_id}:{len(shard_id)}:{shard_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
+  (`len` = decimal UTF-8 byte length, because network and shard ids are variable-width and shard
+  ids contain `:`; ticket id = the server-issued `register/start` ticket; shard id = the shard the
+  entry is issued in; display name last, `:` and multi-byte UTF-8 in it taken as-is), as UTF-8 and
+  hex, with the deterministic Ed25519 signature (verified strictly). `replayVectors` list signatures
+  that must NOT verify when the ticket, network or shard differs or a `:` is moved between fields.
 - `device-grant-approval.json` — device grant approval bytes
   `avalon:device_grant.approved:v2:{grant_id}:{identity_id}:{requested_public_key_hex}` and
   signature.

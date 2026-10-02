@@ -240,6 +240,10 @@ pub fn display_name_permitted(name: &str) -> bool {
 #[doc(hidden)]
 pub const TEST_NETWORK_ID: &str = "avalon-test-network";
 
+/// Shard id used by [`TestIdentity::created_payload`].
+#[doc(hidden)]
+pub const TEST_SHARD_ID: &str = "core";
+
 /// A test identity: a fresh Ed25519 inception key and the id derived from it.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -270,18 +274,19 @@ impl TestIdentity {
         self.signing_key.verifying_key().to_bytes()
     }
 
-    /// A correctly self-signed `identity.created` v2 payload for [`TEST_NETWORK_ID`] and a fresh ticket.
+    /// A correctly self-signed `identity.created` v2 payload for [`TEST_NETWORK_ID`], [`TEST_SHARD_ID`] and a fresh ticket.
     pub fn created_payload(
         &self,
         display_name: &str,
     ) -> crate::event_payloads::IdentityCreatedPayload {
-        self.created_payload_for(TEST_NETWORK_ID, Uuid::new_v4(), display_name)
+        self.created_payload_for(TEST_NETWORK_ID, TEST_SHARD_ID, Uuid::new_v4(), display_name)
     }
 
-    /// A correctly self-signed `identity.created` v2 payload bound to `network_id` and `ticket_id`.
+    /// A correctly self-signed `identity.created` v2 payload bound to a network, shard and ticket.
     pub fn created_payload_for(
         &self,
         network_id: &str,
+        shard_id: &str,
         ticket_id: Uuid,
         display_name: &str,
     ) -> crate::event_payloads::IdentityCreatedPayload {
@@ -289,6 +294,7 @@ impl TestIdentity {
         use ed25519_dalek::Signer as _;
         let bytes = identity_created_signing_bytes_v2(
             network_id,
+            shard_id,
             ticket_id,
             &self.id,
             &self.public_key(),
@@ -313,19 +319,24 @@ impl Default for TestIdentity {
 }
 
 /// Bytes signed for `identity.created` v2:
-/// `avalon:identity.created:v2:{network_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`.
-/// `ticket_id` is the server-issued registration ticket and `network_id` the ledger network, so a
-/// copied signature cannot be replayed into another ceremony or network. The display name is
-/// last, so a `:` inside it is harmless; a network id never contains `:`.
+/// `avalon:identity.created:v2:{len(network_id)}:{network_id}:{len(shard_id)}:{shard_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
+/// (`len` is the decimal UTF-8 byte length). Network and shard ids are variable-width and may
+/// contain `:` (`game:slug/1`), so each is length-prefixed and the encoding is unambiguous. The
+/// ticket binds the signature to one registration ceremony, the network and the issuing shard to
+/// one ledger stream, so a copied payload does not verify in another shard. The display name is
+/// last, so a `:` inside it is harmless.
 pub fn identity_created_signing_bytes_v2(
     network_id: &str,
+    shard_id: &str,
     ticket_id: Uuid,
     identity_id: &IdentityId,
     public_key: &[u8; 32],
     display_name: &str,
 ) -> Vec<u8> {
     format!(
-        "avalon:identity.created:v2:{network_id}:{ticket_id}:{identity_id}:{}:{display_name}",
+        "avalon:identity.created:v2:{}:{network_id}:{}:{shard_id}:{ticket_id}:{identity_id}:{}:{display_name}",
+        network_id.len(),
+        shard_id.len(),
         hex::encode(public_key)
     )
     .into_bytes()
@@ -444,6 +455,18 @@ mod tests {
     }
 
     #[test]
+    fn network_and_shard_boundaries_are_unambiguous() {
+        let (key, id) = test_identity(7);
+        let pk = key.verifying_key().to_bytes();
+        let t = Uuid::nil();
+        let a = identity_created_signing_bytes_v2("a:b", "c", t, &id, &pk, "n");
+        let b = identity_created_signing_bytes_v2("a", "b:c", t, &id, &pk, "n");
+        let c = identity_created_signing_bytes_v2("a", "b", t, &id, &pk, "c:n");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
     fn serde_enforces_the_canonical_form() {
         let (_, id) = test_identity(7);
         let json = serde_json::to_string(&id).unwrap();
@@ -455,11 +478,12 @@ mod tests {
     fn signing_bytes_have_the_documented_layout() {
         let (key, id) = test_identity(7);
         let pk = key.verifying_key().to_bytes();
-        let created = identity_created_signing_bytes_v2("net", Uuid::nil(), &id, &pk, "a:b");
+        let created =
+            identity_created_signing_bytes_v2("net", "game:x/1", Uuid::nil(), &id, &pk, "a:b");
         assert_eq!(
             String::from_utf8(created).unwrap(),
             format!(
-                "avalon:identity.created:v2:net:{}:{id}:{}:a:b",
+                "avalon:identity.created:v2:3:net:8:game:x/1:{}:{id}:{}:a:b",
                 Uuid::nil(),
                 hex::encode(pk)
             )

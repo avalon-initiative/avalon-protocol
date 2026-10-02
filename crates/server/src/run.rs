@@ -140,6 +140,15 @@ pub async fn run_with_tracing(
     // value is a misconfiguration, not "assume dev."
     let network_id = std::env::var("AVALON_NETWORK_ID")
         .expect("AVALON_NETWORK_ID must be set — see .env.example");
+    if network_id.is_empty()
+        || network_id
+            .chars()
+            .any(|c| c == ':' || c.is_whitespace() || c.is_control())
+    {
+        panic!(
+            "AVALON_NETWORK_ID {network_id:?} is invalid: it must be non-empty and contain no ':', whitespace or control characters (it is part of signed identity bytes)"
+        );
+    }
 
     // Issue #363, implementing #287's decision: every hoster-configurable
     // resource limit defaults to exactly what this process hardcoded

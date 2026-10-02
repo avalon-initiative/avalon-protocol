@@ -117,6 +117,7 @@ mod hub_side {
 
         let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
             start["network_id"].as_str().unwrap(),
+            start["shard_id"].as_str().unwrap(),
             ticket_id.parse().unwrap(),
             &identity_id,
             &public_key,

@@ -159,8 +159,10 @@ pub struct RegisterStartRequest {
 #[derive(Serialize, ToSchema)]
 pub struct RegisterStartResponse {
     pub ticket_id: Uuid,
-    /// The ledger network id; the client signs it, with the ticket, into `identity.created`.
+    /// The ledger network id; the client signs it, with the shard id and ticket, into `identity.created`.
     pub network_id: String,
+    /// The shard this node authors; part of the signed bytes.
+    pub shard_id: String,
     /// `webauthn-rs`'s own WebAuthn creation-challenge type — opaque here
     /// since it's an external crate's type with no `ToSchema` impl of its
     /// own; the real, authoritative shape is `webauthn-rs`'s
@@ -274,6 +276,7 @@ pub async fn register_start(
     Ok(Json(RegisterStartResponse {
         ticket_id,
         network_id: state.chain.network_id().to_string(),
+        shard_id: state.own_shard_id.clone(),
         challenge,
     }))
 }
@@ -340,6 +343,7 @@ pub async fn register_finish(
         .map_err(|_| AppError::InvalidEventSignature)?;
     let signing_bytes = identity_created_signing_bytes_v2(
         state.chain.network_id(),
+        &state.own_shard_id,
         body.ticket_id,
         &ceremony.identity_id,
         &ceremony.public_key,
