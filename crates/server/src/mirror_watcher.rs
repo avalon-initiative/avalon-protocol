@@ -267,6 +267,7 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// [`fetch_and_verify_sth`] returns one: a caller cross-checking two
 /// accepted heads for equivocation needs the exact key both verified
 /// against.
+#[allow(clippy::too_many_arguments)]
 async fn discover_and_verify_shard_peers(
     client: &crate::node_http::NodeClient,
     pool: &PgPool,
@@ -275,9 +276,9 @@ async fn discover_and_verify_shard_peers(
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
     bounds: &crate::self_certifying_keys::MirrorBounds,
+    new_self_certifying: &mut usize,
 ) -> Vec<(String, String, CosignedTreeHead, VerifyingKey)> {
     let mut verified = Vec::new();
-    let mut new_self_certifying = 0usize;
     for shard_id in shard_registry.known_shard_ids() {
         if already_configured.contains(&shard_id) {
             continue;
@@ -305,44 +306,35 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
-        let pinned = if self_certifying {
-            let pinned = crate::self_certifying_keys::pinned_key(pool, &shard_id).await;
-            if pinned.is_none() {
-                if new_self_certifying >= bounds.max_new_per_tick {
-                    continue;
+        if self_certifying {
+            match fetch_and_verify_self_certifying_sth(
+                client,
+                pool,
+                network_id,
+                &shard_id,
+                &url,
+                bounds,
+                new_self_certifying,
+            )
+            .await
+            {
+                Ok(Some((head, key))) => {
+                    log_auto_mirror(&shard_id, &url);
+                    verified.push((shard_id, url, head, key));
                 }
-                new_self_certifying += 1;
+                Ok(None) => {}
+                Err(err) => tracing::warn!(
+                    shard_id,
+                    url = %url,
+                    error = %err,
+                    "mirror-watcher: not auto-mirroring a self-certifying shard",
+                ),
             }
-            pinned
-        } else {
-            None
-        };
+            continue;
+        }
 
         match fetch_latest_sth(client, &url, Some(&shard_id)).await {
-            Ok((dto, peer_protocol_version)) => {
-                let db_keys = if self_certifying {
-                    if check_peer_version(&url, &peer_protocol_version).is_err() {
-                        continue;
-                    }
-                    match verify_self_certifying_shard(
-                        pool, network_id, &shard_id, &url, pinned, &dto, bounds,
-                    )
-                    .await
-                    {
-                        Ok(key) => vec![key],
-                        Err(rejection) => {
-                            tracing::warn!(
-                                shard_id,
-                                url = %url,
-                                ?rejection,
-                                "mirror-watcher: not auto-mirroring a self-certifying shard",
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    db_keys
-                };
+            Ok((dto, _)) => {
                 let head: CosignedTreeHead = dto.into();
                 let now = OffsetDateTime::now_utc();
                 match cosign_verify::verify_cosigned_against_any_key(
@@ -352,13 +344,7 @@ async fn discover_and_verify_shard_peers(
                     now,
                 ) {
                     Some(matched_key) => {
-                        tracing::info!(
-                            event = "auto_mirror_discovered_shard",
-                            shard_id,
-                            url = %url,
-                            "auto-mirroring a newly discovered shard whose STH verified against \
-                             a resolved shard key",
-                        );
+                        log_auto_mirror(&shard_id, &url);
                         verified.push((shard_id, url, head, matched_key));
                     }
                     None => {
@@ -381,6 +367,48 @@ async fn discover_and_verify_shard_peers(
         }
     }
     verified
+}
+
+fn log_auto_mirror(shard_id: &str, url: &str) {
+    tracing::info!(
+        event = "auto_mirror_discovered_shard",
+        shard_id,
+        url = %url,
+        "auto-mirroring a newly discovered shard whose STH verified against a resolved shard key",
+    );
+}
+
+/// Fetches a self-certifying shard's head from `source` (http(s) or `p2p://`) and verifies it
+/// with [`verify_self_certifying_shard`]; the shard's own key, never a trust anchor, vouches
+/// for it. `Ok(None)` when an unpinned shard is skipped because `new_unpinned` already
+/// reached `bounds.max_new_per_tick` this tick.
+async fn fetch_and_verify_self_certifying_sth(
+    client: &crate::node_http::NodeClient,
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    source: &str,
+    bounds: &crate::self_certifying_keys::MirrorBounds,
+    new_unpinned: &mut usize,
+) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
+    let pinned = crate::self_certifying_keys::pinned_key(pool, shard_id).await;
+    if pinned.is_none() {
+        if *new_unpinned >= bounds.max_new_per_tick {
+            return Ok(None);
+        }
+        *new_unpinned += 1;
+    }
+    let (dto, peer_protocol_version) = fetch_latest_sth(client, source, Some(shard_id)).await?;
+    check_peer_version(source, &peer_protocol_version)?;
+    let key =
+        verify_self_certifying_shard(pool, network_id, shard_id, source, pinned, &dto, bounds)
+            .await
+            .map_err(MirrorWatcherError::SelfCertifyingRejected)?;
+    let head: CosignedTreeHead = dto.into();
+    let now = OffsetDateTime::now_utc();
+    let matched = cosign_verify::verify_cosigned_against_any_key([key], &head, &[], now)
+        .ok_or(MirrorWatcherError::InvalidSignature)?;
+    Ok(Some((head, matched)))
 }
 
 /// Verifies a self-certifying shard's head with only the key it presents (or the
@@ -581,16 +609,6 @@ pub async fn run_worker(
             config.auto_mirror_discovered
         );
     }
-    if config
-        .peers
-        .iter()
-        .any(|(_, u)| crate::node_http::is_p2p_url(u))
-    {
-        tracing::warn!(
-            "mirror-watcher: p2p:// sources are accepted for notifications only and are not \
-             polled until pull support lands"
-        );
-    }
     if own_base_url.is_none() {
         tracing::info!(
             "mirror-watcher: AVALON_NODE_URL is unset — this node can still receive push \
@@ -629,13 +647,22 @@ pub async fn run_worker(
         // tree_size.
         let mut verified_by_shard: HashMap<(String, String), Vec<(String, CosignedTreeHead)>> =
             HashMap::new();
+        // Unpinned self-certifying shards examined this tick, shared with discovery below.
+        let mut new_self_certifying = 0usize;
         for (shard_id, peer) in &config.peers {
-            // A p2p source has no stream-capable client here yet (#1147), so it is not polled.
-            if crate::node_http::is_p2p_url(peer) {
-                continue;
-            }
-            match fetch_and_verify_sth(&client, &trust_anchors, peer, shard_id).await {
-                Ok((head, author_key)) => {
+            match fetch_and_verify_configured_head(
+                &client,
+                &pool,
+                chain.network_id(),
+                &trust_anchors,
+                shard_id,
+                peer,
+                &self_certifying_bounds,
+                &mut new_self_certifying,
+            )
+            .await
+            {
+                Ok(Some((head, author_key))) => {
                     record_verified_head(
                         &pool,
                         &chain,
@@ -654,7 +681,8 @@ pub async fn run_worker(
                     )
                     .await;
                 }
-                Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
+                Ok(None) => {}
+                Err(err) => log_source_failure(peer, &err),
             }
         }
 
@@ -667,6 +695,7 @@ pub async fn run_worker(
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
                 &self_certifying_bounds,
+                &mut new_self_certifying,
             )
             .await;
             for (shard_id, peer, head, author_key) in discovered {
@@ -792,6 +821,8 @@ pub enum MirrorWatcherError {
     RootHashMismatch,
     #[error("entry seq={seq} exceeds the per-entry size limit for a self-certifying shard")]
     EntryTooLarge { seq: i64 },
+    #[error("self-certifying shard rejected: {0:?}")]
+    SelfCertifyingRejected(crate::self_certifying_keys::Rejection),
     #[error("every configured peer for this network failed this request")]
     AllPeersFailed,
     #[error("storage error: {0}")]
@@ -907,6 +938,53 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
         peer_version: peer_protocol_version.to_string(),
         floor,
     })
+}
+
+/// Fetches and verifies one configured source's head. A self-certifying shard (`node:<hash>`)
+/// is verified by its own key; every other shard against the network trust anchor. The
+/// transport (http(s) or `p2p://`) does not change either path. `Ok(None)` when the per-tick
+/// unpinned-shard budget skips it.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_and_verify_configured_head(
+    client: &crate::node_http::NodeClient,
+    pool: &PgPool,
+    network_id: &str,
+    anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
+    shard_id: &str,
+    source: &str,
+    bounds: &crate::self_certifying_keys::MirrorBounds,
+    new_unpinned: &mut usize,
+) -> Result<Option<(CosignedTreeHead, VerifyingKey)>, MirrorWatcherError> {
+    if avalon_protocol::shard_identity::is_self_certifying(shard_id) {
+        return fetch_and_verify_self_certifying_sth(
+            client,
+            pool,
+            network_id,
+            shard_id,
+            source,
+            bounds,
+            new_unpinned,
+        )
+        .await;
+    }
+    fetch_and_verify_sth(client, anchors, source, shard_id)
+        .await
+        .map(Some)
+}
+
+/// Logs a configured source's failure: loudly once per interval for a source that cannot be
+/// reached (a p2p peer may be offline for a long time), always for a verification refusal.
+fn log_source_failure(source: &str, err: &MirrorWatcherError) {
+    static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> = std::sync::OnceLock::new();
+    let log = LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(Duration::from_secs(300)));
+    let unreachable = matches!(err, MirrorWatcherError::Http(e) if e.is_local() || e.is_connect() || e.is_timeout());
+    if unreachable {
+        if let Some(held_back) = log.permit(source, std::time::Instant::now()) {
+            tracing::warn!(held_back, "mirror-watcher: {source}: {err}");
+        }
+    } else {
+        tracing::error!("mirror-watcher: {source}: {err}");
+    }
 }
 
 /// Fetches `peer`'s latest STH for `shard_id` and verifies its author
@@ -2673,6 +2751,7 @@ mod tests {
             None,
             &BTreeSet::new(),
             bounds,
+            &mut 0,
         )
         .await
     }
@@ -2791,6 +2870,7 @@ mod tests {
             None,
             &BTreeSet::new(),
             &bounds,
+            &mut 0,
         )
         .await;
         assert_eq!(found.len(), 2);
