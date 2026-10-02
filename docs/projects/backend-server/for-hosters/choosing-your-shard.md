@@ -165,7 +165,10 @@ this node authors the named shard `<shard>` but AVALON_MIRROR_PEERS is empty, so
 
 Every node can act as a witness: a node that mirrors a shard checks that each new
 head extends the last head it cosigned (an RFC 6962 consistency proof), refuses to
-cosign two different roots at one size, and stores and serves its cosignature. Nothing
+cosign two different roots at one size, and stores and serves its cosignature. A node
+that authors a shard cosigns its own new heads the same way (checked against its own
+ledger, within about two seconds of a commit, and the current head right after a start),
+so a client whose known list holds the author's witness key can reach a majority. Nothing
 here needs registration or a named shard, and it does not change how clients pinned
 to the network verify heads.
 

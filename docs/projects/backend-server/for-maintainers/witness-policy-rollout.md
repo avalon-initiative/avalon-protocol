@@ -50,7 +50,8 @@ Do the author last. Every step is reversible, see Rollback.
 2. **Give each intended witness a key** and restart it with cosigning left on:
    `AVALON_WITNESS_SIGNING_KEY=<32-byte hex seed>` (a node that authors a shard can rely
    on its settlement key instead). Keep `AVALON_MIRROR_PEERS` pointed at the authorities
-   whose heads it should cosign; a node only cosigns heads it mirrors.
+   whose heads it should cosign; a node cosigns the heads it mirrors, plus every new head of the
+   shard it authors itself (the author counts as a witness of its own log).
 3. **Let the known lists fill.** Each node admits peers that prove a witness key in their
    own announce response, with a 30-minute probation before a new slot counts. Nothing to
    configure; the bundled seed nodes are anchors. Watch `known_list` log lines
@@ -77,8 +78,8 @@ The first is what a pinned client does and must exit 0 before, during and after.
 second lists the cosignatures that node holds. To check a majority the way a
 witness-aware client will, feed the same head as served by each witness to
 `verify_sth cosigned <witness-key-hex>...`; it accepts only if a majority of the given
-keys cosigned, and rejects the same head with one of two. The author serves no
-cosignatures itself; a mirror collects them from each confirmed witness's
+keys cosigned, and rejects the same head with one of two. An author with cosigning on
+serves its own witness key's cosignature of its latest head; a mirror collects the others from each confirmed witness's
 `GET /ledger/sth/{tree_size}?shard_id=<shard>&witnesses=1`, so a mirror that logs
 "holding it" for a head is waiting for a majority of witnesses to answer for that exact
 head, not failing verification. Also confirm:
