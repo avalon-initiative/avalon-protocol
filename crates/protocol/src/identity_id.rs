@@ -206,22 +206,33 @@ mod sqlx_impls {
     }
 }
 
+/// Unicode Default_Ignorable_Code_Point plus control characters and the line/paragraph separators:
+/// characters that render as nothing (or reorder text) and so can hide an id lookalike.
 fn is_invisible(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
             '\u{00AD}'
-                | '\u{180E}'
+                | '\u{034F}'
+                | '\u{061C}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
                 | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
                 | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E0FFF}'
         )
 }
 
-/// Whether `name`, after dropping invisible characters, trimming and ASCII-lowercasing, is shaped
-/// like an identity id. Handle lookup is case-insensitive, so such a name could shadow an id.
+/// Whether `name`, after dropping invisible characters, trimming whitespace and ASCII-lowercasing,
+/// is shaped like an identity id. Handle lookup is case-insensitive, so such a name could shadow an id.
 pub fn display_name_mimics_identity_id(name: &str) -> bool {
     let visible: String = name.chars().filter(|c| !is_invisible(*c)).collect();
     IdentityId::parse(&visible.trim().to_ascii_lowercase()).is_ok()
@@ -449,6 +460,21 @@ mod tests {
             "👨\u{200D}👩".to_string(),
         ] {
             assert!(display_name_permitted(&ok), "{ok:?}");
+        }
+        for gap in [
+            '\u{00AD}', '\u{034F}', '\u{061C}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}',
+            '\u{180B}', '\u{180F}', '\u{200B}', '\u{200F}', '\u{2028}', '\u{2029}', '\u{202A}',
+            '\u{202E}', '\u{2060}', '\u{206F}', '\u{3164}', '\u{FE00}', '\u{FE0F}', '\u{FEFF}',
+            '\u{FFA0}', '\u{1BCA0}', '\u{1BCA3}', '\u{1D173}', '\u{1D17A}', '\u{E0000}',
+            '\u{E0FFF}', '\u{2003}', '\u{00A0}',
+        ] {
+            let interior = format!("{}{gap}{}", &lower[..30], &lower[30..]);
+            assert!(!display_name_permitted(&format!("{lower}{gap}")), "suffix {gap:?}");
+            assert!(!display_name_permitted(&format!("{gap}{lower}")), "prefix {gap:?}");
+            // Interior visible whitespace is a visibly different name; only invisible gaps hide.
+            if !gap.is_whitespace() || is_invisible(gap) {
+                assert!(!display_name_permitted(&interior), "interior {gap:?}");
+            }
         }
         assert!(!display_name_permitted("a\u{202E}b"));
         assert!(!display_name_permitted("line\nbreak"));
