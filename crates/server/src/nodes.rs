@@ -249,9 +249,7 @@ fn carry_identity(existing: Option<&PeerInfo>, info: &mut PeerInfo) {
     }
 }
 
-pub(crate) fn is_p2p_url(url: &str) -> bool {
-    url.starts_with("p2p://")
-}
+use crate::node_http::is_p2p_url;
 
 /// Most `p2p://` entries the main table holds, so free peer ids cannot fill it.
 const MAX_P2P_ENTRIES: usize = 64;
@@ -1426,7 +1424,7 @@ fn classify_p2p_announce(
     claimed_id: Option<&str>,
     remote: Option<libp2p::PeerId>,
 ) -> Result<P2pAnnounce, TopologyError> {
-    if !base_url.trim().starts_with("p2p://") {
+    if !crate::node_http::is_p2p_url(base_url.trim()) {
         return Ok(P2pAnnounce::NotP2p);
     }
     let mismatch =
@@ -1703,7 +1701,7 @@ fn admit_responder_node(
     mut node: PeerInfo,
 ) -> bool {
     let called = normalized_base_url(called_url);
-    let shape_ok = if called.starts_with("p2p://") {
+    let shape_ok = if is_p2p_url(&called) {
         self_consistent_p2p_base(&node.base_url, node.libp2p_peer_id.as_deref()).as_deref()
             == Some(called.as_str())
     } else {
@@ -1781,7 +1779,7 @@ async fn merge_gossip(
             skipped.rejected += 1;
             continue;
         }
-        let is_p2p = info.base_url.trim().starts_with("p2p://");
+        let is_p2p = crate::node_http::is_p2p_url(info.base_url.trim());
         if is_p2p {
             let Some(base) =
                 self_consistent_p2p_base(&info.base_url, info.libp2p_peer_id.as_deref())
@@ -2215,7 +2213,7 @@ impl AnnounceConfig {
     pub fn own_http_base_url(&self) -> Option<String> {
         self.own_base_url
             .clone()
-            .filter(|u| !u.starts_with("p2p://"))
+            .filter(|u| !crate::node_http::is_p2p_url(u))
     }
 
     /// Without `AVALON_NODE_URL`, a node with a libp2p identity announces itself as
@@ -2730,7 +2728,7 @@ async fn announce_to_peer(
     let target = announce_target(peers, peer, own_base_url);
     let own_is_p2p = crate::node_http::parse_p2p_base(own_base_url).is_some();
     // Over HTTP a `p2p://` announce is only answered, never admitted.
-    let hello = own_is_p2p && !target.starts_with("p2p://");
+    let hello = own_is_p2p && !is_p2p_url(&target);
     let first = announce_to(client, &target, request).await;
     if first.is_ok() || !own_is_p2p || target == peer {
         return first.map(|r| (r, hello));
@@ -2796,11 +2794,11 @@ async fn vouch_contact(
     target: &str,
     request: &AnnounceRequest,
 ) {
-    if !peer.starts_with("p2p://") && adm.check_address(peer).await.is_err() {
+    if !crate::node_http::is_p2p_url(peer) && adm.check_address(peer).await.is_err() {
         return;
     }
     // A `p2p://` announce over HTTP admits nothing, so its answer vouches for nothing.
-    if request.base_url.starts_with("p2p://") && !target.starts_with("p2p://") {
+    if is_p2p_url(&request.base_url) && !is_p2p_url(target) {
         return;
     }
     let Ok(response) = announce_to(client, target, request).await else {
@@ -2882,7 +2880,7 @@ async fn announce_to(
         .post(format!("{peer_base_url}/nodes/announce"))
         .json(request);
     // A `p2p://` announcer is only admitted over a stream, so it never changes transport here.
-    if request.base_url.starts_with("p2p://") {
+    if is_p2p_url(&request.base_url) {
         post = post.pinned();
     }
     let response = post.send().await.map_err(|e| e.to_string())?;
@@ -5183,7 +5181,7 @@ mod tests {
         let evicted = small
             .insert_bounded(supported("http://127.0.0.1:2", now), 2)
             .unwrap();
-        assert!(evicted.unwrap().starts_with("p2p://"));
+        assert!(crate::node_http::is_p2p_url(&evicted.unwrap()));
         assert!(small.contains("http://127.0.0.1:1"));
     }
 

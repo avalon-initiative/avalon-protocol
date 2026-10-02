@@ -37,6 +37,7 @@
 //! `mirror_watcher`'s own module doc for the two-tier design this
 //! implements.
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::dht::DhtCommandSender;
@@ -106,44 +107,61 @@ pub async fn notify_peers(config: &MirrorPushConfig, network_id: &str, tree_size
         network_id: network_id.to_string(),
         tree_size,
     };
-    for peer in peers {
-        if config.own_base_url.as_deref() == Some(peer.as_str()) {
-            continue;
+    let own = config
+        .own_base_url
+        .as_deref()
+        .and_then(interest::valid_node_address);
+    let peers: Vec<String> = peers
+        .into_iter()
+        .filter(|peer| Some(peer) != own.as_ref())
+        .collect();
+    let client = config.client.clone();
+    // Detached so the caller never waits on slow peers; the fan-out inside is bounded.
+    tokio::spawn(async move {
+        futures_util::stream::iter(peers)
+            .for_each_concurrent(MAX_CONCURRENT_PUSHES, |peer_url| {
+                push_one(&client, peer_url, &body)
+            })
+            .await;
+    });
+}
+
+/// Most pushes in flight at once from one notification.
+const MAX_CONCURRENT_PUSHES: usize = 16;
+
+async fn push_one(
+    client: &crate::node_http::NodeClient,
+    peer_url: String,
+    body: &MirrorNotifyRequest,
+) {
+    match client
+        .post(format!("{peer_url}/mirror/notify"))
+        .json(body)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            tracing::debug!(
+                peer = %peer_url,
+                network_id = %body.network_id,
+                tree_size = body.tree_size,
+                "mirror-push: notified peer of a new STH"
+            );
         }
-        let client = config.client.clone();
-        let peer_url = peer.clone();
-        let body = body.clone();
-        tokio::spawn(async move {
-            match client
-                .post(format!("{peer_url}/mirror/notify"))
-                .json(&body)
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    tracing::debug!(
-                        peer = %peer_url,
-                        network_id = %body.network_id,
-                        tree_size = body.tree_size,
-                        "mirror-push: notified peer of a new STH"
-                    );
-                }
-                Ok(response) => {
-                    tracing::warn!(
-                        peer = %peer_url,
-                        status = %response.status(),
-                        "mirror-push: peer rejected push notification — its own poll fallback still applies"
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        peer = %peer_url,
-                        error = %err,
-                        "mirror-push: failed to reach peer — its own poll fallback still applies"
-                    );
-                }
-            }
-        });
+        Ok(response) => {
+            tracing::warn!(
+                peer = %peer_url,
+                status = %response.status(),
+                "mirror-push: peer rejected push notification — its own poll fallback still applies"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                peer = %peer_url,
+                error = %err,
+                "mirror-push: failed to reach peer — its own poll fallback still applies"
+            );
+        }
     }
 }
 
@@ -309,5 +327,110 @@ mod tests {
         assert!(!source_of("http://[::1]:8080", "http://[::2]:8080"));
         // A p2p entry names no origin, so it is never a source.
         assert!(!source_of("p2p://somepeer", "http://src.test"));
+    }
+
+    /// A mock swarm: answers the interest lookup with `values` and every stream push with 202,
+    /// reporting each push's peer and path and tracking how many were in flight at once.
+    fn mock_swarm(
+        values: Vec<Vec<u8>>,
+    ) -> (
+        crate::dht::DhtCommandSender,
+        tokio::sync::mpsc::UnboundedReceiver<(libp2p::PeerId, String)>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::dht::DhtCommand>(8);
+        let (pushed_tx, pushed) = tokio::sync::mpsc::unbounded_channel();
+        let (inflight, peak) = (
+            std::sync::Arc::new(AtomicUsize::new(0)),
+            std::sync::Arc::new(AtomicUsize::new(0)),
+        );
+        let seen_peak = peak.clone();
+        tokio::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                match command {
+                    crate::dht::DhtCommand::GetRecord { respond_to, .. } => {
+                        let _ = respond_to.send(values.clone());
+                    }
+                    crate::dht::DhtCommand::HttpRequest {
+                        peer,
+                        request,
+                        respond_to,
+                    } => {
+                        let now = inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        let (inflight, pushed_tx) = (inflight.clone(), pushed_tx.clone());
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            inflight.fetch_sub(1, Ordering::SeqCst);
+                            let _ = pushed_tx.send((peer, request.path_and_query));
+                            let _ = respond_to.send(Ok(crate::node_http::NodeHttpResponse {
+                                status: 202,
+                                headers: vec![],
+                                body: vec![],
+                            }));
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        });
+        (tx, pushed, seen_peak)
+    }
+
+    fn config(commands: crate::dht::DhtCommandSender, own: Option<&str>) -> MirrorPushConfig {
+        let handle = crate::node_http::StreamHandle {
+            commands: commands.clone(),
+            peers: None,
+            settings: crate::node_http::NodeHttpSettings::default(),
+        };
+        MirrorPushConfig {
+            dht_commands: commands,
+            redis_fast_path: None,
+            own_base_url: own.map(str::to_string),
+            client: crate::node_http::NodeClient::new().with_stream(handle),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_p2p_interest_is_pushed_over_its_stream_and_this_node_is_not_notified() {
+        let peer = libp2p::PeerId::random();
+        let values = vec![
+            crate::node_http::p2p_base_url(&peer).into_bytes(),
+            b"http://Self.test:80/".to_vec(),
+            b"HTTP://SELF.test".to_vec(),
+            b"http://self.test/".to_vec(),
+        ];
+        let (commands, mut pushed, _) = mock_swarm(values);
+        let config = config(commands, Some("http://self.test"));
+        notify_peers(&config, "avalon-test", 7).await;
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), pushed.recv())
+            .await
+            .expect("a push should arrive")
+            .unwrap();
+        assert_eq!(first, (peer, "/mirror/notify".to_string()));
+        let more = tokio::time::timeout(std::time::Duration::from_millis(100), pushed.recv()).await;
+        assert!(
+            more.is_err(),
+            "a variant of this node's own URL was pushed to"
+        );
+    }
+
+    #[tokio::test]
+    async fn pushes_are_capped_in_number_and_in_flight() {
+        let values: Vec<Vec<u8>> = (0..100)
+            .map(|_| crate::node_http::p2p_base_url(&libp2p::PeerId::random()).into_bytes())
+            .collect();
+        let (commands, mut pushed, peak) = mock_swarm(values);
+        notify_peers(&config(commands, None), "avalon-test", 7).await;
+        let mut delivered = 0;
+        while let Ok(Some(_)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), pushed.recv()).await
+        {
+            delivered += 1;
+        }
+        assert_eq!(delivered, 64);
+        let peak = peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!((2..=MAX_CONCURRENT_PUSHES).contains(&peak), "peak {peak}");
     }
 }

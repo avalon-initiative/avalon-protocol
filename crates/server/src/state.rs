@@ -343,7 +343,7 @@ impl AppState {
 
 /// `url` unless it is a `p2p://` identity.
 pub fn http_only(url: Option<&str>) -> Option<&str> {
-    url.filter(|u| !u.starts_with("p2p://"))
+    url.filter(|u| !crate::node_http::is_p2p_url(u))
 }
 
 #[cfg(test)]

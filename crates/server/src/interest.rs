@@ -497,8 +497,10 @@ impl InterestRegistry {
                 .expect("interest registry lock poisoned")
                 .get(&scope)
                 .map(|claim| claim.as_bytes().to_vec()),
-            InterestScope::Network(_) | InterestScope::Identity(_) => {
-                Some(own_base_url.as_bytes().to_vec())
+            InterestScope::Network(_) => Some(own_base_url.as_bytes().to_vec()),
+            // A location is an http(s) base URL a login can dial; a `p2p://` identity is not one.
+            InterestScope::Identity(_) => {
+                crate::state::http_only(Some(own_base_url)).map(|url| url.as_bytes().to_vec())
             }
         }
     }
@@ -525,9 +527,52 @@ impl InterestRegistry {
     }
 }
 
+/// A DHT-read node address worth dialing: an http(s) base URL or a canonical `p2p://<peer id>`,
+/// returned in canonical form. This is syntactic only; the outbound policy is a separate check.
+pub(crate) fn valid_node_address(raw: &str) -> Option<String> {
+    if crate::node_http::is_p2p_url(raw) {
+        let peer = crate::node_http::parse_p2p_base(raw)?;
+        return Some(crate::node_http::p2p_base_url(&peer));
+    }
+    valid_http_node_url(raw)
+}
+
+/// [`valid_node_address`] restricted to http(s), for targets that must be reachable by URL.
+pub(crate) fn valid_http_node_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    let plain = matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    plain.then(|| url.as_str().trim_end_matches('/').to_string())
+}
+
+/// The fast path's answer, or `None` (fall through to the DHT) when it has no valid member, so a
+/// poisoned or stale set cannot hide the DHT's answer.
+fn redis_answer(members: Option<Vec<String>>) -> Option<Vec<String>> {
+    Some(canonical_addresses(members?)).filter(|m| !m.is_empty())
+}
+
+/// Most addresses one lookup returns, so a flooded record cannot fan out unboundedly.
+const MAX_LOOKUP_VALUES: usize = 64;
+
+/// Canonical, deduplicated, capped addresses from raw lookup values.
+fn canonical_addresses<S: AsRef<str>>(raw: impl IntoIterator<Item = S>) -> Vec<String> {
+    let mut found: Vec<String> = raw
+        .into_iter()
+        .filter_map(|v| valid_node_address(v.as_ref()))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found.truncate(MAX_LOOKUP_VALUES);
+    found
+}
+
 /// Looks up who currently has a local subscriber for `scope`, decoding
-/// each stored value as a UTF-8 base URL (silently dropping anything that
-/// doesn't decode — never expected from this module's own
+/// each stored value as a UTF-8 node address ([`valid_node_address`]; silently dropping anything
+/// that doesn't decode or validate — never expected from this module's own
 /// [`run_worker`], but a malformed or malicious record from elsewhere in
 /// the DHT shouldn't be fatal to the caller, same posture
 /// `crate::dht::new_dht_peer` already takes for a bad peer-table entry).
@@ -550,9 +595,7 @@ pub async fn lookup(
     redis_fast_path: Option<&RedisFastPath>,
 ) -> Vec<String> {
     if let Some(redis_fast_path) = redis_fast_path {
-        if let Some(mut members) = redis_fast_path.lookup(scope).await {
-            members.sort_unstable();
-            members.dedup();
+        if let Some(members) = redis_answer(redis_fast_path.lookup(scope).await) {
             return members;
         }
     }
@@ -572,13 +615,7 @@ pub async fn lookup(
         return Vec::new();
     }
     let values = receiver.await.unwrap_or_default();
-    let mut base_urls: Vec<String> = values
-        .into_iter()
-        .filter_map(|v| String::from_utf8(v).ok())
-        .collect();
-    base_urls.sort_unstable();
-    base_urls.dedup();
-    base_urls
+    canonical_addresses(values.into_iter().filter_map(|v| String::from_utf8(v).ok()))
 }
 
 /// Replacement for [`lookup`] on `Channel`/`Conversation`
@@ -623,11 +660,15 @@ pub async fn lookup_claimed(
     let values = receiver.await.unwrap_or_default();
 
     let mut base_urls = Vec::new();
-    for value in values {
+    for value in values.into_iter().take(MAX_LOOKUP_VALUES) {
         let Ok(wire) = String::from_utf8(value) else {
             continue;
         };
         let Some(claim) = verify_claim_signature(state, &wire, scope).await else {
+            continue;
+        };
+        // Chat only goes to an http target: a `p2p://` role is self-reported, unverified.
+        let Some(base_url) = valid_http_node_url(&claim.base_url) else {
             continue;
         };
         let still_a_member = match claim.scope {
@@ -647,7 +688,7 @@ pub async fn lookup_claimed(
             }
         };
         if still_a_member {
-            base_urls.push(claim.base_url);
+            base_urls.push(base_url);
         }
     }
     base_urls.sort_unstable();
@@ -760,18 +801,16 @@ fn put_command(scope: InterestScope, value: Vec<u8>, ttl: Duration) -> DhtComman
     }
 }
 
-/// Never returns. `PutRecord`s `own_base_url` under a scope immediately
+/// Never returns. `PutRecord`s this node's own address under a scope immediately
 /// when [`InterestRegistry::register`] signals it just went active (via
 /// `newly_active`, the receiver [`InterestRegistry::new`] hands back), and
 /// again every [`REFRESH_INTERVAL`] for every still-active scope — the one
 /// thing this node ever advertises into the DHT for interest routing,
 /// reusing the exact same `base_url` identity #362's HTTP peer table
 /// already announces rather than inventing a second way to name this node.
-/// `None` (matching `AnnounceConfig::own_base_url`'s own "can be announced
-/// TO but can't announce" degenerate case) means this node has nothing
-/// useful to put — the worker still runs so it starts advertising
-/// correctly the moment `AVALON_NODE_URL` is set and the process restarts,
-/// but does nothing, on a tick or otherwise, until then.
+/// A node with no `AVALON_NODE_URL` advertises its `p2p://<peer id>` form, so
+/// it is reached over its stream; `None` (no DHT identity either) means
+/// there is nothing to put, and the worker does nothing.
 pub async fn run_worker(
     registry: InterestRegistry,
     mut newly_active: mpsc::UnboundedReceiver<InterestScope>,
@@ -781,9 +820,7 @@ pub async fn run_worker(
 ) {
     let Some(own_base_url) = own_base_url else {
         tracing::warn!(
-            "avalon-interest: AVALON_NODE_URL unset — this node can register local subscribers' \
-             interest for others to find, but has no reachable base URL to advertise, so it \
-             never will"
+            "avalon-interest: this node has no address to advertise, so it never registers interest"
         );
         return;
     };
@@ -998,6 +1035,149 @@ mod tests {
         let _guard_a = registry.register(a);
         assert_eq!(registry.count(a), 1);
         assert_eq!(registry.count(b), 0);
+    }
+
+    fn own_p2p() -> (libp2p::PeerId, String) {
+        let id = libp2p::PeerId::random();
+        (id, crate::node_http::p2p_base_url(&id))
+    }
+
+    #[tokio::test]
+    async fn a_node_with_no_url_advertises_its_p2p_address_for_a_network() {
+        let (registry, newly_active) = InterestRegistry::new();
+        let (tx, mut rx) = mpsc::channel(8);
+        let (_, own) = own_p2p();
+        tokio::spawn(run_worker(
+            registry.clone(),
+            newly_active,
+            tx,
+            Some(own.clone()),
+            None,
+        ));
+        let network = InterestScope::for_network("avalon-test");
+        let _guard = registry.register(network);
+        let Some(DhtCommand::PutRecord { key, value, .. }) = rx.recv().await else {
+            panic!("expected a PutRecord");
+        };
+        assert_eq!(key, network.dht_key());
+        assert_eq!(value, own.as_bytes());
+    }
+
+    #[test]
+    fn an_identity_location_is_never_a_p2p_address() {
+        let (registry, _rx) = InterestRegistry::new();
+        let scope = InterestScope::Identity(Uuid::new_v4());
+        let (_, own) = own_p2p();
+        assert_eq!(registry.dht_value(scope, &own), None);
+        assert_eq!(
+            registry.dht_value(scope, "http://node.test"),
+            Some(b"http://node.test".to_vec())
+        );
+    }
+
+    #[test]
+    fn only_a_plain_http_or_canonical_p2p_address_is_valid() {
+        let (_, p2p) = own_p2p();
+        assert_eq!(valid_node_address(&p2p), Some(p2p.clone()));
+        assert_eq!(valid_node_address(&format!("{p2p}/")), Some(p2p));
+        for ok in [
+            "http://node.test",
+            "https://node.test:8443",
+            "http://10.0.0.1/avalon",
+        ] {
+            assert_eq!(valid_node_address(ok).as_deref(), Some(ok));
+        }
+        // Canonical form: lowercase host, default port and trailing slash dropped.
+        for variant in [
+            "HTTP://Node.TEST:80/",
+            "http://node.test/",
+            "http://NODE.test",
+        ] {
+            assert_eq!(
+                valid_node_address(variant).as_deref(),
+                Some("http://node.test")
+            );
+        }
+        // The p2p scheme is lowercase only, so this is neither a p2p nor an http address.
+        assert_eq!(valid_node_address("P2P://12D3KooWabc"), None);
+        assert!(!crate::node_http::is_p2p_url("P2P://x"));
+        for bad in [
+            "",
+            "node.test",
+            "ftp://node.test",
+            "http://",
+            "http://user:pw@node.test",
+            "http://node.test?x=1",
+            "http://node.test#frag",
+            "p2p://not-a-peer-id",
+            "p2p://",
+            "p2p://12D3KooWabc/path",
+        ] {
+            assert_eq!(valid_node_address(bad), None, "{bad}");
+        }
+        assert_eq!(valid_http_node_url(&own_p2p().1), None);
+    }
+
+    #[tokio::test]
+    async fn a_lookup_drops_malformed_values_instead_of_returning_them() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_, p2p) = own_p2p();
+        let answer = vec![
+            b"http://good.test".to_vec(),
+            p2p.clone().into_bytes(),
+            b"http://user:pw@evil.test".to_vec(),
+            b"ftp://evil.test".to_vec(),
+            b"p2p://garbage".to_vec(),
+            vec![0xff, 0xfe],
+        ];
+        tokio::spawn(async move {
+            if let Some(DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let _ = respond_to.send(answer);
+            }
+        });
+        let found = lookup(&tx, InterestScope::for_network("avalon-test"), None).await;
+        let mut expected = vec!["http://good.test".to_string(), p2p];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn a_redis_set_with_nothing_valid_in_it_falls_through_to_the_dht() {
+        assert_eq!(redis_answer(None), None);
+        assert_eq!(redis_answer(Some(vec![])), None);
+        assert_eq!(
+            redis_answer(Some(vec![
+                "junk".into(),
+                "ftp://x".into(),
+                "http://u:p@x".into()
+            ])),
+            None
+        );
+        assert_eq!(
+            redis_answer(Some(vec![
+                "HTTP://Node.test:80/".into(),
+                "http://node.test".into(),
+                "junk".into()
+            ])),
+            Some(vec!["http://node.test".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lookup_returns_at_most_the_cap_after_deduplicating() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut answer: Vec<Vec<u8>> = (0..200)
+            .map(|i| format!("http://node{i:03}.test").into_bytes())
+            .collect();
+        answer.extend(answer.clone());
+        tokio::spawn(async move {
+            if let Some(DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let _ = respond_to.send(answer);
+            }
+        });
+        let found = lookup(&tx, InterestScope::for_network("avalon-test"), None).await;
+        assert_eq!(found.len(), MAX_LOOKUP_VALUES);
+        assert_eq!(found[0], "http://node000.test");
     }
 
     #[test]
@@ -1280,6 +1460,40 @@ mod tests {
                 "a claim with a perfectly valid signature must still be rejected once its \
                  identity is not actually a member of the channel it names"
             );
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn a_signed_member_claim_naming_a_p2p_address_is_dropped() {
+            let pool = test_pool().await;
+            let dht_commands = fake_dht();
+            let (identity_id, signing_key_id, signing_key) =
+                seed_identity_with_signing_key(&pool).await;
+            let (guild_id, channel_id) = seed_guild_channel(&pool).await;
+            add_member(&pool, guild_id, identity_id).await;
+
+            let base_url = crate::node_http::p2p_base_url(&libp2p::PeerId::random());
+            let claim = mint_claim(
+                identity_id,
+                signing_key_id,
+                &signing_key,
+                channel_id,
+                &base_url,
+            );
+            let scope = InterestScope::Channel(channel_id);
+            dht_commands
+                .send(put_command(
+                    scope,
+                    claim.into_bytes(),
+                    Duration::from_secs(60),
+                ))
+                .await
+                .expect("fake dht channel should still be open");
+
+            let state = test_state(pool, None).await;
+            assert!(lookup_claimed(&state, &dht_commands, scope)
+                .await
+                .is_empty());
         }
 
         #[tokio::test]

@@ -1459,6 +1459,25 @@ mod node_auth_wiring {
     }
 
     #[tokio::test]
+    async fn an_identity_location_lookup_drops_p2p_and_malformed_values() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<dht::DhtCommand>(1);
+        tokio::spawn(async move {
+            if let Some(dht::DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let p2p = node_http::p2p_base_url(&libp2p::PeerId::random());
+                let _ = respond_to.send(vec![
+                    b"http://home.test".to_vec(),
+                    p2p.into_bytes(),
+                    b"junk".to_vec(),
+                ]);
+            }
+        });
+        let mut state = lazy_state();
+        state.dht_commands = Some(tx);
+        let found = identity_locator::resolve(&state, uuid::Uuid::new_v4()).await;
+        assert_eq!(found, vec!["http://home.test".to_string()]);
+    }
+
+    #[tokio::test]
     async fn relay_refuses_again_once_the_subscribing_connection_is_gone() {
         let node = libp2p::PeerId::random();
         let state = lazy_state();
@@ -1535,6 +1554,8 @@ mod node_auth_wiring {
 
         let source = libp2p::PeerId::random();
         let mut state = state_with_pool(pool.clone());
+        // The receiver has no public URL: it is only its own p2p:// identity.
+        state.own_base_url = Some(node_http::p2p_base_url(&libp2p::PeerId::random()));
         state.shard_mirror_sources =
             settlement::ShardMirrorSources::from_raw("http://src.test:8080");
         state
