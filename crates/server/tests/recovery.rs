@@ -37,7 +37,10 @@ use uuid::Uuid;
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -102,10 +105,12 @@ fn new_virtual_client() -> VirtualClient {
 /// owner and every guardian, none of which need a real passkey for these
 /// tests (only the *recovering device* does, since it's the one thing the
 /// server genuinely runs a WebAuthn ceremony for).
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -129,7 +134,11 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-async fn seed_friendship(pool: &PgPool, a: Uuid, b: Uuid) {
+async fn seed_friendship(
+    pool: &PgPool,
+    a: avalon_protocol::ids::IdentityId,
+    b: avalon_protocol::ids::IdentityId,
+) {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(lo)
@@ -149,7 +158,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 async fn initiate_recovery(
     http: &reqwest::Client,
     base: &str,
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
 ) -> serde_json::Value {
     let start: serde_json::Value = http
         .post(format!("{base}/recovery/requests/start"))
@@ -199,18 +208,18 @@ async fn configure_guardians(
     http: &reqwest::Client,
     base: &str,
     pool: &PgPool,
-    owner_id: Uuid,
+    owner_id: avalon_protocol::ids::IdentityId,
     owner_token: &str,
-    guardians: &[Uuid],
+    guardians: &[avalon_protocol::ids::IdentityId],
     threshold: i32,
 ) {
     let (signing_key_id, signing_key) = seed_signing_key(pool, owner_id).await;
-    let mut sorted_guardians: Vec<Uuid> = guardians.to_vec();
+    let mut sorted_guardians: Vec<avalon_protocol::ids::IdentityId> = guardians.to_vec();
     sorted_guardians.sort();
     sorted_guardians.dedup();
     let guardians_field = sorted_guardians
         .iter()
-        .map(Uuid::to_string)
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
     let signature = sign_action(
@@ -727,9 +736,9 @@ async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigu
     // identity — that one stays "exists but unconfigured".
     let (unconfigured_owner, _unconfigured_token) = seed_identity_session(&pool).await;
 
-    let nonexistent_id = Uuid::new_v4();
+    let nonexistent_id = avalon_protocol::ids::IdentityId::random_for_tests();
 
-    let start_request = |identity_id: Uuid| {
+    let start_request = |identity_id: avalon_protocol::ids::IdentityId| {
         let http = &http;
         let base = &base;
         async move {

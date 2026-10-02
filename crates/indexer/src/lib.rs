@@ -38,6 +38,13 @@ pub enum IndexError {
     /// 500.
     #[error("display_name is already taken")]
     DisplayNameTaken,
+    /// An event contradicts what is already projected (for example it would repoint an existing
+    /// signing key to another identity or key); it is refused, not applied.
+    #[error("event rejected: {0}")]
+    Rejected(String),
+    /// The display name is an identity-id lookalike or carries hidden characters.
+    #[error("display_name is not permitted")]
+    DisplayNameNotPermitted,
     /// Issue #661: raised by a network-facing [`Indexer`] implementation
     /// (`avalon_server::internal_role::RemoteIndexer`) when a request to
     /// the remote Indexer process could not be completed — a connection
@@ -94,6 +101,15 @@ impl From<sqlx::Error> for IndexError {
             .is_some_and(|db_err| db_err.constraint() == Some("profiles_display_name_lower_idx"));
         if is_display_name_conflict {
             return IndexError::DisplayNameTaken;
+        }
+        // A child event whose parent identity was never created (or was refused) is invalid, not a
+        // storage fault.
+        if err
+            .as_database_error()
+            .and_then(|db| db.code())
+            .is_some_and(|code| code == "23503")
+        {
+            return IndexError::Rejected(format!("references a missing parent row: {err}"));
         }
         if is_unavailable(&err) {
             return IndexError::Unavailable(err.to_string());

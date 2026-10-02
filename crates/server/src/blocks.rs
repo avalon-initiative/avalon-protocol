@@ -18,18 +18,18 @@
 //! `has_block_between`/`block_partners` below are the only two places that
 //! query, so every caller gets the exact same answer shape.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::authenticate;
 use crate::state::AppState;
 
@@ -38,8 +38,8 @@ use crate::state::AppState;
 /// `friends::create_friend_request`, a one-off, request-scoped check.
 pub(crate) async fn has_block_between(
     state: &AppState,
-    a: Uuid,
-    b: Uuid,
+    a: IdentityId,
+    b: IdentityId,
 ) -> Result<bool, AppError> {
     let row = sqlx::query(
         "SELECT 1 FROM blocks WHERE (blocker = $1 AND blocked = $2) OR (blocker = $2 AND blocked = $1)",
@@ -63,8 +63,8 @@ pub(crate) async fn has_block_between(
 /// already accepts.
 pub(crate) async fn block_partners(
     state: &AppState,
-    caller: Uuid,
-) -> Result<HashSet<Uuid>, AppError> {
+    caller: IdentityId,
+) -> Result<HashSet<IdentityId>, AppError> {
     let rows = sqlx::query(
         r#"
         SELECT blocked AS other FROM blocks WHERE blocker = $1
@@ -94,7 +94,7 @@ pub(crate) async fn block_partners(
 /// blocked = ANY($1)`.
 pub(crate) async fn has_block_among(
     state: &AppState,
-    participants: &[Uuid],
+    participants: &[IdentityId],
 ) -> Result<bool, AppError> {
     let row =
         sqlx::query("SELECT 1 FROM blocks WHERE blocker = ANY($1) AND blocked = ANY($1) LIMIT 1")
@@ -106,12 +106,12 @@ pub(crate) async fn has_block_among(
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateBlockRequest {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct BlockResponse {
-    pub blocked: Uuid,
+    pub blocked: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -191,13 +191,13 @@ pub async fn create_block(
     delete,
     path = "/blocks/{identity_id}",
     tag = "blocks",
-    params(("identity_id" = Uuid, Path)),
+    params(("identity_id" = IdentityId, Path)),
     responses((status = 200, description = "Block removed")),
 )]
 pub async fn remove_block(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(blocked): Path<Uuid>,
+    IdPath(blocked): IdPath<IdentityId>,
 ) -> Result<(), AppError> {
     let blocker = authenticate(&state, &headers).await?;
     let removed = sqlx::query("DELETE FROM blocks WHERE blocker = $1 AND blocked = $2")
@@ -213,7 +213,7 @@ pub async fn remove_block(
 
 #[derive(Serialize, ToSchema)]
 pub struct BlockListEntry {
-    pub blocked: Uuid,
+    pub blocked: IdentityId,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
@@ -253,7 +253,7 @@ pub async fn list_blocks(
 /// tested without a live Postgres — see [`tests`] below. Not called from
 /// the request path; `#[cfg(test)]` only.
 #[cfg(test)]
-fn any_pair_blocked(blocks: &[(Uuid, Uuid)], participants: &[Uuid]) -> bool {
+fn any_pair_blocked(blocks: &[(IdentityId, IdentityId)], participants: &[IdentityId]) -> bool {
     blocks
         .iter()
         .any(|(a, b)| participants.contains(a) && participants.contains(b))
@@ -274,10 +274,10 @@ mod tests {
 
     #[test]
     fn any_pair_blocked_finds_a_block_between_two_non_adjacent_participants() {
-        let alice = Uuid::new_v4();
-        let bob = Uuid::new_v4();
-        let carol = Uuid::new_v4();
-        let dave = Uuid::new_v4();
+        let alice = IdentityId::random_for_tests();
+        let bob = IdentityId::random_for_tests();
+        let carol = IdentityId::random_for_tests();
+        let dave = IdentityId::random_for_tests();
 
         // alice blocked dave; neither is directly "adjacent" in the
         // group's natural ordering — the check still has to find it.
@@ -288,9 +288,9 @@ mod tests {
 
     #[test]
     fn any_pair_blocked_ignores_a_block_involving_someone_outside_the_set() {
-        let alice = Uuid::new_v4();
-        let bob = Uuid::new_v4();
-        let outsider = Uuid::new_v4();
+        let alice = IdentityId::random_for_tests();
+        let bob = IdentityId::random_for_tests();
+        let outsider = IdentityId::random_for_tests();
 
         let blocks = vec![(alice, outsider)];
         let participants = vec![alice, bob];
@@ -299,8 +299,8 @@ mod tests {
 
     #[test]
     fn any_pair_blocked_is_false_with_no_blocks_at_all() {
-        let alice = Uuid::new_v4();
-        let bob = Uuid::new_v4();
+        let alice = IdentityId::random_for_tests();
+        let bob = IdentityId::random_for_tests();
         assert!(!any_pair_blocked(&[], &[alice, bob]));
     }
 }

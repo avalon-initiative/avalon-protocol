@@ -126,7 +126,7 @@ fn guard_evidence_size(evidence: &Option<serde_json::Value>) -> Result<(), AppEr
 async fn recent_issuer_subject_write_count(
     state: &AppState,
     issuer_str: &str,
-    subject_id: Uuid,
+    subject_id: IdentityId,
 ) -> Result<i64, AppError> {
     let window_start =
         OffsetDateTime::now_utc() - time::Duration::hours(write_quota_window_hours_from_env());
@@ -853,7 +853,7 @@ pub struct AttestationSignatureResponse {
 pub struct AttestationResponse {
     pub id: Uuid,
     pub issuer: String,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     pub achievement: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -968,7 +968,7 @@ async fn issue_attestation(
     let candidate = AchievementAttestation {
         id: AttestationId(attestation_id),
         issuer: issuer_enum,
-        subject: IdentityId(subject_id),
+        subject: subject_id,
         achievement: definition_ref(category, slug, &key),
         issued_at: now,
         proof: Signature {
@@ -1269,12 +1269,8 @@ async fn bulk_issue_attestation(
     let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
 
-    let signing_bytes = bulk_attestation_signing_bytes(
-        claim_kind,
-        &issuer_str,
-        IdentityId(subject_id),
-        &achievement_refs,
-    );
+    let signing_bytes =
+        bulk_attestation_signing_bytes(claim_kind, &issuer_str, subject_id, &achievement_refs);
     let Authenticity::Authentic { .. } = verify_signature(
         &body.key_id.to_string(),
         &signing_bytes,

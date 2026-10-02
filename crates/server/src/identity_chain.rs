@@ -4,8 +4,8 @@
 
 use avalon_indexer::identity_chain_store;
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::ids::IdentityId;
 use sqlx::{PgExecutor, Postgres, Transaction};
-use uuid::Uuid;
 
 use crate::error::AppError;
 
@@ -23,7 +23,7 @@ pub async fn assign(
 /// chain is forked.
 pub async fn ensure_not_forked<'e>(
     exec: impl PgExecutor<'e>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<(), AppError> {
     if identity_chain_store::is_forked(exec, identity_id).await? {
         return Err(AppError::IdentityChainForked);

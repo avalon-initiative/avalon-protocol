@@ -4,6 +4,7 @@
 //! for the archive-tier retention, announcement-only channels,
 //! and moderation-deletion-vs-archive semantics.
 
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -68,7 +69,7 @@ async fn require_channel_view_details(
     guild_id: Uuid,
     channel_id: Uuid,
     channel_public: bool,
-    actor: Uuid,
+    actor: IdentityId,
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let allowed = has_view_permission(
@@ -100,7 +101,7 @@ fn validate_message_body(body: &str) -> Result<(), AppError> {
 pub struct MessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
-    pub author: Uuid,
+    pub author: IdentityId,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -185,7 +186,7 @@ pub async fn list_messages(
 pub struct ArchivedMessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
-    pub author: Uuid,
+    pub author: IdentityId,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -523,7 +524,7 @@ pub struct GuildAnnouncementAlert {
     pub channel_id: Uuid,
     pub channel_name: String,
     pub guild_id: Uuid,
-    pub author: Uuid,
+    pub author: IdentityId,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]

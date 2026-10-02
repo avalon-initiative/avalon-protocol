@@ -4,6 +4,7 @@
 //! endpoint owns both concerns, the durable event history, and the
 //! no-grant-without-a-binding invariants enforced here.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_protocol::event_payloads::{
@@ -27,7 +28,7 @@ use crate::outbox;
 use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
 
-fn identity_ref(identity_id: Uuid, verb: &str) -> avalon_protocol::ids::GlobalId {
+fn identity_ref(identity_id: IdentityId, verb: &str) -> avalon_protocol::ids::GlobalId {
     avalon_protocol::ids::GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
@@ -55,7 +56,7 @@ async fn requested_capabilities(
 /// check within the same transaction.
 async fn active_binding(
     tx: &mut Transaction<'_, Postgres>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     integrator_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     let row = sqlx::query(

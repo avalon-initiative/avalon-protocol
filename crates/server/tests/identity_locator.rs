@@ -43,12 +43,15 @@ fn new_virtual_client() -> VirtualClient {
 /// (register/start + register/finish) to produce a real
 /// `indexer_identity_signing_keys` row, which is all `identity_locator`
 /// scans for. Never logs in — this test doesn't need a session.
-async fn register_identity(http: &reqwest::Client, base: &str) -> Uuid {
-    let identity_id = Uuid::new_v4();
+async fn register_identity(http: &reqwest::Client, base: &str) -> avalon_protocol::ids::IdentityId {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("identity-locator-test-{identity_id}");
 
     let start_body = serde_json::json!({
         "identity_id": identity_id,
+        "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()),
         "display_name": display_name,
     });
     let start: serde_json::Value = http
@@ -71,9 +74,15 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> Uuid {
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes_for_creation =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            start["network_id"].as_str().unwrap(),
+            start["shard_id"].as_str().unwrap(),
+            ticket_id.parse().unwrap(),
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -82,7 +91,6 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> Uuid {
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
         "webauthn_credential": credential,
-        "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
         "event_signature": BASE64.encode(signature.to_bytes()),
         "device_label": null,
     });

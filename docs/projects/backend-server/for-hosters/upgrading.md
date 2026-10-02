@@ -286,3 +286,30 @@ itself — that stays yours either way) is tracked by #799, design not yet
 settled. A real rolling-upgrade/multi-replica setup (a load balancer in
 front of more than one `avalon-server` instance) isn't documented anywhere
 because the default topology this project documents is single-node.
+
+## Migration 0083: self-certifying identity ids (destructive)
+
+Identity ids change from random UUIDs to the lowercase hex SHA-256 of a domain tag and the
+identity's inception public key (64 characters, `^[0-9a-f]{64}$`). Old ids cannot be converted, so
+migration 0083 **deletes every identity and every row keyed by one** (profiles, sessions, friends,
+guild membership, messages, bindings, projections and replicas). It also clears in-flight WebAuthn ceremonies. It refuses to run while
+`identities`, `webauthn_ceremonies` or any of the truncated replica and projection tables has rows, and names the table in its error; the node then fails to start rather than wiping
+silently.
+
+- **Development nodes:** run `make db-reset`, which drops and recreates the schema, then migrates.
+- **Any other node:** back up or export first. If you accept the loss, re-run the migration with
+  `PGOPTIONS="-c avalon.allow_identity_wipe=on"` set for the migrate process.
+- **The ledger and the outbox are not cleared by the migration.** Pending outbox rows still
+  carry old-format events and will be refused or parked by the new decoders.
+- **The ledger is not wiped by the migration.** A node migrated in place keeps ledger history for
+  identities that no longer exist locally, and its older `identity.created`,
+  `identity.signing_key_added` and `identity.signing_key_revoked` entries are version 1, which
+  decoders no longer accept: they are skipped or parked, never projected. For a coherent node
+  (ledger and read model agreeing), reset the whole database.
+- **All nodes of a network must update together.** The registration protocol, event payload
+  versions and signing bytes change in the same release; a node on the old version cannot register
+  or verify identities from a new one.
+- **Clients:** `POST /identities/register/start` now takes the inception public key and returns a
+  `network_id`; the `identity.created` signature covers that network id and the ticket id; device
+  revocation requires a signature. SDKs and the Hub must be updated before they can register
+  identities against a migrated node.

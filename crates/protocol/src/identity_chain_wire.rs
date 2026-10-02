@@ -9,13 +9,13 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use crate::events::{IdentityChainPosition, ProtocolEvent, ProtocolEventKind};
 use crate::identity_chain::{
     apply_chain, clamp_timestamp, compute_event_hash, ActionClass, ChainOutcome, ChainedEvent,
     ClockSkewBounds, EventAuthority, EventHash, TimestampError,
 };
+use crate::identity_id::IdentityId;
 
 /// Reserved top-level payload key a chain position is stored under inside a
 /// ledger entry, so the position is covered by the entry hash and travels
@@ -56,7 +56,7 @@ pub fn split_position(mut payload: Value) -> (Value, Option<IdentityChainPositio
 
 /// The identity whose chain `event` belongs to, or `None` when the kind is
 /// unchained or the relevant `GlobalId` is not in the `identity` namespace.
-pub fn chain_owner(event: &ProtocolEvent) -> Option<Uuid> {
+pub fn chain_owner(event: &ProtocolEvent) -> Option<IdentityId> {
     ActionClass::classify(&ProtocolEventKind::from(event.kind.as_str()))?;
     let id = match event.kind.as_str() {
         "identity.recovery_approved" | "identity.recovery_cancelled" => &event.subject,
@@ -194,8 +194,9 @@ mod tests {
     use super::*;
     use crate::ids::GlobalId;
     use serde_json::json;
+    use uuid::Uuid;
 
-    fn event(kind: &str, issuer_id: Uuid, seq: u64, prev: Option<String>) -> ProtocolEvent {
+    fn event(kind: &str, issuer_id: IdentityId, seq: u64, prev: Option<String>) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
@@ -225,7 +226,7 @@ mod tests {
 
     #[test]
     fn hash_ignores_key_order_and_sub_microsecond_time() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let a = event("profile.updated", id, 1, None);
         let mut b = a.clone();
         b.payload = json!({"a": {"y": 2, "z": 1}, "b": 1});
@@ -235,8 +236,8 @@ mod tests {
 
     #[test]
     fn owner_is_subject_for_guardian_recovery_events_else_issuer() {
-        let id = Uuid::new_v4();
-        let guardian = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
+        let guardian = IdentityId::random_for_tests();
         let mut e = event("identity.recovery_approved", guardian, 1, None);
         e.subject = GlobalId::new("identity", &id.to_string(), "self", "x");
         assert_eq!(chain_owner(&e), Some(id));
@@ -248,7 +249,7 @@ mod tests {
 
     #[test]
     fn far_future_timestamp_is_rejected() {
-        let e = event("profile.updated", Uuid::new_v4(), 1, None);
+        let e = event("profile.updated", IdentityId::random_for_tests(), 1, None);
         let now = e.timestamp - time::Duration::hours(1);
         assert_eq!(
             to_chained_event(&e, now, &ClockSkewBounds::default()),
@@ -258,7 +259,7 @@ mod tests {
 
     #[test]
     fn recovered_event_resolves_a_fork() {
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
         let b = ClockSkewBounds::default();
         let a = event("identity.signing_key_added", id, 1, None);

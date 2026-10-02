@@ -4,6 +4,7 @@
 //! for idempotent creation, the relationship gate,
 //! and how blocking is enforced identically on read and write.
 
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -48,13 +49,13 @@ fn validate_message_body(body: &str) -> Result<(), AppError> {
 /// comma-joined ids — so the same set of identities always produces the
 /// same key regardless of request order. See the module doc comment's
 /// "Idempotent creation" section.
-pub(crate) fn participants_key(participants: &[Uuid]) -> String {
+pub(crate) fn participants_key(participants: &[IdentityId]) -> String {
     let mut sorted = participants.to_vec();
     sorted.sort();
     sorted.dedup();
     sorted
         .iter()
-        .map(Uuid::to_string)
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -67,7 +68,7 @@ pub(crate) fn participants_key(participants: &[Uuid]) -> String {
 async fn conversation_participant_ids(
     state: &AppState,
     conversation_id: Uuid,
-) -> Result<Vec<Uuid>, AppError> {
+) -> Result<Vec<IdentityId>, AppError> {
     let rows =
         sqlx::query("SELECT identity_id FROM conversation_participants WHERE conversation_id = $1")
             .bind(conversation_id)
@@ -103,8 +104,8 @@ async fn conversation_participant_ids(
 pub(crate) async fn require_unblocked_participant(
     state: &AppState,
     conversation_id: Uuid,
-    actor: Uuid,
-) -> Result<Vec<Uuid>, AppError> {
+    actor: IdentityId,
+) -> Result<Vec<IdentityId>, AppError> {
     let participants = conversation_participant_ids(state, conversation_id).await?;
     let blocked = blocks::has_block_among(state, &participants).await?;
     if participants.contains(&actor) && !blocked {
@@ -118,9 +119,9 @@ pub(crate) async fn require_unblocked_participant(
 /// relationship gate [`create_conversation`] applies to every named
 /// participant. Pure, so it's unit-testable without a database.
 fn all_related_to_caller(
-    others: &[Uuid],
-    friends: &std::collections::HashSet<Uuid>,
-    guild_mates: &std::collections::HashSet<Uuid>,
+    others: &[IdentityId],
+    friends: &std::collections::HashSet<IdentityId>,
+    guild_mates: &std::collections::HashSet<IdentityId>,
 ) -> bool {
     others
         .iter()
@@ -130,12 +131,12 @@ fn all_related_to_caller(
 #[derive(Serialize, ToSchema)]
 pub struct ConversationResponse {
     pub id: Uuid,
-    pub participants: Vec<Uuid>,
+    pub participants: Vec<IdentityId>,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateConversationRequest {
-    pub participants: Vec<Uuid>,
+    pub participants: Vec<IdentityId>,
 }
 
 /// `POST /conversations` — session-authenticated. The caller is always
@@ -168,7 +169,7 @@ pub async fn create_conversation(
 
     // Relationship gate — also closes the existence oracle, since a
     // nonexistent id can never be a friend or guild-mate.
-    let others: Vec<Uuid> = participants
+    let others: Vec<IdentityId> = participants
         .iter()
         .copied()
         .filter(|&id| id != actor)
@@ -257,7 +258,7 @@ pub async fn list_my_conversations(
     let mut conversations = Vec::with_capacity(rows.len());
     for row in rows {
         let id = row.try_get("id")?;
-        let participants: Vec<Uuid> = row.try_get("participants")?;
+        let participants: Vec<IdentityId> = row.try_get("participants")?;
         if blocks::has_block_among(&state, &participants).await? {
             continue;
         }
@@ -280,7 +281,7 @@ pub async fn list_my_conversations(
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
-    pub author: Uuid,
+    pub author: IdentityId,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
@@ -606,9 +607,9 @@ mod tests {
 
     #[test]
     fn participants_key_is_order_independent_and_deduplicates() {
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = IdentityId::random_for_tests();
+        let b = IdentityId::random_for_tests();
+        let c = IdentityId::random_for_tests();
 
         assert_eq!(participants_key(&[a, b, c]), participants_key(&[c, a, b]));
         assert_eq!(participants_key(&[a, b]), participants_key(&[b, a, a, b]));
@@ -621,7 +622,7 @@ mod tests {
     fn unrelated_participant_is_denied() {
         // Stands in for both an unrelated real identity and a nonexistent
         // one — neither is ever in either relationship set.
-        let stranger = Uuid::new_v4();
+        let stranger = IdentityId::random_for_tests();
         let friends = std::collections::HashSet::new();
         let guild_mates = std::collections::HashSet::new();
 
@@ -630,7 +631,7 @@ mod tests {
 
     #[test]
     fn friend_participant_is_allowed() {
-        let friend = Uuid::new_v4();
+        let friend = IdentityId::random_for_tests();
         let mut friends = std::collections::HashSet::new();
         friends.insert(friend);
         let guild_mates = std::collections::HashSet::new();
@@ -640,7 +641,7 @@ mod tests {
 
     #[test]
     fn mutual_guild_participant_is_allowed() {
-        let guild_mate = Uuid::new_v4();
+        let guild_mate = IdentityId::random_for_tests();
         let friends = std::collections::HashSet::new();
         let mut guild_mates = std::collections::HashSet::new();
         guild_mates.insert(guild_mate);
@@ -650,8 +651,8 @@ mod tests {
 
     #[test]
     fn one_unrelated_participant_denies_the_whole_group() {
-        let friend = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
+        let friend = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
         let mut friends = std::collections::HashSet::new();
         friends.insert(friend);
         let guild_mates = std::collections::HashSet::new();

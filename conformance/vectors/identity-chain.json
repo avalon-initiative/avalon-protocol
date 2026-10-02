@@ -12,35 +12,35 @@
     {
       "name": "genesis-profile-update",
       "kind": "profile.updated",
-      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
-      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "issuer": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:profile_updated",
+      "subject": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:profile_updated",
       "payloadJson": "{\"bio\":\"first\"}",
       "timestampNanos": "1700000000000000000",
       "seq": 1,
       "prevHashHex": null,
-      "expectedHashHex": "b8c9cf3e499c8ced32fb6d4f217055097b5c6c068f1f2c0921477ecdc2ef0582"
+      "expectedHashHex": "5e80190597fc4b5a78e187b3610bab3a7efa1e8cef070c3ed90412ce3dbaa98f"
     },
     {
       "name": "second-event-points-at-first",
       "kind": "profile.updated",
-      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
-      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:profile_updated",
+      "issuer": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:profile_updated",
+      "subject": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:profile_updated",
       "payloadJson": "{\"bio\":\"second\"}",
       "timestampNanos": "1700000060000000000",
       "seq": 2,
-      "prevHashHex": "b8c9cf3e499c8ced32fb6d4f217055097b5c6c068f1f2c0921477ecdc2ef0582",
-      "expectedHashHex": "f4a4837ceb1f5fa7bc547dea6e4ffdf8a39e6e65b5a9cf0f2e0b1fe98fb7e7b3"
+      "prevHashHex": "5e80190597fc4b5a78e187b3610bab3a7efa1e8cef070c3ed90412ce3dbaa98f",
+      "expectedHashHex": "af63bb3a5eb0d1486eb4e8c59857c85b00366676c2981f3238210743bf024945"
     },
     {
       "name": "signing-key-added-third",
       "kind": "identity.signing_key_added",
-      "issuer": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:signing_key_added",
-      "subject": "identity:7d6f4a52-0b7e-4d0b-9f3a-2b1c7e3f9a10:self:signing_key_added",
+      "issuer": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:signing_key_added",
+      "subject": "identity:97129fe5aedcb1e8eccb2072bcf83e58478a22330dd589afd9d4545764f0cd56:self:signing_key_added",
       "payloadJson": "{\"public_key\":\"AAAA\"}",
       "timestampNanos": "1700000120000000000",
       "seq": 3,
-      "prevHashHex": "f4a4837ceb1f5fa7bc547dea6e4ffdf8a39e6e65b5a9cf0f2e0b1fe98fb7e7b3",
-      "expectedHashHex": "241c89e8e360840fe01af62c5fe49ef70b40c3b489a85906e4c2bed4f5c145af"
+      "prevHashHex": "af63bb3a5eb0d1486eb4e8c59857c85b00366676c2981f3238210743bf024945",
+      "expectedHashHex": "276bcdd6a790c74d2f1328b9ed9d6ecc066e367c3598dcbe5449347a3f77ee2f"
     }
   ],
   "resolutionCases": [

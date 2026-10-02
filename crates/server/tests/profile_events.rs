@@ -26,10 +26,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -436,11 +438,64 @@ async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
     let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
 
     let response = http
-        .get(format!("{base}/identities/{}/profile", Uuid::new_v4()))
+        .get(format!(
+            "{base}/identities/{}/profile",
+            avalon_protocol::ids::IdentityId::random_for_tests()
+        ))
         .bearer_auth(&viewer_token)
         .send()
         .await
         .expect("profile request failed — is `make start` running?");
 
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_display_name_shaped_like_an_identity_id_is_refused_on_update_and_never_resolves_as_a_handle(
+) {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_id, token) = seed_identity_session(&pool).await;
+    let (victim_id, _) = seed_identity_session(&pool).await;
+    let victim = victim_id.to_string();
+
+    let mixed: String = victim
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i % 2 == 0 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    for bad in [
+        victim.to_uppercase(),
+        mixed,
+        format!(" {victim} "),
+        format!("\u{200B}{victim}"),
+        format!("{victim}\u{FEFF}"),
+    ] {
+        let response = http
+            .patch(format!("{base}/me"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "display_name": bad }))
+            .send()
+            .await
+            .expect("PATCH /me failed — is `make start` running?");
+        assert_eq!(response.status().as_u16(), 400, "{bad:?}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "INVALID_DISPLAY_NAME");
+    }
+
+    let handle = http
+        .get(format!("{base}/friends/handle/{}", victim.to_uppercase()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(handle.status().as_u16(), 404, "ids are never handles");
 }

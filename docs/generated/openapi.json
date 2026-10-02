@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -389,8 +389,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -727,8 +726,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2225,8 +2223,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2256,8 +2253,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2716,6 +2712,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "INVALID_IDENTITY_ID, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"
+          },
+          "409": {
+            "description": "IDENTITY_ID_TAKEN or DISPLAY_NAME_TAKEN"
           }
         }
       }
@@ -2776,8 +2778,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2811,8 +2812,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2843,8 +2843,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -2875,8 +2874,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -4207,8 +4205,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -4649,7 +4646,7 @@
         "tags": [
           "devices"
         ],
-        "summary": "`POST /me/devices/:id/revoke` — unilateral, per the ticket's invariant:\nany currently-authenticated session for the identity can revoke any\nsigning-key row (including the one it's revoking itself with, for a\ndeliberate self-rotation), independent of the revoked device's\ncooperation. Network-attributed, not individually signed — same\nmilestone-1 precedent `friends.rs`'s `friend.requested` already uses;\nrevocation only ever narrows trust, so it doesn't need the higher\nsigning bar grant approval does.",
+        "summary": "`POST /me/devices/:id/revoke` — any authenticated session for the identity can\nrevoke any of its signing keys (including the signer's own, for self-rotation), provided\nthe request carries a valid signature from an active key of the same identity. The last\nactive key cannot be revoked (409 `LAST_SIGNING_KEY`).",
         "operationId": "revoke_device",
         "parameters": [
           {
@@ -4662,9 +4659,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Signing key revoked"
+          },
+          "409": {
+            "description": "LAST_SIGNING_KEY: the last active signing key cannot be revoked"
           }
         }
       }
@@ -5018,8 +5028,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -5399,8 +5408,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         ],
@@ -5968,7 +5976,7 @@
           },
           "signature": {
             "type": "string",
-            "description": "Base64-encoded Ed25519 signature over\n`device_grant_approval_signing_bytes(grant_id, identity_id, requested_signing_public_key)`,\nproduced by `approver_signing_key_id`'s key."
+            "description": "Base64-encoded Ed25519 signature over\n`device_grant_approval_signing_bytes_v2(grant_id, identity_id, requested_signing_public_key)`,\nproduced by `approver_signing_key_id`'s key."
           }
         }
       },
@@ -6013,8 +6021,7 @@
             "format": "date-time"
           },
           "author": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "body": {
             "type": "string"
@@ -6118,8 +6125,7 @@
             "$ref": "#/components/schemas/AttestationProofResponse"
           },
           "subject": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "validity": {
             "$ref": "#/components/schemas/ValidityResponse"
@@ -6155,8 +6161,7 @@
             "$ref": "#/components/schemas/AttestationSignatureResponse"
           },
           "subject": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -6228,8 +6233,7 @@
         ],
         "properties": {
           "blocked": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "created_at": {
             "type": "string",
@@ -6245,8 +6249,7 @@
         ],
         "properties": {
           "blocked": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "created_at": {
             "type": "string",
@@ -6551,8 +6554,7 @@
         ],
         "properties": {
           "author": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "body": {
             "type": "string"
@@ -6585,8 +6587,7 @@
           "participants": {
             "type": "array",
             "items": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         }
@@ -6725,8 +6726,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -6750,8 +6750,7 @@
           "participants": {
             "type": "array",
             "items": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           }
         }
@@ -6803,8 +6802,7 @@
         ],
         "properties": {
           "to": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -6815,8 +6813,7 @@
         ],
         "properties": {
           "to": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -6954,8 +6951,7 @@
             "format": "date-time"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "issued_at": {
             "type": "string",
@@ -7095,7 +7091,7 @@
           },
           "requested_signing_public_key": {
             "type": "string",
-            "description": "Base64-encoded — the approving device needs this exact value to\nreconstruct `device_grant_approval_signing_bytes` and sign it; the\nserver never trusts a client-supplied copy of its own request back,\nbut the *approver* is a different device that only ever learns this\nkey by reading it back off this response."
+            "description": "Base64-encoded — the approving device needs this exact value to\nreconstruct `device_grant_approval_signing_bytes_v2` and sign it; the\nserver never trusts a client-supplied copy of its own request back,\nbut the *approver* is a different device that only ever learns this\nkey by reading it back off this response."
           },
           "status": {
             "type": "string"
@@ -7231,8 +7227,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -7296,8 +7291,7 @@
             "format": "date-time"
           },
           "created_by": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "description": {
             "type": [
@@ -7408,8 +7402,7 @@
         ],
         "properties": {
           "from": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "id": {
             "type": "string",
@@ -7420,8 +7413,7 @@
             "format": "date-time"
           },
           "to": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -7434,12 +7426,10 @@
         ],
         "properties": {
           "a": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "b": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "since": {
             "type": "string",
@@ -7536,8 +7526,7 @@
             "type": "string"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -7566,8 +7555,7 @@
           "guardian_ids": {
             "type": "array",
             "items": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           },
           "threshold": {
@@ -7596,8 +7584,7 @@
         ],
         "properties": {
           "author": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "body": {
             "type": "string"
@@ -7638,8 +7625,7 @@
             "format": "date-time"
           },
           "from": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "guild_id": {
             "type": "string",
@@ -7650,8 +7636,7 @@
             "format": "uuid"
           },
           "to": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -7666,8 +7651,7 @@
         ],
         "properties": {
           "applicant": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "created_at": {
             "type": "string",
@@ -7681,11 +7665,14 @@
             "format": "date-time"
           },
           "decided_by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IdentityId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "guild_id": {
             "type": "string",
@@ -7752,8 +7739,7 @@
             "format": "uuid"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "joined_at": {
             "type": "string",
@@ -7853,8 +7839,7 @@
             "type": "string"
           },
           "owner": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "public": {
             "type": "boolean",
@@ -7906,6 +7891,11 @@
             "format": "date-time"
           }
         }
+      },
+      "IdentityId": {
+        "type": "string",
+        "description": "Self-certifying identity id: lowercase hex SHA-256 of the domain tag and the inception public key.",
+        "pattern": "^[0-9a-f]{64}$"
       },
       "InitialKeyRequest": {
         "type": "object",
@@ -7990,8 +7980,7 @@
             "type": "string"
           },
           "subject": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "superseded_by": {
             "type": [
@@ -8530,8 +8519,7 @@
         ],
         "properties": {
           "author": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "body": {
             "type": "string"
@@ -8668,8 +8656,7 @@
             "format": "date-time"
           },
           "from": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "guild_id": {
             "type": "string",
@@ -9049,8 +9036,7 @@
             "format": "uuid"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "status": {
             "$ref": "#/components/schemas/PresenceStatus"
@@ -9208,8 +9194,7 @@
             "format": "date-time"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "links": {
             "type": "array",
@@ -9312,8 +9297,7 @@
             "format": "date-time"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "links": {
             "type": "array",
@@ -9378,8 +9362,7 @@
             "type": "string"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -9394,8 +9377,7 @@
             "type": "object"
           },
           "subject": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -9544,8 +9526,7 @@
             "format": "uuid"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "requested_at": {
             "type": "string",
@@ -9573,8 +9554,7 @@
             ]
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -9599,7 +9579,6 @@
         "required": [
           "ticket_id",
           "webauthn_credential",
-          "event_signing_public_key",
           "event_signature"
         ],
         "properties": {
@@ -9612,11 +9591,7 @@
           },
           "event_signature": {
             "type": "string",
-            "description": "Base64-encoded Ed25519 signature over\n`identity_created_signing_bytes(identity_id, display_name)`."
-          },
-          "event_signing_public_key": {
-            "type": "string",
-            "description": "Base64-encoded raw Ed25519 public key — the identity's event-signing\nkey, distinct from the WebAuthn passkey above. See module docs."
+            "description": "Base64-encoded Ed25519 signature over\n`avalon_protocol::identity_id::identity_created_signing_bytes_v2`, which covers this\nceremony's `ticket_id` and the `network_id` returned by `register/start`."
           },
           "ticket_id": {
             "type": "string",
@@ -9634,8 +9609,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -9671,16 +9645,20 @@
         "type": "object",
         "required": [
           "identity_id",
+          "event_signing_public_key",
           "display_name"
         ],
         "properties": {
           "display_name": {
             "type": "string"
           },
-          "identity_id": {
+          "event_signing_public_key": {
             "type": "string",
-            "format": "uuid",
-            "description": "Client-chosen, not server-assigned — identity is a wallet its holder\ncreates themselves. Must also become the WebAuthn user handle, which\nis why it has to be decided here rather than at `finish`."
+            "description": "Base64-encoded raw Ed25519 inception public key, the one the identity id is derived from."
+          },
+          "identity_id": {
+            "$ref": "#/components/schemas/IdentityId",
+            "description": "Lowercase hex SHA-256 of the domain tag and `event_signing_public_key`; the server\nrecomputes it and rejects a mismatch."
           }
         }
       },
@@ -9688,12 +9666,22 @@
         "type": "object",
         "required": [
           "ticket_id",
+          "network_id",
+          "shard_id",
           "challenge"
         ],
         "properties": {
           "challenge": {
             "type": "object",
             "description": "`webauthn-rs`'s own WebAuthn creation-challenge type — opaque here\nsince it's an external crate's type with no `ToSchema` impl of its\nown; the real, authoritative shape is `webauthn-rs`'s\n`CreationChallengeResponse`, not this placeholder."
+          },
+          "network_id": {
+            "type": "string",
+            "description": "The ledger network id; the client signs it, with the shard id and ticket, into `identity.created`."
+          },
+          "shard_id": {
+            "type": "string",
+            "description": "The shard this node authors; part of the signed bytes."
           },
           "ticket_id": {
             "type": "string",
@@ -9782,8 +9770,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -9884,6 +9871,24 @@
           "signature": {
             "type": "string",
             "description": "Standard-base64-encoded detached Ed25519 signature over\n[`revocation_signing_bytes`]."
+          }
+        }
+      },
+      "RevokeDeviceRequest": {
+        "type": "object",
+        "required": [
+          "revoked_by_signing_key_id",
+          "signature"
+        ],
+        "properties": {
+          "revoked_by_signing_key_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The caller's own active signing key that signs the revocation (may be the key being revoked)."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Base64 Ed25519 signature by `revoked_by_signing_key_id` over\n`avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2`."
           }
         }
       },
@@ -10214,8 +10219,7 @@
             "format": "uuid"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "responded_at": {
             "type": "string",
@@ -10235,8 +10239,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           },
           "responded_at": {
             "type": "string",
@@ -10278,8 +10281,7 @@
             "type": "string"
           },
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -10399,8 +10401,7 @@
         ],
         "properties": {
           "identity_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },
@@ -10446,8 +10447,7 @@
           "guardian_ids": {
             "type": "array",
             "items": {
-              "type": "string",
-              "format": "uuid"
+              "$ref": "#/components/schemas/IdentityId"
             }
           },
           "signature": {
@@ -10855,8 +10855,7 @@
             "description": "#704's gap #2 / #697/#698: permanently hands another identity full\nownership — signature-required."
           },
           "to": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/IdentityId"
           }
         }
       },

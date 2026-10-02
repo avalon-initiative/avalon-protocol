@@ -65,6 +65,7 @@
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::{IndexError, Indexer};
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::TestIdentity;
 use avalon_protocol::ids::GlobalId;
 use avalon_server::internal_role::RemoteIndexer;
 use sqlx::postgres::PgPoolOptions;
@@ -134,31 +135,33 @@ async fn setup_schema() -> PgPool {
 /// step every other live test in this crate uses
 /// (`crates/indexer/tests/postgres_indexer.rs`'s own `seed_identity`)
 /// before an `identity.created` event can be applied.
-async fn seed_identity(pool: &PgPool, identity_id: Uuid) {
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
-        .bind(identity_id)
+async fn seed_identity(pool: &PgPool, who: &TestIdentity) {
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
+        .bind(who.id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
 }
 
-fn identity_created_event(identity_id: Uuid, display_name: &str) -> ProtocolEvent {
+fn identity_created_event(who: &TestIdentity, display_name: &str) -> ProtocolEvent {
+    let identity_id = who.id;
     ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "identity.created".to_string(),
         issuer: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
         subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
-        payload: serde_json::json!({
-            "identity_id": identity_id,
-            "display_name": display_name,
-        }),
+        payload: serde_json::to_value(who.created_payload(display_name)).unwrap(),
         timestamp: time::OffsetDateTime::now_utc(),
-        version: 1,
+        version: 2,
         identity_chain: None,
     }
 }
 
-async fn profile_display_name(pool: &PgPool, identity_id: Uuid) -> Option<String> {
+async fn profile_display_name(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> Option<String> {
     sqlx::query("SELECT display_name FROM profiles WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_optional(pool)
@@ -179,20 +182,22 @@ async fn apply_via_remote_matches_direct_postgres_indexer() {
     let local_indexer = PostgresIndexer::new(pool.clone());
     let remote_indexer = RemoteIndexer::new(remote_indexer_url(), Some(role_key()));
 
-    let local_identity = Uuid::new_v4();
-    let remote_identity = Uuid::new_v4();
-    seed_identity(&pool, local_identity).await;
-    seed_identity(&pool, remote_identity).await;
+    let local_who = TestIdentity::new();
+    let local_identity = local_who.id;
+    let remote_who = TestIdentity::new();
+    let remote_identity = remote_who.id;
+    seed_identity(&pool, &local_who).await;
+    seed_identity(&pool, &remote_who).await;
 
     local_indexer
         .apply(&identity_created_event(
-            local_identity,
+            &local_who,
             "direct-postgres-indexer",
         ))
         .await
         .expect("direct PostgresIndexer apply failed");
     remote_indexer
-        .apply(&identity_created_event(remote_identity, "remote-http-indexer"))
+        .apply(&identity_created_event(&remote_who, "remote-http-indexer"))
         .await
         .expect("RemoteIndexer apply failed — is the Indexer-role process running? See this file's own module doc comment.");
 
@@ -217,12 +222,14 @@ async fn rebuild_via_remote_matches_direct_postgres_indexer() {
     let local_indexer = PostgresIndexer::new(pool.clone());
     let remote_indexer = RemoteIndexer::new(remote_indexer_url(), Some(role_key()));
 
-    let local_identity = Uuid::new_v4();
-    let remote_identity = Uuid::new_v4();
-    seed_identity(&pool, local_identity).await;
-    seed_identity(&pool, remote_identity).await;
-    let local_events = vec![identity_created_event(local_identity, "direct-rebuild")];
-    let remote_events = vec![identity_created_event(remote_identity, "remote-rebuild")];
+    let local_who = TestIdentity::new();
+    let local_identity = local_who.id;
+    let remote_who = TestIdentity::new();
+    let remote_identity = remote_who.id;
+    seed_identity(&pool, &local_who).await;
+    seed_identity(&pool, &remote_who).await;
+    let local_events = vec![identity_created_event(&local_who, "direct-rebuild")];
+    let remote_events = vec![identity_created_event(&remote_who, "remote-rebuild")];
 
     local_indexer
         .rebuild(&local_events)
@@ -268,10 +275,10 @@ async fn remote_indexer_reports_a_clear_failure_when_the_role_is_killed() {
 
     // First: prove the process really is up before killing it — a failure
     // here means the process was never running, not that killing it works.
-    let liveness_identity = Uuid::new_v4();
-    seed_identity(&pool, liveness_identity).await;
+    let liveness_who = TestIdentity::new();
+    seed_identity(&pool, &liveness_who).await;
     remote_indexer
-        .apply(&identity_created_event(liveness_identity, "pre-kill-liveness-check"))
+        .apply(&identity_created_event(&liveness_who, "pre-kill-liveness-check"))
         .await
         .expect("Indexer-role process must be running before this test kills it — see this file's own module doc comment for how to start it");
 
@@ -296,7 +303,7 @@ async fn remote_indexer_reports_a_clear_failure_when_the_role_is_killed() {
     let started = Instant::now();
     let err = remote_indexer
         .apply(&identity_created_event(
-            Uuid::new_v4(),
+            &TestIdentity::new(),
             "post-kill-should-fail",
         ))
         .await

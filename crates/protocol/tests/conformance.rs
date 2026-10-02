@@ -66,6 +66,15 @@ fn parse_uuid(v: &Value, field: &str) -> Uuid {
     .unwrap_or_else(|e| panic!("invalid uuid in {field}: {e}"))
 }
 
+fn parse_identity_id(v: &Value, field: &str) -> IdentityId {
+    IdentityId::parse(
+        v[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing {field}")),
+    )
+    .unwrap_or_else(|e| panic!("invalid identity id in {field}: {e}"))
+}
+
 fn parse_offset(v: &Value, field: &str) -> OffsetDateTime {
     let secs = v[field]
         .as_i64()
@@ -103,7 +112,7 @@ fn attestation_signing_matches_shared_vectors() {
             "issue" => attestation_signing_bytes(
                 claim_kind,
                 issuer_ref,
-                IdentityId(parse_uuid(input, "subject")),
+                parse_identity_id(input, "subject"),
                 input["achievement"].as_str().unwrap(),
             ),
             "bulk_issue" => {
@@ -116,7 +125,7 @@ fn attestation_signing_matches_shared_vectors() {
                 bulk_attestation_signing_bytes(
                     claim_kind,
                     issuer_ref,
-                    IdentityId(parse_uuid(input, "subject")),
+                    parse_identity_id(input, "subject"),
                     &achievements,
                 )
             }
@@ -180,7 +189,7 @@ fn cross_node_login_grant_signing_matches_shared_vectors() {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
         let input = &vector["input"];
         let bytes = cross_node_login_signing_bytes(
-            parse_uuid(input, "identityId"),
+            parse_identity_id(input, "identityId"),
             parse_uuid(input, "signingKeyId"),
             input["destinationBaseUrl"].as_str().unwrap(),
             input["requestingContext"].as_str().unwrap(),
@@ -208,7 +217,7 @@ fn session_continuation_signing_matches_shared_vectors() {
     let vector = &doc["vectors"][0];
     let input = &vector["input"];
     let bytes = continuation_signing_bytes(
-        parse_uuid(input, "identityId"),
+        parse_identity_id(input, "identityId"),
         parse_uuid(input, "signingKeyId"),
         parse_uuid(input, "nonce"),
         parse_offset(input, "issuedAtUnixSeconds"),
@@ -227,7 +236,7 @@ fn websocket_interest_claim_signing_matches_shared_vectors() {
     let vector = &doc["vectors"][0];
     let input = &vector["input"];
     let bytes = interest_claim_signing_bytes(
-        parse_uuid(input, "identityId"),
+        parse_identity_id(input, "identityId"),
         parse_uuid(input, "signingKeyId"),
         ClaimedScope::Channel {
             channel_id: parse_uuid(&input["scope"], "channelId"),
@@ -769,19 +778,14 @@ fn assert_identity_signing_vectors(file: &str, build: impl Fn(&Value, &Value) ->
     }
 }
 
-fn identity_id_of(
-    v: &Value,
-    field: &str,
-) -> avalon_protocol::identity_id::SelfCertifyingIdentityId {
+fn identity_id_of(v: &Value, field: &str) -> avalon_protocol::identity_id::IdentityId {
     v[field].as_str().unwrap().parse().unwrap()
 }
 
 #[test]
 fn identity_id_matches_shared_vectors() {
     use avalon_protocol::ed25519_key::parse_ed25519_public_key_hex;
-    use avalon_protocol::identity_id::{
-        derive_identity_id, SelfCertifyingIdentityId, IDENTITY_ID_DOMAIN_TAG,
-    };
+    use avalon_protocol::identity_id::{derive_identity_id, IdentityId, IDENTITY_ID_DOMAIN_TAG};
     use avalon_protocol::shard_identity::derive_self_certifying_id;
 
     let doc = load("identity-id.json");
@@ -809,13 +813,13 @@ fn identity_id_matches_shared_vectors() {
                     "{name}: preimage"
                 );
                 assert_eq!(
-                    derive_identity_id(&pk).as_str(),
+                    derive_identity_id(&pk).to_string(),
                     expected["identityId"].as_str().unwrap(),
                     "{name}"
                 );
             }
             "parse" => {
-                let parsed = SelfCertifyingIdentityId::parse(input["identityId"].as_str().unwrap());
+                let parsed = IdentityId::parse(input["identityId"].as_str().unwrap());
                 assert_eq!(
                     parsed.is_ok(),
                     expected["valid"].as_bool().unwrap(),
@@ -834,9 +838,9 @@ fn identity_id_matches_shared_vectors() {
                 let key = verifying_key_from_hex(input["publicKeyHex"].as_str().unwrap());
                 let id = derive_identity_id(key.as_bytes());
                 let shard = derive_self_certifying_id(&key);
-                assert_eq!(id.as_str(), expected["identityId"].as_str().unwrap());
+                assert_eq!(id.to_string(), expected["identityId"].as_str().unwrap());
                 assert_eq!(shard, expected["nodeShardId"].as_str().unwrap());
-                assert_ne!(shard.strip_prefix("node:"), Some(id.as_str()));
+                assert_ne!(shard.strip_prefix("node:"), Some(id.to_string().as_str()));
                 assert!(!expected["equal"].as_bool().unwrap());
             }
             "strict_verify" => {
@@ -865,11 +869,46 @@ fn identity_created_signing_matches_shared_vectors() {
         let id = identity_id_of(doc, "identityId");
         assert!(id.matches_key(pk.as_bytes()));
         identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            input["shardId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
             &id,
             pk.as_bytes(),
             input["displayName"].as_str().unwrap(),
         )
     });
+}
+
+#[test]
+fn identity_created_signature_is_bound_to_ticket_and_network() {
+    use avalon_protocol::ed25519_key::verify_strict_signature;
+    use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+    let doc = load("identity-created-signing.json");
+    let pk = verifying_key_from_hex(doc["signingPublicKeyHex"].as_str().unwrap());
+    let id = identity_id_of(&doc, "identityId");
+    let replays = doc["replayVectors"].as_array().unwrap();
+    assert!(!replays.is_empty());
+    for r in replays {
+        let input = &r["input"];
+        let bytes = identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            input["shardId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
+            &id,
+            pk.as_bytes(),
+            input["displayName"].as_str().unwrap(),
+        );
+        let sig: [u8; 64] = hex::decode(input["signatureHex"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            verify_strict_signature(&pk, &bytes, &sig),
+            r["expected"]["valid"].as_bool().unwrap(),
+            "{}",
+            r["name"]
+        );
+    }
 }
 
 #[test]
@@ -888,6 +927,9 @@ fn identity_created_v1_and_v2_bytes_differ_per_shared_vectors() {
         );
         assert_eq!(v1, expected["v1SigningBytesUtf8"].as_str().unwrap());
         let v2 = identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            input["shardId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
             &identity_id_of(input, "identityId"),
             pk.as_bytes(),
             name,

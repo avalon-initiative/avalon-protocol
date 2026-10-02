@@ -8,7 +8,7 @@ use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -22,12 +22,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres")
 }
 
-fn gid(identity_id: Uuid, verb: &str) -> GlobalId {
+fn gid(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
 fn chained(
-    identity_id: Uuid,
+    identity_id: IdentityId,
     kind: &str,
     verb: &str,
     payload: serde_json::Value,
@@ -52,10 +52,12 @@ fn chained(
     event
 }
 
-async fn seed_identity(pool: &PgPool) -> Uuid {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity(pool: &PgPool) -> IdentityId {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .unwrap();
@@ -68,7 +70,7 @@ async fn seed_identity(pool: &PgPool) -> Uuid {
     identity_id
 }
 
-async fn reset(pool: &PgPool, identity_id: Uuid, events: &[&ProtocolEvent]) {
+async fn reset(pool: &PgPool, identity_id: IdentityId, events: &[&ProtocolEvent]) {
     for e in events {
         sqlx::query("DELETE FROM indexer_applied_events WHERE event_id = $1")
             .bind(e.id)
@@ -93,7 +95,7 @@ async fn reset(pool: &PgPool, identity_id: Uuid, events: &[&ProtocolEvent]) {
         .unwrap();
 }
 
-async fn profile(pool: &PgPool, identity_id: Uuid) -> (Option<String>, Option<String>) {
+async fn profile(pool: &PgPool, identity_id: IdentityId) -> (Option<String>, Option<String>) {
     let row = sqlx::query("SELECT bio, pronouns FROM profiles WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_one(pool)

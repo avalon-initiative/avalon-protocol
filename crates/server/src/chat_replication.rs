@@ -351,7 +351,7 @@ mod tests {
         ReplicationEvent::ChannelMessage(guild_messages::MessageResponse {
             id: Uuid::new_v4(),
             channel_id: Uuid::new_v4(),
-            author: Uuid::new_v4(),
+            author: avalon_protocol::ids::IdentityId::random_for_tests(),
             body: body.to_string(),
             sent_at,
         })

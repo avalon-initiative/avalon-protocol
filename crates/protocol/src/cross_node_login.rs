@@ -34,6 +34,7 @@
 //! successfully against a different one, or an attacker could relay an
 //! approved grant to a node the human never actually saw.
 
+use crate::identity_id::IdentityId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -50,7 +51,7 @@ pub const DEFAULT_TTL_SECONDS: i64 = 60;
 /// `destination_base_url`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CrossNodeLoginGrant {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     /// Which of the identity's (possibly several) signing keys approved
     /// this — same multi-key model `identity_signing_keys`/`devices.rs`
     /// already supports.
@@ -87,7 +88,7 @@ pub struct CrossNodeLoginGrant {
 /// be replayed against a different identity, key, destination, context, or
 /// validity window than the one it was actually produced for.
 pub fn signing_bytes(
-    identity_id: Uuid,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
     destination_base_url: &str,
     requesting_context: &str,
@@ -123,10 +124,11 @@ impl CrossNodeLoginGrant {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity_id::derive_identity_id;
 
     fn sample() -> CrossNodeLoginGrant {
         CrossNodeLoginGrant {
-            identity_id: Uuid::nil(),
+            identity_id: derive_identity_id(&[1u8; 32]),
             signing_key_id: Uuid::nil(),
             destination_base_url: "https://node-b.example".to_string(),
             requesting_context: "SomeGame (node-b.example)".to_string(),
@@ -159,7 +161,7 @@ mod tests {
         let base_bytes = base.signing_bytes();
 
         let mut different_identity = base.clone();
-        different_identity.identity_id = Uuid::from_u128(1);
+        different_identity.identity_id = derive_identity_id(&[2u8; 32]);
         assert_ne!(different_identity.signing_bytes(), base_bytes);
 
         let mut different_key = base.clone();

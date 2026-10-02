@@ -115,10 +115,15 @@ async fn setup_schema() -> PgPool {
 /// Seeds an identity/profile/session directly via SQL — same shortcut
 /// `crates/server/tests/profile_events.rs::seed_identity_session` takes to
 /// avoid a full WebAuthn ceremony for a test that isn't about login itself.
-async fn seed_identity_session(pool: &PgPool, label: &str) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(
+    pool: &PgPool,
+    label: &str,
+) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -153,7 +158,10 @@ async fn update_bio(http: &reqwest::Client, base: &str, token: &str, bio: &str) 
         .expect("PATCH /me should succeed");
 }
 
-async fn profile_bio(pool: &PgPool, identity_id: Uuid) -> Option<String> {
+async fn profile_bio(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> Option<String> {
     sqlx::query("SELECT bio FROM profiles WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_one(pool)

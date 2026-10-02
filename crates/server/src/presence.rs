@@ -4,13 +4,14 @@
 //! the repo" sections for the publish/read auth model, sticky manual
 //! overrides, and the durable `hide_active_in` opt-out.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use avalon_protocol::social::PresenceStatus;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
@@ -20,7 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::authz::{authenticate_caller, require_capability, Caller};
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
 use avalon_protocol::permissions::{Capability, Visibility};
@@ -50,7 +51,7 @@ const UPDATE_CHANNEL_CAPACITY: usize = 256;
 /// or `ledger_entries`; see module docs. Cheap to clone into `AppState`.
 #[derive(Clone)]
 pub struct PresenceStore {
-    entries: Arc<RwLock<HashMap<Uuid, PresenceEntry>>>,
+    entries: Arc<RwLock<HashMap<IdentityId, PresenceEntry>>>,
     ttl: Duration,
     /// Fan-out for `presence::presence_ws` — every `set()`
     /// call also broadcasts the new status, so a subscribed websocket
@@ -96,7 +97,7 @@ impl PresenceStore {
 
     fn set(
         &self,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         status: PresenceStatus,
         active_in: Option<Uuid>,
     ) -> OffsetDateTime {
@@ -117,7 +118,7 @@ impl PresenceStore {
     /// expiry is inherently a per-node concept.
     pub fn apply_relayed(
         &self,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         status: PresenceStatus,
         active_in: Option<Uuid>,
         updated_at: OffsetDateTime,
@@ -127,7 +128,7 @@ impl PresenceStore {
 
     fn apply(
         &self,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         status: PresenceStatus,
         active_in: Option<Uuid>,
         updated_at: OffsetDateTime,
@@ -170,7 +171,7 @@ impl PresenceStore {
     /// which immediately resumes live TTL tracking. This is the Discord-
     /// style "sticky manual override" behavior; see
     /// `avalon_protocol::social::PresenceStatus`'s doc comment.
-    fn get(&self, identity_id: Uuid) -> PresenceView {
+    fn get(&self, identity_id: IdentityId) -> PresenceView {
         let entries = self.entries.read().expect("presence lock poisoned");
         match entries.get(&identity_id) {
             Some(entry) => {
@@ -208,7 +209,7 @@ impl Default for PresenceStore {
 }
 
 struct PresenceView {
-    identity_id: Uuid,
+    identity_id: IdentityId,
     status: PresenceStatus,
     active_in: Option<Uuid>,
     updated_at: OffsetDateTime,
@@ -216,7 +217,7 @@ struct PresenceView {
 
 #[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct PresenceResponse {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub status: PresenceStatus,
     pub active_in: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
@@ -240,7 +241,10 @@ impl From<PresenceView> for PresenceResponse {
 /// Absence (no row at all) means "not hidden" — see module doc comment —
 /// so the caller only ever needs the positive set, never a full map with
 /// defaults filled in.
-async fn hide_active_in_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uuid>, AppError> {
+async fn hide_active_in_for(
+    state: &AppState,
+    ids: &[IdentityId],
+) -> Result<HashSet<IdentityId>, AppError> {
     if ids.is_empty() {
         return Ok(HashSet::new());
     }
@@ -266,8 +270,8 @@ async fn hide_active_in_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uu
 /// row this lookup can't find.
 async fn presence_visibility_for(
     state: &AppState,
-    ids: &[Uuid],
-) -> Result<HashMap<Uuid, Visibility>, AppError> {
+    ids: &[IdentityId],
+) -> Result<HashMap<IdentityId, Visibility>, AppError> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -279,7 +283,7 @@ async fn presence_visibility_for(
     .await?;
     let mut map = HashMap::with_capacity(rows.len());
     for row in rows {
-        let identity_id: Uuid = row.try_get("identity_id")?;
+        let identity_id: IdentityId = row.try_get("identity_id")?;
         let raw: String = row.try_get("presence_visibility")?;
         map.insert(identity_id, crate::visibility::parse_visibility(&raw));
     }
@@ -291,7 +295,7 @@ async fn presence_visibility_for(
 /// part of the ephemeral `PresenceStore`.
 async fn set_hide_active_in(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     hide: bool,
 ) -> Result<(), AppError> {
     sqlx::query(
@@ -398,14 +402,14 @@ pub struct UpdateIntegratorPresenceRequest {
     put,
     path = "/presence/{identity_id}",
     tag = "presence",
-    params(("identity_id" = Uuid, Path)),
+    params(("identity_id" = IdentityId, Path)),
     request_body = UpdateIntegratorPresenceRequest,
     responses((status = 200, description = "The resulting presence", body = PresenceResponse)),
 )]
 pub async fn update_integrator_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(identity_id): Path<Uuid>,
+    IdPath(identity_id): IdPath<IdentityId>,
     Json(body): Json<UpdateIntegratorPresenceRequest>,
 ) -> Result<Json<PresenceResponse>, AppError> {
     let caller = authenticate_caller(&state, &headers).await?;
@@ -454,11 +458,11 @@ pub struct PresenceQuery {
 /// `GuildMembers`/`Private` never (presence has no guild context, and
 /// `Private` means nobody but the subject).
 fn presence_visible(
-    caller: Uuid,
-    subject: Uuid,
+    caller: IdentityId,
+    subject: IdentityId,
     visibility: Visibility,
-    friend_ids: &HashSet<Uuid>,
-    blocked_partners: &HashSet<Uuid>,
+    friend_ids: &HashSet<IdentityId>,
+    blocked_partners: &HashSet<IdentityId>,
 ) -> bool {
     if subject == caller {
         return true;
@@ -473,7 +477,7 @@ fn presence_visible(
     }
 }
 
-fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> PresenceResponse {
+fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<IdentityId>) -> PresenceResponse {
     if hidden.contains(&view.identity_id) {
         PresenceResponse {
             active_in: None,
@@ -504,13 +508,13 @@ pub async fn get_presence(
 ) -> Result<Json<Vec<PresenceResponse>>, AppError> {
     let caller = authenticate(&state, &headers).await?;
 
-    let ids: Vec<Uuid> = query
+    let ids: Vec<IdentityId> = query
         .ids
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
-            s.parse::<Uuid>()
+            s.parse::<IdentityId>()
                 .map_err(|_| AppError::InvalidPresenceQuery)
         })
         .collect::<Result<_, _>>()?;
@@ -592,14 +596,14 @@ pub async fn presence_ws(
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
-    Subscribe { ids: Vec<Uuid> },
+    Subscribe { ids: Vec<IdentityId> },
 }
 
 /// Forces a presence view for `id` to `Offline` — issue #97: a blocked
 /// identity (or, now, a non-friend under the friends-only default) must
 /// read exactly like a missing/stale entry, never a distinguishable
 /// "hidden" state.
-fn offline_view(id: Uuid) -> PresenceResponse {
+fn offline_view(id: IdentityId) -> PresenceResponse {
     PresenceResponse {
         identity_id: id,
         status: PresenceStatus::Offline,
@@ -608,7 +612,7 @@ fn offline_view(id: Uuid) -> PresenceResponse {
     }
 }
 
-async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
+async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: IdentityId) {
     // Loaded once per connection, not per message — see
     // `blocks::block_partners`'s own doc comment for the staleness
     // tradeoff this accepts; `friend_partners` and each subscribed id's
@@ -622,9 +626,9 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
         Ok(set) => set,
         Err(_) => return,
     };
-    let mut subscribed: HashSet<Uuid> = HashSet::new();
-    let mut hidden_playing: HashSet<Uuid> = HashSet::new();
-    let mut visibility_by_id: HashMap<Uuid, Visibility> = HashMap::new();
+    let mut subscribed: HashSet<IdentityId> = HashSet::new();
+    let mut hidden_playing: HashSet<IdentityId> = HashSet::new();
+    let mut visibility_by_id: HashMap<IdentityId, Visibility> = HashMap::new();
     let mut updates = state.presence.subscribe();
     let mut session = crate::shutdown::socket_session();
 
@@ -640,7 +644,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                         let Ok(ClientMessage::Subscribe { ids }) = serde_json::from_str(&text) else {
                             continue;
                         };
-                        let new_ids: Vec<Uuid> = ids.into_iter().filter(|id| !subscribed.contains(id)).collect();
+                        let new_ids: Vec<IdentityId> = ids.into_iter().filter(|id| !subscribed.contains(id)).collect();
                         if new_ids.is_empty() {
                             continue;
                         }
@@ -718,7 +722,7 @@ mod tests {
     #[test]
     fn fresh_entry_reads_as_its_own_status() {
         let store = PresenceStore::with_ttl(Duration::from_secs(60));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::Online, None);
         let view = store.get(id);
         assert_eq!(view.status, PresenceStatus::Online);
@@ -727,7 +731,7 @@ mod tests {
     #[test]
     fn stale_entry_reads_as_offline() {
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::Online, None);
         std::thread::sleep(Duration::from_millis(30));
         let view = store.get(id);
@@ -737,7 +741,7 @@ mod tests {
     #[test]
     fn sticky_away_survives_ttl_expiry() {
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::Away, None);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(store.get(id).status, PresenceStatus::Away);
@@ -746,7 +750,7 @@ mod tests {
     #[test]
     fn sticky_do_not_disturb_survives_ttl_expiry() {
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::DoNotDisturb, None);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(store.get(id).status, PresenceStatus::DoNotDisturb);
@@ -763,7 +767,7 @@ mod tests {
         // branch (which would still yield `Offline` here, coincidentally —
         // see the `updated_at`-based test below for the real distinction).
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::Offline, None);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(store.get(id).status, PresenceStatus::Offline);
@@ -772,7 +776,7 @@ mod tests {
     #[test]
     fn sticky_override_preserves_its_own_updated_at_instead_of_now() {
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         let set_at = store.set(id, PresenceStatus::Away, None);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(store.get(id).updated_at, set_at);
@@ -781,7 +785,7 @@ mod tests {
     #[test]
     fn explicit_online_after_a_sticky_override_clears_it_and_resumes_ttl_tracking() {
         let store = PresenceStore::with_ttl(Duration::from_millis(10));
-        let id = Uuid::new_v4();
+        let id = IdentityId::random_for_tests();
         store.set(id, PresenceStatus::DoNotDisturb, None);
         store.set(id, PresenceStatus::Online, None);
         assert_eq!(store.get(id).status, PresenceStatus::Online);
@@ -792,7 +796,7 @@ mod tests {
     #[test]
     fn missing_entry_reads_as_offline() {
         let store = PresenceStore::with_ttl(Duration::from_secs(60));
-        let view = store.get(Uuid::new_v4());
+        let view = store.get(IdentityId::random_for_tests());
         assert_eq!(view.status, PresenceStatus::Offline);
     }
 
@@ -828,7 +832,7 @@ mod tests {
 
     #[test]
     fn presence_visible_to_self_regardless_of_visibility_setting() {
-        let caller = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
         let empty = HashSet::new();
         assert!(presence_visible(
             caller,
@@ -841,9 +845,9 @@ mod tests {
 
     #[test]
     fn presence_visible_to_a_friend_under_the_friends_default() {
-        let caller = Uuid::new_v4();
-        let friend = Uuid::new_v4();
-        let friends: HashSet<Uuid> = [friend].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let friend = IdentityId::random_for_tests();
+        let friends: HashSet<IdentityId> = [friend].into_iter().collect();
         assert!(presence_visible(
             caller,
             friend,
@@ -855,8 +859,8 @@ mod tests {
 
     #[test]
     fn presence_hidden_from_a_non_friend_under_the_friends_default() {
-        let caller = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
         assert!(!presence_visible(
             caller,
             stranger,
@@ -868,8 +872,8 @@ mod tests {
 
     #[test]
     fn presence_visible_to_a_stranger_under_public() {
-        let caller = Uuid::new_v4();
-        let stranger = Uuid::new_v4();
+        let caller = IdentityId::random_for_tests();
+        let stranger = IdentityId::random_for_tests();
         assert!(presence_visible(
             caller,
             stranger,
@@ -881,9 +885,9 @@ mod tests {
 
     #[test]
     fn presence_hidden_from_everyone_but_self_under_private() {
-        let caller = Uuid::new_v4();
-        let friend = Uuid::new_v4();
-        let friends: HashSet<Uuid> = [friend].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let friend = IdentityId::random_for_tests();
+        let friends: HashSet<IdentityId> = [friend].into_iter().collect();
         assert!(!presence_visible(
             caller,
             friend,
@@ -898,10 +902,10 @@ mod tests {
         // A block hides presence regardless of the subject's own
         // visibility setting — the block check runs before the setting is
         // ever consulted.
-        let caller = Uuid::new_v4();
-        let friend_and_blocked = Uuid::new_v4();
-        let friends: HashSet<Uuid> = [friend_and_blocked].into_iter().collect();
-        let blocked: HashSet<Uuid> = [friend_and_blocked].into_iter().collect();
+        let caller = IdentityId::random_for_tests();
+        let friend_and_blocked = IdentityId::random_for_tests();
+        let friends: HashSet<IdentityId> = [friend_and_blocked].into_iter().collect();
+        let blocked: HashSet<IdentityId> = [friend_and_blocked].into_iter().collect();
         assert!(!presence_visible(
             caller,
             friend_and_blocked,
@@ -913,9 +917,9 @@ mod tests {
 
     #[test]
     fn hidden_playing_view_nulls_out_playing_only_for_hidden_ids() {
-        let shown = Uuid::new_v4();
-        let hidden_id = Uuid::new_v4();
-        let hidden: HashSet<Uuid> = [hidden_id].into_iter().collect();
+        let shown = IdentityId::random_for_tests();
+        let hidden_id = IdentityId::random_for_tests();
+        let hidden: HashSet<IdentityId> = [hidden_id].into_iter().collect();
 
         let view = PresenceResponse {
             identity_id: shown,

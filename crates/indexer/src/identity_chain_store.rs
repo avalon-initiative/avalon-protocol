@@ -14,9 +14,9 @@ use avalon_protocol::identity_chain_wire::{
     chain_owner, event_hash, resolve_identity_chain, to_chained_event, truncate_to_micros,
     ChainEventError,
 };
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 /// Resolved head of one identity's chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +52,7 @@ struct Stored {
 
 pub async fn state<'e>(
     exec: impl PgExecutor<'e>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Option<ChainState>, sqlx::Error> {
     let row = sqlx::query(
         "SELECT seq, head_hash, forked_at_seq FROM identity_chain_state WHERE identity_id = $1",
@@ -74,7 +74,7 @@ pub async fn state<'e>(
 /// chain-critical events).
 pub async fn is_forked<'e>(
     exec: impl PgExecutor<'e>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<bool, sqlx::Error> {
     Ok(state(exec, identity_id)
         .await?
@@ -83,7 +83,7 @@ pub async fn is_forked<'e>(
 
 async fn lock_state(
     tx: &mut Transaction<'_, Postgres>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<ChainState, sqlx::Error> {
     sqlx::query(
         "INSERT INTO identity_chain_state (identity_id) VALUES ($1) ON CONFLICT DO NOTHING",
@@ -107,7 +107,7 @@ async fn lock_state(
 
 async fn load(
     tx: &mut Transaction<'_, Postgres>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Vec<Stored>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT event, chain_timestamp FROM identity_chain_events \
@@ -157,7 +157,7 @@ fn accepted_of<'a>(stored: &'a [Stored], outcome: &ChainOutcome) -> Vec<&'a Stor
 
 async fn persist_state(
     tx: &mut Transaction<'_, Postgres>,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     outcome: &ChainOutcome,
 ) -> Result<(), sqlx::Error> {
     let head = outcome.head();
@@ -217,7 +217,7 @@ pub async fn record(
 
 async fn record_locked(
     tx: &mut Transaction<'_, Postgres>,
-    owner: Uuid,
+    owner: IdentityId,
     event: &ProtocolEvent,
     node_now: OffsetDateTime,
 ) -> Result<Recorded, sqlx::Error> {

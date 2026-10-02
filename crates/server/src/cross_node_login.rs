@@ -29,6 +29,7 @@
 //! — see [`resolve_signing_key_cross_shard`]'s own doc comment for the
 //! shard-id simplification this relies on.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 
 use avalon_indexer::projections::identity_signing_keys;
@@ -36,6 +37,8 @@ use avalon_protocol::cross_node_login::CrossNodeLoginGrant;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use ed25519_dalek::VerifyingKey;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
@@ -512,7 +515,7 @@ fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
 /// local lookup's own `revoked_at IS NULL` condition.
 async fn resolve_signing_key_cross_shard(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
 ) -> Option<Vec<u8>> {
     let locations = crate::identity_locator::resolve(state, identity_id).await;
@@ -524,6 +527,10 @@ async fn resolve_signing_key_cross_shard(
     let known_list = crate::cosign_verify::known_list_verifying_keys(&state.known_list);
     let sources = crate::cosign_gather::witness_sources(&known_list, &state.peers.list_all());
     let signing_key_id_str = signing_key_id.to_string();
+    let identity_id_str = identity_id.to_string();
+    let belongs_to_identity = |payload: &serde_json::Value| {
+        payload.get("identity_id").and_then(|v| v.as_str()) == Some(identity_id_str.as_str())
+    };
     let added_subject = format!("identity:{identity_id}:self:signing_key_added");
     let revoked_subject = format!("identity:{identity_id}:self:signing_key_revoked");
 
@@ -543,8 +550,9 @@ async fn resolve_signing_key_cross_shard(
             continue;
         };
         let Some(matching) = added.iter().find(|entry| {
-            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
-                == Some(signing_key_id_str.as_str())
+            belongs_to_identity(&entry.payload)
+                && entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                    == Some(signing_key_id_str.as_str())
         }) else {
             continue;
         };
@@ -562,8 +570,9 @@ async fn resolve_signing_key_cross_shard(
         .await
         .unwrap_or_default();
         let is_revoked = revoked.iter().any(|entry| {
-            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
-                == Some(signing_key_id_str.as_str())
+            belongs_to_identity(&entry.payload)
+                && entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                    == Some(signing_key_id_str.as_str())
         });
         if is_revoked {
             return None;
@@ -578,6 +587,15 @@ async fn resolve_signing_key_cross_shard(
         else {
             continue;
         };
+        // An inception key is valid only if it is the key the identity id was derived from.
+        if matching.payload.get("kind").and_then(|v| v.as_str()) == Some("inception") {
+            let derived = <[u8; 32]>::try_from(public_key.as_slice())
+                .ok()
+                .is_some_and(|key| identity_id.matches_key(&key));
+            if !derived {
+                continue;
+            }
+        }
         return Some(public_key);
     }
     None
@@ -596,7 +614,45 @@ async fn resolve_signing_key_cross_shard(
 /// identity with the same `display_name` (the one real collision case here
 /// — cross-shard `display_name` uniqueness isn't and can't be enforced
 /// globally by a single node's unique index).
-async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
+/// The display name and inception key of the first valid v2 `identity.created` entry for
+/// `identity_id` fetched from `shard_id` on `network_id`: id derived from an acceptable key,
+/// permitted display name, and the inception key's strict self-signature over the bytes bound to
+/// this network and shard.
+fn valid_creation(
+    created: &[crate::cross_shard_fetch::VerifiedEntry],
+    identity_id: IdentityId,
+    network_id: &str,
+    shard_id: &str,
+) -> Option<(String, [u8; 32])> {
+    created.iter().find_map(|entry| {
+        let payload: avalon_protocol::event_payloads::IdentityCreatedPayload =
+            serde_json::from_value(entry.payload.clone()).ok()?;
+        if entry.version != 2
+            || payload.identity_id != identity_id
+            || !avalon_protocol::identity_id::display_name_permitted(&payload.display_name)
+        {
+            return None;
+        }
+        let key = <[u8; 32]>::try_from(BASE64.decode(&payload.public_key).ok()?).ok()?;
+        let verifying_key = avalon_protocol::ed25519_key::parse_ed25519_public_key(&key)?;
+        if !identity_id.matches_key(&key) {
+            return None;
+        }
+        let signature = <[u8; 64]>::try_from(BASE64.decode(&payload.signature).ok()?).ok()?;
+        let bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            network_id,
+            shard_id,
+            payload.ticket_id,
+            &identity_id,
+            &key,
+            &payload.display_name,
+        );
+        avalon_protocol::ed25519_key::verify_strict_signature(&verifying_key, &bytes, &signature)
+            .then_some((payload.display_name, key))
+    })
+}
+
+async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId) {
     let already_local = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
         .bind(identity_id)
         .fetch_optional(&state.pool)
@@ -626,19 +682,24 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
         else {
             continue;
         };
-        let Some(display_name) = created
-            .first()
-            .and_then(|entry| entry.payload.get("display_name"))
-            .and_then(|v| v.as_str())
-        else {
+        let Some((display_name, inception_key)) = valid_creation(
+            &created,
+            identity_id,
+            state.chain.network_id(),
+            IDENTITY_SIGNING_KEY_SHARD_ID,
+        ) else {
             continue;
         };
+        let display_name = display_name.as_str();
 
         let Ok(mut tx) = state.pool.begin().await else {
             return;
         };
-        if sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(identity_id)
+        if sqlx::query(
+            "INSERT INTO identities (id, inception_public_key) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(identity_id)
+        .bind(inception_key.as_slice())
             .execute(&mut *tx)
             .await
             .is_err()
@@ -672,7 +733,10 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
 /// failure is [`AppError::Unauthorized`], same undifferentiated posture
 /// `crate::continuation::verify`'s own doc comment already establishes for
 /// the same reason (never reveal *why* a bearer credential didn't verify).
-async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<Uuid, AppError> {
+async fn verify_grant(
+    state: &AppState,
+    grant: &CrossNodeLoginGrant,
+) -> Result<IdentityId, AppError> {
     let now = OffsetDateTime::now_utc();
     if grant.expires_at < now || grant.issued_at > now + CLOCK_SKEW_ALLOWANCE {
         return Err(AppError::Unauthorized);
@@ -690,31 +754,36 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
         return Err(AppError::Unauthorized);
     }
 
-    let public_key =
-        match identity_signing_keys::find_active_by_id(&state.pool, grant.signing_key_id).await? {
-            Some(key) => {
-                if key.identity_id != grant.identity_id {
-                    return Err(AppError::Unauthorized);
-                }
-                key.public_key
+    let public_key = match identity_signing_keys::find_active_by_id(
+        &state.pool,
+        grant.identity_id,
+        grant.signing_key_id,
+    )
+    .await?
+    {
+        Some(key) => {
+            if key.identity_id != grant.identity_id {
+                return Err(AppError::Unauthorized);
             }
-            // Not local — falls back to cross-shard resolution. A cross-shard-fetched entry
-            // is already scoped to `grant.identity_id` by construction (it's
-            // fetched from that exact identity's own `identity:{id}:...`
-            // subject), so there's no separate identity-id cross-check to
-            // repeat here the way the local path needs one.
-            None => {
-                let key =
-                    resolve_signing_key_cross_shard(state, grant.identity_id, grant.signing_key_id)
-                        .await
-                        .ok_or(AppError::Unauthorized)?;
-                // Needed before `submit` can insert into `sessions` (its
-                // `identity_id` FK) or `GET /me` can return anything — see
-                // this function's own doc comment.
-                provision_local_identity_stub(state, grant.identity_id).await;
-                key
-            }
-        };
+            key.public_key
+        }
+        // Not local — falls back to cross-shard resolution. A cross-shard-fetched entry
+        // is already scoped to `grant.identity_id` by construction (it's
+        // fetched from that exact identity's own `identity:{id}:...`
+        // subject), so there's no separate identity-id cross-check to
+        // repeat here the way the local path needs one.
+        None => {
+            let key =
+                resolve_signing_key_cross_shard(state, grant.identity_id, grant.signing_key_id)
+                    .await
+                    .ok_or(AppError::Unauthorized)?;
+            // Needed before `submit` can insert into `sessions` (its
+            // `identity_id` FK) or `GET /me` can return anything — see
+            // this function's own doc comment.
+            provision_local_identity_stub(state, grant.identity_id).await;
+            key
+        }
+    };
 
     let signature_bytes = hex::decode(&grant.signature).map_err(|_| AppError::Unauthorized)?;
     if !verify_event_signature(&public_key, &grant.signing_bytes(), &signature_bytes) {
@@ -946,5 +1015,69 @@ mod tests {
             "avalon-mainnet-1",
             &anchors,
         ));
+    }
+
+    fn entry(
+        who: &avalon_protocol::identity_id::TestIdentity,
+        name: &str,
+        version: i32,
+    ) -> crate::cross_shard_fetch::VerifiedEntry {
+        crate::cross_shard_fetch::VerifiedEntry {
+            event_id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: String::new(),
+            subject: String::new(),
+            payload: serde_json::to_value(who.created_payload(name)).unwrap(),
+            event_timestamp: OffsetDateTime::now_utc(),
+            version,
+        }
+    }
+
+    const NET: &str = "avalon-test-network";
+    const SHARD: &str = "core";
+
+    #[test]
+    fn a_remote_creation_is_accepted_only_when_valid() {
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let other = avalon_protocol::identity_id::TestIdentity::new();
+        let ok = valid_creation(&[entry(&who, "Nova", 2)], who.id, NET, SHARD).unwrap();
+        assert_eq!(ok.0, "Nova");
+        assert_eq!(ok.1, who.public_key());
+        assert!(valid_creation(&[entry(&who, "Nova", 1)], who.id, NET, SHARD).is_none());
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], other.id, NET, SHARD).is_none());
+        for bad in [
+            other.id.to_string().to_uppercase(),
+            "a\u{202E}b".to_string(),
+            "n".repeat(500),
+        ] {
+            assert!(
+                valid_creation(&[entry(&who, &bad, 2)], who.id, NET, SHARD).is_none(),
+                "{bad:?}"
+            );
+        }
+        // Signed for another shard or network, or with a tampered signature.
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], who.id, NET, "game:x/1").is_none());
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], who.id, "other-net", SHARD).is_none());
+        let mut tampered = entry(&who, "Nova", 2);
+        tampered.payload["display_name"] = serde_json::json!("Mallory");
+        assert!(valid_creation(&[tampered], who.id, NET, SHARD).is_none());
+    }
+
+    #[test]
+    fn a_creation_whose_id_does_not_derive_from_its_key_or_with_a_weak_key_is_refused() {
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let other = avalon_protocol::identity_id::TestIdentity::new();
+        // Key swapped for another identity's: the id no longer derives from it.
+        let mut swapped = entry(&who, "Nova", 2);
+        swapped.payload["public_key"] = serde_json::json!(BASE64.encode(other.public_key()));
+        assert!(valid_creation(&[swapped], who.id, NET, SHARD).is_none());
+        // The identity point is small order: an id can be derived from it, but the key is refused.
+        let mut weak_key = [0u8; 32];
+        weak_key[0] = 1;
+        let weak_id = avalon_protocol::identity_id::derive_identity_id(&weak_key);
+        let mut weak = entry(&who, "Nova", 2);
+        weak.payload["identity_id"] = serde_json::json!(weak_id.to_string());
+        weak.payload["public_key"] = serde_json::json!(BASE64.encode(weak_key));
+        assert!(valid_creation(&[weak], weak_id, NET, SHARD).is_none());
     }
 }

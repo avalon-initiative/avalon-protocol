@@ -7,6 +7,7 @@
 //! `avalon-docs/protocol/identity.md`'s durability table.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -17,7 +18,7 @@ use crate::IndexError;
 pub enum PasskeyWrite {
     Registered {
         passkey_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         credential_id: Vec<u8>,
         passkey_data: serde_json::Value,
         label: Option<String>,
@@ -25,6 +26,7 @@ pub enum PasskeyWrite {
     },
     Revoked {
         passkey_id: Uuid,
+        identity_id: IdentityId,
         revoked_at: OffsetDateTime,
     },
 }
@@ -33,7 +35,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<PasskeyWrite> {
     match event.kind.as_str() {
         "identity.passkey_registered" => {
             let passkey_id = super::uuid_field(&event.payload, "passkey_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             let credential_id_b64 = event.payload.get("credential_id")?.as_str()?;
             let credential_id = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
@@ -56,8 +58,10 @@ pub fn decode(event: &ProtocolEvent) -> Option<PasskeyWrite> {
         }
         "identity.passkey_revoked" => {
             let passkey_id = super::uuid_field(&event.payload, "passkey_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             Some(PasskeyWrite::Revoked {
                 passkey_id,
+                identity_id,
                 revoked_at: event.timestamp,
             })
         }
@@ -78,14 +82,19 @@ pub async fn apply(
             label,
             added_at,
         } => {
-            sqlx::query(
-                "INSERT INTO indexer_identity_passkeys \
+            // A re-delivery of the same registration is idempotent; an event that would repoint an
+            // existing row to another identity or credential is refused.
+            let written = sqlx::query(
+                "INSERT INTO indexer_identity_passkeys AS k \
                  (passkey_id, identity_id, credential_id, passkey_data, label, added_at, revoked_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, NULL) \
+                 VALUES ($1, $2, $3, $4, $5, $6, \
+                         (SELECT revoked_at FROM indexer_identity_passkey_revocations \
+                          WHERE identity_id = $2 AND passkey_id = $1)) \
                  ON CONFLICT (passkey_id) DO UPDATE SET \
-                     identity_id = EXCLUDED.identity_id, credential_id = EXCLUDED.credential_id, \
-                     passkey_data = EXCLUDED.passkey_data, label = EXCLUDED.label, \
-                     added_at = EXCLUDED.added_at",
+                     label = EXCLUDED.label, added_at = EXCLUDED.added_at \
+                 WHERE k.identity_id = EXCLUDED.identity_id \
+                   AND k.credential_id = EXCLUDED.credential_id \
+                   AND k.passkey_data = EXCLUDED.passkey_data",
             )
             .bind(passkey_id)
             .bind(identity_id)
@@ -95,14 +104,34 @@ pub async fn apply(
             .bind(added_at)
             .execute(&mut **tx)
             .await?;
+            if written.rows_affected() == 0 {
+                return Err(IndexError::Rejected(format!(
+                    "passkey {passkey_id} already belongs to a different identity or credential"
+                )));
+            }
         }
         PasskeyWrite::Revoked {
             passkey_id,
+            identity_id,
             revoked_at,
         } => {
             sqlx::query(
-                "UPDATE indexer_identity_passkeys SET revoked_at = $2 WHERE passkey_id = $1",
+                "UPDATE indexer_identity_passkeys SET revoked_at = $2 \
+                 WHERE passkey_id = $1 AND identity_id = $3 AND revoked_at IS NULL",
             )
+            .bind(passkey_id)
+            .bind(revoked_at)
+            .bind(identity_id)
+            .execute(&mut **tx)
+            .await?;
+            // Recorded even when it arrives before the registration, so that registration
+            // comes up revoked.
+            sqlx::query(
+                "INSERT INTO indexer_identity_passkey_revocations \
+                 (identity_id, passkey_id, revoked_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(identity_id)
             .bind(passkey_id)
             .bind(revoked_at)
             .execute(&mut **tx)
@@ -115,7 +144,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq)]
 pub struct PasskeyRow {
     pub passkey_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub credential_id: Vec<u8>,
     pub passkey_data: serde_json::Value,
     pub label: Option<String>,
@@ -174,7 +203,7 @@ mod tests {
     #[test]
     fn decodes_a_registered_event() {
         let passkey_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.passkey_registered",
             serde_json::json!({
@@ -202,7 +231,7 @@ mod tests {
     #[test]
     fn decodes_a_registered_event_with_no_label() {
         let passkey_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.passkey_registered",
             serde_json::json!({
@@ -230,11 +259,12 @@ mod tests {
     #[test]
     fn decodes_a_revoked_event() {
         let passkey_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.passkey_revoked",
             serde_json::json!({
                 "passkey_id": passkey_id,
-                "identity_id": Uuid::new_v4(),
+                "identity_id": identity_id,
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -242,9 +272,19 @@ mod tests {
             write,
             PasskeyWrite::Revoked {
                 passkey_id,
+                identity_id,
                 revoked_at: source_event.timestamp,
             }
         );
+    }
+
+    #[test]
+    fn a_revocation_without_an_identity_id_is_refused() {
+        let source_event = event(
+            "identity.passkey_revoked",
+            serde_json::json!({ "passkey_id": Uuid::new_v4() }),
+        );
+        assert_eq!(decode(&source_event), None);
     }
 
     #[test]
@@ -259,7 +299,7 @@ mod tests {
                 "identity.passkey_registered",
                 serde_json::json!({
                     "passkey_id": Uuid::new_v4(),
-                    "identity_id": Uuid::new_v4(),
+                    "identity_id": IdentityId::random_for_tests(),
                     "credential_id": "not valid base64!!",
                     "passkey_data": {},
                 }),

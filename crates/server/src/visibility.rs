@@ -32,6 +32,7 @@
 
 use avalon_indexer::projections::friendships as friendship_reads;
 use avalon_indexer::projections::guild_rosters;
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Visibility;
 use uuid::Uuid;
 
@@ -69,8 +70,8 @@ pub(crate) fn parse_visibility(raw: &str) -> Visibility {
 pub(crate) async fn is_visible(
     state: &AppState,
     visibility: Visibility,
-    viewer: Option<Uuid>,
-    subject: Option<Uuid>,
+    viewer: Option<IdentityId>,
+    subject: Option<IdentityId>,
     guild_id: Option<Uuid>,
 ) -> Result<bool, AppError> {
     if let (Some(viewer_id), Some(subject_id)) = (viewer, subject) {
@@ -94,14 +95,14 @@ pub(crate) async fn is_visible(
     }
 }
 
-async fn are_friends(state: &AppState, a: Uuid, b: Uuid) -> Result<bool, AppError> {
+async fn are_friends(state: &AppState, a: IdentityId, b: IdentityId) -> Result<bool, AppError> {
     Ok(friendship_reads::are_friends(&state.pool, a, b).await?)
 }
 
 async fn is_guild_member(
     state: &AppState,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<bool, AppError> {
     Ok(guild_rosters::is_member(&state.pool, guild_id, identity_id).await?)
 }
@@ -115,7 +116,7 @@ async fn is_guild_member(
 /// on a bad value) — this function only ever writes what it's given.
 pub(crate) async fn set_presence_visibility(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     raw: &str,
 ) -> Result<(), AppError> {
     sqlx::query("UPDATE profiles SET presence_visibility = $2 WHERE identity_id = $1")

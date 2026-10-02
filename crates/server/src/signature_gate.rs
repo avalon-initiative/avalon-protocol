@@ -3,7 +3,7 @@
 //! `avalon-docs/protocol/identity.md`'s "Action-tier classification" section
 //! for the endpoint-by-endpoint list this backs. Deliberately reuses
 //! `auth::verify_event_signature` rather than inventing a new signing
-//! scheme, mirroring `devices::device_grant_approval_signing_bytes`'s wire
+//! scheme, mirroring the device-grant approval signing bytes' wire
 //! shape: the caller supplies `signing_key_id` (one of their own
 //! non-revoked `identity_signing_keys` rows) plus a base64 signature over a
 //! canonical `avalon:<action_tag>:v1:<field>:<field>:...` byte string the
@@ -11,6 +11,7 @@
 //! signature minted for one action/target can never be replayed against a
 //! different one.
 
+use avalon_protocol::ids::IdentityId;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use sqlx::Row;
@@ -22,7 +23,7 @@ use crate::state::AppState;
 
 /// Builds the canonical byte string a fresh-signature action signs —
 /// `avalon:<action_tag>:v1:<field1>:<field2>:...`, the same versioned-tag
-/// shape `devices::device_grant_approval_signing_bytes` already
+/// shape the device-grant approval signing bytes already
 /// establishes, factored out here so every signature-required endpoint
 /// builds it the same way.
 pub fn canonical_message(action_tag: &str, fields: &[&str]) -> Vec<u8> {
@@ -39,7 +40,10 @@ pub fn canonical_message(action_tag: &str, fields: &[&str]) -> Vec<u8> {
 /// have no key to sign with" ([`AppError::NoRegisteredSigningKey`]) and
 /// "you have a key but didn't sign this request"
 /// ([`AppError::FreshSignatureRequired`]).
-pub async fn has_any_signing_key(state: &AppState, identity_id: Uuid) -> Result<bool, AppError> {
+pub async fn has_any_signing_key(
+    state: &AppState,
+    identity_id: IdentityId,
+) -> Result<bool, AppError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM identity_signing_keys WHERE identity_id = $1 AND revoked_at IS NULL",
     )
@@ -63,7 +67,7 @@ pub async fn has_any_signing_key(state: &AppState, identity_id: Uuid) -> Result<
 /// not a generic auth failure, per #698's own invariant.
 pub async fn require_fresh_signature(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     canonical_message: &[u8],
     signing_key_id: Option<Uuid>,
     signature_b64: Option<&str>,

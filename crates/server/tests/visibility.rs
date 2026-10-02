@@ -28,10 +28,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -55,7 +57,11 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+async fn seed_friendship(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
@@ -99,7 +105,7 @@ async fn presence_visible_to(
     http: &reqwest::Client,
     base: &str,
     viewer_token: &str,
-    subject: Uuid,
+    subject: avalon_protocol::ids::IdentityId,
 ) -> bool {
     let response: serde_json::Value = auth(http.get(format!("{base}/presence")), viewer_token)
         .query(&[("ids", subject.to_string())])
@@ -163,7 +169,11 @@ async fn create_guild(http: &reqwest::Client, base: &str, owner_token: &str) -> 
     response["id"].as_str().unwrap().parse().unwrap()
 }
 
-async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
+async fn seed_guild_membership(
+    pool: &PgPool,
+    guild_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, 1, now())",

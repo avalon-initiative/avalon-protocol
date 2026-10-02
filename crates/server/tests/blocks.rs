@@ -23,10 +23,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -57,7 +59,11 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 /// Presence reads default to friends-only visibility (`presence.rs`'s
 /// module doc comment) — needed by any test checking one identity's view
 /// of another's real presence.
-async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+async fn seed_friendship(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
@@ -96,7 +102,7 @@ async fn a_friend_request_from_a_blocked_identity_fails_identically_to_a_nonexis
     let blocked_body: serde_json::Value = blocked_attempt.json().await.unwrap();
 
     let nonexistent_attempt = auth(http.post(format!("{base}/friends/requests")), &bob_token)
-        .json(&serde_json::json!({ "to": Uuid::new_v4() }))
+        .json(&serde_json::json!({ "to": avalon_protocol::ids::IdentityId::random_for_tests() }))
         .send()
         .await
         .unwrap();

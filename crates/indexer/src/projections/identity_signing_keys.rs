@@ -10,7 +10,9 @@
 //! since that node's own writes are dual-written here too (same pattern
 //! `recognitions.rs` already uses).
 
+use avalon_protocol::event_payloads::IdentitySigningKeyAddedPayload;
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -21,13 +23,14 @@ use crate::IndexError;
 pub enum SigningKeyWrite {
     Added {
         signing_key_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         public_key: Vec<u8>,
         label: Option<String>,
         added_at: OffsetDateTime,
     },
     Revoked {
         signing_key_id: Uuid,
+        identity_id: IdentityId,
         revoked_at: OffsetDateTime,
     },
 }
@@ -35,28 +38,40 @@ pub enum SigningKeyWrite {
 pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
     match event.kind.as_str() {
         "identity.signing_key_added" => {
-            let signing_key_id = super::uuid_field(&event.payload, "signing_key_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
-            let public_key_b64 = event.payload.get("public_key")?.as_str()?;
-            let public_key =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, public_key_b64)
-                    .ok()?;
-            let label = event
-                .payload
-                .get("device_label")
-                .and_then(|v| v.as_str().map(str::to_string));
+            if event.version != 2 {
+                return None;
+            }
+            let added: IdentitySigningKeyAddedPayload =
+                serde_json::from_value(event.payload.clone()).ok()?;
+            let public_key = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &added.public_key,
+            )
+            .ok()?;
+            if added.kind == avalon_protocol::event_payloads::SIGNING_KEY_KIND_INCEPTION {
+                let key: [u8; 32] = public_key.as_slice().try_into().ok()?;
+                avalon_protocol::ed25519_key::parse_ed25519_public_key(&key)?;
+                if !added.identity_id.matches_key(&key) {
+                    return None;
+                }
+            }
             Some(SigningKeyWrite::Added {
-                signing_key_id,
-                identity_id,
+                signing_key_id: added.signing_key_id,
+                identity_id: added.identity_id,
                 public_key,
-                label,
+                label: added.device_label,
                 added_at: event.timestamp,
             })
         }
         "identity.signing_key_revoked" => {
-            let signing_key_id = super::uuid_field(&event.payload, "signing_key_id")?;
+            if event.version != 2 {
+                return None;
+            }
+            let revoked: avalon_protocol::event_payloads::IdentitySigningKeyRevokedPayload =
+                serde_json::from_value(event.payload.clone()).ok()?;
             Some(SigningKeyWrite::Revoked {
-                signing_key_id,
+                signing_key_id: revoked.signing_key_id,
+                identity_id: revoked.identity_id,
                 revoked_at: event.timestamp,
             })
         }
@@ -76,13 +91,18 @@ pub async fn apply(
             label,
             added_at,
         } => {
-            sqlx::query(
-                "INSERT INTO indexer_identity_signing_keys \
+            // Keys are unique per (identity, key id), so another identity cannot occupy this id.
+            // A re-delivery is idempotent; one that would swap the public key is refused. A
+            // revocation that arrived before this addition is applied to the new row.
+            let written = sqlx::query(
+                "INSERT INTO indexer_identity_signing_keys AS k \
                  (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \
-                 VALUES ($1, $2, $3, $4, $5, NULL) \
-                 ON CONFLICT (signing_key_id) DO UPDATE SET \
-                     identity_id = EXCLUDED.identity_id, public_key = EXCLUDED.public_key, \
-                     label = EXCLUDED.label, added_at = EXCLUDED.added_at",
+                 VALUES ($1, $2, $3, $4, $5, \
+                         (SELECT revoked_at FROM indexer_identity_signing_key_revocations \
+                          WHERE identity_id = $2 AND signing_key_id = $1)) \
+                 ON CONFLICT (identity_id, signing_key_id) DO UPDATE SET \
+                     label = EXCLUDED.label, added_at = EXCLUDED.added_at \
+                 WHERE k.public_key = EXCLUDED.public_key",
             )
             .bind(signing_key_id)
             .bind(identity_id)
@@ -91,14 +111,34 @@ pub async fn apply(
             .bind(added_at)
             .execute(&mut **tx)
             .await?;
+            if written.rows_affected() == 0 {
+                return Err(IndexError::Rejected(format!(
+                    "signing key {signing_key_id} already exists for this identity with a different public key"
+                )));
+            }
         }
         SigningKeyWrite::Revoked {
             signing_key_id,
+            identity_id,
             revoked_at,
         } => {
             sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = $2 WHERE signing_key_id = $1",
+                "UPDATE indexer_identity_signing_keys SET revoked_at = $3 \
+                 WHERE signing_key_id = $1 AND identity_id = $2 AND revoked_at IS NULL",
             )
+            .bind(signing_key_id)
+            .bind(identity_id)
+            .bind(revoked_at)
+            .execute(&mut **tx)
+            .await?;
+            // Recorded unconditionally: a revocation delivered before the key's addition must
+            // still leave the key revoked when the addition arrives.
+            sqlx::query(
+                "INSERT INTO indexer_identity_signing_key_revocations \
+                 (identity_id, signing_key_id, revoked_at) VALUES ($1, $2, $3) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(identity_id)
             .bind(signing_key_id)
             .bind(revoked_at)
             .execute(&mut **tx)
@@ -111,7 +151,7 @@ pub async fn apply(
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigningKeyRow {
     pub signing_key_id: Uuid,
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub public_key: Vec<u8>,
 }
 
@@ -124,12 +164,14 @@ pub struct SigningKeyRow {
 /// session tokens.
 pub async fn find_active_by_id(
     pool: &sqlx::PgPool,
+    identity_id: IdentityId,
     signing_key_id: Uuid,
 ) -> Result<Option<SigningKeyRow>, IndexError> {
     let row = sqlx::query(
         "SELECT signing_key_id, identity_id, public_key FROM indexer_identity_signing_keys \
-         WHERE signing_key_id = $1 AND revoked_at IS NULL",
+         WHERE identity_id = $1 AND signing_key_id = $2 AND revoked_at IS NULL",
     )
+    .bind(identity_id)
     .bind(signing_key_id)
     .fetch_optional(pool)
     .await?;
@@ -142,7 +184,7 @@ pub async fn find_active_by_id(
 /// identities whose only key is revoked (their history is still real and
 /// still worth locating), so this is "identities this node knows about,"
 /// not "identities this node can currently authenticate."
-pub async fn distinct_identity_ids(pool: &sqlx::PgPool) -> Result<Vec<Uuid>, IndexError> {
+pub async fn distinct_identity_ids(pool: &sqlx::PgPool) -> Result<Vec<IdentityId>, IndexError> {
     let rows = sqlx::query("SELECT DISTINCT identity_id FROM indexer_identity_signing_keys")
         .fetch_all(pool)
         .await?;
@@ -165,7 +207,11 @@ mod tests {
 
     use super::*;
 
-    fn event(kind: &str, issuer_identity_id: Uuid, payload: serde_json::Value) -> ProtocolEvent {
+    fn event(
+        kind: &str,
+        issuer_identity_id: IdentityId,
+        payload: serde_json::Value,
+    ) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
@@ -183,7 +229,7 @@ mod tests {
             ),
             payload,
             timestamp: OffsetDateTime::now_utc(),
-            version: 1,
+            version: 2,
             identity_chain: None,
         }
     }
@@ -191,7 +237,7 @@ mod tests {
     #[test]
     fn decodes_an_added_event() {
         let signing_key_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.signing_key_added",
             identity_id,
@@ -201,6 +247,7 @@ mod tests {
                 "device_label": "Pixel 9",
                 "approved_by_signing_key_id": signing_key_id,
                 "identity_id": identity_id,
+                "kind": "device_grant",
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -219,19 +266,75 @@ mod tests {
     #[test]
     fn decodes_a_revoked_event() {
         let signing_key_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "identity.signing_key_revoked",
-            Uuid::new_v4(),
-            serde_json::json!({ "signing_key_id": signing_key_id }),
+            identity_id,
+            serde_json::json!({
+                "identity_id": identity_id,
+                "signing_key_id": signing_key_id,
+                "revoked_by_signing_key_id": signing_key_id,
+                "signature": "c2ln",
+            }),
         );
         let write = decode(&source_event).unwrap();
         assert_eq!(
             write,
             SigningKeyWrite::Revoked {
                 signing_key_id,
+                identity_id,
                 revoked_at: source_event.timestamp,
             }
         );
+    }
+
+    #[test]
+    fn an_inception_key_must_hash_to_the_identity_id() {
+        use base64::Engine as _;
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let other = avalon_protocol::identity_id::TestIdentity::new();
+        let payload = |identity: IdentityId, key: [u8; 32]| {
+            serde_json::json!({
+                "signing_key_id": Uuid::new_v4(),
+                "public_key": base64::engine::general_purpose::STANDARD.encode(key),
+                "device_label": null,
+                "approved_by_signing_key_id": Uuid::new_v4(),
+                "identity_id": identity,
+                "kind": "inception",
+            })
+        };
+        let good = event(
+            "identity.signing_key_added",
+            who.id,
+            payload(who.id, who.public_key()),
+        );
+        assert!(decode(&good).is_some());
+        let forged = event(
+            "identity.signing_key_added",
+            who.id,
+            payload(who.id, other.public_key()),
+        );
+        assert_eq!(decode(&forged), None);
+    }
+
+    #[test]
+    fn v1_added_event_is_rejected() {
+        let id = IdentityId::random_for_tests();
+        let mut e = event(
+            "identity.signing_key_added",
+            id,
+            serde_json::json!({
+                "signing_key_id": Uuid::new_v4(),
+                "public_key": "AAAA",
+                "device_label": null,
+                "approved_by_signing_key_id": Uuid::new_v4(),
+                "identity_id": id,
+                "kind": "device_grant",
+            }),
+        );
+        assert!(decode(&e).is_some());
+        e.version = 1;
+        assert_eq!(decode(&e), None);
     }
 
     #[test]
@@ -239,7 +342,7 @@ mod tests {
         assert_eq!(
             decode(&event(
                 "guild.created",
-                Uuid::new_v4(),
+                IdentityId::random_for_tests(),
                 serde_json::json!({})
             )),
             None
@@ -251,7 +354,7 @@ mod tests {
         assert_eq!(
             decode(&event(
                 "identity.signing_key_added",
-                Uuid::new_v4(),
+                IdentityId::random_for_tests(),
                 serde_json::json!({
                     "signing_key_id": Uuid::new_v4(),
                     "public_key": "not valid base64!!",

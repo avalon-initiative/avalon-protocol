@@ -23,7 +23,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 /// Comfortably above realistic queuing delay for a handful of writes on a
 /// pool of 2-3 connections, and comfortably below the 30s acquire timeout
@@ -48,9 +47,11 @@ async fn test_pool() -> PgPool {
 }
 
 async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");

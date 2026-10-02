@@ -325,7 +325,7 @@ replica, a well-formed write is refused with `403` and code `REPLICA_ONLY`:
 ```bash
 curl -s -X POST http://127.0.0.1:8080/identities/register/start \
   -H 'content-type: application/json' \
-  -d '{"identity_id":"3f2b1c94-7d1e-4a55-9c1a-2b6f0e8d7a10","display_name":"probe"}'
+  -d '{"identity_id":"7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9","event_signing_public_key":"11l5O7wTooGagnx2rbb7qKSa7gB/SfLQmS2ZuCWtLEg=","display_name":"probe"}'
 ```
 
 (A body that fails validation is answered `422` before the replica check.)

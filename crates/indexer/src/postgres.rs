@@ -18,6 +18,7 @@
 //!   writing `profiles` themselves.
 
 use async_trait::async_trait;
+use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -52,6 +53,8 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_integrator_schemas",
     "indexer_identity_passkeys",
     "indexer_identity_signing_keys",
+    "indexer_identity_signing_key_revocations",
+    "indexer_identity_passkey_revocations",
     "identity_chain_events",
     "identity_chain_state",
 ];
@@ -108,25 +111,72 @@ impl PostgresIndexer {
             if event.kind != "identity.created" {
                 continue;
             }
-            let Some(identity_id) = event
-                .payload
-                .get("identity_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<uuid::Uuid>().ok())
+            if event.version != 2 {
+                continue;
+            }
+            let Ok(created) =
+                serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
             else {
                 continue;
             };
+            let Some(public_key) = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &created.public_key,
+            )
+            .ok()
+            .and_then(|k| <[u8; 32]>::try_from(k).ok())
+            .filter(|k| created.identity_id.matches_key(k)) else {
+                continue;
+            };
+            if !avalon_protocol::identity_id::display_name_permitted(&created.display_name) {
+                continue;
+            }
+            let identity_id = created.identity_id;
             sqlx::query(
-                "INSERT INTO identities (id, created_at) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
+                 ON CONFLICT (id) DO NOTHING",
             )
             .bind(identity_id)
             .bind(event.timestamp)
+            .bind(public_key.to_vec())
             .execute(&mut *tx)
             .await?;
         }
 
         for event in events {
-            self.apply_in_tx(&mut tx, event).await?;
+            // Each event applies in its own savepoint so a refused one rolls back completely.
+            let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+            match self.apply_in_tx(&mut savepoint, event).await {
+                Ok(()) => savepoint.commit().await?,
+                // Refused by a validity rule, not a storage fault: the same event is refused on
+                // every replay, so it must not abort the whole rebuild.
+                Err(
+                    IndexError::DisplayNameNotPermitted
+                    | IndexError::DisplayNameTaken
+                    | IndexError::Rejected(_),
+                ) => {
+                    eprintln!(
+                        "indexer: skipping refused event {} ({})",
+                        event.id, event.kind
+                    );
+                    savepoint.rollback().await?;
+                    // The first pass created this identity's row; without its profile it must go.
+                    if event.kind == "identity.created" {
+                        if let Ok(created) =
+                            serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
+                        {
+                            sqlx::query(
+                                "DELETE FROM identities WHERE id = $1 \
+                                 AND NOT EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)",
+                            )
+                            .bind(created.identity_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                }
+                Err(other) => return Err(other),
+            }
         }
 
         tx.commit().await?;

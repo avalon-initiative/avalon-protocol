@@ -11,6 +11,7 @@
 
 use avalon_indexer::projections::identity_signing_keys;
 use avalon_protocol::continuation::ContinuationToken;
+use avalon_protocol::ids::IdentityId;
 use time::{Duration, OffsetDateTime};
 
 use crate::auth::verify_event_signature;
@@ -30,7 +31,7 @@ const CLOCK_SKEW_ALLOWANCE: Duration = Duration::seconds(5);
 /// key, bad signature, replayed nonce — is [`AppError::Unauthorized`],
 /// never distinguished, same posture `authenticate_token`'s own doc comment
 /// already states for session tokens.
-pub async fn verify(state: &AppState, wire_body: &str) -> Result<uuid::Uuid, AppError> {
+pub async fn verify(state: &AppState, wire_body: &str) -> Result<IdentityId, AppError> {
     let token = ContinuationToken::from_wire_body(wire_body).ok_or(AppError::Unauthorized)?;
 
     let now = OffsetDateTime::now_utc();
@@ -47,9 +48,13 @@ pub async fn verify(state: &AppState, wire_body: &str) -> Result<uuid::Uuid, App
         return Err(AppError::Unauthorized);
     }
 
-    let key = identity_signing_keys::find_active_by_id(&state.pool, token.signing_key_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
+    let key = identity_signing_keys::find_active_by_id(
+        &state.pool,
+        token.identity_id,
+        token.signing_key_id,
+    )
+    .await?
+    .ok_or(AppError::Unauthorized)?;
 
     let signature_bytes = hex::decode(&token.signature).map_err(|_| AppError::Unauthorized)?;
     if !verify_event_signature(&key.public_key, &token.signing_bytes(), &signature_bytes) {
@@ -75,11 +80,8 @@ pub async fn verify(state: &AppState, wire_body: &str) -> Result<uuid::Uuid, App
         return Err(AppError::Unauthorized);
     }
 
-    // The verified key's own `identity_id`, never the token's claimed one
-    // — `signing_key_id` already univocally names one identity via
-    // `indexer_identity_signing_keys`' primary key, so this is the
-    // authoritative answer regardless of what the token's own
-    // `identity_id` field says.
+    // The key is looked up by (identity, key id), so the returned identity is both the one the
+    // token claims and the one the key belongs to.
     Ok(key.identity_id)
 }
 
@@ -101,8 +103,8 @@ mod tests {
         signing_key: &SigningKey,
         issued_at: OffsetDateTime,
         expires_at: OffsetDateTime,
-    ) -> (ContinuationToken, Uuid) {
-        let identity_id = Uuid::new_v4();
+    ) -> (ContinuationToken, IdentityId) {
+        let identity_id = IdentityId::random_for_tests();
         let signing_key_id = Uuid::new_v4();
         let nonce = Uuid::new_v4();
         let bytes = signing_bytes(identity_id, signing_key_id, nonce, issued_at, expires_at);
@@ -140,7 +142,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let (mut token, _identity_id) =
             signed_token(&signing_key, now, now + Duration::seconds(30));
-        token.identity_id = Uuid::new_v4(); // tampered after signing
+        token.identity_id = IdentityId::random_for_tests(); // tampered after signing
 
         let signature_bytes = hex::decode(&token.signature).unwrap();
         assert!(!verify_event_signature(

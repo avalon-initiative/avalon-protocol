@@ -1358,7 +1358,7 @@ mod node_auth_wiring {
 
     fn channel_message(channel_id: uuid::Uuid, body: &str) -> serde_json::Value {
         serde_json::json!({"type": "channel_message", "data": {
-            "id": uuid::Uuid::new_v4(), "channel_id": channel_id, "author": uuid::Uuid::new_v4(),
+            "id": uuid::Uuid::new_v4(), "channel_id": channel_id, "author": avalon_protocol::ids::IdentityId::random_for_tests(),
             "body": body, "sent_at": "2026-01-01T00:00:00Z"}})
     }
 
@@ -1473,7 +1473,9 @@ mod node_auth_wiring {
         });
         let mut state = lazy_state();
         state.dht_commands = Some(tx);
-        let found = identity_locator::resolve(&state, uuid::Uuid::new_v4()).await;
+        let found =
+            identity_locator::resolve(&state, avalon_protocol::ids::IdentityId::random_for_tests())
+                .await;
         assert_eq!(found, vec!["http://home.test".to_string()]);
     }
 

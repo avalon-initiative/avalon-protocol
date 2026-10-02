@@ -12,7 +12,6 @@ use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -58,12 +57,15 @@ async fn create_identity_with_one_passkey(
     http: &reqwest::Client,
     base: &str,
     expected_ceremonies: usize,
-) -> (Uuid, VirtualClient) {
-    let identity_id = Uuid::new_v4();
+) -> (avalon_protocol::ids::IdentityId, VirtualClient) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("passkey-durability-test-{identity_id}");
 
     let start_body = serde_json::json!({
         "identity_id": identity_id,
+        "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()),
         "display_name": display_name,
     });
     let start: serde_json::Value = http
@@ -87,9 +89,14 @@ async fn create_identity_with_one_passkey(
         .expect("virtual authenticator registration should succeed");
 
     use ed25519_dalek::{Signer, SigningKey};
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let signing_bytes =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        start["network_id"].as_str().unwrap(),
+        start["shard_id"].as_str().unwrap(),
+        ticket_id.parse().unwrap(),
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -98,7 +105,6 @@ async fn create_identity_with_one_passkey(
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
         "webauthn_credential": credential,
-        "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
         "event_signature": BASE64.encode(signature.to_bytes()),
         "device_label": null,
     });
@@ -113,7 +119,10 @@ async fn create_identity_with_one_passkey(
     (identity_id, client)
 }
 
-async fn active_mirrored_passkey_count(pool: &PgPool, identity_id: Uuid) -> i64 {
+async fn active_mirrored_passkey_count(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> i64 {
     sqlx::query(
         "SELECT COUNT(*) AS count FROM indexer_identity_passkeys \
          WHERE identity_id = $1 AND revoked_at IS NULL",

@@ -58,10 +58,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -93,7 +95,10 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// table (same "authoring vs. mirror" indifference #525's own continuation
 /// verification already has), so a direct insert of a freshly generated
 /// keypair is exactly as good a fixture here as a real ceremony would be.
-async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_key_id = Uuid::new_v4();
     sqlx::query(
@@ -115,7 +120,7 @@ async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey
 /// just constructed directly against `avalon_protocol`'s own types rather
 /// than round-tripping through JS.
 fn mint_channel_claim(
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
     signing_key_id: Uuid,
     signing_key: &SigningKey,
     channel_id: Uuid,

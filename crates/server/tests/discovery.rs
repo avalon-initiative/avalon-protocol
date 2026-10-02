@@ -22,10 +22,12 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -60,7 +62,7 @@ async fn become_friends(
     http: &reqwest::Client,
     base: &str,
     from_token: &str,
-    to_id: Uuid,
+    to_id: avalon_protocol::ids::IdentityId,
     to_token: &str,
 ) {
     let create = auth(http.post(format!("{base}/friends/requests")), from_token)
@@ -98,7 +100,7 @@ async fn create_guild_with_member(
     http: &reqwest::Client,
     base: &str,
     owner_token: &str,
-    member_id: Uuid,
+    member_id: avalon_protocol::ids::IdentityId,
     member_token: &str,
 ) -> String {
     let create = auth(http.post(format!("{base}/guilds")), owner_token)
@@ -290,7 +292,7 @@ async fn search(http: &reqwest::Client, base: &str, token: &str, q: &str) -> Vec
 /// Fetches an identity's own `display_name` (needed to build a query term
 /// that will actually match it, since `seed_identity_session` gives each
 /// identity a unique random-ish display name).
-async fn display_name(pool: &PgPool, identity_id: Uuid) -> String {
+async fn display_name(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> String {
     let row = sqlx::query("SELECT display_name FROM profiles WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_one(pool)

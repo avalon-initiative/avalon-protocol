@@ -52,12 +52,15 @@ fn new_virtual_client() -> VirtualClient {
 async fn create_identity_and_log_in(
     http: &reqwest::Client,
     base: &str,
-) -> (Uuid, String, SigningKey) {
-    let identity_id = Uuid::new_v4();
+) -> (avalon_protocol::ids::IdentityId, String, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("continuation-test-{identity_id}");
 
     let start_body = serde_json::json!({
         "identity_id": identity_id,
+        "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()),
         "display_name": display_name,
     });
     let start: serde_json::Value = http
@@ -80,9 +83,15 @@ async fn create_identity_and_log_in(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes_for_creation =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            start["network_id"].as_str().unwrap(),
+            start["shard_id"].as_str().unwrap(),
+            ticket_id.parse().unwrap(),
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -91,7 +100,6 @@ async fn create_identity_and_log_in(
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
         "webauthn_credential": credential,
-        "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
         "event_signature": BASE64.encode(signature.to_bytes()),
         "device_label": null,
     });
@@ -155,7 +163,7 @@ async fn first_signing_key_id(http: &reqwest::Client, base: &str, session_token:
 }
 
 fn mint_token(
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
     signing_key_id: Uuid,
     signing_key: &SigningKey,
     issued_at: time::OffsetDateTime,
@@ -357,9 +365,61 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
     // Revoking your own only signing key is allowed (unilateral, per
     // `devices::revoke_device`'s own doc comment) — the identity still has
     // its passkey for normal login, just no active signing key.
+    // The last active key cannot be revoked, so add a second device first.
+    let second_key = SigningKey::generate(&mut rand::rng());
+    let second_public = second_key.verifying_key().to_bytes();
+    let grant: serde_json::Value = http
+        .post(format!("{base}/me/devices/grants"))
+        .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "requested_signing_public_key": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                second_public,
+            ),
+            "device_label": "second",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let grant_id: uuid::Uuid = grant["id"].as_str().unwrap().parse().unwrap();
+    let approval = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+        grant_id,
+        &identity_id,
+        &second_public,
+    );
+    let approved = http
+        .post(format!("{base}/me/devices/grants/{grant_id}/approve"))
+        .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "approver_signing_key_id": signing_key_id,
+            "signature": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                signing_key.sign(&approval).to_bytes(),
+            ),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(approved.status().is_success(), "{:?}", approved.status());
+
+    let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+        &identity_id,
+        signing_key_id,
+        signing_key_id,
+    );
     let revoke_status = http
         .post(format!("{base}/me/devices/{signing_key_id}/revoke"))
         .bearer_auth(&session_token)
+        .json(&serde_json::json!({
+            "revoked_by_signing_key_id": signing_key_id,
+            "signature": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                signing_key.sign(&revoke_bytes).to_bytes(),
+            ),
+        }))
         .send()
         .await
         .unwrap()

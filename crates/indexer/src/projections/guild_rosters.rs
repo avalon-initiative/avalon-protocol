@@ -29,6 +29,7 @@
 //! case in the first place.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -45,13 +46,13 @@ pub enum GuildRosterWrite {
     /// member's original `joined_at`.
     Upsert {
         guild_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
         role_index: i32,
         joined_at: OffsetDateTime,
     },
     Remove {
         guild_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
     },
 }
 
@@ -63,7 +64,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
     match event.kind.as_str() {
         "guild.created" => {
             let guild_id = super::uuid_field(&event.payload, "guild_id")?;
-            let owner = super::uuid_field(&event.payload, "owner")?;
+            let owner = super::identity_field(&event.payload, "owner")?;
             Some(GuildRosterWrite::Upsert {
                 guild_id,
                 identity_id: owner,
@@ -73,7 +74,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
         }
         "guild.member_added" | "guild.role_changed" => {
             let guild_id = super::uuid_field(&event.payload, "guild_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             let role_index = role_index(&event.payload)?;
             Some(GuildRosterWrite::Upsert {
                 guild_id,
@@ -84,7 +85,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
         }
         "guild.member_removed" => {
             let guild_id = super::uuid_field(&event.payload, "guild_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             Some(GuildRosterWrite::Remove {
                 guild_id,
                 identity_id,
@@ -92,7 +93,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
         }
         "guild.membership_reversed" => {
             let guild_id = super::uuid_field(&event.payload, "guild_id")?;
-            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let identity_id = super::identity_field(&event.payload, "identity_id")?;
             match event.payload.get("effect")?.as_str()? {
                 "membership_removed" => Some(GuildRosterWrite::Remove {
                     guild_id,
@@ -155,7 +156,7 @@ pub async fn apply(
 pub async fn role_index_for<'e, E>(
     executor: E,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Option<i32>, IndexError>
 where
     E: PgExecutor<'e>,
@@ -177,7 +178,7 @@ where
 pub async fn joined_at_for<'e, E>(
     executor: E,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Option<OffsetDateTime>, IndexError>
 where
     E: PgExecutor<'e>,
@@ -196,7 +197,7 @@ where
 pub async fn is_member<'e, E>(
     executor: E,
     guild_id: Uuid,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<bool, IndexError>
 where
     E: PgExecutor<'e>,
@@ -247,7 +248,7 @@ where
 /// One roster row, from [`roster`].
 #[derive(Debug, Clone)]
 pub struct MemberRow {
-    pub identity_id: Uuid,
+    pub identity_id: IdentityId,
     pub role_index: i32,
     pub joined_at: OffsetDateTime,
 }
@@ -289,7 +290,7 @@ pub struct MembershipRow {
 /// same shape `crates/server/src/guilds.rs::list_my_guilds` already returns.
 pub async fn memberships_for<'e, E>(
     executor: E,
-    identity_id: Uuid,
+    identity_id: IdentityId,
 ) -> Result<Vec<MembershipRow>, IndexError>
 where
     E: PgExecutor<'e>,
@@ -319,8 +320,8 @@ where
 /// `crate::server::conversations` need.
 pub async fn mutual_members<'e, E>(
     executor: E,
-    identity_id: Uuid,
-) -> Result<std::collections::HashSet<Uuid>, IndexError>
+    identity_id: IdentityId,
+) -> Result<std::collections::HashSet<IdentityId>, IndexError>
 where
     E: PgExecutor<'e>,
 {
@@ -364,7 +365,7 @@ mod tests {
     #[test]
     fn decodes_guild_created_into_an_owner_upsert() {
         let guild_id = Uuid::new_v4();
-        let owner = Uuid::new_v4();
+        let owner = IdentityId::random_for_tests();
         let source_event = event(
             "guild.created",
             serde_json::json!({
@@ -390,7 +391,7 @@ mod tests {
     #[test]
     fn decodes_member_added_into_an_upsert() {
         let guild_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "guild.member_added",
             serde_json::json!({ "guild_id": guild_id, "identity_id": identity_id, "role_index": 2, "via": "join", "actor": identity_id }),
@@ -410,10 +411,10 @@ mod tests {
     #[test]
     fn decodes_role_changed_into_an_upsert_too() {
         let guild_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let source_event = event(
             "guild.role_changed",
-            serde_json::json!({ "guild_id": guild_id, "identity_id": identity_id, "role_index": 1, "actor": Uuid::new_v4() }),
+            serde_json::json!({ "guild_id": guild_id, "identity_id": identity_id, "role_index": 1, "actor": IdentityId::random_for_tests() }),
         );
         let write = decode(&source_event).unwrap();
         assert_eq!(
@@ -430,7 +431,7 @@ mod tests {
     #[test]
     fn decodes_member_removed_into_a_remove() {
         let guild_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let write = decode(&event(
             "guild.member_removed",
             serde_json::json!({ "guild_id": guild_id, "identity_id": identity_id, "reason": "left", "actor": identity_id }),
@@ -458,7 +459,7 @@ mod tests {
         assert_eq!(
             decode(&event(
                 "guild.member_added",
-                serde_json::json!({ "guild_id": Uuid::new_v4(), "identity_id": Uuid::new_v4() }),
+                serde_json::json!({ "guild_id": Uuid::new_v4(), "identity_id": IdentityId::random_for_tests() }),
             )),
             None
         );
@@ -467,7 +468,7 @@ mod tests {
     #[test]
     fn decodes_membership_reversed_by_effect() {
         let guild_id = Uuid::new_v4();
-        let identity_id = Uuid::new_v4();
+        let identity_id = IdentityId::random_for_tests();
         let reversal = |effect: &str| {
             event(
                 "guild.membership_reversed",

@@ -33,3 +33,11 @@ pub mod profiles;
 pub(crate) fn uuid_field(payload: &serde_json::Value, key: &str) -> Option<uuid::Uuid> {
     payload.get(key)?.as_str()?.parse().ok()
 }
+
+/// Pulls a self-certifying identity id string field out of an event payload.
+pub(crate) fn identity_field(
+    payload: &serde_json::Value,
+    key: &str,
+) -> Option<avalon_protocol::identity_id::IdentityId> {
+    payload.get(key)?.as_str()?.parse().ok()
+}

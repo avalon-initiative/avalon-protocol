@@ -26,6 +26,8 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 
+use avalon_protocol::identity_id::{derive_identity_id_for_key, identity_created_signing_bytes_v2};
+use avalon_protocol::ids::IdentityId;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use coset::{CborSerializable, CoseKey};
@@ -37,25 +39,16 @@ use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOption
 use passkey_types::Passkey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
 
 pub(crate) fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-/// Must produce exactly the bytes `avalon-server`'s
-/// `handlers::identity_created_signing_bytes` reconstructs — see that
-/// function's doc comment. Duplicated rather than shared: `avalon-cli`
-/// doesn't depend on `avalon-server`.
-fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<u8> {
-    format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
 fn key_dir() -> PathBuf {
     PathBuf::from("_running/keys")
 }
 
-fn passkey_path(identity_id: Uuid) -> PathBuf {
+fn passkey_path(identity_id: IdentityId) -> PathBuf {
     key_dir().join(format!("{identity_id}.passkey.json"))
 }
 
@@ -139,16 +132,15 @@ pub(crate) async fn create_identity() {
         .expect("failed to read display name");
     let display_name = display_name.trim().to_string();
 
-    let identity_id = Uuid::new_v4();
     let base = server_url();
     let http = reqwest::Client::new();
 
-    // The identity's event-signing key (see avalon-docs/protocol/identity.md
-    // and crates/server/src/auth.rs) — separate from the WebAuthn passkey
-    // below, and the only thing that signs `identity.created`.
+    // The identity's inception key signs `identity.created`, and the identity id is derived from it.
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
-    let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let event_signing_public_key = BASE64.encode(public_key);
+    let identity_id = derive_identity_id_for_key(&signing_key.verifying_key());
 
     // A software/virtual WebAuthn authenticator — no browser, no hardware.
     // This is exactly the intended use of the `testable` feature: it drives
@@ -163,13 +155,26 @@ pub(crate) async fn create_identity() {
     let origin_url =
         url::Url::parse(&origin_str).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL");
 
-    let start_body = json!({ "identity_id": identity_id, "display_name": display_name });
-    let start: serde_json::Value = http
+    let start_body = json!({
+        "identity_id": identity_id,
+        "event_signing_public_key": event_signing_public_key,
+        "display_name": display_name,
+    });
+    let start_response = http
         .post(format!("{base}/identities/register/start"))
         .json(&start_body)
         .send()
         .await
-        .expect("register/start request failed — is `make start` running?")
+        .expect("register/start request failed — is `make start` running?");
+    if !start_response.status().is_success() {
+        eprintln!(
+            "registration could not start: {:?}\n{}",
+            start_response.status(),
+            start_response.text().await.unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+    let start: serde_json::Value = start_response
         .json()
         .await
         .expect("register/start response was not JSON");
@@ -191,14 +196,24 @@ pub(crate) async fn create_identity() {
         .await
         .expect("WebAuthn registration ceremony failed");
 
-    let signing_bytes = identity_created_signing_bytes(identity_id, &display_name);
+    let signing_bytes = identity_created_signing_bytes_v2(
+        start["network_id"]
+            .as_str()
+            .expect("register/start response missing network_id"),
+        start["shard_id"]
+            .as_str()
+            .expect("register/start response missing shard_id"),
+        ticket_id.parse().expect("ticket id is a UUID"),
+        &identity_id,
+        &public_key,
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes);
     let event_signature = BASE64.encode(signature.to_bytes());
 
     let finish_body = json!({
         "ticket_id": ticket_id,
         "webauthn_credential": webauthn_credential,
-        "event_signing_public_key": event_signing_public_key,
         "event_signature": event_signature,
     });
     let finish_response = http
@@ -271,7 +286,7 @@ pub(crate) async fn create_identity() {
 /// `identity_id` has nothing saved locally — see `create_identity`'s
 /// `StoredPasskey` persistence, the only source this can authenticate
 /// against.
-pub(crate) async fn login(identity_id: Uuid) {
+pub(crate) async fn login(identity_id: IdentityId) {
     let passkey_path = passkey_path(identity_id);
     let stored_json = std::fs::read_to_string(&passkey_path).unwrap_or_else(|_| {
         eprintln!(

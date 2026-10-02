@@ -9,6 +9,14 @@ pub enum AppError {
     Unauthorized,
     #[error("identity id already taken")]
     IdentityIdTaken,
+    #[error("identity id is not the id derived from the signing key")]
+    IdentityIdMismatch,
+    #[error("malformed identity id or signing key")]
+    InvalidIdentityId,
+    #[error("malformed path parameter")]
+    InvalidPathParameter,
+    #[error("display name must not look like an identity id")]
+    InvalidDisplayName,
     #[error("webauthn ceremony not found or already used")]
     CeremonyNotFound,
     #[error("webauthn ceremony expired")]
@@ -100,6 +108,8 @@ pub enum AppError {
     DeviceGrantExpired,
     #[error("approving signing key is unknown or has been revoked")]
     ApproverKeyInvalid,
+    #[error("the last active signing key cannot be revoked")]
+    LastSigningKey,
     #[error("grant approval signature verification failed")]
     InvalidGrantSignature,
     /// Issue #698: this action is in #697's signature-required tier, and
@@ -494,6 +504,10 @@ impl AppError {
         match self {
             AppError::Unauthorized => "UNAUTHORIZED",
             AppError::IdentityIdTaken => "IDENTITY_ID_TAKEN",
+            AppError::IdentityIdMismatch => "IDENTITY_ID_MISMATCH",
+            AppError::InvalidIdentityId => "INVALID_IDENTITY_ID",
+            AppError::InvalidPathParameter => "INVALID_PATH_PARAMETER",
+            AppError::InvalidDisplayName => "INVALID_DISPLAY_NAME",
             AppError::CeremonyNotFound => "CEREMONY_NOT_FOUND",
             AppError::CeremonyExpired => "CEREMONY_EXPIRED",
             AppError::WebauthnFailed => "WEBAUTHN_FAILED",
@@ -535,6 +549,7 @@ impl AppError {
             AppError::DeviceGrantNotFound => "DEVICE_GRANT_NOT_FOUND",
             AppError::DeviceGrantExpired => "DEVICE_GRANT_EXPIRED",
             AppError::ApproverKeyInvalid => "APPROVER_KEY_INVALID",
+            AppError::LastSigningKey => "LAST_SIGNING_KEY",
             AppError::InvalidGrantSignature => "INVALID_GRANT_SIGNATURE",
             AppError::NoRegisteredSigningKey => "NO_REGISTERED_SIGNING_KEY",
             AppError::FreshSignatureRequired => "FRESH_SIGNATURE_REQUIRED",
@@ -693,7 +708,12 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::IdentityIdTaken => StatusCode::CONFLICT,
-            AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
+            AppError::CeremonyNotFound
+            | AppError::CeremonyExpired
+            | AppError::IdentityIdMismatch
+            | AppError::InvalidIdentityId
+            | AppError::InvalidPathParameter
+            | AppError::InvalidDisplayName => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
             AppError::SelfFriendRequest
@@ -734,7 +754,8 @@ impl IntoResponse for AppError {
             AppError::InvalidRollbackWindow => StatusCode::BAD_REQUEST,
             AppError::RollbackNoCompletedRecovery
             | AppError::RollbackNotReversible(_)
-            | AppError::RollbackAlreadyReversed => StatusCode::CONFLICT,
+            | AppError::RollbackAlreadyReversed
+            | AppError::LastSigningKey => StatusCode::CONFLICT,
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
                 StatusCode::UNAUTHORIZED
@@ -1001,6 +1022,49 @@ impl IntoResponse for AppError {
             }
         }
         response
+    }
+}
+
+/// `Path` that reports a malformed path as JSON instead of axum's plain text: a bad identity id is
+/// `INVALID_IDENTITY_ID`, any other malformed part `INVALID_PATH_PARAMETER`.
+pub struct IdPath<T>(pub T);
+
+impl<T, S> axum::extract::FromRequestParts<S> for IdPath<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        use axum::extract::path::ErrorKind;
+        use axum::extract::rejection::PathRejection;
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Path(value)) => Ok(IdPath(value)),
+            // A route without the expected parameters is a server bug, not a bad request.
+            Err(rejection @ PathRejection::MissingPathParams(_)) => Err(rejection.into_response()),
+            Err(PathRejection::FailedToDeserializePathParams(failure)) => {
+                let identity_failure = match failure.kind() {
+                    ErrorKind::DeserializeError { message, .. } | ErrorKind::Message(message) => {
+                        use avalon_protocol::identity_id::IdentityIdParseError as E;
+                        [E::WrongLength, E::NotLowercaseHex]
+                            .iter()
+                            .any(|e| message.contains(&e.to_string()))
+                    }
+                    _ => false,
+                };
+                Err(if identity_failure {
+                    AppError::InvalidIdentityId
+                } else {
+                    AppError::InvalidPathParameter
+                }
+                .into_response())
+            }
+            Err(other) => Err(other.into_response()),
+        }
     }
 }
 

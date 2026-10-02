@@ -45,12 +45,15 @@ fn new_virtual_client() -> VirtualClient {
 async fn create_identity_and_log_in(
     http: &reqwest::Client,
     base: &str,
-) -> (Uuid, String, SigningKey) {
-    let identity_id = Uuid::new_v4();
+) -> (avalon_protocol::ids::IdentityId, String, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let identity_id =
+        avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
     let display_name = format!("cross-node-login-test-{identity_id}");
 
     let start_body = serde_json::json!({
         "identity_id": identity_id,
+        "event_signing_public_key": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signing_key.verifying_key().to_bytes()),
         "display_name": display_name,
     });
     let start: serde_json::Value = http
@@ -73,9 +76,15 @@ async fn create_identity_and_log_in(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes_for_creation =
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
+        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            start["network_id"].as_str().unwrap(),
+            start["shard_id"].as_str().unwrap(),
+            ticket_id.parse().unwrap(),
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -84,7 +93,6 @@ async fn create_identity_and_log_in(
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
         "webauthn_credential": credential,
-        "event_signing_public_key": BASE64.encode(signing_key.verifying_key().to_bytes()),
         "event_signature": BASE64.encode(signature.to_bytes()),
         "device_label": null,
     });
@@ -149,7 +157,7 @@ async fn first_signing_key_id(http: &reqwest::Client, base: &str, session_token:
 
 #[allow(clippy::too_many_arguments)]
 fn mint_grant(
-    identity_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
     signing_key_id: Uuid,
     destination_base_url: &str,
     requesting_context: &str,

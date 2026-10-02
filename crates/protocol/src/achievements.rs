@@ -225,7 +225,7 @@ mod issuer_tests {
         // vocabulary must never verify under the other, even for the same
         // issuer/subject/achievement triple — the claim_kind is folded
         // into what's actually signed, not just into routing.
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
 
         let achievement_bytes = attestation_signing_bytes(
@@ -246,7 +246,7 @@ mod issuer_tests {
 
     #[test]
     fn attestation_signing_bytes_are_deterministic() {
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let achievement = GlobalId::new("app", "wallet-app", "milestone", "onboarded");
 
         let a =
@@ -258,7 +258,7 @@ mod issuer_tests {
 
     #[test]
     fn bulk_attestation_signing_bytes_are_deterministic() {
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let achievements = vec![
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
             "game:ashen-realms:achievement:lost_city".to_string(),
@@ -285,7 +285,7 @@ mod issuer_tests {
         // never actually signed, including a reordering of the same keys —
         // length-prefixing alone doesn't guarantee this unless order is
         // also part of the message, which it is (iteration order below).
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let forward = vec!["a".to_string(), "b".to_string()];
         let reversed = vec!["b".to_string(), "a".to_string()];
 
@@ -300,7 +300,7 @@ mod issuer_tests {
     fn bulk_attestation_signing_bytes_are_unambiguous_across_a_split_boundary() {
         // Without length-prefixing, `["ab", "c"]` and `["a", "bc"]` could
         // concatenate to the same bytes. With it, they must not.
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let split_a = vec!["ab".to_string(), "c".to_string()];
         let split_b = vec!["a".to_string(), "bc".to_string()];
 
@@ -317,7 +317,7 @@ mod issuer_tests {
         // plain single-claim `attestation_signing_bytes` signature, or vice
         // versa — the `.issued.bulk` domain tag keeps the two schemes from
         // ever being confused, even for the degenerate one-claim case.
-        let subject = IdentityId(Uuid::new_v4());
+        let subject = IdentityId::random_for_tests();
         let achievement = "game:ashen-realms:achievement:dragon_slayer".to_string();
 
         let single =

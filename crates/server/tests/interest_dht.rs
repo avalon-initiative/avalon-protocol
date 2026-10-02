@@ -151,7 +151,7 @@ async fn a_registered_identity_locator_scope_is_found_by_a_lookup_from_a_differe
 
     tokio::time::sleep(TEST_SCAN_INTERVAL * 6).await;
 
-    let identity_id = Uuid::new_v4();
+    let identity_id = avalon_protocol::ids::IdentityId::random_for_tests();
     let scope = InterestScope::Identity(identity_id);
     node_a
         .commands
@@ -174,7 +174,7 @@ async fn a_registered_identity_locator_scope_is_found_by_a_lookup_from_a_differe
 
     let never_registered = interest::lookup(
         &node_b.commands,
-        InterestScope::Identity(Uuid::new_v4()),
+        InterestScope::Identity(avalon_protocol::ids::IdentityId::random_for_tests()),
         None,
     )
     .await;
@@ -275,7 +275,7 @@ async fn redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead() {
         Some(redis_fast_path.clone()),
     ));
 
-    let scope = InterestScope::Identity(Uuid::new_v4());
+    let scope = InterestScope::Identity(avalon_protocol::ids::IdentityId::random_for_tests());
     let _guard = registry.register(scope);
 
     // Real network round trip for run_worker's immediate-on-registration

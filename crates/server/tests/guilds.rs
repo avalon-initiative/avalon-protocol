@@ -18,7 +18,10 @@ use uuid::Uuid;
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -57,10 +60,12 @@ async fn test_pool() -> PgPool {
 
 /// Seeds a bare identity + session, bypassing WebAuthn entirely, and
 /// returns the session's bearer token.
-async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
-    let identity_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    let identity_id = who.id;
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
+        .bind(who.public_key().to_vec())
         .execute(pool)
         .await
         .expect("failed to seed identity");
@@ -1596,7 +1601,11 @@ async fn seed_integrator(pool: &PgPool, name: &str) -> Uuid {
 }
 
 /// Seeds an active `bindings` row directly — see `seed_integrator`'s own note.
-async fn seed_binding(pool: &PgPool, identity_id: Uuid, integrator_id: Uuid) -> Uuid {
+async fn seed_binding(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+    integrator_id: Uuid,
+) -> Uuid {
     let binding_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO bindings (id, identity_id, integrator_id, established_at) \
@@ -1630,7 +1639,7 @@ async fn invite_and_accept(
     owner_token: &str,
     to_token: &str,
     guild_id: &str,
-    to_identity_id: Uuid,
+    to_identity_id: avalon_protocol::ids::IdentityId,
 ) {
     let invite = auth(
         http.post(format!("{base}/guilds/{guild_id}/invites")),

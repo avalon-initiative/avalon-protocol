@@ -11,6 +11,7 @@
 //! items at all.
 #![allow(dead_code)]
 
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Capability;
 use axum::http::HeaderMap;
 use sqlx::Row;
@@ -34,7 +35,7 @@ const CALLER_IDENTITY_ID_HEADER: &str = "x-avalon-identity-id";
 pub(crate) enum Caller {
     /// A user's own authenticated session — full access to their own
     /// resources, no grant needed (see module doc comment).
-    User(Uuid),
+    User(IdentityId),
     /// An integrator, authenticated via challenge-response
     /// (`integrators::authenticate_integrator`), acting on behalf of `identity_id`.
     /// Nothing about this variant alone implies access to anything —
@@ -42,7 +43,7 @@ pub(crate) enum Caller {
     /// action.
     Integrator {
         integrator_id: Uuid,
-        identity_id: Uuid,
+        identity_id: IdentityId,
     },
 }
 
@@ -64,7 +65,7 @@ pub(crate) async fn authenticate_caller(
     }
 
     let integrator_id = authenticate_integrator(state, headers).await?;
-    let identity_id: Uuid = headers
+    let identity_id: IdentityId = headers
         .get(CALLER_IDENTITY_ID_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
@@ -121,7 +122,7 @@ fn capability_authorized(
 /// read-only check with nothing to lock against.
 async fn fetch_binding(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     integrator_id: Uuid,
 ) -> Result<Option<(Uuid, BindingFacts)>, AppError> {
     let row = sqlx::query(
@@ -178,7 +179,7 @@ async fn fetch_grant(
 /// this module's own doc comment insists on for every other binding check.
 pub(crate) async fn has_active_binding(
     state: &AppState,
-    identity_id: Uuid,
+    identity_id: IdentityId,
     integrator_id: Uuid,
 ) -> Result<bool, AppError> {
     Ok(fetch_binding(state, identity_id, integrator_id)
@@ -329,7 +330,7 @@ mod tests {
         // `Ok(())` before `capability_authorized` (a `Caller::Integrator`-only
         // helper) is ever called — this documents that shape rather than
         // calling the helper with meaningless inputs.
-        let caller = Caller::User(Uuid::new_v4());
+        let caller = Caller::User(IdentityId::random_for_tests());
         assert!(matches!(caller, Caller::User(_)));
     }
 }
@@ -423,7 +424,7 @@ mod live_tests {
     }
 
     struct Seeded {
-        identity_id: Uuid,
+        identity_id: IdentityId,
         token: String,
         integrator_id: Uuid,
         slug: String,
@@ -435,9 +436,11 @@ mod live_tests {
     /// since this test isn't going over HTTP at all (see module doc
     /// comment).
     async fn seed(pool: &PgPool) -> Seeded {
-        let identity_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+        let who = avalon_protocol::identity_id::TestIdentity::new();
+        let identity_id = who.id;
+        sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
             .bind(identity_id)
+            .bind(who.public_key().to_vec())
             .execute(pool)
             .await
             .expect("failed to seed identity");

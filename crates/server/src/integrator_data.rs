@@ -23,6 +23,7 @@
 //! (`avalon_indexer::projections::integrator_data_instances`), never raw
 //! ledger/outbox data.
 
+use avalon_protocol::ids::IdentityId;
 use std::collections::BTreeMap;
 
 use avalon_indexer::projections::{
@@ -40,7 +41,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::authz;
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::integrator_schemas::{fetch_schema_by_id, schema_ref};
 use crate::integrators::{
     authenticate_integrator, fetch_integrator_id_by_slug, integrator_ref, issuer_ref,
@@ -69,7 +70,7 @@ async fn authenticate_owning_integrator(
 
 #[derive(Deserialize, ToSchema)]
 pub struct PublishInstanceRequest {
-    pub subject: Uuid,
+    pub subject: IdentityId,
     #[schema(value_type = Object)]
     pub instance: serde_json::Value,
 }
@@ -79,7 +80,7 @@ pub struct IntegratorDataInstanceResponse {
     pub id: String,
     pub schema_id: String,
     pub integrator_id: Uuid,
-    pub subject: Uuid,
+    pub subject: IdentityId,
     #[schema(value_type = Object)]
     pub instance: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
@@ -270,7 +271,7 @@ fn default_delete_reason_code() -> String {
     params(
         ("slug" = String, Path),
         ("version" = u32, Path),
-        ("subject" = Uuid, Path),
+        ("subject" = IdentityId, Path),
     ),
     request_body = DeleteInstanceRequest,
     responses((status = 200, description = "Instance tombstoned")),
@@ -278,7 +279,7 @@ fn default_delete_reason_code() -> String {
 pub async fn delete_instance(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((slug, version, subject)): Path<(String, u32, Uuid)>,
+    IdPath((slug, version, subject)): IdPath<(String, u32, IdentityId)>,
     Json(body): Json<DeleteInstanceRequest>,
 ) -> Result<Json<()>, AppError> {
     let integrator_id = authenticate_owning_integrator(&state, &headers, &slug).await?;
@@ -407,12 +408,12 @@ pub struct VisibleIntegratorDataInstanceResponse {
     get,
     path = "/identities/{id}/integrator-data",
     tag = "integrator-space",
-    params(("id" = Uuid, Path)),
+    params(("id" = IdentityId, Path)),
     responses((status = 200, description = "List of visible integrator data instance entries", body = Vec<VisibleIntegratorDataInstanceResponse>)),
 )]
 pub async fn get_identity_integrator_data(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    IdPath(id): IdPath<IdentityId>,
 ) -> Result<Json<Vec<VisibleIntegratorDataInstanceResponse>>, AppError> {
     // #533: `list_current_for_subject` already excludes deleted instances
     // (`deleted_at IS NULL`), so a deleted character simply stops
