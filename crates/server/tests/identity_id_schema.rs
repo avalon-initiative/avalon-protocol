@@ -22,6 +22,7 @@ const UNREFERENCED_IDENTITY_COLUMNS: &[(&str, &str)] = &[
     ("indexer_integrator_data_instances", "subject"),
     ("identity_chain_events", "identity_id"),
     ("identity_chain_state", "identity_id"),
+    ("indexer_identity_signing_key_revocations", "identity_id"),
 ];
 
 /// UUID column names that never hold an identity id, wherever they appear.
@@ -54,7 +55,10 @@ const GENERIC_UUID_COLUMNS: &[&str] = &[
 ];
 
 /// TEXT columns with identity-style names that hold something other than an identity id.
-const NON_ID_TEXT_COLUMNS: &[(&str, &str)] = &[("ledger_entries", "subject")];
+const NON_ID_TEXT_COLUMNS: &[(&str, &str)] = &[
+    ("ledger_entries", "subject"),
+    ("mirrored_entries", "subject"),
+];
 
 /// Table-specific non-identity UUID columns not covered by the generic names.
 const NON_IDENTITY_UUID_COLUMNS: &[(&str, &str)] = &[];
