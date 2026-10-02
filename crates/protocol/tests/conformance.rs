@@ -869,11 +869,44 @@ fn identity_created_signing_matches_shared_vectors() {
         let id = identity_id_of(doc, "identityId");
         assert!(id.matches_key(pk.as_bytes()));
         identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
             &id,
             pk.as_bytes(),
             input["displayName"].as_str().unwrap(),
         )
     });
+}
+
+#[test]
+fn identity_created_signature_is_bound_to_ticket_and_network() {
+    use avalon_protocol::ed25519_key::verify_strict_signature;
+    use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+    let doc = load("identity-created-signing.json");
+    let pk = verifying_key_from_hex(doc["signingPublicKeyHex"].as_str().unwrap());
+    let id = identity_id_of(&doc, "identityId");
+    let replays = doc["replayVectors"].as_array().unwrap();
+    assert!(!replays.is_empty());
+    for r in replays {
+        let input = &r["input"];
+        let bytes = identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
+            &id,
+            pk.as_bytes(),
+            input["displayName"].as_str().unwrap(),
+        );
+        let sig: [u8; 64] = hex::decode(input["signatureHex"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            verify_strict_signature(&pk, &bytes, &sig),
+            r["expected"]["valid"].as_bool().unwrap(),
+            "{}",
+            r["name"]
+        );
+    }
 }
 
 #[test]
@@ -892,6 +925,8 @@ fn identity_created_v1_and_v2_bytes_differ_per_shared_vectors() {
         );
         assert_eq!(v1, expected["v1SigningBytesUtf8"].as_str().unwrap());
         let v2 = identity_created_signing_bytes_v2(
+            input["networkId"].as_str().unwrap(),
+            parse_uuid(input, "ticketId"),
             &identity_id_of(input, "identityId"),
             pk.as_bytes(),
             name,

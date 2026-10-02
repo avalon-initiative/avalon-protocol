@@ -44,11 +44,14 @@ use crate::identity_id::IdentityId;
 
 // --- identity.* -----------------------------------------------------------
 
-/// `identity.created` v2: the inception key and the self-signature over
-/// `identity_created_signing_bytes_v2`, so a mirror can verify the id offline.
+/// `identity.created` v2: the inception key, the registration ticket and the self-signature over
+/// `identity_created_signing_bytes_v2` (which also covers the ledger's network id), so a mirror can
+/// verify the id offline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityCreatedPayload {
     pub identity_id: IdentityId,
+    /// The server-issued `register/start` ticket the signature is bound to.
+    pub ticket_id: Uuid,
     pub display_name: String,
     /// Inception Ed25519 public key, standard base64.
     pub public_key: String,
@@ -774,12 +777,14 @@ mod tests {
     fn identity_created_round_trips() {
         let payload = IdentityCreatedPayload {
             identity_id: test_id(),
+            ticket_id: Uuid::nil(),
             display_name: "Aria".to_string(),
             public_key: "base64key".to_string(),
             signature: "base64sig".to_string(),
         };
         let json = serde_json::json!({
             "identity_id": test_id().to_string(),
+            "ticket_id": Uuid::nil().to_string(),
             "display_name": "Aria",
             "public_key": "base64key",
             "signature": "base64sig",

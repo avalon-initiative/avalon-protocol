@@ -105,6 +105,8 @@ async fn registration_and_login_challenges_do_not_restrict_authenticator_attachm
         .expect("virtual authenticator registration should succeed");
 
     let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        start["network_id"].as_str().unwrap(),
+        start["ticket_id"].as_str().unwrap().parse().unwrap(),
         &identity_id,
         &signing_key.verifying_key().to_bytes(),
         &display_name,

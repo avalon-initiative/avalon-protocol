@@ -206,6 +206,10 @@ mod sqlx_impls {
     }
 }
 
+/// Network id used by [`TestIdentity::created_payload`].
+#[doc(hidden)]
+pub const TEST_NETWORK_ID: &str = "avalon-test-network";
+
 /// A test identity: a fresh Ed25519 inception key and the id derived from it.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -236,16 +240,33 @@ impl TestIdentity {
         self.signing_key.verifying_key().to_bytes()
     }
 
-    /// A correctly self-signed `identity.created` v2 payload.
+    /// A correctly self-signed `identity.created` v2 payload for [`TEST_NETWORK_ID`] and a fresh ticket.
     pub fn created_payload(
         &self,
         display_name: &str,
     ) -> crate::event_payloads::IdentityCreatedPayload {
+        self.created_payload_for(TEST_NETWORK_ID, Uuid::new_v4(), display_name)
+    }
+
+    /// A correctly self-signed `identity.created` v2 payload bound to `network_id` and `ticket_id`.
+    pub fn created_payload_for(
+        &self,
+        network_id: &str,
+        ticket_id: Uuid,
+        display_name: &str,
+    ) -> crate::event_payloads::IdentityCreatedPayload {
         use base64::Engine as _;
         use ed25519_dalek::Signer as _;
-        let bytes = identity_created_signing_bytes_v2(&self.id, &self.public_key(), display_name);
+        let bytes = identity_created_signing_bytes_v2(
+            network_id,
+            ticket_id,
+            &self.id,
+            &self.public_key(),
+            display_name,
+        );
         crate::event_payloads::IdentityCreatedPayload {
             identity_id: self.id,
+            ticket_id,
             display_name: display_name.to_string(),
             public_key: base64::engine::general_purpose::STANDARD.encode(self.public_key()),
             signature: base64::engine::general_purpose::STANDARD
@@ -262,15 +283,19 @@ impl Default for TestIdentity {
 }
 
 /// Bytes signed for `identity.created` v2:
-/// `avalon:identity.created:v2:{identity_id}:{public_key_hex}:{display_name}`.
-/// The display name is last, so a `:` inside it is harmless.
+/// `avalon:identity.created:v2:{network_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`.
+/// `ticket_id` is the server-issued registration ticket and `network_id` the ledger network, so a
+/// copied signature cannot be replayed into another ceremony or network. The display name is
+/// last, so a `:` inside it is harmless; a network id never contains `:`.
 pub fn identity_created_signing_bytes_v2(
+    network_id: &str,
+    ticket_id: Uuid,
     identity_id: &IdentityId,
     public_key: &[u8; 32],
     display_name: &str,
 ) -> Vec<u8> {
     format!(
-        "avalon:identity.created:v2:{identity_id}:{}:{display_name}",
+        "avalon:identity.created:v2:{network_id}:{ticket_id}:{identity_id}:{}:{display_name}",
         hex::encode(public_key)
     )
     .into_bytes()
@@ -363,10 +388,14 @@ mod tests {
     fn signing_bytes_have_the_documented_layout() {
         let (key, id) = test_identity(7);
         let pk = key.verifying_key().to_bytes();
-        let created = identity_created_signing_bytes_v2(&id, &pk, "a:b");
+        let created = identity_created_signing_bytes_v2("net", Uuid::nil(), &id, &pk, "a:b");
         assert_eq!(
             String::from_utf8(created).unwrap(),
-            format!("avalon:identity.created:v2:{id}:{}:a:b", hex::encode(pk))
+            format!(
+                "avalon:identity.created:v2:net:{}:{id}:{}:a:b",
+                Uuid::nil(),
+                hex::encode(pk)
+            )
         );
         let grant = device_grant_approval_signing_bytes_v2(Uuid::nil(), &id, &pk);
         assert!(String::from_utf8(grant)

@@ -155,6 +155,8 @@ pub struct RegisterStartRequest {
 #[derive(Serialize, ToSchema)]
 pub struct RegisterStartResponse {
     pub ticket_id: Uuid,
+    /// The ledger network id; the client signs it, with the ticket, into `identity.created`.
+    pub network_id: String,
     /// `webauthn-rs`'s own WebAuthn creation-challenge type — opaque here
     /// since it's an external crate's type with no `ToSchema` impl of its
     /// own; the real, authoritative shape is `webauthn-rs`'s
@@ -269,6 +271,7 @@ pub async fn register_start(
 
     Ok(Json(RegisterStartResponse {
         ticket_id,
+        network_id: state.chain.network_id().to_string(),
         challenge,
     }))
 }
@@ -279,7 +282,8 @@ pub struct RegisterFinishRequest {
     #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
     /// Base64-encoded Ed25519 signature over
-    /// `avalon_protocol::identity_id::identity_created_signing_bytes_v2`.
+    /// `avalon_protocol::identity_id::identity_created_signing_bytes_v2`, which covers this
+    /// ceremony's `ticket_id` and the `network_id` returned by `register/start`.
     pub event_signature: String,
     /// A user-chosen label for the device completing this ceremony (e.g.
     /// "Work laptop") — purely descriptive, never part of what's signed.
@@ -333,6 +337,8 @@ pub async fn register_finish(
         .decode(&body.event_signature)
         .map_err(|_| AppError::InvalidEventSignature)?;
     let signing_bytes = identity_created_signing_bytes_v2(
+        state.chain.network_id(),
+        body.ticket_id,
         &ceremony.identity_id,
         &ceremony.public_key,
         &ceremony.display_name,
@@ -373,6 +379,7 @@ pub async fn register_finish(
         // no discriminator.
         payload: serde_json::to_value(IdentityCreatedPayload {
             identity_id: ceremony.identity_id,
+            ticket_id: body.ticket_id,
             display_name: ceremony.display_name.clone(),
             public_key: BASE64.encode(public_key_bytes.as_slice()),
             signature: body.event_signature.clone(),

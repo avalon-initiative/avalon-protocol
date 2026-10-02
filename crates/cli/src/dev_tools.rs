@@ -196,7 +196,15 @@ pub(crate) async fn create_identity() {
         .await
         .expect("WebAuthn registration ceremony failed");
 
-    let signing_bytes = identity_created_signing_bytes_v2(&identity_id, &public_key, &display_name);
+    let signing_bytes = identity_created_signing_bytes_v2(
+        start["network_id"]
+            .as_str()
+            .expect("register/start response missing network_id"),
+        ticket_id.parse().expect("ticket id is a UUID"),
+        &identity_id,
+        &public_key,
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes);
     let event_signature = BASE64.encode(signature.to_bytes());
 

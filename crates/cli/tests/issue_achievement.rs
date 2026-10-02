@@ -84,6 +84,8 @@ async fn register_and_login(
 
     let signature = signing_key.sign(
         &avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            start["network_id"].as_str().unwrap(),
+            ticket_id.parse().unwrap(),
             &identity_id,
             &public_key,
             display_name,
