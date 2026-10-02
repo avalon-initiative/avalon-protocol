@@ -98,8 +98,15 @@ everywhere and the node behind a no-inbound NAT:
   `node:<hash>=p2p://<peer id>`; at most 16, any other `p2p` spelling is dropped with a
   warning). Its notifications are accepted only from a connection authenticated as that peer
   id, after it has announced; a peer table entry never makes a source. A `p2p://` source is
-  not polled yet: pulling a statically configured `node:` shard from one is the next slice, so
-  for now it is accepted for notifications only.
+  also polled: its head, entries and proofs are fetched over the libp2p stream and verified
+  exactly as over HTTP, because verification runs on the response body. A `node:<hash>` shard
+  (whether its source is `p2p://` or an http(s) URL) is verified by its own key (the key must
+  hash to the shard id and sign the head), pinned once the head is accepted, and held to the
+  same per-tick limits and per-source shard cap as a discovered one; the cap counts the
+  `p2p://<peer id>` string. Any other shard configured with a `p2p://` source is verified
+  against the network trust anchor as usual. A source that cannot be reached is logged once
+  per five minutes, not every tick, and is retried every tick. Discovered shards still never
+  register push interest.
 - Addresses read from interest lookups are checked for shape only (an http(s) URL without
   credentials, query or fragment, or a `p2p://` peer id), deduplicated and capped at 64 per
   lookup. The direct HTTP pushes for mirror notifications and chat relay then apply the same
