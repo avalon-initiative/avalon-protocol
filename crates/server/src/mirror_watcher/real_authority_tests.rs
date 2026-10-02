@@ -197,6 +197,7 @@ async fn entries_written_by_a_real_authority_mirror_completely() {
         &sth,
         None,
         false,
+        0,
     )
     .await;
     let stored: Vec<(i64, String)> =

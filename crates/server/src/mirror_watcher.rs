@@ -61,7 +61,8 @@
 //! must equal the previous verified entry's hash (genesis for the first), so
 //! the hash chain links. (5) Its `seq` must exceed the last mirrored `seq`
 //! (gaps are legitimate; `seq` is not covered by the hash, so this is only an
-//! ordering and plausibility check). An entry and its proof always come from
+//! ordering and plausibility check) and may jump at most 2^32 past it; a larger
+//! jump is refused loudly with the source, both seqs and the bound logged. An entry and its proof always come from
 //! the same candidate source. A candidate whose entry fails any check, or
 //! serves nothing, is excluded for the rest of the tick and the same page is
 //! retried from the next candidate; nothing from a refused entry is stored,
@@ -759,7 +760,9 @@ pub async fn run_worker(
     // hostile or unpinned network_id claim from ever reaching the DHT.
     let mut network_interest: HashMap<String, crate::interest::InterestGuard> = HashMap::new();
 
+    let mut tick = 0usize;
     loop {
+        tick = tick.wrapping_add(1);
         // Read live at the top of every tick — never a snapshot taken once
         // at startup — so an admitted or dropped known-list witness is
         // reflected starting this very tick, no restart needed.
@@ -944,6 +947,7 @@ pub async fn run_worker(
                 shard_id,
                 &observations,
                 limits,
+                tick,
             );
             // A self-certifying source may stall a request; the budget bounds the whole shard.
             let result = match limits {
@@ -1867,6 +1871,7 @@ async fn check_equivocation(
 ///    on — not simply whichever peer happened to be first in the config
 ///    list. A peer reporting a different, smaller `tree_size` is just
 ///    behind, not disagreeing, and isn't counted against the winner.
+#[allow(clippy::too_many_arguments)]
 async fn backfill_network(
     client: &crate::node_http::NodeClient,
     pool: &PgPool,
@@ -1875,6 +1880,7 @@ async fn backfill_network(
     shard_id: &str,
     observations: &[(String, SignedTreeHead)],
     limits: Option<BackfillLimits>,
+    tick: usize,
 ) -> Result<(), MirrorWatcherError> {
     let equivocations = mirror::unresolved_equivocations(pool, network_id, shard_id).await?;
     if !equivocations.is_empty() {
@@ -1928,6 +1934,7 @@ async fn backfill_network(
         &target_sth,
         limits,
         projection_blocked,
+        tick,
     )
     .await
 }
@@ -1969,6 +1976,7 @@ async fn backfill(
     sth: &SignedTreeHead,
     limits: Option<BackfillLimits>,
     projection_blocked: bool,
+    tick: usize,
 ) -> Result<(), MirrorWatcherError> {
     if candidate_peers.is_empty() {
         return Ok(());
@@ -2002,9 +2010,8 @@ async fn backfill(
     };
 
     // Each tick starts at a different candidate so no single peer takes all the traffic.
-    static TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = candidate_peers.len();
-    let mut peer_cursor = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+    let mut peer_cursor = tick % n;
     // A candidate that served bad or no data is skipped for the rest of this tick.
     let mut excluded = vec![false; n];
     let mut last_refusal: Option<MirrorWatcherError> = None;
@@ -2094,9 +2101,34 @@ enum PageError {
     Fatal(MirrorWatcherError),
 }
 
-/// Most a stored `seq` may jump past the previous one: rolled-back commits burn sequence
-/// values, so gaps are legitimate, but a huge jump would strand later honest entries.
-const MAX_SEQ_GAP: i64 = 1_000_000;
+/// Most a stored `seq` may jump past the previous one. Rolled-back commits burn identity values,
+/// so gaps are legitimate and can be large; the bound only stops absurd labels that would strand
+/// the since_seq cursor (2^32 is far beyond any real ledger).
+const MAX_SEQ_GAP: i64 = 1 << 32;
+
+/// Classifies a failed proof request: a transport failure or throttling is an outage, while a
+/// 4xx for an entry the source just served or a body that does not decode is a refusal.
+fn proof_failure(err: MirrorWatcherError) -> PageError {
+    let refused = match &err {
+        MirrorWatcherError::Decode(_) => true,
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Decode(_)) => true,
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Status(s)) => {
+            s.is_client_error() && *s != reqwest::StatusCode::TOO_MANY_REQUESTS
+        }
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Http(e)) => {
+            e.is_decode()
+                || e.status().is_some_and(|s| {
+                    s.is_client_error() && s != reqwest::StatusCode::TOO_MANY_REQUESTS
+                })
+        }
+        _ => false,
+    };
+    if refused {
+        PageError::Refused(err)
+    } else {
+        PageError::Unreachable(err)
+    }
+}
 
 /// The payload to hash: absent only when the source says it was pruned, a served JSON null
 /// is a real payload.
@@ -2152,6 +2184,12 @@ async fn backfill_page(
 
         // seq is not covered by the entry hash, so it must at least keep the stored order.
         let last_seq = state.progress.last_seq;
+        if entry.seq > last_seq && entry.seq - last_seq > MAX_SEQ_GAP {
+            tracing::error!(
+                "mirror-watcher: {} (via {peer}): entry seq={} jumps past the last mirrored seq={last_seq} by more than the bound {MAX_SEQ_GAP} — refusing it and excluding this source for the tick; mirror from another source or investigate this one",
+                sth.network_id, entry.seq
+            );
+        }
         if entry.seq <= last_seq || entry.seq - last_seq > MAX_SEQ_GAP {
             return Err(PageError::Refused(MirrorWatcherError::EntrySeqInvalid {
                 seq: entry.seq,
@@ -2163,7 +2201,7 @@ async fn backfill_page(
         let leaf_index = state.progress.verified_count as usize;
         let proof_dto = fetch_inclusion_proof(client, peer, shard_id, entry.seq, sth.tree_size)
             .await
-            .map_err(PageError::Unreachable)?;
+            .map_err(proof_failure)?;
         if proof_dto.root_hash != sth.root_hash {
             return Err(PageError::Refused(MirrorWatcherError::RootHashMismatch));
         }
@@ -3644,6 +3682,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &observations,
             None,
+            0,
         )
         .await
         .expect("backfill_network should return Ok(()) rather than error when gated");
@@ -3719,6 +3758,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &observations,
             None,
+            0,
         )
         .await;
         assert!(result.is_ok());
@@ -4354,6 +4394,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &obs,
             None,
+            0,
         )
         .await
         .unwrap();
@@ -4380,6 +4421,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &[],
             None,
+            0,
         )
         .await
         .unwrap();

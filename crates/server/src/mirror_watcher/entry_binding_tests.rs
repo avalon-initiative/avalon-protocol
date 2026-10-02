@@ -123,13 +123,14 @@ impl Ledger {
         pool: &PgPool,
         server: &MockServer,
     ) -> Result<(), MirrorWatcherError> {
-        self.backfill_candidates(pool, &[server.uri()]).await
+        self.backfill_candidates(pool, &[server.uri()], 0).await
     }
 
     async fn backfill_candidates(
         &self,
         pool: &PgPool,
         candidates: &[String],
+        tick: usize,
     ) -> Result<(), MirrorWatcherError> {
         backfill(
             &crate::node_http::NodeClient::new(),
@@ -140,6 +141,7 @@ impl Ledger {
             &self.sth,
             None,
             false,
+            tick,
         )
         .await
     }
@@ -547,14 +549,18 @@ async fn a_bad_or_pruned_first_candidate_fails_over_to_an_honest_one_in_one_tick
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         format!("http://{}", l.local_addr().unwrap())
     };
-    for kind in [
+    let kinds = [
         "tampered",
         "pruned",
         "bad_proof",
+        "garbage_proof",
+        "proof_404",
         "empty",
         "bad_seq",
         "dead",
-    ] {
+    ];
+    // Tick 0 contacts the bad candidate first; tick 1 starts at the honest one.
+    for (kind, tick) in kinds.into_iter().flat_map(|k| [(k, 0usize), (k, 1)]) {
         let net = fresh_net();
         let ledger = genuine_ledger(&net, 4);
         let mut bad = ledger.entries.clone();
@@ -569,7 +575,7 @@ async fn a_bad_or_pruned_first_candidate_fails_over_to_an_honest_one_in_one_tick
             _ => {}
         }
         let bad_server = ledger.serve(bad).await;
-        if kind == "bad_proof" {
+        if matches!(kind, "bad_proof" | "garbage_proof" | "proof_404") {
             // Honest entries, but this source's proofs are for another leaf.
             bad_server.reset().await;
             let entries = ledger.entries.clone();
@@ -589,11 +595,16 @@ async fn a_bad_or_pruned_first_candidate_fails_over_to_an_honest_one_in_one_tick
                 })
                 .mount(&bad_server)
                 .await;
-            Mock::given(matchers::path("/ledger/proof/inclusion"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            let proof_response = match kind {
+                "garbage_proof" => ResponseTemplate::new(200).set_body_string("not json"),
+                "proof_404" => ResponseTemplate::new(404),
+                _ => ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "root_hash": ledger.sth.root_hash, "leaf_hash": ledger.hashes[0],
                     "proof": [],
-                })))
+                })),
+            };
+            Mock::given(matchers::path("/ledger/proof/inclusion"))
+                .respond_with(proof_response)
                 .mount(&bad_server)
                 .await;
         }
@@ -603,12 +614,15 @@ async fn a_bad_or_pruned_first_candidate_fails_over_to_an_honest_one_in_one_tick
         } else {
             bad_server.uri()
         };
-        // Both orders: the starting candidate rotates per tick, so either may go first.
         ledger
-            .backfill_candidates(&pool, &[first.clone(), good.uri()])
+            .backfill_candidates(&pool, &[first.clone(), good.uri()], tick)
             .await
-            .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
-        assert_eq!(stored_seqs(&pool, &net).await, vec![1, 2, 3, 4], "{kind}");
+            .unwrap_or_else(|e| panic!("{kind}/{tick}: {e:?}"));
+        assert_eq!(
+            stored_seqs(&pool, &net).await,
+            vec![1, 2, 3, 4],
+            "{kind}/{tick}"
+        );
         let hashes: Vec<String> = sqlx::query_scalar(
             "SELECT entry_hash FROM mirrored_entries WHERE network_id = $1 ORDER BY seq",
         )
@@ -636,7 +650,7 @@ async fn every_candidate_failing_is_an_error_and_stores_nothing_bad() {
     b[1]["payload_pruned"] = serde_json::json!(true);
     let (sa, sb) = (ledger.serve(a).await, ledger.serve(b).await);
     let err = ledger
-        .backfill_candidates(&pool, &[sa.uri(), sb.uri()])
+        .backfill_candidates(&pool, &[sa.uri(), sb.uri()], 0)
         .await
         .unwrap_err();
     assert!(
@@ -670,4 +684,99 @@ async fn a_json_null_payload_that_is_not_pruned_is_stored_as_null() {
         stored_payload(&pool, &net, 2).await,
         Some(serde_json::Value::Null)
     );
+}
+
+#[tokio::test]
+#[ignore]
+async fn every_candidate_serving_garbage_proofs_is_a_refusal_not_an_outage() {
+    let pool = pool().await;
+    for response in [
+        ResponseTemplate::new(200).set_body_string("not json"),
+        ResponseTemplate::new(404),
+    ] {
+        let net = fresh_net();
+        let ledger = genuine_ledger(&net, 2);
+        let server = ledger.serve(ledger.entries.clone()).await;
+        server.reset().await;
+        let entries = ledger.entries.clone();
+        Mock::given(matchers::path("/ledger/entries"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(entries))
+            .mount(&server)
+            .await;
+        Mock::given(matchers::path("/ledger/proof/inclusion"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                MirrorWatcherError::Decode(_) | MirrorWatcherError::Http(_)
+            ),
+            "{err:?}"
+        );
+        assert!(stored_seqs(&pool, &net).await.is_empty());
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn the_seq_bound_is_exact_and_a_first_seq_above_a_million_is_accepted() {
+    let pool = pool().await;
+    // (first label, second label, expected outcome for the second)
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 2);
+    let mut served = ledger.entries.clone();
+    served[0]["seq"] = serde_json::json!(5_000_000);
+    served[1]["seq"] = serde_json::json!(5_000_000 + MAX_SEQ_GAP);
+    let server = ledger.serve(served).await;
+    ledger.backfill_from(&pool, &server).await.unwrap();
+    assert_eq!(
+        stored_seqs(&pool, &net).await,
+        vec![5_000_000, 5_000_000 + MAX_SEQ_GAP]
+    );
+
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 2);
+    let mut served = ledger.entries.clone();
+    served[1]["seq"] = serde_json::json!(1 + MAX_SEQ_GAP + 1);
+    let server = ledger.serve(served).await;
+    let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
+    assert!(matches!(err, MirrorWatcherError::EntrySeqInvalid { .. }));
+    assert_eq!(stored_seqs(&pool, &net).await, vec![1]);
+}
+
+/// A hostile `Retry-After` on `path` is clamped, so a throttled backfill finishes in about the
+/// clamp (real time, ~30s) rather than the claimed day.
+async fn assert_retry_after_is_clamped(path: &str) {
+    let pool = pool().await;
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 1);
+    let server = ledger.serve(ledger.entries.clone()).await;
+    Mock::given(matchers::path(path))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "86400"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    tokio::time::timeout(
+        MAX_RETRY_AFTER + Duration::from_secs(15),
+        ledger.backfill_from(&pool, &server),
+    )
+    .await
+    .expect("backfill waited past the Retry-After clamp")
+    .unwrap();
+    assert_eq!(stored_seqs(&pool, &net).await, vec![1]);
+}
+
+#[tokio::test]
+#[ignore]
+async fn backfill_clamps_a_hostile_retry_after_on_the_entries_request() {
+    assert_retry_after_is_clamped("/ledger/entries").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn backfill_clamps_a_hostile_retry_after_on_the_proof_request() {
+    assert_retry_after_is_clamped("/ledger/proof/inclusion").await;
 }
