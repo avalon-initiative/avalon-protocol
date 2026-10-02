@@ -206,6 +206,36 @@ mod sqlx_impls {
     }
 }
 
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+/// Whether `name`, after dropping invisible characters, trimming and ASCII-lowercasing, is shaped
+/// like an identity id. Handle lookup is case-insensitive, so such a name could shadow an id.
+pub fn display_name_mimics_identity_id(name: &str) -> bool {
+    let visible: String = name.chars().filter(|c| !is_invisible(*c)).collect();
+    IdentityId::parse(&visible.trim().to_ascii_lowercase()).is_ok()
+}
+
+/// Whether a display name may be used at all: no control, bidi-override or zero-width characters
+/// (joiners that glue emoji sequences are fine) and not an identity-id lookalike.
+pub fn display_name_permitted(name: &str) -> bool {
+    let hidden = name
+        .chars()
+        .any(|c| is_invisible(c) && !matches!(c, '\u{200C}' | '\u{200D}'));
+    !hidden && !display_name_mimics_identity_id(name)
+}
+
 /// Network id used by [`TestIdentity::created_payload`].
 #[doc(hidden)]
 pub const TEST_NETWORK_ID: &str = "avalon-test-network";
@@ -374,6 +404,43 @@ mod tests {
         let (key, id) = test_identity(7);
         let shard = derive_self_certifying_id(&key.verifying_key());
         assert_ne!(shard.strip_prefix("node:"), Some(id.to_string().as_str()));
+    }
+
+    #[test]
+    fn display_names_shaped_like_ids_are_not_permitted() {
+        let (_, id) = test_identity(7);
+        let lower = id.to_string();
+        let padded = format!("\u{200B} {lower}\t");
+        let mixed: String = lower
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if i % 2 == 0 {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
+        for bad in [
+            lower.clone(),
+            lower.to_uppercase(),
+            mixed,
+            padded,
+            format!("{lower}\u{FEFF}"),
+        ] {
+            assert!(!display_name_permitted(&bad), "{bad:?}");
+        }
+        for ok in [
+            lower[..63].to_string(),
+            format!("{lower}0"),
+            "Zoë 🎮".to_string(),
+            "👨\u{200D}👩".to_string(),
+        ] {
+            assert!(display_name_permitted(&ok), "{ok:?}");
+        }
+        assert!(!display_name_permitted("a\u{202E}b"));
+        assert!(!display_name_permitted("line\nbreak"));
     }
 
     #[test]

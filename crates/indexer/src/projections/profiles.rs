@@ -238,6 +238,13 @@ pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &ProfileWrite,
 ) -> Result<(), IndexError> {
+    if write
+        .display_name
+        .as_deref()
+        .is_some_and(|name| !avalon_protocol::identity_id::display_name_permitted(name))
+    {
+        return Err(IndexError::DisplayNameNotPermitted);
+    }
     let avatar_url_provided = write.avatar_url.is_some();
     let avatar_url = write.avatar_url.clone().flatten();
     let bio_provided = write.bio.is_some();
@@ -525,6 +532,7 @@ mod tests {
             payload: serde_json::json!({
                 "identity_id": identity_id,
                 "display_name": "nova",
+                "ticket_id": Uuid::nil(),
                 "public_key": "a2V5",
                 "signature": "c2ln",
             }),

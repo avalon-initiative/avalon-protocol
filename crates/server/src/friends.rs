@@ -94,6 +94,10 @@ pub async fn resolve_handle(
 ) -> Result<Json<ResolveHandleResponse>, AppError> {
     authenticate(&state, &headers).await?;
 
+    // Ids are looked up by id, never as handles.
+    if avalon_protocol::identity_id::display_name_mimics_identity_id(&handle) {
+        return Err(AppError::HandleNotFound);
+    }
     let row = sqlx::query("SELECT identity_id FROM profiles WHERE lower(display_name) = lower($1)")
         .bind(&handle)
         .fetch_optional(&state.pool)

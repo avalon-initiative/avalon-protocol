@@ -38,6 +38,9 @@ pub enum IndexError {
     /// 500.
     #[error("display_name is already taken")]
     DisplayNameTaken,
+    /// The display name is an identity-id lookalike or carries hidden characters.
+    #[error("display_name is not permitted")]
+    DisplayNameNotPermitted,
     /// Issue #661: raised by a network-facing [`Indexer`] implementation
     /// (`avalon_server::internal_role::RemoteIndexer`) when a request to
     /// the remote Indexer process could not be completed — a connection

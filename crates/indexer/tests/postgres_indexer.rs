@@ -168,3 +168,30 @@ async fn server_owned_kinds_from_678_are_a_noop_not_an_error() {
             .unwrap_or_else(|e| panic!("{:?} must be a no-op, not an error: {e}", event.kind));
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_projected_identity_created_with_an_id_lookalike_name_is_refused() {
+    let pool = test_pool().await;
+    let indexer = PostgresIndexer::new(pool.clone());
+    let who = seed_identity(&pool).await;
+    let other = TestIdentity::new();
+    let mut event = identity_created_event(&who);
+    event.payload =
+        serde_json::to_value(who.created_payload(&other.id.to_string().to_uppercase())).unwrap();
+    let err = indexer
+        .apply(&event)
+        .await
+        .expect_err("lookalike name must not project");
+    assert!(
+        matches!(err, avalon_indexer::IndexError::DisplayNameNotPermitted),
+        "{err:?}"
+    );
+    assert!(!err.is_transient());
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM profiles WHERE identity_id = $1")
+        .bind(who.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}

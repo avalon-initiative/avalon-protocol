@@ -449,3 +449,53 @@ async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
 
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_display_name_shaped_like_an_identity_id_is_refused_on_update_and_never_resolves_as_a_handle(
+) {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_id, token) = seed_identity_session(&pool).await;
+    let (victim_id, _) = seed_identity_session(&pool).await;
+    let victim = victim_id.to_string();
+
+    let mixed: String = victim
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i % 2 == 0 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    for bad in [
+        victim.to_uppercase(),
+        mixed,
+        format!(" {victim} "),
+        format!("\u{200B}{victim}"),
+        format!("{victim}\u{FEFF}"),
+    ] {
+        let response = http
+            .patch(format!("{base}/me"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "display_name": bad }))
+            .send()
+            .await
+            .expect("PATCH /me failed — is `make start` running?");
+        assert_eq!(response.status().as_u16(), 400, "{bad:?}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "INVALID_DISPLAY_NAME");
+    }
+
+    let handle = http
+        .get(format!("{base}/friends/handle/{}", victim.to_uppercase()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(handle.status().as_u16(), 404, "ids are never handles");
+}

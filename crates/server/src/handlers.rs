@@ -123,9 +123,13 @@ fn parse_inception_key(base64_key: &str) -> Result<[u8; 32], AppError> {
     Ok(bytes)
 }
 
-/// Whether `name` has the exact shape of an identity id, which a display name must never imitate.
-pub(crate) fn display_name_mimics_identity_id(name: &str) -> bool {
-    IdentityId::parse(name).is_ok()
+/// Refuses display names that imitate an identity id or hide characters.
+pub(crate) fn require_permitted_display_name(name: &str) -> Result<(), AppError> {
+    if avalon_protocol::identity_id::display_name_permitted(name) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidDisplayName)
+    }
 }
 
 /// Ceremony state persisted between `register/start` and `register/finish`
@@ -187,9 +191,7 @@ pub async fn register_start(
     if !identity_id.matches_key(&public_key) {
         return Err(AppError::IdentityIdMismatch);
     }
-    if display_name_mimics_identity_id(&body.display_name) {
-        return Err(AppError::InvalidDisplayName);
-    }
+    require_permitted_display_name(&body.display_name)?;
     // Issue #629, implementing #622's decision: a shard past its
     // bootstrap grace period with too few independently-confirmed
     // mirrors doesn't get to accept a brand-new identity — checked first,
@@ -419,6 +421,9 @@ pub async fn register_finish(
     if let Err(err) = state.indexer.apply_in_tx(&mut tx, &event).await {
         if matches!(err, avalon_indexer::IndexError::DisplayNameTaken) {
             return Err(AppError::DisplayNameTaken);
+        }
+        if matches!(err, avalon_indexer::IndexError::DisplayNameNotPermitted) {
+            return Err(AppError::InvalidDisplayName);
         }
         return Err(err.into());
     }
@@ -1412,9 +1417,7 @@ pub async fn update_profile(
     // check documents — the real enforcement is `apply_in_tx`'s write
     // further down, mapped to a clean rejection there.
     if let Some(new_name) = &body.display_name {
-        if display_name_mimics_identity_id(new_name) {
-            return Err(AppError::InvalidDisplayName);
-        }
+        require_permitted_display_name(new_name)?;
         if profile_reads::is_display_name_taken(&state.pool, new_name, Some(identity_id)).await? {
             return Err(AppError::DisplayNameTaken);
         }

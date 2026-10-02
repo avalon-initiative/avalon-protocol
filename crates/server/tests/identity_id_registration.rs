@@ -96,14 +96,35 @@ async fn malformed_ids_and_weak_keys_are_rejected() {
 async fn a_display_name_shaped_like_an_identity_id_is_rejected() {
     let (public_key, id) = fresh_key();
     let (_, someone_elses_id) = fresh_key();
-    let (status, body) = start(json!({
-        "identity_id": id,
-        "event_signing_public_key": BASE64.encode(public_key),
-        "display_name": someone_elses_id,
-    }))
-    .await;
-    assert_eq!(status, 400);
-    assert_eq!(body["code"], "INVALID_DISPLAY_NAME");
+    let upper = someone_elses_id.to_uppercase();
+    let mixed: String = someone_elses_id
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if i % 2 == 0 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    for name in [
+        someone_elses_id.clone(),
+        upper,
+        mixed,
+        format!("  {someone_elses_id}\t"),
+        format!("\u{200B}{someone_elses_id}"),
+        format!("{someone_elses_id}\u{200D}\u{2060}"),
+    ] {
+        let (status, body) = start(json!({
+            "identity_id": id,
+            "event_signing_public_key": BASE64.encode(public_key),
+            "display_name": name,
+        }))
+        .await;
+        assert_eq!(status, 400, "{name:?}");
+        assert_eq!(body["code"], "INVALID_DISPLAY_NAME");
+    }
 }
 
 #[tokio::test]
