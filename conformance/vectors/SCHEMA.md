@@ -186,8 +186,15 @@ Each file has this shape:
   signature.
 - `signing-key-revoked.json` — signing-key revocation bytes
   `avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}`
-  and signature. These four files are asserted by the protocol runner only so far; the SDKs
-  adopt them in a later slice.
+  and signature; key ids are UUID text, so no `:` can occur in them. These four files are asserted
+  by the protocol runner only so far (`supportedIn` is `["rust"]`, meaning the protocol crate; the
+  SDK runners gate on this field and skip the rest). `identity-id.json` also has `strict_verify`
+  vectors: Ed25519 verification must be strict (S below the group order L, and no small-order R
+  or key), and `identity-created-signing.json` has `domainSeparationVectors` showing the v1 and
+  v2 bytes differ. For the next slice: the server's existing non-strict verify sites
+  (`auth.rs` `verify_event_signature` and similar) accept a small-order R that `verify_strict`
+  rejects, so the server switches identity-bound verification to
+  `ed25519_key::verify_strict_signature`, and the SDKs must reject small-order R and S >= L.
 
 ## Both sides of the wire
 

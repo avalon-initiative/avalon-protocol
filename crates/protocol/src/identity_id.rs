@@ -63,13 +63,17 @@ impl SelfCertifyingIdentityId {
         &self.0
     }
 
-    /// Whether this id is the one derived from `public_key`.
+    /// Whether this id is the one derived from `public_key` (a pure hash comparison).
+    /// Callers MUST gate the key with [`crate::ed25519_key::parse_ed25519_public_key`] first.
     pub fn matches_key(&self, public_key: &[u8; 32]) -> bool {
         derive_identity_id(public_key) == *self
     }
 }
 
 /// Derives the identity id for an inception public key (pure hash, no key checks).
+///
+/// Callers MUST gate the key with [`crate::ed25519_key::parse_ed25519_public_key`]
+/// first; an unchecked weak or non-canonical key still yields an id.
 pub fn derive_identity_id(public_key: &[u8; 32]) -> SelfCertifyingIdentityId {
     let mut hasher = Sha256::new();
     hasher.update(IDENTITY_ID_DOMAIN_TAG);
@@ -139,10 +143,11 @@ pub fn device_grant_approval_signing_bytes_v2(
 
 /// Bytes a signing-key revocation signs:
 /// `avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}`.
+/// Key ids are UUIDs (never containing `:`), so the fields cannot be re-split ambiguously.
 pub fn signing_key_revoked_signing_bytes_v2(
     identity_id: &SelfCertifyingIdentityId,
-    signing_key_id: &str,
-    revoked_by_signing_key_id: &str,
+    signing_key_id: Uuid,
+    revoked_by_signing_key_id: Uuid,
 ) -> Vec<u8> {
     format!(
         "avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}"
@@ -221,9 +226,12 @@ mod tests {
         assert!(String::from_utf8(grant)
             .unwrap()
             .starts_with("avalon:device_grant.approved:v2:00000000-"));
-        let revoked = signing_key_revoked_signing_bytes_v2(&id, "k1", "k2");
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let revoked = signing_key_revoked_signing_bytes_v2(&id, a, b);
         assert!(String::from_utf8(revoked)
             .unwrap()
-            .ends_with(&format!("{id}:k1:k2")));
+            .ends_with(&format!("{id}:{a}:{b}")));
+        let swapped = signing_key_revoked_signing_bytes_v2(&id, b, a);
+        assert_ne!(signing_key_revoked_signing_bytes_v2(&id, a, b), swapped);
     }
 }

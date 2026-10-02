@@ -839,6 +839,19 @@ fn identity_id_matches_shared_vectors() {
                 assert_ne!(shard.strip_prefix("node:"), Some(id.as_str()));
                 assert!(!expected["equal"].as_bool().unwrap());
             }
+            "strict_verify" => {
+                let key = verifying_key_from_hex(input["publicKeyHex"].as_str().unwrap());
+                let message = hex::decode(input["messageHex"].as_str().unwrap()).unwrap();
+                let sig: [u8; 64] = hex::decode(input["signatureHex"].as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                assert_eq!(
+                    avalon_protocol::ed25519_key::verify_strict_signature(&key, &message, &sig),
+                    expected["valid"].as_bool().unwrap(),
+                    "{name}"
+                );
+            }
             other => panic!("{name}: unknown vector kind {other}"),
         }
     }
@@ -860,6 +873,35 @@ fn identity_created_signing_matches_shared_vectors() {
 }
 
 #[test]
+fn identity_created_v1_and_v2_bytes_differ_per_shared_vectors() {
+    use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+    let doc = load("identity-created-signing.json");
+    let pk = verifying_key_from_hex(doc["signingPublicKeyHex"].as_str().unwrap());
+    let vectors = doc["domainSeparationVectors"].as_array().unwrap();
+    assert!(!vectors.is_empty());
+    for v in vectors {
+        let (input, expected) = (&v["input"], &v["expected"]);
+        let name = input["displayName"].as_str().unwrap();
+        let v1 = format!(
+            "avalon:identity.created:v1:{}:{name}",
+            input["identityUuid"].as_str().unwrap()
+        );
+        assert_eq!(v1, expected["v1SigningBytesUtf8"].as_str().unwrap());
+        let v2 = identity_created_signing_bytes_v2(
+            &identity_id_of(input, "identityId"),
+            pk.as_bytes(),
+            name,
+        );
+        assert_eq!(
+            hex::encode(&v2),
+            expected["v2SigningBytesHex"].as_str().unwrap()
+        );
+        assert_ne!(v1.as_bytes(), &v2[..]);
+        assert!(!expected["equal"].as_bool().unwrap());
+    }
+}
+
+#[test]
 fn device_grant_approval_matches_shared_vectors() {
     use avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2;
     assert_identity_signing_vectors("device-grant-approval.json", |_, input| {
@@ -878,8 +920,8 @@ fn signing_key_revoked_matches_shared_vectors() {
     assert_identity_signing_vectors("signing-key-revoked.json", |_, input| {
         signing_key_revoked_signing_bytes_v2(
             &identity_id_of(input, "identityId"),
-            input["signingKeyId"].as_str().unwrap(),
-            input["revokedBySigningKeyId"].as_str().unwrap(),
+            parse_uuid(input, "signingKeyId"),
+            parse_uuid(input, "revokedBySigningKeyId"),
         )
     });
 }

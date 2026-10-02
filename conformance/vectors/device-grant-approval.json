@@ -3,14 +3,16 @@
   "description": "Device grant approval signing bytes (avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2): UTF-8 of 'avalon:device_grant.approved:v2:{grant_id}:{identity_id}:{requested_public_key_hex}'. grant_id is the grant's UUID text; identity_id is the 64-hex self-certifying id; the requested device key is lowercase HEX in the bytes and standard BASE64 on the wire. The signature is Ed25519 by an already-active identity key (the approver) over the bytes.",
   "generation": "Deterministic: the approver is the identity of signingKeySeedHex; the requested key is the public key of requestedKeySeedHex.",
   "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "notSupported": {
+    "csharp": "no identity-id implementation yet",
+    "typescript": "no identity-id implementation yet"
+  },
   "requestedKeySeedHex": "5555555555555555555555555555555555555555555555555555555555555555",
   "requestedPublicKeyHex": "c6822637c7d310ec57627be00ba259d253749f4aaf644470cffbe53a35f73242",
   "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
   "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
   "supportedIn": [
-    "rust",
-    "csharp",
-    "typescript"
+    "rust"
   ],
   "vectors": [
     {

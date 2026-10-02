@@ -1,14 +1,44 @@
 {
   "$schema": "./SCHEMA.md#identity-created-signing",
   "description": "identity.created v2 signing bytes (avalon_protocol::identity_id::identity_created_signing_bytes_v2): UTF-8 of 'avalon:identity.created:v2:{identity_id}:{public_key_hex}:{display_name}'. The display name is last, so a ':' in it is harmless; it is taken as-is (multi-byte UTF-8 stays UTF-8, no normalisation). The public key is lowercase HEX in the signing bytes and standard BASE64 on the wire. The signature is Ed25519 by the identity's inception key over the bytes (verified strictly).",
+  "domainSeparationVectors": [
+    {
+      "expected": {
+        "equal": false,
+        "v1SigningBytesUtf8": "avalon:identity.created:v1:0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d:Alice",
+        "v2SigningBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a416c696365"
+      },
+      "input": {
+        "displayName": "Alice",
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "identityUuid": "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
+      },
+      "name": "v1 and v2 differ for display name \"Alice\""
+    },
+    {
+      "expected": {
+        "equal": false,
+        "v1SigningBytesUtf8": "avalon:identity.created:v1:0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d:a:b:c",
+        "v2SigningBytesHex": "6176616c6f6e3a6964656e746974792e637265617465643a76323a376332366130653334323630623263356262366137393565323963646665383738633930376466346266386337343235633561386365303032333535353865393a643735393739336262633133613238313961383237633736616462366662613861343961656530303766343966326430393932643939623832356164326334383a613a623a63"
+      },
+      "input": {
+        "displayName": "a:b:c",
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+        "identityUuid": "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
+      },
+      "name": "v1 and v2 differ for display name \"a:b:c\""
+    }
+  ],
   "generation": "Deterministic: signingKeySeedHex is the Ed25519 seed, identityId derives from signingPublicKeyHex per identity-id.json; Ed25519 signatures are deterministic.",
   "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
+  "notSupported": {
+    "csharp": "no identity-id implementation yet",
+    "typescript": "no identity-id implementation yet"
+  },
   "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
   "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
   "supportedIn": [
-    "rust",
-    "csharp",
-    "typescript"
+    "rust"
   ],
   "vectors": [
     {
