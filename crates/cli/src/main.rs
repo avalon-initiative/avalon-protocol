@@ -84,7 +84,7 @@ async fn main() {
         Some("create-identity") => dev_tools::create_identity().await,
         #[cfg(feature = "dev-tools")]
         Some("login") => {
-            let Some(identity_id) = args.next().and_then(|s| s.parse::<Uuid>().ok()) else {
+            let Some(identity_id) = args.next().and_then(|s| s.parse::<avalon_protocol::ids::IdentityId>().ok()) else {
                 eprintln!("usage: avalon login <identity_id>");
                 std::process::exit(1);
             };

@@ -8,6 +8,8 @@ description = "Load generator for isolated avalon-server nodes. Refuses non-loop
 publish = false
 
 [dependencies]
+avalon-protocol = { path = "../protocol" }
+ed25519-dalek.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 reqwest.workspace = true
 sqlx.workspace = true

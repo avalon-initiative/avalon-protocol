@@ -103,9 +103,23 @@ impl Ctx {
     }
 }
 
-/// Seeds `n` identities with sessions directly in the node's schema.
-pub async fn seed_identities(pool: &PgPool, n: usize) -> Result<Vec<(Uuid, String)>> {
-    let ids: Vec<Uuid> = (0..n).map(|_| Uuid::new_v4()).collect();
+/// Seeds `n` identities (self-certifying ids over fresh keys) with sessions directly in the node's schema.
+pub async fn seed_identities(pool: &PgPool, n: usize) -> Result<Vec<(String, String)>> {
+    let keys: Vec<[u8; 32]> = (0..n)
+        .map(|_| {
+            let mut seed = [0u8; 32];
+            seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+            seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+            ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes()
+        })
+        .collect();
+    let ids: Vec<String> = keys
+        .iter()
+        .map(|key| avalon_protocol::identity_id::derive_identity_id(key).to_string())
+        .collect();
+    let key_bytes: Vec<Vec<u8>> = keys.iter().map(|key| key.to_vec()).collect();
     let tokens: Vec<String> = ids
         .iter()
         .map(|_| format!("load-{}", Uuid::new_v4()))
@@ -113,16 +127,19 @@ pub async fn seed_identities(pool: &PgPool, n: usize) -> Result<Vec<(Uuid, Strin
     let names: Vec<String> = ids.iter().map(|id| format!("load-{id}")).collect();
     let expires = time::OffsetDateTime::now_utc() + time::Duration::hours(2);
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO identities (id) SELECT unnest($1::uuid[])")
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO profiles (identity_id, display_name) SELECT unnest($1::uuid[]), unnest($2::text[])")
+    sqlx::query(
+        "INSERT INTO identities (id, inception_public_key) SELECT unnest($1::text[]), unnest($2::bytea[])",
+    )
+    .bind(&ids)
+    .bind(&key_bytes)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO profiles (identity_id, display_name) SELECT unnest($1::text[]), unnest($2::text[])")
         .bind(&ids)
         .bind(&names)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) SELECT unnest($1::text[]), unnest($2::uuid[]), $3")
+    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) SELECT unnest($1::text[]), unnest($2::text[]), $3")
         .bind(&tokens)
         .bind(&ids)
         .bind(expires)
