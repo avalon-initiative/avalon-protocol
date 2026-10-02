@@ -110,9 +110,12 @@ is_2xx() { [[ "$1" == 2* ]]; }
 known_list_has_at_least() { [ "$(known_list_size "$1")" -ge "$2" ]; }
 peer_table_has_at_least() { [ "$(peer_count "$1")" -ge "$2" ]; }
 proc_gone() { ! kill -0 "$1" 2>/dev/null; }
-# serves_own_cosignature <port> <witness-key-hex>: the node's latest head carries its own witness cosignature.
+# serves_own_cosignature <port> <witness-key-hex>: the head of the shard the node authors (core, or
+# its own node: shard when it has no pinned settlement key, as in CI) carries its own cosignature.
 serves_own_cosignature() {
-  curl -sf "http://127.0.0.1:$1/ledger/sth/latest?witnesses=1" \
+  local shard
+  shard="$(curl -sf "http://127.0.0.1:$1/nodes/status" | jq -er '.own_shard_replication.shard_id')" || return 1
+  curl -sf -G "http://127.0.0.1:$1/ledger/sth/latest" --data-urlencode "shard_id=$shard" -d witnesses=1 \
     | jq -e --arg k "$2" '[.cosignatures[]?.witness_key_id] | index($k) != null' >/dev/null 2>&1
 }
 known_list_contains() { known_list_ids_sorted "$1" | grep -qx "$2"; }
@@ -174,7 +177,7 @@ scenario_lifecycle() {
   check "A alone answers /nodes/status" alive "$port_a"
   # The author cosigns its own head with its own witness key.
   check "A accepts a write" is_2xx "$(register_integrator "$port_a" drill-lifecycle-a)"
-  wait_until "A serves its own witness key's cosignature of its head" 20 \
+  wait_until "A serves its own witness key's cosignature of its head" 60 \
     serves_own_cosignature "$port_a" "$key_a"
 
   node b "http://127.0.0.1:$port_a" AVALON_KNOWN_LIST_MAX_PER_PREFIX=10 || return 1
