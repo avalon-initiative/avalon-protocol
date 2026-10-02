@@ -340,7 +340,7 @@ impl Default for TestIdentity {
 
 /// Bytes signed for `identity.created` v2:
 /// `avalon:identity.created:v2:{len(network_id)}:{network_id}:{len(shard_id)}:{shard_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
-/// (`len` is the decimal UTF-8 byte length). Network and shard ids are variable-width and may
+/// (`len` is the decimal UTF-8 byte length, not the character count). Network and shard ids are variable-width and may
 /// contain `:` (`game:slug/1`), so each is length-prefixed and the encoding is unambiguous. The
 /// ticket binds the signature to one registration ceremony, the network and the issuing shard to
 /// one ledger stream, so a copied payload does not verify in another shard. The display name is

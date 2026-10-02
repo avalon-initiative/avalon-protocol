@@ -140,6 +140,8 @@ pub async fn run_with_tracing(
     // value is a misconfiguration, not "assume dev."
     let network_id = std::env::var("AVALON_NETWORK_ID")
         .expect("AVALON_NETWORK_ID must be set — see .env.example");
+    // Hardening on top of the length-prefixed encoding in the signed identity bytes, which is
+    // unambiguous even with ':' in the id.
     if network_id.is_empty()
         || network_id
             .chars()

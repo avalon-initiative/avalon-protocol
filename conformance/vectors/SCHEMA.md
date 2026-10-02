@@ -179,7 +179,7 @@ Each file has this shape:
   BASE64 on the wire.
 - `identity-created-signing.json` — `identity.created` v2 signing bytes
   `avalon:identity.created:v2:{len(network_id)}:{network_id}:{len(shard_id)}:{shard_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
-  (`len` = decimal UTF-8 byte length, because network and shard ids are variable-width and shard
+  (`len` = decimal UTF-8 BYTE length, not character count; one vector uses multi-byte ids, because network and shard ids are variable-width and shard
   ids contain `:`; ticket id = the server-issued `register/start` ticket; shard id = the shard the
   entry is issued in; display name last, `:` and multi-byte UTF-8 in it taken as-is), as UTF-8 and
   hex, with the deterministic Ed25519 signature (verified strictly). `replayVectors` list signatures
