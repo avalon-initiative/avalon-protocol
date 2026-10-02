@@ -1,6 +1,7 @@
 //! #1122: the node that authors a shard cosigns its own heads with its witness key. Runs a real
-//! `PostgresSettlementProvider` ledger; gated `--ignored`, and the `--test-threads=1` run should
-//! point `DATABASE_URL` at a throwaway database since the ledger tables are not network-scoped.
+//! `PostgresSettlementProvider` ledger; gated `--ignored`. The ledger and its genesis are one per
+//! database, so run with `--test-threads=1` against a throwaway database whose genesis network is
+//! `NETWORK_ID` (a fresh `avalon-server-bundled` data dir); each test uses its own shard id.
 
 use avalon_chain::mirror::{record_witness_checkpoint, witness_checkpoint_for};
 use avalon_chain::{PostgresSettlementProvider, SettlementProvider};
@@ -16,12 +17,15 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+/// The genesis network of a freshly bootstrapped dev database.
+const NETWORK_ID: &str = "avalon-dev-local";
 const SETTLEMENT_SEED: [u8; 32] = [9u8; 32];
 
 struct Author {
     pool: PgPool,
     chain: PostgresSettlementProvider,
     network_id: String,
+    shard: String,
     config: WitnessCosignConfig,
     tracker: HeadGossipTracker,
 }
@@ -38,7 +42,8 @@ impl Author {
         }
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let pool = PgPoolOptions::new().connect(&url).await.unwrap();
-        let network_id = format!("self-cosign-{}", Uuid::new_v4());
+        let network_id = NETWORK_ID.to_string();
+        let shard = format!("game:self-cosign-{}", Uuid::new_v4().simple());
         let chain = PostgresSettlementProvider::connect(pool.clone(), &network_id)
             .await
             .unwrap();
@@ -48,6 +53,7 @@ impl Author {
             pool,
             chain,
             network_id,
+            shard,
             config: WitnessCosignConfig::new(witness, id),
             tracker: HeadGossipTracker::new(),
         }
@@ -85,14 +91,14 @@ impl Author {
             &self.pool,
             Some(&self.config),
             &self.tracker,
-            "core",
+            &self.shard,
         )
         .await;
     }
 
     async fn stored(&self, size: i64) -> Vec<avalon_protocol::witness::WitnessCosignature> {
         self.chain
-            .list_witness_cosignatures(&self.network_id, "core", size)
+            .list_witness_cosignatures(&self.network_id, &self.shard, size)
             .await
             .unwrap()
     }
@@ -171,7 +177,7 @@ async fn a_restart_cosigns_the_existing_head_and_later_heads_extend_it() {
     let next = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
     assert!(next.tree_size > first.tree_size);
     assert_eq!(a.stored(next.tree_size).await.len(), 1);
-    let cp = witness_checkpoint_for(&a.pool, &a.network_id, "core")
+    let cp = witness_checkpoint_for(&a.pool, &a.network_id, &a.shard)
         .await
         .unwrap()
         .unwrap();
@@ -189,9 +195,14 @@ async fn a_smaller_or_forked_checkpoint_blocks_cosigning_the_head() {
     let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
     let id = a.config.key_id();
     let record = |size: i64, root: String| {
-        let (pool, net, id) = (a.pool.clone(), a.network_id.clone(), id.to_string());
+        let (pool, net, shard, id) = (
+            a.pool.clone(),
+            a.network_id.clone(),
+            a.shard.clone(),
+            id.to_string(),
+        );
         async move {
-            record_witness_checkpoint(&pool, &net, "core", size, &root, &id)
+            record_witness_checkpoint(&pool, &net, &shard, size, &root, &id)
                 .await
                 .unwrap()
         }
@@ -218,8 +229,8 @@ async fn a_smaller_or_forked_checkpoint_blocks_cosigning_the_head() {
 async fn no_config_or_an_equivocating_shard_means_no_self_cosignature() {
     let a = Author::new().await;
     a.commit(2).await;
-    cosign_own_latest_head(&a.chain, &a.pool, None, &a.tracker, "core").await;
-    a.tracker.mark_equivocating("core");
+    cosign_own_latest_head(&a.chain, &a.pool, None, &a.tracker, &a.shard).await;
+    a.tracker.mark_equivocating(&a.shard);
     a.cosign().await;
     let sth = a.chain.latest_signed_tree_head().await.unwrap().unwrap();
     assert!(a.stored(sth.tree_size).await.is_empty());
