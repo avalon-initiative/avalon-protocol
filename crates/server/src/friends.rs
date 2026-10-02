@@ -38,7 +38,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
@@ -357,7 +357,7 @@ pub async fn decline_or_withdraw_friend_request(
 pub async fn remove_friend(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(other_identity_id): Path<IdentityId>,
+    IdPath(other_identity_id): IdPath<IdentityId>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let (a, b) = ordered_pair(actor, other_identity_id);

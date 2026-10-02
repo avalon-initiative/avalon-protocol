@@ -49,10 +49,11 @@ use avalon_protocol::ids::IdentityId;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 
+use crate::error::IdPath;
 use crate::interest::{InterestGuard, InterestRegistry, InterestScope};
 use crate::state::AppState;
 
@@ -172,7 +173,7 @@ pub struct LocationsResponse {
 )]
 pub async fn get_locations(
     State(state): State<AppState>,
-    Path(identity_id): Path<IdentityId>,
+    IdPath(identity_id): IdPath<IdentityId>,
 ) -> Json<LocationsResponse> {
     Json(LocationsResponse {
         locations: resolve(&state, identity_id).await,

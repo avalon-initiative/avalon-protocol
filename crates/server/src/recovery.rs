@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::friends::friend_partners;
 use crate::handlers::authenticate;
 use crate::outbox;
@@ -437,7 +437,7 @@ pub async fn guardian_of(
 pub async fn resign_guardian(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(identity_id): Path<IdentityId>,
+    IdPath(identity_id): IdPath<IdentityId>,
 ) -> Result<Json<()>, AppError> {
     let caller = authenticate(&state, &headers).await?;
 
@@ -1195,7 +1195,7 @@ pub async fn get_request(
 )]
 pub async fn identity_recovery_status(
     State(state): State<AppState>,
-    Path(identity_id): Path<IdentityId>,
+    IdPath(identity_id): IdPath<IdentityId>,
 ) -> Result<Json<Option<RecoveryRequestResponse>>, AppError> {
     let row = sqlx::query(
         "SELECT id FROM recovery_requests WHERE identity_id = $1 AND status IN ('pending_approvals', 'delay')",
@@ -1230,7 +1230,7 @@ pub async fn my_recovery_status(
     headers: HeaderMap,
 ) -> Result<Json<Option<RecoveryRequestResponse>>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
-    identity_recovery_status(State(state), Path(identity_id)).await
+    identity_recovery_status(State(state), IdPath(identity_id)).await
 }
 
 #[derive(Serialize, ToSchema)]

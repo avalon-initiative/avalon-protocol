@@ -27,7 +27,7 @@ use avalon_protocol::identity::{
 };
 use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
 use avalon_protocol::ids::{GlobalId, IdentityId};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -41,7 +41,7 @@ use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
 use crate::auth::{generate_session_token, verify_event_signature};
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::outbox;
 use crate::state::AppState;
 
@@ -939,7 +939,7 @@ pub struct PublicIdentityProfileResponse {
 pub async fn get_identity_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<IdentityId>,
+    IdPath(id): IdPath<IdentityId>,
 ) -> Result<Json<PublicIdentityProfileResponse>, AppError> {
     authenticate(&state, &headers).await?;
 

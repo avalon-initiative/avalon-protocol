@@ -147,3 +147,33 @@ async fn a_signature_for_another_network_is_refused_and_the_right_one_passes() {
     let reused = finish(&http, &honest, &passkey_b, &good).await;
     assert!(reused.status().is_client_error());
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_bad_signature_and_a_signature_by_another_key_are_refused() {
+    let http = reqwest::Client::new();
+    let key = SigningKey::generate(&mut rand::rng());
+    let id = avalon_protocol::identity_id::derive_identity_id(&key.verifying_key().to_bytes());
+    let name = format!("badsig-{id}");
+
+    let started = start(&http, &key, &name).await;
+    let credential = passkey(&started).await;
+    let by_other_key = sign(
+        &SigningKey::generate(&mut rand::rng()),
+        &started.network_id,
+        started.ticket_id,
+        &name,
+    );
+    let refused = finish(&http, &started, &credential, &by_other_key).await;
+    assert_eq!(refused.status().as_u16(), 401);
+
+    // The ceremony row is consumed by the failed attempt, so even the right signature now fails.
+    let good = sign(&key, &started.network_id, started.ticket_id, &name);
+    let after = finish(&http, &started, &credential, &good).await;
+    assert!(after.status().is_client_error());
+
+    let garbage = start(&http, &key, &name).await;
+    let credential = passkey(&garbage).await;
+    let refused = finish(&http, &garbage, &credential, "not base64!!").await;
+    assert_eq!(refused.status().as_u16(), 401);
+}

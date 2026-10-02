@@ -24,6 +24,38 @@ const UNREFERENCED_IDENTITY_COLUMNS: &[(&str, &str)] = &[
     ("identity_chain_state", "identity_id"),
 ];
 
+/// UUID column names that never hold an identity id, wherever they appear.
+const GENERIC_UUID_COLUMNS: &[&str] = &[
+    "id",
+    "event_id",
+    "batch_id",
+    "guild_id",
+    "channel_id",
+    "conversation_id",
+    "integrator_id",
+    "game_id",
+    "signing_key_id",
+    "passkey_id",
+    "grant_id",
+    "nonce",
+    "request_id",
+    "attestation_id",
+    "binding_id",
+    "proof_key_id",
+    "key_id",
+    "client_entry_id",
+    "resource_id",
+    "recognizer_id",
+    "recognized_id",
+    "main_guild",
+    "approved_by_signing_key_id",
+    "message_id",
+    "ticket_id",
+];
+
+/// Table-specific non-identity UUID columns not covered by the generic names.
+const NON_IDENTITY_UUID_COLUMNS: &[(&str, &str)] = &[];
+
 #[tokio::test]
 #[ignore]
 async fn every_identity_column_is_text_with_a_shape_check() {
@@ -51,7 +83,22 @@ async fn every_identity_column_is_text_with_a_shape_check() {
             .iter()
             .map(|(table, column)| (table.to_string(), column.to_string())),
     );
+    let checks: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.conrelid::regclass::text, pg_get_constraintdef(c.oid) FROM pg_constraint c \
+         WHERE c.contype = 'c'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     for (table, column) in &columns {
+        if table != "identities" {
+            assert!(
+                checks.iter().any(|(t, def)| t == table
+                    && def.contains(column.as_str())
+                    && def.contains("[0-9a-f]{64}")),
+                "{table}.{column} has no shape CHECK"
+            );
+        }
         let data_type: String = sqlx::query_scalar(
             "SELECT data_type FROM information_schema.columns \
              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
@@ -63,6 +110,28 @@ async fn every_identity_column_is_text_with_a_shape_check() {
         .unwrap_or_else(|e| panic!("{table}.{column}: {e}"));
         assert_eq!(data_type, "text", "{table}.{column} must be TEXT");
     }
+
+    // Every remaining UUID column must be a known non-identity one, so an identity-style column
+    // under any other name (actor, requested_by, approved_by, ...) fails here.
+    let uuid_columns: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND data_type = 'uuid' ORDER BY 1, 2",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let unknown: Vec<String> = uuid_columns
+        .iter()
+        .filter(|(table, column)| {
+            !NON_IDENTITY_UUID_COLUMNS.contains(&(table.as_str(), column.as_str()))
+        })
+        .filter(|(_, column)| !GENERIC_UUID_COLUMNS.contains(&column.as_str()))
+        .map(|(table, column)| format!("{table}.{column}"))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "unclassified UUID columns (identity ids are TEXT; add genuine non-identity ones to the allowlist): {unknown:?}"
+    );
 
     // By name, so a future identity column added as a UUID without a foreign key is caught too.
     let stray: Vec<(String, String)> = sqlx::query_as(

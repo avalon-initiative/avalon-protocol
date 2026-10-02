@@ -1052,3 +1052,25 @@ mod tests {
         assert_eq!(err.code(), "INDEX");
     }
 }
+
+/// `Path` that reports a malformed identity id (or other path part) as the JSON
+/// `INVALID_IDENTITY_ID` error instead of axum's plain-text rejection.
+pub struct IdPath<T>(pub T);
+
+impl<T, S> axum::extract::FromRequestParts<S> for IdPath<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        axum::extract::Path::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Path(value)| IdPath(value))
+            .map_err(|_| AppError::InvalidIdentityId)
+    }
+}

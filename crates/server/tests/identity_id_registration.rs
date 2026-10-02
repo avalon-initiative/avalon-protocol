@@ -142,5 +142,46 @@ async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
             .await
             .expect("request failed — is `make start` running?");
         assert_eq!(response.status().as_u16(), 400, "{bad}");
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "INVALID_IDENTITY_ID", "{bad}");
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn unacceptable_keys_and_encodings_are_rejected() {
+    let (public_key, id) = fresh_key();
+    // y = 2^255 - 19 + 1: a non-canonical encoding of y = 1 (small order as well).
+    let mut non_canonical = [0xffu8; 32];
+    non_canonical[0] = 0xee;
+    non_canonical[31] = 0x7f;
+    let non_canonical_id =
+        avalon_protocol::identity_id::derive_identity_id(&non_canonical).to_string();
+    let url_safe = base64::engine::general_purpose::URL_SAFE.encode([0xfbu8; 32]);
+    let cases: Vec<(String, String)> = vec![
+        (id.clone(), BASE64.encode(&public_key[..31])),
+        (
+            id.clone(),
+            BASE64.encode([public_key.as_slice(), &[0u8]].concat()),
+        ),
+        (
+            id.clone(),
+            BASE64.encode(public_key).trim_end_matches('=').to_string(),
+        ),
+        (id.clone(), format!(" {}", BASE64.encode(public_key))),
+        (id.clone(), hex::encode(public_key)),
+        (id.clone(), url_safe),
+        (id.clone(), String::new()),
+        (non_canonical_id, BASE64.encode(non_canonical)),
+    ];
+    for (identity_id, key) in cases {
+        let (status, body) = start(json!({
+            "identity_id": identity_id,
+            "event_signing_public_key": key,
+            "display_name": "id-bad-key",
+        }))
+        .await;
+        assert_eq!(status, 400, "{key:?}: {body}");
+        assert_eq!(body["code"], "INVALID_IDENTITY_ID", "{key:?}");
     }
 }

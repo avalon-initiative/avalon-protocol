@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use avalon_protocol::social::PresenceStatus;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::authz::{authenticate_caller, require_capability, Caller};
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
 use avalon_protocol::permissions::{Capability, Visibility};
@@ -409,7 +409,7 @@ pub struct UpdateIntegratorPresenceRequest {
 pub async fn update_integrator_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(identity_id): Path<IdentityId>,
+    IdPath(identity_id): IdPath<IdentityId>,
     Json(body): Json<UpdateIntegratorPresenceRequest>,
 ) -> Result<Json<PresenceResponse>, AppError> {
     let caller = authenticate_caller(&state, &headers).await?;

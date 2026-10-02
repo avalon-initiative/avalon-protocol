@@ -41,7 +41,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::authz;
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::integrator_schemas::{fetch_schema_by_id, schema_ref};
 use crate::integrators::{
     authenticate_integrator, fetch_integrator_id_by_slug, integrator_ref, issuer_ref,
@@ -279,7 +279,7 @@ fn default_delete_reason_code() -> String {
 pub async fn delete_instance(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((slug, version, subject)): Path<(String, u32, IdentityId)>,
+    IdPath((slug, version, subject)): IdPath<(String, u32, IdentityId)>,
     Json(body): Json<DeleteInstanceRequest>,
 ) -> Result<Json<()>, AppError> {
     let integrator_id = authenticate_owning_integrator(&state, &headers, &slug).await?;
@@ -413,7 +413,7 @@ pub struct VisibleIntegratorDataInstanceResponse {
 )]
 pub async fn get_identity_integrator_data(
     State(state): State<AppState>,
-    Path(id): Path<IdentityId>,
+    IdPath(id): IdPath<IdentityId>,
 ) -> Result<Json<Vec<VisibleIntegratorDataInstanceResponse>>, AppError> {
     // #533: `list_current_for_subject` already excludes deleted instances
     // (`deleted_at IS NULL`), so a deleted character simply stops

@@ -21,7 +21,7 @@
 use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ use sqlx::Row;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::authenticate;
 use crate::state::AppState;
 
@@ -197,7 +197,7 @@ pub async fn create_block(
 pub async fn remove_block(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(blocked): Path<IdentityId>,
+    IdPath(blocked): IdPath<IdentityId>,
 ) -> Result<(), AppError> {
     let blocker = authenticate(&state, &headers).await?;
     let removed = sqlx::query("DELETE FROM blocks WHERE blocker = $1 AND blocked = $2")

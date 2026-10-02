@@ -26,7 +26,7 @@ use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::error::{AppError, IdPath};
 use crate::handlers::{authenticate, is_http_url};
 use crate::outbox;
 use crate::signature_gate::{canonical_message, require_fresh_signature};
@@ -2524,7 +2524,7 @@ pub async fn leave_guild(
 pub async fn remove_member(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((guild_id, identity_id)): Path<(Uuid, IdentityId)>,
+    IdPath((guild_id, identity_id)): IdPath<(Uuid, IdentityId)>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -3002,7 +3002,7 @@ pub struct UpdateGuildMemberRequest {
 pub async fn update_member_role(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((guild_id, identity_id)): Path<(Uuid, IdentityId)>,
+    IdPath((guild_id, identity_id)): IdPath<(Uuid, IdentityId)>,
     Json(body): Json<UpdateGuildMemberRequest>,
 ) -> Result<Json<GuildMemberResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
