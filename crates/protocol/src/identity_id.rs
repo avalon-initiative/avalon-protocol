@@ -225,6 +225,7 @@ fn is_invisible(c: char) -> bool {
                 | '\u{FE00}'..='\u{FE0F}'
                 | '\u{FEFF}'
                 | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFF8}'
                 | '\u{1BCA0}'..='\u{1BCA3}'
                 | '\u{1D173}'..='\u{1D17A}'
                 | '\u{E0000}'..='\u{E0FFF}'
@@ -238,9 +239,17 @@ pub fn display_name_mimics_identity_id(name: &str) -> bool {
     IdentityId::parse(&visible.trim().to_ascii_lowercase()).is_ok()
 }
 
-/// Whether a display name may be used at all: no control, bidi-override or zero-width characters
-/// (joiners that glue emoji sequences are fine) and not an identity-id lookalike.
+/// Longest display name, in characters after trimming.
+pub const MAX_DISPLAY_NAME_CHARS: usize = 128;
+
+/// Whether a display name may be used at all: 1 to [`MAX_DISPLAY_NAME_CHARS`] characters after
+/// trimming, no control, bidi-override or zero-width characters (joiners that glue emoji
+/// sequences are fine) and not an identity-id lookalike.
 pub fn display_name_permitted(name: &str) -> bool {
+    let length = name.trim().chars().count();
+    if length == 0 || length > MAX_DISPLAY_NAME_CHARS {
+        return false;
+    }
     let hidden = name
         .chars()
         .any(|c| is_invisible(c) && !matches!(c, '\u{200C}' | '\u{200D}'));
@@ -484,6 +493,8 @@ mod tests {
             '\u{FE0F}',
             '\u{FEFF}',
             '\u{FFA0}',
+            '\u{FFF0}',
+            '\u{FFF8}',
             '\u{1BCA0}',
             '\u{1BCA3}',
             '\u{1D173}',
@@ -507,6 +518,20 @@ mod tests {
                 assert!(!display_name_permitted(&interior), "interior {gap:?}");
             }
         }
+        // Interior joiners are fine in an emoji name but must not hide an id lookalike.
+        for joiner in ['\u{200D}', '\u{200C}'] {
+            assert!(!display_name_permitted(&format!(
+                "{}{joiner}{}",
+                &lower[..30],
+                &lower[30..]
+            )));
+        }
+        assert!(!display_name_permitted(""));
+        assert!(!display_name_permitted("   "));
+        assert!(display_name_permitted(&"n".repeat(MAX_DISPLAY_NAME_CHARS)));
+        assert!(!display_name_permitted(
+            &"n".repeat(MAX_DISPLAY_NAME_CHARS + 1)
+        ));
         assert!(!display_name_permitted("a\u{202E}b"));
         assert!(!display_name_permitted("line\nbreak"));
     }
