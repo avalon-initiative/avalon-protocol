@@ -166,7 +166,9 @@ async fn a_signature_for_another_network_is_refused_and_the_right_one_passes() {
 
     // The ticket is single-use.
     let reused = finish(&http, &honest, &passkey_b, &good).await;
-    assert!(reused.status().is_client_error());
+    assert_eq!(reused.status().as_u16(), 400);
+    let body: Value = reused.json().await.unwrap();
+    assert_eq!(body["code"], "CEREMONY_NOT_FOUND");
 }
 
 #[tokio::test]
@@ -198,7 +200,9 @@ async fn a_bad_signature_and_a_signature_by_another_key_are_refused() {
         &name,
     );
     let after = finish(&http, &started, &credential, &good).await;
-    assert!(after.status().is_client_error());
+    assert_eq!(after.status().as_u16(), 400);
+    let body: Value = after.json().await.unwrap();
+    assert_eq!(body["code"], "CEREMONY_NOT_FOUND");
 
     let garbage = start(&http, &key, &name).await;
     let credential = passkey(&garbage).await;

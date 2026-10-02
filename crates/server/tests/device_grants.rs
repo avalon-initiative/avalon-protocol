@@ -444,6 +444,13 @@ async fn two_keys_revoking_each_other_concurrently_leave_one_active() {
     let (key_a_id, key_a) = seed_signing_key(&pool, identity_id).await;
     let (key_b_id, key_b) = seed_signing_key(&pool, identity_id).await;
 
+    // Hold the identity's key rows locked so both requests are in flight before either proceeds.
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM identity_signing_keys WHERE identity_id = $1 FOR UPDATE")
+        .bind(identity_id)
+        .fetch_all(&mut *blocker)
+        .await
+        .unwrap();
     let a_revokes_b = auth(
         http.post(format!("{base}/me/devices/{key_b_id}/revoke")),
         &token,
@@ -456,7 +463,11 @@ async fn two_keys_revoking_each_other_concurrently_leave_one_active() {
     )
     .json(&revoke_body(identity_id, key_a_id, key_b_id, &key_b))
     .send();
-    let (first, second) = tokio::join!(a_revokes_b, b_revokes_a);
+    let release = async {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        blocker.commit().await.unwrap();
+    };
+    let (first, second, ()) = tokio::join!(a_revokes_b, b_revokes_a, release);
     let statuses = [first.unwrap().status(), second.unwrap().status()];
     assert_eq!(
         statuses.iter().filter(|s| s.is_success()).count(),

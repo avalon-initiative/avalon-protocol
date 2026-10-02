@@ -53,6 +53,11 @@ const GENERIC_UUID_COLUMNS: &[&str] = &[
     "ticket_id",
 ];
 
+/// TEXT columns with identity-style names that hold something other than an identity id.
+const NON_ID_TEXT_COLUMNS: &[(&str, &str)] = &[
+    ("ledger_entries", "subject"),
+];
+
 /// Table-specific non-identity UUID columns not covered by the generic names.
 const NON_IDENTITY_UUID_COLUMNS: &[(&str, &str)] = &[];
 
@@ -94,7 +99,8 @@ async fn every_identity_column_is_text_with_a_shape_check() {
         if table != "identities" {
             assert!(
                 checks.iter().any(|(t, def)| t == table
-                    && def.contains(column.as_str())
+                    && (def.contains(&format!("(({column} ~"))
+                        || def.contains(&format!("((\"{column}\" ~")))
                     && def.contains("[0-9a-f]{64}")),
                 "{table}.{column} has no shape CHECK"
             );
@@ -131,6 +137,30 @@ async fn every_identity_column_is_text_with_a_shape_check() {
     assert!(
         unknown.is_empty(),
         "unclassified UUID columns (identity ids are TEXT; add genuine non-identity ones to the allowlist): {unknown:?}"
+    );
+
+    // TEXT columns with identity-style names must be converted ones or known non-id text.
+    let converted: std::collections::HashSet<(String, String)> = columns.iter().cloned().collect();
+    let text_columns: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND data_type = 'text' \
+           AND column_name IN ('identity_id', 'author', 'owner', 'subject', 'created_by', \
+                               'applicant', 'decided_by', 'blocker', 'blocked', \
+                               'guardian_identity_id', 'cancelled_by', 'from', 'to')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let unlisted: Vec<String> = text_columns
+        .into_iter()
+        .filter(|c| {
+            !converted.contains(c) && !NON_ID_TEXT_COLUMNS.contains(&(c.0.as_str(), c.1.as_str()))
+        })
+        .map(|(t, c)| format!("{t}.{c}"))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "identity-style TEXT columns without a shape check: {unlisted:?}"
     );
 
     // By name, so a future identity column added as a UUID without a foreign key is caught too.
