@@ -1190,7 +1190,7 @@ pub async fn get_request(
     get,
     path = "/identities/{id}/recovery/status",
     tag = "recovery",
-    params(("id" = Uuid, Path)),
+    params(("id" = IdentityId, Path)),
     responses((status = 200, description = "The recovery request, or null if there is none", body = Option<RecoveryRequestResponse>)),
 )]
 pub async fn identity_recovery_status(
