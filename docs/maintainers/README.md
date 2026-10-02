@@ -24,6 +24,9 @@ settlement signing key) — see that project's own README.
   governs each area. Read this before proposing or reviewing anything
   non-trivial.
 - Root `README.md` — repository layout and current build status
+- [`environments.md`](environments.md) — bringing the dev, int, staging and prod
+  networks up and down, adding a network to the trust-anchor list, and the
+  protections around prod
 - [`../../.github/CODE_OF_CONDUCT.md`](../../.github/CODE_OF_CONDUCT.md) and
   [`../../.github/SECURITY.md`](../../.github/SECURITY.md)
 
