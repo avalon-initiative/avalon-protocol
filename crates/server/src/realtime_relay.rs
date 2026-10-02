@@ -133,7 +133,7 @@ fn full_peer_loop_targets(state: &AppState) -> Vec<String> {
 fn realtime_targets(peers: Vec<crate::nodes::PeerInfo>) -> Vec<String> {
     peers
         .into_iter()
-        .filter(|peer| !crate::nodes::is_p2p_url(&peer.base_url))
+        .filter(|peer| !crate::node_http::is_p2p_url(&peer.base_url))
         .filter(|peer| advertises_realtime_relay_role(&peer.roles))
         .map(|peer| crate::node_http::NodeClient::url_for(&peer))
         .collect()
@@ -176,10 +176,14 @@ async fn relay_targets(state: &AppState, event: &RelayEvent) -> Vec<String> {
     // see `interest::lookup_claimed`'s own doc comment for why this can no
     // longer reuse the Redis fast-path `interest::lookup` still does for
     // `crate::mirror_push`'s unrelated `Network`-scope use.
+    let own = state
+        .own_base_url
+        .as_deref()
+        .and_then(interest::valid_node_address);
     interest::lookup_claimed(state, dht_commands, scope)
         .await
         .into_iter()
-        .filter(|base_url| Some(base_url) != state.own_base_url.as_ref())
+        .filter(|base_url| Some(base_url) != own.as_ref())
         .collect()
 }
 

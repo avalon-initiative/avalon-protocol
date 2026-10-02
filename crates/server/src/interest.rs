@@ -527,10 +527,10 @@ impl InterestRegistry {
     }
 }
 
-/// A DHT-read node address worth dialing: an http(s) base URL or a canonical `p2p://<peer id>`.
-/// Anything else (userinfo, query, fragment, another scheme, a bad peer id) is dropped.
-fn valid_node_address(raw: &str) -> Option<String> {
-    if raw.starts_with("p2p://") {
+/// A DHT-read node address worth dialing: an http(s) base URL or a canonical `p2p://<peer id>`,
+/// returned in canonical form. This is syntactic only; the outbound policy is a separate check.
+pub(crate) fn valid_node_address(raw: &str) -> Option<String> {
+    if crate::node_http::is_p2p_url(raw) {
         let peer = crate::node_http::parse_p2p_base(raw)?;
         return Some(crate::node_http::p2p_base_url(&peer));
     }
@@ -538,7 +538,7 @@ fn valid_node_address(raw: &str) -> Option<String> {
 }
 
 /// [`valid_node_address`] restricted to http(s), for targets that must be reachable by URL.
-fn valid_http_node_url(raw: &str) -> Option<String> {
+pub(crate) fn valid_http_node_url(raw: &str) -> Option<String> {
     let url = url::Url::parse(raw).ok()?;
     let plain = matches!(url.scheme(), "http" | "https")
         && url.host_str().is_some()
@@ -546,7 +546,28 @@ fn valid_http_node_url(raw: &str) -> Option<String> {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none();
-    plain.then(|| raw.to_string())
+    plain.then(|| url.as_str().trim_end_matches('/').to_string())
+}
+
+/// The fast path's answer, or `None` (fall through to the DHT) when it has no valid member, so a
+/// poisoned or stale set cannot hide the DHT's answer.
+fn redis_answer(members: Option<Vec<String>>) -> Option<Vec<String>> {
+    Some(canonical_addresses(members?)).filter(|m| !m.is_empty())
+}
+
+/// Most addresses one lookup returns, so a flooded record cannot fan out unboundedly.
+const MAX_LOOKUP_VALUES: usize = 64;
+
+/// Canonical, deduplicated, capped addresses from raw lookup values.
+fn canonical_addresses<S: AsRef<str>>(raw: impl IntoIterator<Item = S>) -> Vec<String> {
+    let mut found: Vec<String> = raw
+        .into_iter()
+        .filter_map(|v| valid_node_address(v.as_ref()))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found.truncate(MAX_LOOKUP_VALUES);
+    found
 }
 
 /// Looks up who currently has a local subscriber for `scope`, decoding
@@ -574,10 +595,7 @@ pub async fn lookup(
     redis_fast_path: Option<&RedisFastPath>,
 ) -> Vec<String> {
     if let Some(redis_fast_path) = redis_fast_path {
-        if let Some(mut members) = redis_fast_path.lookup(scope).await {
-            members.retain(|m| valid_node_address(m).is_some());
-            members.sort_unstable();
-            members.dedup();
+        if let Some(members) = redis_answer(redis_fast_path.lookup(scope).await) {
             return members;
         }
     }
@@ -597,14 +615,7 @@ pub async fn lookup(
         return Vec::new();
     }
     let values = receiver.await.unwrap_or_default();
-    let mut base_urls: Vec<String> = values
-        .into_iter()
-        .filter_map(|v| String::from_utf8(v).ok())
-        .filter_map(|v| valid_node_address(&v))
-        .collect();
-    base_urls.sort_unstable();
-    base_urls.dedup();
-    base_urls
+    canonical_addresses(values.into_iter().filter_map(|v| String::from_utf8(v).ok()))
 }
 
 /// Replacement for [`lookup`] on `Channel`/`Conversation`
@@ -649,11 +660,15 @@ pub async fn lookup_claimed(
     let values = receiver.await.unwrap_or_default();
 
     let mut base_urls = Vec::new();
-    for value in values {
+    for value in values.into_iter().take(MAX_LOOKUP_VALUES) {
         let Ok(wire) = String::from_utf8(value) else {
             continue;
         };
         let Some(claim) = verify_claim_signature(state, &wire, scope).await else {
+            continue;
+        };
+        // Chat only goes to an http target: a `p2p://` role is self-reported, unverified.
+        let Some(base_url) = valid_http_node_url(&claim.base_url) else {
             continue;
         };
         let still_a_member = match claim.scope {
@@ -673,10 +688,6 @@ pub async fn lookup_claimed(
             }
         };
         if still_a_member {
-            // Chat only goes to an http target: a `p2p://` role is self-reported, unverified.
-            let Some(base_url) = valid_http_node_url(&claim.base_url) else {
-                continue;
-            };
             base_urls.push(base_url);
         }
     }
@@ -1072,10 +1083,24 @@ mod tests {
         for ok in [
             "http://node.test",
             "https://node.test:8443",
-            "http://10.0.0.1:80/avalon",
+            "http://10.0.0.1/avalon",
         ] {
             assert_eq!(valid_node_address(ok).as_deref(), Some(ok));
         }
+        // Canonical form: lowercase host, default port and trailing slash dropped.
+        for variant in [
+            "HTTP://Node.TEST:80/",
+            "http://node.test/",
+            "http://NODE.test",
+        ] {
+            assert_eq!(
+                valid_node_address(variant).as_deref(),
+                Some("http://node.test")
+            );
+        }
+        // The p2p scheme is lowercase only, so this is neither a p2p nor an http address.
+        assert_eq!(valid_node_address("P2P://12D3KooWabc"), None);
+        assert!(!crate::node_http::is_p2p_url("P2P://x"));
         for bad in [
             "",
             "node.test",
@@ -1114,6 +1139,45 @@ mod tests {
         let mut expected = vec!["http://good.test".to_string(), p2p];
         expected.sort();
         assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn a_redis_set_with_nothing_valid_in_it_falls_through_to_the_dht() {
+        assert_eq!(redis_answer(None), None);
+        assert_eq!(redis_answer(Some(vec![])), None);
+        assert_eq!(
+            redis_answer(Some(vec![
+                "junk".into(),
+                "ftp://x".into(),
+                "http://u:p@x".into()
+            ])),
+            None
+        );
+        assert_eq!(
+            redis_answer(Some(vec![
+                "HTTP://Node.test:80/".into(),
+                "http://node.test".into(),
+                "junk".into()
+            ])),
+            Some(vec!["http://node.test".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lookup_returns_at_most_the_cap_after_deduplicating() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut answer: Vec<Vec<u8>> = (0..200)
+            .map(|i| format!("http://node{i:03}.test").into_bytes())
+            .collect();
+        answer.extend(answer.clone());
+        tokio::spawn(async move {
+            if let Some(DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let _ = respond_to.send(answer);
+            }
+        });
+        let found = lookup(&tx, InterestScope::for_network("avalon-test"), None).await;
+        assert_eq!(found.len(), MAX_LOOKUP_VALUES);
+        assert_eq!(found[0], "http://node000.test");
     }
 
     #[test]
@@ -1396,6 +1460,40 @@ mod tests {
                 "a claim with a perfectly valid signature must still be rejected once its \
                  identity is not actually a member of the channel it names"
             );
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn a_signed_member_claim_naming_a_p2p_address_is_dropped() {
+            let pool = test_pool().await;
+            let dht_commands = fake_dht();
+            let (identity_id, signing_key_id, signing_key) =
+                seed_identity_with_signing_key(&pool).await;
+            let (guild_id, channel_id) = seed_guild_channel(&pool).await;
+            add_member(&pool, guild_id, identity_id).await;
+
+            let base_url = crate::node_http::p2p_base_url(&libp2p::PeerId::random());
+            let claim = mint_claim(
+                identity_id,
+                signing_key_id,
+                &signing_key,
+                channel_id,
+                &base_url,
+            );
+            let scope = InterestScope::Channel(channel_id);
+            dht_commands
+                .send(put_command(
+                    scope,
+                    claim.into_bytes(),
+                    Duration::from_secs(60),
+                ))
+                .await
+                .expect("fake dht channel should still be open");
+
+            let state = test_state(pool, None).await;
+            assert!(lookup_claimed(&state, &dht_commands, scope)
+                .await
+                .is_empty());
         }
 
         #[tokio::test]

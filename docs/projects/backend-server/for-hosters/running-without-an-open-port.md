@@ -82,14 +82,21 @@ everywhere and the node behind a no-inbound NAT:
 
 - A `p2p://` peer can call the routes that carry data (`/nodes/relay`, `/nodes/replicate-chat`,
   `/mirror/notify`) on its neighbors: its libp2p handshake authenticates it, and a self-announced
-  `p2p://` entry gives it standing with that neighbor. Those routes only check who is calling,
-  not what that node may push, so any node with standing, including one that announced a free
-  key, can still use them; per-route scope checks are not implemented yet.
+  `p2p://` entry gives it standing with that neighbor. Each route then checks what the caller may
+  push: the relay only for scopes with a local subscriber, chat replication only on a node with a
+  storage role and within the signer's rate, and mirror notifications only from a configured
+  mirror source.
 - It registers mirror interest under its `p2p://` address, so its mirror sources push to it over
-  its stream and it still polls as the fallback. It receives no chat: it is not a replication
-  target, because a `p2p://` entry's roles are self-reported, and channel and conversation
-  interest is only registered by nodes with an HTTP URL. Addresses read from lookups are
-  validated before use, and a malformed one is dropped. A source must still have an HTTP URL.
+  its stream and it still polls as the fallback. A source must have an HTTP URL to be matched.
+  It receives no chat: it is not a replication target, because a `p2p://` entry's roles are
+  self-reported, and channel and conversation interest is only registered by nodes with an HTTP
+  URL.
+- Addresses read from interest lookups are checked for shape only (an http(s) URL without
+  credentials, query or fragment, or a `p2p://` peer id), deduplicated and capped at 64 per
+  lookup. That check does not block private or internal addresses: the direct HTTP pushes for
+  mirror notifications and chat relay do not apply the outbound address policy, so a hostile
+  record can point them at an internal host. Run these nodes where internal hosts are not
+  reachable with the node's privileges.
 - Each neighbor keeps at most 64 `p2p://` entries, and they are evicted first.
 - Clients cannot reach the node directly: a `p2p://` URL is not an HTTP address. Serving
   clients needs a fronting node; a fronting gateway is planned, not implemented.
@@ -97,9 +104,9 @@ everywhere and the node behind a no-inbound NAT:
   hole punch; this has not been exercised between two url-less nodes yet.
 - First contact needs a reachable HTTP seed.
 
-Planned, not implemented: a fronting gateway for clients, scope checks on the write routes
-above, relay re-selection and probing when a relay degrades, and binding the `p2p://` identity
-to a key proof.
+Planned, not implemented: a fronting gateway for clients, the outbound address policy on those
+direct pushes, relay re-selection and probing when a relay degrades, and binding the `p2p://`
+identity to a key proof.
 
 ## Check that it joined
 

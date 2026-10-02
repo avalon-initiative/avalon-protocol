@@ -81,7 +81,7 @@ fn replication_target(state: &AppState) -> Option<String> {
 fn replication_target_from(peers: Vec<crate::nodes::PeerInfo>) -> Option<String> {
     peers
         .into_iter()
-        .filter(|peer| !crate::nodes::is_p2p_url(&peer.base_url))
+        .filter(|peer| !crate::node_http::is_p2p_url(&peer.base_url))
         .filter(|peer| advertises_storage_role(&peer.roles))
         .min_by(|a, b| a.base_url.cmp(&b.base_url))
         .map(|peer| crate::node_http::NodeClient::url_for(&peer))

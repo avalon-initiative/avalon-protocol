@@ -62,7 +62,7 @@ impl From<NoRouteReason> for NextHop {
 pub fn canonical_base_url(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     // Peer ids are case-sensitive base58.
-    if url.starts_with("p2p://") {
+    if crate::node_http::is_p2p_url(url) {
         return url.to_string();
     }
     url.to_ascii_lowercase()

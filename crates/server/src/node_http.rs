@@ -65,6 +65,12 @@ async fn bounded_check<E>(
 /// URL scheme for a peer reached over a libp2p stream.
 pub const P2P_SCHEME: &str = "p2p";
 
+/// Whether `url` names a `p2p://` peer; the scheme is lowercase only, so `P2P://x` is not one.
+pub fn is_p2p_url(url: &str) -> bool {
+    url.strip_prefix(P2P_SCHEME)
+        .is_some_and(|rest| rest.starts_with("://"))
+}
+
 /// `p2p://<peer id>` for `peer`.
 pub fn p2p_base_url(peer: &PeerId) -> String {
     format!("{P2P_SCHEME}://{peer}")
@@ -583,7 +589,7 @@ impl NodeRequestBuilder {
         let handle = self.client.stream_handle();
         let table = handle.and_then(|h| h.peers.as_ref());
         let stats = || table.map(|t| t.transport_stats().clone());
-        if self.url.starts_with("p2p://") {
+        if is_p2p_url(&self.url) {
             let (peer, path) = split_p2p_url(&self.url)
                 .ok_or_else(|| NodeHttpError::Invalid("bad p2p url".into()))?;
             let (holders, url) = table

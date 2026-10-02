@@ -1459,22 +1459,22 @@ mod node_auth_wiring {
     }
 
     #[tokio::test]
-    async fn a_node_with_no_url_still_accepts_a_stream_notification_from_its_source() {
-        let (source, receiver) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+    async fn an_identity_location_lookup_drops_p2p_and_malformed_values() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<dht::DhtCommand>(1);
+        tokio::spawn(async move {
+            if let Some(dht::DhtCommand::GetRecord { respond_to, .. }) = rx.recv().await {
+                let p2p = node_http::p2p_base_url(&libp2p::PeerId::random());
+                let _ = respond_to.send(vec![
+                    b"http://home.test".to_vec(),
+                    p2p.into_bytes(),
+                    b"junk".to_vec(),
+                ]);
+            }
+        });
         let mut state = lazy_state();
-        state.own_base_url = Some(node_http::p2p_base_url(&receiver));
-        state.shard_mirror_sources =
-            settlement::ShardMirrorSources::from_raw("http://src.test:8080");
-        state
-            .peers
-            .upsert(bound_entry(&source, "http://src.test:8080".into()));
-        let app = router(state, None);
-        let note = |network: &str| serde_json::json!({"network_id": network, "tree_size": 9});
-        // Past the source check (not 403); the wrong network is then refused before any database read.
-        assert_eq!(
-            stream_post(&app, "/mirror/notify", source, note("elsewhere")).await,
-            StatusCode::BAD_REQUEST
-        );
+        state.dht_commands = Some(tx);
+        let found = identity_locator::resolve(&state, uuid::Uuid::new_v4()).await;
+        assert_eq!(found, vec!["http://home.test".to_string()]);
     }
 
     #[tokio::test]
@@ -1554,6 +1554,8 @@ mod node_auth_wiring {
 
         let source = libp2p::PeerId::random();
         let mut state = state_with_pool(pool.clone());
+        // The receiver has no public URL: it is only its own p2p:// identity.
+        state.own_base_url = Some(node_http::p2p_base_url(&libp2p::PeerId::random()));
         state.shard_mirror_sources =
             settlement::ShardMirrorSources::from_raw("http://src.test:8080");
         state

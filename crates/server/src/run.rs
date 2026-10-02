@@ -906,6 +906,6 @@ mod tests {
         assert!(!config
             .own_base_url
             .as_deref()
-            .is_some_and(|u| u.starts_with("p2p://")));
+            .is_some_and(crate::node_http::is_p2p_url));
     }
 }
