@@ -62,7 +62,10 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// the actual private key, so the test can sign a genuine grant approval
 /// with it — exercising `devices::approve_device_grant`'s real
 /// `verify_event_signature` check, not a bypass.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
 

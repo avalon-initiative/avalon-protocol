@@ -208,7 +208,10 @@ fn of_kind<'a>(listing: &'a serde_json::Value, kind: &str) -> Vec<&'a serde_json
         .collect()
 }
 
-async fn insert_completed_recovery(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> OffsetDateTime {
+async fn insert_completed_recovery(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> OffsetDateTime {
     let completed_at = OffsetDateTime::now_utc();
     sqlx::query(
         "INSERT INTO recovery_requests \
@@ -224,7 +227,11 @@ async fn insert_completed_recovery(pool: &PgPool, identity_id: avalon_protocol::
     completed_at
 }
 
-async fn is_friend(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon_protocol::ids::IdentityId) -> bool {
+async fn is_friend(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) -> bool {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("SELECT 1 FROM indexer_friendships WHERE a = $1 AND b = $2")
         .bind(a)
@@ -235,7 +242,11 @@ async fn is_friend(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon
         .is_some()
 }
 
-async fn role_index(pool: &PgPool, guild: Uuid, identity: avalon_protocol::ids::IdentityId) -> Option<i32> {
+async fn role_index(
+    pool: &PgPool,
+    guild: Uuid,
+    identity: avalon_protocol::ids::IdentityId,
+) -> Option<i32> {
     sqlx::query(
         "SELECT role_index FROM indexer_guild_members WHERE guild_id = $1 AND identity_id = $2",
     )

@@ -6,9 +6,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use avalon_protocol::ids::IdentityId;
 use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota};
-use avalon_protocol::ids::IdentityId;
 use uuid::Uuid;
 
 use crate::error::AppError;

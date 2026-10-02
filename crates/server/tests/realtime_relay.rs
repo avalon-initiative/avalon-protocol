@@ -95,7 +95,10 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// table (same "authoring vs. mirror" indifference #525's own continuation
 /// verification already has), so a direct insert of a freshly generated
 /// keypair is exactly as good a fixture here as a real ceremony would be.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_key_id = Uuid::new_v4();
     sqlx::query(

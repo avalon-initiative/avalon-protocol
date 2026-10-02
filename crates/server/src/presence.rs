@@ -241,7 +241,10 @@ impl From<PresenceView> for PresenceResponse {
 /// Absence (no row at all) means "not hidden" — see module doc comment —
 /// so the caller only ever needs the positive set, never a full map with
 /// defaults filled in.
-async fn hide_active_in_for(state: &AppState, ids: &[IdentityId]) -> Result<HashSet<IdentityId>, AppError> {
+async fn hide_active_in_for(
+    state: &AppState,
+    ids: &[IdentityId],
+) -> Result<HashSet<IdentityId>, AppError> {
     if ids.is_empty() {
         return Ok(HashSet::new());
     }

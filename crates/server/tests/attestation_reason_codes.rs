@@ -60,7 +60,10 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// #697/#698: `POST /integrations/{slug}/connect` is signature-required
 /// -- seeds a real signing key for `identity_id` so a connect call can
 /// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -155,7 +158,11 @@ async fn auth_headers(
     headers
 }
 
-fn attestation_signing_bytes(issuer_ref: &str, subject: avalon_protocol::ids::IdentityId, achievement: &str) -> Vec<u8> {
+fn attestation_signing_bytes(
+    issuer_ref: &str,
+    subject: avalon_protocol::ids::IdentityId,
+    achievement: &str,
+) -> Vec<u8> {
     format!("avalon:achievement.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
@@ -173,7 +180,12 @@ async fn issue_one(
     http: &reqwest::Client,
     base: &str,
     pool: &PgPool,
-) -> (RegisteredIntegrator, String, avalon_protocol::ids::IdentityId, Uuid) {
+) -> (
+    RegisteredIntegrator,
+    String,
+    avalon_protocol::ids::IdentityId,
+    Uuid,
+) {
     let (identity_id, token) = seed_identity_session(pool).await;
     let integrator = register_integrator(http, base).await;
 

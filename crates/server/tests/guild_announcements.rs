@@ -48,7 +48,12 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: avalon_protocol::ids::IdentityId, role_index: i32) {
+async fn seed_membership(
+    pool: &PgPool,
+    guild_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+    role_index: i32,
+) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, $3, now())",

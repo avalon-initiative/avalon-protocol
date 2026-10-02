@@ -60,7 +60,12 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// endpoint doesn't verify chain integrity (see
 /// `avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`'s
 /// own docs on why), only reads issuer/kind/subject/payload/timestamp back.
-async fn seed_ledger_entry(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId, kind: &str, verb: &str) {
+async fn seed_ledger_entry(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+    kind: &str,
+    verb: &str,
+) {
     // ledger_entries.batch_id is NOT NULL with an FK to ledger_batches
     // this endpoint doesn't care about real batching either
     // (same "junk is fine" reasoning as prev_hash/entry_hash above), but a
@@ -148,7 +153,10 @@ async fn my_history_returns_only_the_callers_own_events() {
     cleanup_seeded_ledger_entries(&pool, &[alice_id, bob_id]).await;
 }
 
-async fn cleanup_seeded_ledger_entries(pool: &PgPool, identity_ids: &[avalon_protocol::ids::IdentityId]) {
+async fn cleanup_seeded_ledger_entries(
+    pool: &PgPool,
+    identity_ids: &[avalon_protocol::ids::IdentityId],
+) {
     for id in identity_ids {
         sqlx::query("DELETE FROM ledger_entries WHERE issuer LIKE $1")
             .bind(format!("identity:{id}:%"))

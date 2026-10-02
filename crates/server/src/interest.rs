@@ -1348,7 +1348,9 @@ mod tests {
         }
 
         async fn seed_guild_channel(pool: &PgPool) -> (Uuid, Uuid) {
-            let owner_key = SigningKey::generate(&mut rand::rng()).verifying_key().to_bytes();
+            let owner_key = SigningKey::generate(&mut rand::rng())
+                .verifying_key()
+                .to_bytes();
             let owner_id = avalon_protocol::identity_id::derive_identity_id(&owner_key);
             sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
                 .bind(owner_id)

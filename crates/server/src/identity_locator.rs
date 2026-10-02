@@ -192,7 +192,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn registrations_found_in_one_scan_are_staggered_not_simultaneous() {
         let (registry, _newly_active) = InterestRegistry::new();
-        let ids = vec![IdentityId::random_for_tests(), IdentityId::random_for_tests(), IdentityId::random_for_tests()];
+        let ids = vec![
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        ];
         let mut guards: HashMap<IdentityId, InterestGuard> = HashMap::new();
 
         let start = tokio::time::Instant::now();

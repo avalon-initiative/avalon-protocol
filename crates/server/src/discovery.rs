@@ -400,7 +400,10 @@ mod tests {
         // caller" land in the same set) — this only has to check that the
         // set, whatever it contains, is actually applied as an exclusion.
         let caller = IdentityId::random_for_tests();
-        let blocked = vec![IdentityId::random_for_tests(), IdentityId::random_for_tests()];
+        let blocked = vec![
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        ];
         let builder = build_search_query(caller, &blocked, "alice", 20);
         assert!(builder.sql().as_str().contains("p.identity_id <> ALL("));
     }

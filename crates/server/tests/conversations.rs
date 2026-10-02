@@ -57,7 +57,11 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 
 /// Seeds an accepted friendship directly into `friendships`, which requires
 /// `a < b` — ordered here rather than trusting caller order.
-async fn seed_friendship(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon_protocol::ids::IdentityId) {
+async fn seed_friendship(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
@@ -97,7 +101,11 @@ async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
 }
 
 /// Seeds an `indexer_guild_members` row directly at the `member` role (index 2).
-async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: avalon_protocol::ids::IdentityId) {
+async fn seed_guild_membership(
+    pool: &PgPool,
+    guild_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, 2, now())",

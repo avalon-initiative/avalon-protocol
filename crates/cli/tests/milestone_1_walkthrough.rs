@@ -47,15 +47,8 @@ mod hub_side {
             .unwrap_or_else(|_| "http://localhost:8080".to_string())
     }
 
-    /// Must match `avalon-server`'s `handlers::identity_created_signing_bytes`
-    /// exactly — duplicated here since this module doesn't depend on
-    /// `avalon-server`, same convention as `crates/sdk/tests/authenticate.rs`.
-    fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<u8> {
-        format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
-    }
-
     pub struct Player {
-        pub identity_id: Uuid,
+        pub identity_id: avalon_protocol::ids::IdentityId,
         pub token: String,
         /// #697/#698: the same key `register_finish` registered as this
         /// identity's first `identity_signing_keys` row — lets a later
@@ -84,12 +77,13 @@ mod hub_side {
         base: &str,
         display_name: &str,
     ) -> Player {
-        let identity_id = Uuid::new_v4();
         let origin_url = url::Url::parse(&webauthn_origin()).expect("bad webauthn origin");
 
         let mut csprng = rand::rng();
         let signing_key = SigningKey::generate(&mut csprng);
-        let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
+        let public_key = signing_key.verifying_key().to_bytes();
+        let event_signing_public_key = BASE64.encode(public_key);
+        let identity_id = avalon_protocol::identity_id::derive_identity_id(&public_key);
 
         let store = MemoryStore::new();
         let user_mock = MockUserValidationMethod::verified_user(2);
@@ -98,7 +92,11 @@ mod hub_side {
 
         let start: serde_json::Value = http
             .post(format!("{base}/identities/register/start"))
-            .json(&json!({ "identity_id": identity_id, "display_name": display_name }))
+            .json(&json!({
+                "identity_id": identity_id,
+                "event_signing_public_key": event_signing_public_key,
+                "display_name": display_name,
+            }))
             .send()
             .await
             .expect("register/start failed — is `make start` running?")
@@ -118,7 +116,11 @@ mod hub_side {
             .await
             .expect("step 1/2: WebAuthn registration ceremony failed");
 
-        let signing_bytes = identity_created_signing_bytes(identity_id, display_name);
+        let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+            &identity_id,
+            &public_key,
+            display_name,
+        );
         let signature = signing_key.sign(&signing_bytes);
 
         let register_finish = http
@@ -126,7 +128,6 @@ mod hub_side {
             .json(&json!({
                 "ticket_id": ticket_id,
                 "webauthn_credential": webauthn_credential,
-                "event_signing_public_key": event_signing_public_key,
                 "event_signature": BASE64.encode(signature.to_bytes()),
             }))
             .send()
@@ -423,7 +424,7 @@ mod hub_side {
     /// public HTTP surface the Hub uses, nothing internal.
     pub struct HubView {
         pub display_name: String,
-        pub friend_ids: Vec<Uuid>,
+        pub friend_ids: Vec<avalon_protocol::ids::IdentityId>,
         pub guild_ids: Vec<Uuid>,
         pub achievement_keys: Vec<String>,
     }
@@ -458,8 +459,8 @@ mod hub_side {
         let friend_ids = friends
             .iter()
             .map(|f| {
-                let a = Uuid::parse_str(f["a"].as_str().unwrap()).unwrap();
-                let b = Uuid::parse_str(f["b"].as_str().unwrap()).unwrap();
+                let a = avalon_protocol::ids::IdentityId::parse(f["a"].as_str().unwrap()).unwrap();
+                let b = avalon_protocol::ids::IdentityId::parse(f["b"].as_str().unwrap()).unwrap();
                 if a == player.identity_id {
                     b
                 } else {

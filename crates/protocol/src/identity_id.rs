@@ -237,7 +237,10 @@ impl TestIdentity {
     }
 
     /// A correctly self-signed `identity.created` v2 payload.
-    pub fn created_payload(&self, display_name: &str) -> crate::event_payloads::IdentityCreatedPayload {
+    pub fn created_payload(
+        &self,
+        display_name: &str,
+    ) -> crate::event_payloads::IdentityCreatedPayload {
         use base64::Engine as _;
         use ed25519_dalek::Signer as _;
         let bytes = identity_created_signing_bytes_v2(&self.id, &self.public_key(), display_name);

@@ -59,7 +59,11 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 /// Presence reads default to friends-only visibility (`presence.rs`'s
 /// module doc comment) — needed by any test checking one identity's view
 /// of another's real presence.
-async fn seed_friendship(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon_protocol::ids::IdentityId) {
+async fn seed_friendship(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)

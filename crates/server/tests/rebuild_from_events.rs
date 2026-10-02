@@ -103,8 +103,7 @@ async fn register_and_login(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_bytes =
-        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
         &identity_id,
         &signing_key.verifying_key().to_bytes(),
         &display_name,
@@ -635,16 +634,18 @@ async fn rebuild_reproduces_projections_exactly() {
     // `indexer_friendships`/`indexer_guild_members` have no live writer to
     // diff against before #44 — assert the rebuilt rows directly instead
     // (see this file's module doc).
-    let friendship_rows: Vec<(avalon_protocol::ids::IdentityId, avalon_protocol::ids::IdentityId)> =
-        sqlx::query("SELECT a, b FROM indexer_friendships WHERE a = $1 OR a = $2")
-            .bind(alice_id.min(bob_id))
-            .bind(alice_id.max(bob_id))
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row| (row.get("a"), row.get("b")))
-            .collect();
+    let friendship_rows: Vec<(
+        avalon_protocol::ids::IdentityId,
+        avalon_protocol::ids::IdentityId,
+    )> = sqlx::query("SELECT a, b FROM indexer_friendships WHERE a = $1 OR a = $2")
+        .bind(alice_id.min(bob_id))
+        .bind(alice_id.max(bob_id))
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get("a"), row.get("b")))
+        .collect();
     assert_eq!(
         friendship_rows,
         vec![(alice_id.min(bob_id), alice_id.max(bob_id))],

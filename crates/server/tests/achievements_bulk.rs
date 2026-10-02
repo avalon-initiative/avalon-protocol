@@ -60,7 +60,10 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// #697/#698: `POST /integrations/{slug}/connect` is signature-required
 /// -- seeds a real signing key for `identity_id` so a connect call can
 /// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -229,7 +232,11 @@ async fn connect(
     assert!(response.status().is_success(), "{:?}", response.status());
 }
 
-fn bulk_signing_bytes(issuer_ref: &str, subject: avalon_protocol::ids::IdentityId, achievements: &[String]) -> Vec<u8> {
+fn bulk_signing_bytes(
+    issuer_ref: &str,
+    subject: avalon_protocol::ids::IdentityId,
+    achievements: &[String],
+) -> Vec<u8> {
     let mut message =
         format!("avalon:achievement.issued.bulk:v1:{issuer_ref}:{subject}:").into_bytes();
     message.extend_from_slice(&(achievements.len() as u32).to_be_bytes());

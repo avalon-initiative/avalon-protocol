@@ -2,9 +2,9 @@
 //! chain position to an event an identity authors, and refusing operations
 //! that depend on knowing which key controls a forked identity.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_indexer::identity_chain_store;
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::ids::IdentityId;
 use sqlx::{PgExecutor, Postgres, Transaction};
 
 use crate::error::AppError;

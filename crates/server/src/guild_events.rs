@@ -4,8 +4,8 @@
 //! calendar + RSVP" section for the durability call, and "`event_manage`"
 //! for the per-resource-override authorization model.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind, RsvpStatus};
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;

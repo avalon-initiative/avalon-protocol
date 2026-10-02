@@ -37,9 +37,9 @@ use avalon_protocol::cross_node_login::CrossNodeLoginGrant;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use ed25519_dalek::VerifyingKey;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use ed25519_dalek::VerifyingKey;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -690,7 +690,10 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId
 /// failure is [`AppError::Unauthorized`], same undifferentiated posture
 /// `crate::continuation::verify`'s own doc comment already establishes for
 /// the same reason (never reveal *why* a bearer credential didn't verify).
-async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<IdentityId, AppError> {
+async fn verify_grant(
+    state: &AppState,
+    grant: &CrossNodeLoginGrant,
+) -> Result<IdentityId, AppError> {
     let now = OffsetDateTime::now_utc();
     if grant.expires_at < now || grant.issued_at > now + CLOCK_SKEW_ALLOWANCE {
         return Err(AppError::Unauthorized);

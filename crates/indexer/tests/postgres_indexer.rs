@@ -84,8 +84,18 @@ async fn unknown_kind_is_skipped_not_error() {
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "some.future.kind".to_string(),
-        issuer: GlobalId::new("identity", &IdentityId::random_for_tests().to_string(), "self", "x"),
-        subject: GlobalId::new("identity", &IdentityId::random_for_tests().to_string(), "self", "x"),
+        issuer: GlobalId::new(
+            "identity",
+            &IdentityId::random_for_tests().to_string(),
+            "self",
+            "x",
+        ),
+        subject: GlobalId::new(
+            "identity",
+            &IdentityId::random_for_tests().to_string(),
+            "self",
+            "x",
+        ),
         payload: serde_json::json!({ "anything": "at all" }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,

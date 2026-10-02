@@ -158,7 +158,10 @@ fn identity_created_event(who: &TestIdentity, display_name: &str) -> ProtocolEve
     }
 }
 
-async fn profile_display_name(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> Option<String> {
+async fn profile_display_name(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> Option<String> {
     sqlx::query("SELECT display_name FROM profiles WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_optional(pool)
@@ -187,7 +190,8 @@ async fn apply_via_remote_matches_direct_postgres_indexer() {
     seed_identity(&pool, &remote_who).await;
 
     local_indexer
-        .apply(&identity_created_event(&local_who,
+        .apply(&identity_created_event(
+            &local_who,
             "direct-postgres-indexer",
         ))
         .await

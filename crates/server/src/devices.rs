@@ -29,15 +29,15 @@
 //! already established for `identity.created`); `identity.signing_key_revoked`
 //! carries the signature of an active key of the same identity.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
     IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload, SIGNING_KEY_KIND_DEVICE_GRANT,
 };
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity_id::{
     device_grant_approval_signing_bytes_v2, signing_key_revoked_signing_bytes_v2,
 };
-use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;

@@ -385,11 +385,12 @@ pub async fn register_finish(
 
     let mut tx = state.pool.begin().await?;
 
-    let insert_identity = sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
-        .bind(ceremony.identity_id)
-        .bind(public_key_bytes.as_slice())
-        .execute(&mut *tx)
-        .await;
+    let insert_identity =
+        sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
+            .bind(ceremony.identity_id)
+            .bind(public_key_bytes.as_slice())
+            .execute(&mut *tx)
+            .await;
     if let Err(sqlx::Error::Database(db_err)) = &insert_identity {
         if db_err.is_unique_violation() {
             return Err(AppError::IdentityIdTaken);
@@ -563,7 +564,10 @@ pub struct SessionStartResponse {
     pub challenge: RequestChallengeResponse,
 }
 
-async fn fetch_passkeys(state: &AppState, identity_id: IdentityId) -> Result<Vec<Passkey>, AppError> {
+async fn fetch_passkeys(
+    state: &AppState,
+    identity_id: IdentityId,
+) -> Result<Vec<Passkey>, AppError> {
     let key_rows = sqlx::query("SELECT passkey_data FROM identity_keys WHERE identity_id = $1")
         .bind(identity_id)
         .fetch_all(&state.pool)
@@ -988,7 +992,10 @@ pub async fn list_profiles(
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<IdentityId>().map_err(|_| AppError::InvalidProfileQuery))
+        .map(|s| {
+            s.parse::<IdentityId>()
+                .map_err(|_| AppError::InvalidProfileQuery)
+        })
         .collect::<Result<_, _>>()?;
 
     if ids.len() > PROFILE_LOOKUP_MAX_IDS {

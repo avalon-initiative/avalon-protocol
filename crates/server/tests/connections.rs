@@ -14,7 +14,10 @@ use uuid::Uuid;
 /// Seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(

@@ -82,8 +82,8 @@ use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
-use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::event_payloads::IdentityCreatedPayload;
+use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
@@ -3845,7 +3845,10 @@ mod tests {
                 "kind": "inception",
             });
             for (kind, payload) in [
-                ("identity.created", created_payload(&who, &format!("replay-{id}"))),
+                (
+                    "identity.created",
+                    created_payload(&who, &format!("replay-{id}")),
+                ),
                 (
                     "identity.passkey_registered",
                     passkey_payload(id, Uuid::new_v4()),
@@ -4068,7 +4071,13 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("skipped");
-        let pruned = mk_entry(&network_id, 1, "identity.created", IdentityId::random_for_tests(), None);
+        let pruned = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            IdentityId::random_for_tests(),
+            None,
+        );
 
         let mut tx = pool.begin().await.unwrap();
         assert_eq!(

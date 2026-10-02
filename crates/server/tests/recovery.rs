@@ -37,7 +37,10 @@ use uuid::Uuid;
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -131,7 +134,11 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-async fn seed_friendship(pool: &PgPool, a: avalon_protocol::ids::IdentityId, b: avalon_protocol::ids::IdentityId) {
+async fn seed_friendship(
+    pool: &PgPool,
+    a: avalon_protocol::ids::IdentityId,
+    b: avalon_protocol::ids::IdentityId,
+) {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(lo)

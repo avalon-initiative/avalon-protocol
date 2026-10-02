@@ -57,7 +57,11 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-async fn seed_friendship(pool: &PgPool, x: avalon_protocol::ids::IdentityId, y: avalon_protocol::ids::IdentityId) {
+async fn seed_friendship(
+    pool: &PgPool,
+    x: avalon_protocol::ids::IdentityId,
+    y: avalon_protocol::ids::IdentityId,
+) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
     sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
@@ -165,7 +169,11 @@ async fn create_guild(http: &reqwest::Client, base: &str, owner_token: &str) -> 
     response["id"].as_str().unwrap().parse().unwrap()
 }
 
-async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: avalon_protocol::ids::IdentityId) {
+async fn seed_guild_membership(
+    pool: &PgPool,
+    guild_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, 1, now())",

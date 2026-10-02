@@ -96,7 +96,6 @@ async fn register_identity_on_owner(
     let origin_url =
         url::Url::parse(&webauthn_origin()).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL");
 
-
     let mut client = new_virtual_client();
 
     let start: Value = http
@@ -122,10 +121,10 @@ async fn register_identity_on_owner(
 
     let signing_bytes_for_creation =
         avalon_protocol::identity_id::identity_created_signing_bytes_v2(
-        &identity_id,
-        &signing_key.verifying_key().to_bytes(),
-        &display_name,
-    );
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     http.post(format!("{base}/identities/register/finish"))
@@ -206,7 +205,10 @@ async fn register_identity_on_owner(
 /// waiting on the locator alone isn't sufficient here — this is a second,
 /// separate real-world race the cross-shard fallback has to survive
 /// in production too, just one this test needs to wait out rather than hit.
-async fn wait_for_signing_key_ledger_entry(http: &reqwest::Client, identity_id: avalon_protocol::ids::IdentityId) {
+async fn wait_for_signing_key_ledger_entry(
+    http: &reqwest::Client,
+    identity_id: avalon_protocol::ids::IdentityId,
+) {
     let owner = identity_owner_url();
     let subject = format!("identity:{identity_id}:self:signing_key_added");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -242,7 +244,10 @@ async fn wait_for_signing_key_ledger_entry(http: &reqwest::Client, identity_id: 
 /// depends on, not a fixed sleep. Panics with a clear message on timeout,
 /// since a silent empty-locations result would otherwise look identical to
 /// "hasn't propagated yet."
-async fn wait_for_locator_propagation(http: &reqwest::Client, identity_id: avalon_protocol::ids::IdentityId) {
+async fn wait_for_locator_propagation(
+    http: &reqwest::Client,
+    identity_id: avalon_protocol::ids::IdentityId,
+) {
     let verifier = verifier_url();
     let owner = identity_owner_url();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);

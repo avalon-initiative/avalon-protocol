@@ -230,7 +230,8 @@ pub async fn set_guardians(
     // the owner's own recovery path — adding guardians or lowering the
     // threshold only ever makes recovery easier, so those stay ambient.
     let previous = fetch_guardian_settings(&state, identity_id).await?;
-    let previous_guardian_ids: HashSet<IdentityId> = previous.guardian_ids.iter().copied().collect();
+    let previous_guardian_ids: HashSet<IdentityId> =
+        previous.guardian_ids.iter().copied().collect();
     let removes_a_guardian = !previous_guardian_ids
         .iter()
         .all(|g| unique_guardians.contains(g));

@@ -40,7 +40,10 @@ pub fn canonical_message(action_tag: &str, fields: &[&str]) -> Vec<u8> {
 /// have no key to sign with" ([`AppError::NoRegisteredSigningKey`]) and
 /// "you have a key but didn't sign this request"
 /// ([`AppError::FreshSignatureRequired`]).
-pub async fn has_any_signing_key(state: &AppState, identity_id: IdentityId) -> Result<bool, AppError> {
+pub async fn has_any_signing_key(
+    state: &AppState,
+    identity_id: IdentityId,
+) -> Result<bool, AppError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM identity_signing_keys WHERE identity_id = $1 AND revoked_at IS NULL",
     )

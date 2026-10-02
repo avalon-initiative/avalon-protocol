@@ -16,7 +16,10 @@ use uuid::Uuid;
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -82,7 +85,12 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: avalon_protocol::ids::IdentityId, role_index: i32) {
+async fn seed_membership(
+    pool: &PgPool,
+    guild_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+    role_index: i32,
+) {
     sqlx::query(
         "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, $3, now())",

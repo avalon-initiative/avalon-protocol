@@ -1269,12 +1269,8 @@ async fn bulk_issue_attestation(
     let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
 
-    let signing_bytes = bulk_attestation_signing_bytes(
-        claim_kind,
-        &issuer_str,
-        subject_id,
-        &achievement_refs,
-    );
+    let signing_bytes =
+        bulk_attestation_signing_bytes(claim_kind, &issuer_str, subject_id, &achievement_refs);
     let Authenticity::Authentic { .. } = verify_signature(
         &body.key_id.to_string(),
         &signing_bytes,

@@ -79,7 +79,10 @@ fn new_virtual_client() -> VirtualClient {
 /// `crate::devices::identity_ref` produces server-side), and the real
 /// `SigningKey` used for `identity.created` — enough to produce a real,
 /// durable `identity.signing_key_added` ledger entry to fetch and verify.
-async fn register_identity(http: &reqwest::Client, base: &str) -> (avalon_protocol::ids::IdentityId, String) {
+async fn register_identity(
+    http: &reqwest::Client,
+    base: &str,
+) -> (avalon_protocol::ids::IdentityId, String) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let identity_id =
         avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
@@ -112,10 +115,10 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> (avalon_protoc
 
     let signing_bytes_for_creation =
         avalon_protocol::identity_id::identity_created_signing_bytes_v2(
-        &identity_id,
-        &signing_key.verifying_key().to_bytes(),
-        &display_name,
-    );
+            &identity_id,
+            &signing_key.verifying_key().to_bytes(),
+            &display_name,
+        );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;

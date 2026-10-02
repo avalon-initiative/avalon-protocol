@@ -14,7 +14,6 @@
 //! addition (friendship, membership) and restoring a voluntary guild leave
 //! into a currently open guild.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_indexer::projections::{friendships as friendship_reads, guild_rosters};
 use avalon_protocol::event_payloads::{
     FriendRelationshipReversedPayload, GuildMembershipReversedPayload,
@@ -22,6 +21,7 @@ use avalon_protocol::event_payloads::{
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::guilds::JoinPolicy;
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -231,7 +231,12 @@ fn reversible(summary: String, plan: ReversalPlan) -> Assessment {
 
 /// Decides whether an eligible candidate can be reversed against current
 /// state, and how.
-pub fn assess(identity: IdentityId, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
+pub fn assess(
+    identity: IdentityId,
+    event: &LedgerEvent,
+    target: Target,
+    ctx: &Context,
+) -> Assessment {
     let mut assessment = assess_inner(identity, event, target, ctx);
     if ctx.already_reversed {
         assessment.reversible = false;
@@ -242,7 +247,12 @@ pub fn assess(identity: IdentityId, event: &LedgerEvent, target: Target, ctx: &C
     assessment
 }
 
-fn assess_inner(identity: IdentityId, event: &LedgerEvent, target: Target, ctx: &Context) -> Assessment {
+fn assess_inner(
+    identity: IdentityId,
+    event: &LedgerEvent,
+    target: Target,
+    ctx: &Context,
+) -> Assessment {
     match (event.kind.as_str(), target) {
         (KIND_FRIEND_ACCEPTED, Target::Friend { counterparty }) => {
             let summary = format!("Became friends with {counterparty}");
@@ -788,7 +798,10 @@ mod tests {
 
     #[test]
     fn events_outside_the_window_are_not_candidates() {
-        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
+        let (me, other) = (
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        );
         for at in [t(99), t(200), t(500)] {
             assert_eq!(
                 extract_target(me, &window(), &friend_accepted(me, other, at)),
@@ -805,7 +818,10 @@ mod tests {
 
     #[test]
     fn events_authored_by_someone_else_are_not_candidates() {
-        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
+        let (me, other) = (
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        );
         let mut ev = friend_accepted(me, other, t(150));
         ev.issuer = format!("identity:{other}:self:x");
         assert_eq!(extract_target(me, &window(), &ev), None);
@@ -813,7 +829,10 @@ mod tests {
 
     #[test]
     fn friend_accepted_reversible_only_while_friends() {
-        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
+        let (me, other) = (
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        );
         let ev = friend_accepted(me, other, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let ok = assess(
@@ -838,7 +857,10 @@ mod tests {
 
     #[test]
     fn friend_removed_is_never_restorable() {
-        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
+        let (me, other) = (
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        );
         let ev = event(
             me,
             "friend.removed",
@@ -949,7 +971,11 @@ mod tests {
 
     #[test]
     fn removal_by_another_party_is_not_a_candidate() {
-        let (me, guild, officer) = (IdentityId::random_for_tests(), Uuid::new_v4(), IdentityId::random_for_tests());
+        let (me, guild, officer) = (
+            IdentityId::random_for_tests(),
+            Uuid::new_v4(),
+            IdentityId::random_for_tests(),
+        );
         let ev = event(
             me,
             "guild.member_removed",
@@ -968,7 +994,10 @@ mod tests {
 
     #[test]
     fn already_reversed_overrides_reversibility_and_drops_the_plan() {
-        let (me, other) = (IdentityId::random_for_tests(), IdentityId::random_for_tests());
+        let (me, other) = (
+            IdentityId::random_for_tests(),
+            IdentityId::random_for_tests(),
+        );
         let ev = friend_accepted(me, other, t(150));
         let target = extract_target(me, &window(), &ev).unwrap();
         let a = assess(

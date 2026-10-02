@@ -18,7 +18,10 @@ use uuid::Uuid;
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
     let row = sqlx::query(
@@ -1598,7 +1601,11 @@ async fn seed_integrator(pool: &PgPool, name: &str) -> Uuid {
 }
 
 /// Seeds an active `bindings` row directly — see `seed_integrator`'s own note.
-async fn seed_binding(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId, integrator_id: Uuid) -> Uuid {
+async fn seed_binding(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+    integrator_id: Uuid,
+) -> Uuid {
     let binding_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO bindings (id, identity_id, integrator_id, established_at) \

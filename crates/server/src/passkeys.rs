@@ -38,12 +38,12 @@
 //! mirror-only node keeps an audit trail) is what lets a *different* node
 //! learn the same fact.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
     IdentityPasskeyRegisteredPayload, IdentityPasskeyRevokedPayload,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;

@@ -185,7 +185,10 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 /// this identity is a direct-insert fixture, so it needs an
 /// `indexer_identity_signing_keys` row for #610's claim verification to
 /// ever find, independent of the real WebAuthn registration ceremony.
-async fn seed_signing_key(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> (Uuid, SigningKey) {
+async fn seed_signing_key(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> (Uuid, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_key_id = Uuid::new_v4();
     sqlx::query(

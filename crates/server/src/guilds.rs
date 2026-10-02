@@ -3,7 +3,6 @@
 //! not an integrator's. See `avalon-docs/protocol/guilds.md` for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_indexer::projections::guild_rosters;
 use avalon_protocol::event_payloads::{
     GuildCreatedPayload, GuildFavoriteGamesUpdatedPayload, GuildGameAssociatedPayload,
@@ -17,6 +16,7 @@ use avalon_protocol::guilds::{
     RoleBadgeIcon,
 };
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;

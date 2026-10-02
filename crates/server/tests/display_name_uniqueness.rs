@@ -83,7 +83,11 @@ async fn register(
     base: &str,
     display_name: &str,
     expected_checks: usize,
-) -> (avalon_protocol::ids::IdentityId, Option<VirtualClient>, StatusResult) {
+) -> (
+    avalon_protocol::ids::IdentityId,
+    Option<VirtualClient>,
+    StatusResult,
+) {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let identity_id =
         avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());

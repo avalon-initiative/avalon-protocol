@@ -90,8 +90,7 @@ async fn create_identity_with_one_passkey(
         .expect("virtual authenticator registration should succeed");
 
     use ed25519_dalek::{Signer, SigningKey};
-    let signing_bytes =
-        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
         &identity_id,
         &signing_key.verifying_key().to_bytes(),
         &display_name,
@@ -118,7 +117,10 @@ async fn create_identity_with_one_passkey(
     (identity_id, client)
 }
 
-async fn active_mirrored_passkey_count(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> i64 {
+async fn active_mirrored_passkey_count(
+    pool: &PgPool,
+    identity_id: avalon_protocol::ids::IdentityId,
+) -> i64 {
     sqlx::query(
         "SELECT COUNT(*) AS count FROM indexer_identity_passkeys \
          WHERE identity_id = $1 AND revoked_at IS NULL",

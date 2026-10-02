@@ -33,13 +33,13 @@
 //! "any current member may post." Toggled via `PATCH .../channels/{cid}`,
 //! gated the same as a rename (`manage_channels`, resource-aware).
 
-use avalon_protocol::ids::IdentityId;
 use avalon_protocol::event_payloads::{
     GuildChannelArchivedPayload, GuildChannelCreatedPayload, GuildChannelRenamedPayload,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::IdentityId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;

@@ -1473,7 +1473,9 @@ mod node_auth_wiring {
         });
         let mut state = lazy_state();
         state.dht_commands = Some(tx);
-        let found = identity_locator::resolve(&state, avalon_protocol::ids::IdentityId::random_for_tests()).await;
+        let found =
+            identity_locator::resolve(&state, avalon_protocol::ids::IdentityId::random_for_tests())
+                .await;
         assert_eq!(found, vec!["http://home.test".to_string()]);
     }
 

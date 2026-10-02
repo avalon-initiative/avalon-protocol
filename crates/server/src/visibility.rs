@@ -30,9 +30,9 @@
 //! read paths need it is the intended shape going forward, not a
 //! redesign.
 
-use avalon_protocol::ids::IdentityId;
 use avalon_indexer::projections::friendships as friendship_reads;
 use avalon_indexer::projections::guild_rosters;
+use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Visibility;
 use uuid::Uuid;
 

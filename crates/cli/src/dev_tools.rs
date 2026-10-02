@@ -26,11 +26,11 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 
+use avalon_protocol::identity_id::{derive_identity_id_for_key, identity_created_signing_bytes_v2};
+use avalon_protocol::ids::IdentityId;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use coset::{CborSerializable, CoseKey};
-use avalon_protocol::identity_id::{derive_identity_id_for_key, identity_created_signing_bytes_v2};
-use avalon_protocol::ids::IdentityId;
 use ed25519_dalek::{Signer, SigningKey};
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
 use passkey_client::{Client, DefaultClientData, Origin};
