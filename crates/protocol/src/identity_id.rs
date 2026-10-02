@@ -206,6 +206,58 @@ mod sqlx_impls {
     }
 }
 
+/// A test identity: a fresh Ed25519 inception key and the id derived from it.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct TestIdentity {
+    pub signing_key: ed25519_dalek::SigningKey,
+    pub id: IdentityId,
+}
+
+#[doc(hidden)]
+impl TestIdentity {
+    /// A new identity with a random key.
+    pub fn new() -> Self {
+        let mut seed = [0u8; 32];
+        seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+        seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+        Self::from_seed(seed)
+    }
+
+    /// The identity whose inception key comes from `seed`.
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let id = derive_identity_id_for_key(&signing_key.verifying_key());
+        Self { signing_key, id }
+    }
+
+    /// The raw inception public key.
+    pub fn public_key(&self) -> [u8; 32] {
+        self.signing_key.verifying_key().to_bytes()
+    }
+
+    /// A correctly self-signed `identity.created` v2 payload.
+    pub fn created_payload(&self, display_name: &str) -> crate::event_payloads::IdentityCreatedPayload {
+        use base64::Engine as _;
+        use ed25519_dalek::Signer as _;
+        let bytes = identity_created_signing_bytes_v2(&self.id, &self.public_key(), display_name);
+        crate::event_payloads::IdentityCreatedPayload {
+            identity_id: self.id,
+            display_name: display_name.to_string(),
+            public_key: base64::engine::general_purpose::STANDARD.encode(self.public_key()),
+            signature: base64::engine::general_purpose::STANDARD
+                .encode(self.signing_key.sign(&bytes).to_bytes()),
+        }
+    }
+}
+
+#[doc(hidden)]
+impl Default for TestIdentity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Bytes signed for `identity.created` v2:
 /// `avalon:identity.created:v2:{identity_id}:{public_key_hex}:{display_name}`.
 /// The display name is last, so a `:` inside it is harmless.

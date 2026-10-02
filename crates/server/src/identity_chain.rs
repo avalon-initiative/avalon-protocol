@@ -6,7 +6,6 @@ use avalon_protocol::ids::IdentityId;
 use avalon_indexer::identity_chain_store;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgExecutor, Postgres, Transaction};
-use uuid::Uuid;
 
 use crate::error::AppError;
 

@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::Postgres;
 use sqlx::{QueryBuilder, Row};
 use utoipa::{IntoParams, ToSchema};
-use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::guilds::escape_like;

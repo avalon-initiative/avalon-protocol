@@ -83,7 +83,8 @@ use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::event_payloads::IdentityCreatedPayload;
+use avalon_protocol::ids::{GlobalId, IdentityId};
 use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -2582,50 +2583,55 @@ fn global_id_from_str(raw: &str) -> Option<GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
-/// The identity an identity event may create a parent row for: its payload
-/// `identity_id`, only when it matches the id embedded in issuer and subject.
-/// Older history that lacks that match is dropped by design.
-fn identity_row_target(event: &ProtocolEvent) -> Option<Uuid> {
-    if !matches!(
-        event.kind.as_str(),
-        "identity.created" | "identity.passkey_registered" | "identity.signing_key_added"
-    ) {
+/// The identity row an `identity.created` v2 event may create: its payload id and inception
+/// key, only when the id is derived from the key and matches the id embedded in issuer and subject.
+fn identity_row_target(event: &ProtocolEvent) -> Option<(IdentityId, [u8; 32])> {
+    if event.kind != "identity.created" || event.version != 2 {
         return None;
     }
-    let id = event
-        .payload
-        .get("identity_id")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok())?;
+    let created: IdentityCreatedPayload = serde_json::from_value(event.payload.clone()).ok()?;
+    let key = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &created.public_key,
+    )
+    .ok()
+    .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+    .filter(|key| {
+        avalon_protocol::ed25519_key::parse_ed25519_public_key(key).is_some()
+            && created.identity_id.matches_key(key)
+    })?;
     let embedded = |g: &GlobalId| g.as_str().split(':').nth(1).map(str::to_owned);
-    let want = id.to_string();
+    let want = created.identity_id.to_string();
     (embedded(&event.issuer).as_deref() == Some(want.as_str())
         && embedded(&event.subject).as_deref() == Some(want.as_str()))
-    .then_some(id)
+    .then_some((created.identity_id, key))
 }
 
-/// Idempotently inserts the `identities` row an identity event refers to. A
-/// replay-only node never ran the local registration that creates it, and
-/// older history orders a passkey or signing-key event ahead of its
-/// `identity.created`.
+/// Idempotently inserts the `identities` row an `identity.created` event describes, so a
+/// replay-only node (which never ran the local registration) can project the identity's history.
 async fn ensure_identity_row_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     event: &ProtocolEvent,
 ) -> Result<(), avalon_indexer::IndexError> {
-    let Some(identity_id) = identity_row_target(event) else {
-        if event.kind.starts_with("identity.") {
-            tracing::warn!(
-                "mirror-watcher: event {} ({}) has an identity_id that does not match its issuer/subject; not creating an identity row",
-                event.id, event.kind
-            );
-        }
+    if event.kind != "identity.created" {
+        return Ok(());
+    }
+    let Some((identity_id, inception_key)) = identity_row_target(event) else {
+        tracing::warn!(
+            "mirror-watcher: event {} ({}) is not a valid v2 identity creation; not creating an identity row",
+            event.id, event.kind
+        );
         return Ok(());
     };
-    sqlx::query("INSERT INTO identities (id, created_at) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-        .bind(identity_id)
-        .bind(event.timestamp)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(identity_id)
+    .bind(event.timestamp)
+    .bind(inception_key.as_slice())
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -3786,7 +3792,11 @@ mod tests {
             subject: who,
             payload,
             event_timestamp: OffsetDateTime::now_utc(),
-            version: 1,
+            version: if matches!(kind, "identity.created" | "identity.signing_key_added") {
+                2
+            } else {
+                1
+            },
             prev_hash: "00".repeat(32),
             entry_hash: format!("{seq:064x}"),
             batch_id: Uuid::new_v4(),
@@ -3803,11 +3813,11 @@ mod tests {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
     }
 
-    fn created_payload(identity_id: IdentityId, name: &str) -> serde_json::Value {
-        serde_json::json!({ "identity_id": identity_id, "display_name": name })
+    fn created_payload(who: &TestIdentity, name: &str) -> serde_json::Value {
+        serde_json::to_value(who.created_payload(name)).unwrap()
     }
 
-    fn passkey_payload(identity_id: Uuid, passkey_id: Uuid) -> serde_json::Value {
+    fn passkey_payload(identity_id: IdentityId, passkey_id: Uuid) -> serde_json::Value {
         serde_json::json!({
             "passkey_id": passkey_id,
             "identity_id": identity_id,
@@ -3817,30 +3827,29 @@ mod tests {
         })
     }
 
-    /// Entries as a core shard recorded them for fresh registrations: the
-    /// passkey and signing-key events ahead of `identity.created`.
-    fn child_first_history(network_id: &str, identities: usize) -> Vec<mirror::MirroredEntry> {
+    /// Entries as a core shard records a fresh registration: `identity.created`
+    /// first, then the passkey and the inception signing key.
+    fn full_history(network_id: &str, identities: usize) -> Vec<mirror::MirroredEntry> {
         let mut entries = Vec::new();
         let mut seq = 0;
         for _ in 0..identities {
-            let id = Uuid::new_v4();
+            let who = TestIdentity::new();
+            let id = who.id;
             let key = serde_json::json!({
                 "signing_key_id": Uuid::new_v4(),
-                "public_key": b64(&[7u8; 32]),
+                "public_key": b64(&who.public_key()),
                 "device_label": null,
                 "approved_by_signing_key_id": Uuid::new_v4(),
                 "identity_id": id,
+                "kind": "inception",
             });
             for (kind, payload) in [
+                ("identity.created", created_payload(&who, &format!("replay-{id}"))),
                 (
                     "identity.passkey_registered",
                     passkey_payload(id, Uuid::new_v4()),
                 ),
                 ("identity.signing_key_added", key),
-                (
-                    "identity.created",
-                    created_payload(id, &format!("replay-{id}")),
-                ),
             ] {
                 seq += 1;
                 entries.push(mk_entry(network_id, seq, kind, id, Some(payload)));
@@ -3860,11 +3869,11 @@ mod tests {
 
     async fn projected_counts(pool: &PgPool, entries: &[mirror::MirroredEntry]) -> (i64, i64, i64) {
         let all: Vec<&mirror::MirroredEntry> = entries.iter().collect();
-        let ident_ids: Vec<Uuid> = entries
+        let ident_ids: Vec<IdentityId> = entries
             .iter()
             .filter(|e| e.kind == "identity.created")
             .map(|e| {
-                Uuid::parse_str(e.payload.as_ref().unwrap()["identity_id"].as_str().unwrap())
+                IdentityId::parse(e.payload.as_ref().unwrap()["identity_id"].as_str().unwrap())
                     .unwrap()
             })
             .collect();
@@ -3936,7 +3945,7 @@ mod tests {
     async fn replaying_children_ahead_of_identity_created_projects_completely() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
-        let entries = child_first_history(&fresh_network("replay"), 3);
+        let entries = full_history(&fresh_network("replay"), 3);
         let mut blocked = false;
         for entry in &entries {
             store_and_project(&pool, &indexer, entry, &mut blocked)
@@ -3954,7 +3963,7 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("reproject");
-        let entries = child_first_history(&network_id, 2);
+        let entries = full_history(&network_id, 2);
         store_entries(&pool, &entries).await;
         assert_eq!(projected_counts(&pool, &entries).await, (0, 0, 0));
 
@@ -3974,24 +3983,24 @@ mod tests {
     /// followed by a full child-first history that must still project.
     fn poison_history(network_id: &str) -> Vec<mirror::MirroredEntry> {
         let name = format!("poison-{}", Uuid::new_v4());
-        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (a, b) = (TestIdentity::new(), TestIdentity::new());
         let mut entries = vec![
             mk_entry(
                 network_id,
                 1,
                 "identity.created",
-                a,
-                Some(created_payload(a, &name)),
+                a.id,
+                Some(created_payload(&a, &name)),
             ),
             mk_entry(
                 network_id,
                 2,
                 "identity.created",
-                b,
-                Some(created_payload(b, &name)),
+                b.id,
+                Some(created_payload(&b, &name)),
             ),
         ];
-        for mut e in child_first_history(network_id, 1) {
+        for mut e in full_history(network_id, 1) {
             e.seq += 2;
             entries.push(e);
         }
@@ -4058,7 +4067,7 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("skipped");
-        let pruned = mk_entry(&network_id, 1, "identity.created", Uuid::new_v4(), None);
+        let pruned = mk_entry(&network_id, 1, "identity.created", IdentityId::random_for_tests(), None);
 
         let mut tx = pool.begin().await.unwrap();
         assert_eq!(
@@ -4091,27 +4100,27 @@ mod tests {
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("dupname");
         let name = format!("dup-{}", Uuid::new_v4());
-        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (a, b) = (TestIdentity::new(), TestIdentity::new());
         let first = mk_entry(
             &network_id,
             1,
             "identity.created",
-            a,
-            Some(created_payload(a, &name)),
+            a.id,
+            Some(created_payload(&a, &name)),
         );
         let second = mk_entry(
             &network_id,
             2,
             "identity.created",
-            b,
-            Some(created_payload(b, &name)),
+            b.id,
+            Some(created_payload(&b, &name)),
         );
         let after = mk_entry(
             &network_id,
             3,
             "identity.passkey_registered",
-            a,
-            Some(passkey_payload(a, Uuid::new_v4())),
+            a.id,
+            Some(passkey_payload(a.id, Uuid::new_v4())),
         );
         for e in [&first, &second, &after] {
             mirror::insert_mirrored_entry(&pool, e).await.unwrap();
@@ -4151,7 +4160,7 @@ mod tests {
     async fn a_transient_failure_stops_the_pass_and_reports_blocked() {
         let pool = live_test_pool().await;
         let network_id = fresh_network("transient");
-        store_entries(&pool, &child_first_history(&network_id, 1)).await;
+        store_entries(&pool, &full_history(&network_id, 1)).await;
 
         let mut calls = 0;
         let report = reproject_with(&pool, &network_id, mirror::CORE_SHARD_ID, |_| {
@@ -4183,7 +4192,7 @@ mod tests {
         let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
         let shard =
             avalon_protocol::shard_identity::derive_self_certifying_id(&key.verifying_key());
-        let mut entries = child_first_history(&network_id, 1);
+        let mut entries = full_history(&network_id, 1);
         for e in &mut entries {
             e.shard_id = shard.clone();
         }
@@ -4202,7 +4211,7 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("pruned");
-        let pruned = mk_entry(&network_id, 1, "identity.created", Uuid::new_v4(), None);
+        let pruned = mk_entry(&network_id, 1, "identity.created", IdentityId::random_for_tests(), None);
         insert_legacy_pruned_row(&pool, &pruned).await;
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
@@ -4219,13 +4228,14 @@ mod tests {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("revoke");
-        let (id, passkey_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let (who, passkey_id) = (TestIdentity::new(), Uuid::new_v4());
+        let id = who.id;
         let created = mk_entry(
             &network_id,
             1,
             "identity.created",
             id,
-            Some(created_payload(id, &format!("revoke-{id}"))),
+            Some(created_payload(&who, &format!("revoke-{id}"))),
         );
         let registered = mk_entry(
             &network_id,
@@ -4262,61 +4272,63 @@ mod tests {
         assert!(revoked_at.is_some(), "the passkey must end up revoked");
     }
 
-    fn ev(kind: &str, issuer_id: Uuid, payload_id: Uuid) -> ProtocolEvent {
-        let who = GlobalId::new("identity", &issuer_id.to_string(), "self", "x");
+    fn created_event(who: &TestIdentity, embedded: IdentityId) -> ProtocolEvent {
+        let global = GlobalId::new("identity", &embedded.to_string(), "self", "created");
         ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: kind.to_string(),
-            issuer: who.clone(),
-            subject: who,
-            payload: serde_json::json!({ "identity_id": payload_id }),
+            kind: "identity.created".to_string(),
+            issuer: global.clone(),
+            subject: global,
+            payload: created_payload(who, "target-test"),
             timestamp: OffsetDateTime::now_utc(),
-            version: 1,
+            version: 2,
             identity_chain: None,
         }
     }
 
     #[test]
-    fn identity_row_target_requires_an_identity_kind_and_a_matching_embedded_id() {
-        let id = Uuid::new_v4();
+    fn identity_row_target_requires_a_v2_creation_with_a_matching_embedded_id() {
+        let who = TestIdentity::new();
         assert_eq!(
-            identity_row_target(&ev("identity.passkey_registered", id, id)),
-            Some(id)
+            identity_row_target(&created_event(&who, who.id)),
+            Some((who.id, who.public_key()))
         );
         assert_eq!(
-            identity_row_target(&ev("identity.created", id, Uuid::new_v4())),
+            identity_row_target(&created_event(&who, IdentityId::random_for_tests())),
             None
         );
-        assert_eq!(identity_row_target(&ev("friend.requested", id, id)), None);
-        assert_eq!(
-            identity_row_target(&ev("identity.passkey_revoked", id, id)),
-            None
-        );
+        let mut v1 = created_event(&who, who.id);
+        v1.version = 1;
+        assert_eq!(identity_row_target(&v1), None);
+        let mut other_kind = created_event(&who, who.id);
+        other_kind.kind = "identity.passkey_registered".to_string();
+        assert_eq!(identity_row_target(&other_kind), None);
+        let mut wrong_key = created_event(&who, who.id);
+        wrong_key.payload["identity_id"] =
+            serde_json::json!(IdentityId::random_for_tests().to_string());
+        assert_eq!(identity_row_target(&wrong_key), None);
     }
 
     #[tokio::test]
     #[ignore]
-    async fn ensure_identity_row_only_inserts_for_a_matching_identity_event() {
+    async fn ensure_identity_row_only_inserts_for_a_valid_creation() {
         let pool = live_test_pool().await;
         let mut tx = pool.begin().await.unwrap();
-        let (good, other, mismatched) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let mut event = ev("identity.signing_key_added", good, good);
+        let (good, bad) = (TestIdentity::new(), TestIdentity::new());
+        let mut event = created_event(&good, good.id);
         event.timestamp = OffsetDateTime::UNIX_EPOCH + time::Duration::days(400);
         ensure_identity_row_exists(&mut tx, &event).await.unwrap();
-        ensure_identity_row_exists(&mut tx, &ev("friend.requested", other, other))
+        ensure_identity_row_exists(&mut tx, &created_event(&bad, good.id))
             .await
             .unwrap();
-        ensure_identity_row_exists(&mut tx, &ev("identity.created", other, mismatched))
-            .await
-            .unwrap();
-        let rows: Vec<(Uuid, OffsetDateTime)> =
+        let rows: Vec<(IdentityId, OffsetDateTime)> =
             sqlx::query_as("SELECT id, created_at FROM identities WHERE id = ANY($1)")
-                .bind(vec![good, other, mismatched])
+                .bind(vec![good.id, bad.id])
                 .fetch_all(&mut *tx)
                 .await
                 .unwrap();
         tx.rollback().await.unwrap();
-        assert_eq!(rows, vec![(good, event.timestamp)]);
+        assert_eq!(rows, vec![(good.id, event.timestamp)]);
     }
 
     #[test]
@@ -4365,7 +4377,7 @@ mod tests {
         let indexer = PostgresIndexer::new(pool.clone());
         let client = crate::node_http::NodeClient::new();
         let network_id = fresh_network("wiring");
-        let entries = child_first_history(&network_id, 1);
+        let entries = full_history(&network_id, 1);
         store_entries(&pool, &entries).await;
         let refs: Vec<&mirror::MirroredEntry> = entries.iter().collect();
 
