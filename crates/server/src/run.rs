@@ -741,6 +741,15 @@ pub async fn run_with_tracing(
     }
 
     if let Some(witness) = crate::witness_cosign::WitnessCosignConfig::from_env() {
+        if signs_own_shard_locally {
+            tokio::spawn(crate::witness_cosign::run_self_cosign_worker(
+                chain.clone(),
+                pool.clone(),
+                witness.clone(),
+                head_gossip.clone(),
+                own_shard_id.clone(),
+            ));
+        }
         tokio::spawn(crate::witness_cosign::run_reattest_worker(
             chain.clone(),
             pool.clone(),

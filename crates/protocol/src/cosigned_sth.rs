@@ -39,11 +39,10 @@ fn valid_fresh_witness_ids(
     now: OffsetDateTime,
 ) -> BTreeSet<String> {
     let mut verified = BTreeSet::new();
-    // The author's own valid signature over this head is already proof that
-    // its key vouches for it, so a known witness holding the author's key
-    // counts without a separate cosignature. An author never cosigns its own
-    // log as a mirror would, so requiring one would make every list that
-    // contains the author unable to reach a majority.
+    // The author's valid signature already vouches for the head, so a known witness holding
+    // the author's own key counts without a cosignature. A node's witness key is usually a
+    // separate key, which the author's node cosigns with too; either way it shares the
+    // author's operator and is not an independent check.
     for (witness_key_id, key) in known_list {
         if key == author_verifying_key {
             verified.insert(witness_key_id.clone());

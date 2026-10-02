@@ -50,7 +50,12 @@ Do the author last. Every step is reversible, see Rollback.
 2. **Give each intended witness a key** and restart it with cosigning left on:
    `AVALON_WITNESS_SIGNING_KEY=<32-byte hex seed>` (a node that authors a shard can rely
    on its settlement key instead). Keep `AVALON_MIRROR_PEERS` pointed at the authorities
-   whose heads it should cosign; a node only cosigns heads it mirrors.
+   whose heads it should cosign; a node cosigns the heads it mirrors, plus every new head of the
+   shard it authors itself (the author counts as a witness of its own log). The author's
+   witness key counts toward the known list's majority but shares the author's operator: a
+   forking author can sign both forks with it, so for fork prevention N known witnesses
+   means about N-1 independent ones, and with {author, other} the other is the only
+   independent check. Detection is unchanged. List enough independent witnesses.
 3. **Let the known lists fill.** Each node admits peers that prove a witness key in their
    own announce response, with a 30-minute probation before a new slot counts. Nothing to
    configure; the bundled seed nodes are anchors. Watch `known_list` log lines
@@ -77,8 +82,8 @@ The first is what a pinned client does and must exit 0 before, during and after.
 second lists the cosignatures that node holds. To check a majority the way a
 witness-aware client will, feed the same head as served by each witness to
 `verify_sth cosigned <witness-key-hex>...`; it accepts only if a majority of the given
-keys cosigned, and rejects the same head with one of two. The author serves no
-cosignatures itself; a mirror collects them from each confirmed witness's
+keys cosigned, and rejects the same head with one of two. An author with cosigning on
+serves its own witness key's cosignature of its latest head; a mirror collects the others from each confirmed witness's
 `GET /ledger/sth/{tree_size}?shard_id=<shard>&witnesses=1`, so a mirror that logs
 "holding it" for a head is waiting for a majority of witnesses to answer for that exact
 head, not failing verification. Also confirm:
@@ -130,3 +135,15 @@ sign a head that does not extend it.
   witness is not counted for about half an hour.
 - Client-side cosignature verification and a witness list in the trust-anchor entry are
   not shipped; both need the coordinated SDK release.
+
+## Recovering a refused node
+
+A node whose ledger was restored or reset while its `witness_checkpoints` table was kept
+refuses its own heads (`witness_double_cosign_refused` or `witness_consistency_check_failed`
+in the log, repeated at most every five minutes). Delete that shard's checkpoint row
+(`DELETE FROM witness_checkpoints WHERE network_id = $1 AND shard_id = $2`) and it cosigns
+again from the next head; `make db-reset` wipes the table. Only do this for a shard this node
+authors, or after confirming that the shard's history was legitimately reset: the row is what
+stops a witness from cosigning a different root at a size it already cosigned, so a node that
+only mirrors the shard must not delete it to silence a refusal. Known gap: a witness key that was
+rotated is not re-attested for checkpoints recorded under the old key id.
