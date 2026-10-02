@@ -213,12 +213,8 @@ pub async fn exceeds_observed(
     Ok(false)
 }
 
-/// `POST /mirror/notify` — see this module's own doc comment for the full "never trusted
-/// content" invariant. The signer must be one of this node's configured mirror sources (403),
-/// the network id must be this node's (400), and the announced tree size must exceed what this
-/// node has already observed from that source; only then is the mirror watcher woken. A stale
-/// size is acknowledged (202) without waking it. An HTTP source matches by URL origin, so one
-/// configured by hostname but announced by IP (or the reverse) is refused and polling covers it. Nothing here starts outbound work itself.
+/// `POST /mirror/notify`: 403 unless the authenticated signer is a configured source, 400 for
+/// another network, and the watcher wakes only for a larger tree size. No outbound work here.
 pub async fn notify(
     axum::extract::State(state): axum::extract::State<AppState>,
     crate::node_auth::AuthenticatedNode(signer): crate::node_auth::AuthenticatedNode,
@@ -354,6 +350,43 @@ mod tests {
     }
 
     #[test]
+    fn non_canonical_p2p_spellings_are_dropped_and_never_match() {
+        let id = libp2p::PeerId::random();
+        for raw in [
+            format!("P2P://{id}"),
+            format!("p2p:{id}"),
+            format!("p2p:/{id}"),
+            format!("p2p://{id}?x=1"),
+            format!("aux=P2P://{id}"),
+            "p2p://not-a-peer-id".to_string(),
+            "p2p://".to_string(),
+        ] {
+            let sources = crate::settlement::ShardMirrorSources::from_raw(&raw);
+            assert!(sources.entries().is_empty(), "{raw} was kept");
+            let peers = crate::nodes::PeerTable::new();
+            assert!(sources_of_signer(&peers, &sources, &id).is_empty(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn http_and_p2p_sources_match_independently() {
+        let (http_peer, p2p_peer) = (libp2p::PeerId::random(), libp2p::PeerId::random());
+        let peers = crate::nodes::PeerTable::new();
+        peers.upsert(entry(&http_peer, "http://src.test", true));
+        let sources = crate::settlement::ShardMirrorSources::from_raw(&format!(
+            "http://src.test,aux=p2p://{p2p_peer}"
+        ));
+        assert_eq!(
+            sources_of_signer(&peers, &sources, &http_peer),
+            vec![("core".to_string(), "http://src.test".to_string())]
+        );
+        assert_eq!(
+            sources_of_signer(&peers, &sources, &p2p_peer),
+            vec![("aux".to_string(), format!("p2p://{p2p_peer}"))]
+        );
+    }
+
+    #[test]
     fn p2p_source_spellings_canonicalise_to_one_source() {
         let id = libp2p::PeerId::random();
         let canonical = format!("p2p://{id}");
@@ -371,24 +404,20 @@ mod tests {
     }
 
     #[test]
-    fn malformed_and_excess_p2p_sources_are_dropped() {
-        let ids: Vec<_> = (0..crate::mirror_watcher::MAX_P2P_MIRROR_SOURCES + 2)
-            .map(|_| libp2p::PeerId::random())
-            .collect();
+    fn the_cap_keeps_the_first_sixteen_p2p_sources_in_config_order() {
+        let cap = crate::mirror_watcher::MAX_P2P_MIRROR_SOURCES;
+        let ids: Vec<_> = (0..cap + 1).map(|_| libp2p::PeerId::random()).collect();
         let raw = ids.iter().map(|i| format!("p2p://{i}")).collect::<Vec<_>>();
         let sources = crate::settlement::ShardMirrorSources::from_raw(&format!(
-            "p2p://nope,p2p://,p2p://{0}/x,aux=p2p://{0}?q=1,http://h.test,{1}",
-            ids[0],
+            "http://h.test,{}",
             raw.join(",")
         ));
-        let entries = sources.entries();
-        let p2p = entries.iter().filter(|(_, u)| u.starts_with("p2p://"));
-        assert_eq!(p2p.count(), crate::mirror_watcher::MAX_P2P_MIRROR_SOURCES);
-        assert!(entries.iter().any(|(_, u)| u == "http://h.test"));
-        assert!(!entries.iter().any(|(s, _)| s == "aux"));
-        assert!(!entries
-            .iter()
-            .any(|(_, u)| u == "p2p://nope" || u == "p2p://"));
+        let kept: Vec<String> = sources.entries().into_iter().map(|(_, u)| u).collect();
+        assert!(kept.contains(&"http://h.test".to_string()));
+        for (i, r) in raw.iter().enumerate() {
+            assert_eq!(kept.contains(r), i < cap, "source {i}");
+        }
+        assert_eq!(kept.len(), cap + 1);
     }
 
     /// A mock swarm: answers the interest lookup with `values` and every stream push with 202,

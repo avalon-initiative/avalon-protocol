@@ -78,18 +78,15 @@ const BACKFILL_PAGE_SIZE: i64 = 200;
 /// Most `p2p://` entries `AVALON_MIRROR_PEERS` may name; further ones are dropped.
 pub(crate) const MAX_P2P_MIRROR_SOURCES: usize = 16;
 
-/// Issue #573: `AVALON_MIRROR_PEERS` entries can now be either a bare URL
-/// (implicitly the `"core"` shard, preserving every pre-#573 config
-/// byte-for-byte) or `shard_id=url` — the same bare-vs-keyed convention
-/// `AVALON_SETTLEMENT_REMOTE_URLS`/`AVALON_KNOWN_SHARDS` already use.
-/// A URL may also be `p2p://<peer id>` (issue #1146), canonicalised to
-/// `p2p_base_url`'s form; malformed ones are dropped, at most
-/// [`MAX_P2P_MIRROR_SOURCES`] are kept, and only the notify match uses them so far.
-/// Shared by [`MirrorWatcherConfig::from_env`] (which only needs the bare
-/// URL list to poll) and `crate::settlement::ShardMirrorSources` (which
-/// needs the shard_id mapping too, to scope reads correctly — see its own
-/// doc comment for why this matters).
-pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
+/// Issue #573: `AVALON_MIRROR_PEERS` entries are a bare URL (the `"core"` shard) or
+/// `shard_id=url`. A URL may be a canonical `p2p://<peer id>` (#1146); other `p2p` spellings,
+/// malformed ids and p2p entries past [`MAX_P2P_MIRROR_SOURCES`] are dropped, warning if `warn`.
+pub(crate) fn parse_mirror_peers(raw: &str, warn: bool) -> Vec<(String, String)> {
+    let drop_entry = |entry: &str, why: &str| {
+        if warn {
+            tracing::warn!(entry, "mirror peers: dropping entry: {why}");
+        }
+    };
     let mut out: Vec<(String, String)> = Vec::new();
     let mut p2p_sources = 0;
     for entry in raw.split(',') {
@@ -97,14 +94,20 @@ pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
         if entry.is_empty() {
             continue;
         }
+        // A p2p entry is a whole bare URL, so a stray `=` in it is not a shard separator.
         let (shard_id, url) = match entry.split_once('=') {
-            Some((shard_id, url)) => (shard_id.trim().to_string(), url.trim()),
-            None => ("core".to_string(), entry),
+            Some((shard_id, url)) if !is_p2p_scheme(entry) => {
+                (shard_id.trim().to_string(), url.trim())
+            }
+            _ => ("core".to_string(), entry),
         };
-        let url = if crate::node_http::is_p2p_url(url) {
+        let url = if is_p2p_scheme(url) {
             // The canonical string is also the DB key for this source's rows.
-            let Some(peer) = crate::node_http::parse_p2p_base(url) else {
-                tracing::warn!(entry, "mirror peers: dropping a malformed p2p:// source");
+            let canonical = crate::node_http::is_p2p_url(url)
+                .then(|| crate::node_http::parse_p2p_base(url))
+                .flatten();
+            let Some(peer) = canonical else {
+                drop_entry(entry, "malformed or non-canonical p2p:// source");
                 continue;
             };
             crate::node_http::p2p_base_url(&peer)
@@ -116,7 +119,7 @@ pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
         }
         if crate::node_http::is_p2p_url(&url) {
             if p2p_sources >= MAX_P2P_MIRROR_SOURCES {
-                tracing::warn!(entry, "mirror peers: too many p2p:// sources, dropping");
+                drop_entry(entry, "too many p2p:// sources");
                 continue;
             }
             p2p_sources += 1;
@@ -124,6 +127,11 @@ pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
         out.push((shard_id, url));
     }
     out
+}
+
+/// Whether `url` uses the `p2p` scheme in any case or spelling (`P2P://x`, `p2p:x`).
+fn is_p2p_scheme(url: &str) -> bool {
+    url.get(..4).is_some_and(|s| s.eq_ignore_ascii_case("p2p:"))
 }
 
 static DEFAULT_CORE_MIRROR_PEERS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -211,7 +219,7 @@ impl MirrorWatcherConfig {
     /// `docs/projects/backend-server/architecture/nodes.md`'s mirror-sync section for the same
     /// reasoning written up for operators.
     pub fn from_env() -> Option<Self> {
-        let peers = parse_mirror_peers(&effective_mirror_peers());
+        let peers = parse_mirror_peers(&effective_mirror_peers(), true);
         let known_shard_ids: BTreeSet<String> = peers
             .iter()
             .map(|(shard_id, _url)| shard_id.clone())
@@ -573,6 +581,16 @@ pub async fn run_worker(
             config.auto_mirror_discovered
         );
     }
+    if config
+        .peers
+        .iter()
+        .any(|(_, u)| crate::node_http::is_p2p_url(u))
+    {
+        tracing::warn!(
+            "mirror-watcher: p2p:// sources are accepted for notifications only and are not \
+             polled until pull support lands"
+        );
+    }
     if own_base_url.is_none() {
         tracing::info!(
             "mirror-watcher: AVALON_NODE_URL is unset — this node can still receive push \
@@ -612,6 +630,10 @@ pub async fn run_worker(
         let mut verified_by_shard: HashMap<(String, String), Vec<(String, CosignedTreeHead)>> =
             HashMap::new();
         for (shard_id, peer) in &config.peers {
+            // A p2p source has no stream-capable client here yet (#1147), so it is not polled.
+            if crate::node_http::is_p2p_url(peer) {
+                continue;
+            }
             match fetch_and_verify_sth(&client, &trust_anchors, peer, shard_id).await {
                 Ok((head, author_key)) => {
                     record_verified_head(
