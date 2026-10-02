@@ -183,7 +183,10 @@ head that does not extend the checkpoint) are logged once per change and again e
 minutes, not every tick. If a ledger was restored or reset but the `witness_checkpoints`
 table was kept, the node refuses its own heads until the stale row is removed: delete that
 shard's row (`DELETE FROM witness_checkpoints WHERE network_id = $1 AND shard_id = $2`);
-`make db-reset` wipes the table. A witness key that was rotated is not re-attested for
+`make db-reset` wipes the table. Do this only for a shard this node authors, or after
+confirming the shard's history was legitimately reset: the row stops a witness cosigning a
+different root at a size it already cosigned, so a node that only mirrors the shard must not
+delete it to silence a refusal. A witness key that was rotated is not re-attested for
 checkpoints recorded under the old key id (known gap). Nothing
 here needs registration or a named shard, and it does not change how clients pinned
 to the network verify heads.

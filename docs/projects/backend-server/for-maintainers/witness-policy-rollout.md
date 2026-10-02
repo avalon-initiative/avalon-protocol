@@ -142,5 +142,8 @@ A node whose ledger was restored or reset while its `witness_checkpoints` table 
 refuses its own heads (`witness_double_cosign_refused` or `witness_consistency_check_failed`
 in the log, repeated at most every five minutes). Delete that shard's checkpoint row
 (`DELETE FROM witness_checkpoints WHERE network_id = $1 AND shard_id = $2`) and it cosigns
-again from the next head; `make db-reset` wipes the table. Known gap: a witness key that was
+again from the next head; `make db-reset` wipes the table. Only do this for a shard this node
+authors, or after confirming that the shard's history was legitimately reset: the row is what
+stops a witness from cosigning a different root at a size it already cosigned, so a node that
+only mirrors the shard must not delete it to silence a refusal. Known gap: a witness key that was
 rotated is not re-attested for checkpoints recorded under the old key id.
