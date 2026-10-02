@@ -50,6 +50,31 @@
 //! just another network-scoped mirror target as far as push/interest
 //! registration is concerned.
 
+//!
+//! **What backfill verifies before storing an entry.** (1) The head is
+//! signature-checked (or pinned for a self-certifying shard) and corroborated.
+//! (2) The entry's inclusion proof verifies against that head's root at the
+//! entry's leaf index. (3) The entry's hash is recomputed from its content
+//! (event id, kind, issuer, subject, payload, timestamp, version, `prev_hash`
+//! and network id) and must equal both the claimed `entry_hash` and the proof
+//! leaf, so served content is bound to the proven hash. (4) Its `prev_hash`
+//! must equal the previous verified entry's hash (genesis for the first), so
+//! the hash chain links. (5) Its `seq` must exceed the last mirrored `seq`
+//! (gaps are legitimate; `seq` is not covered by the hash, so this is only an
+//! ordering and plausibility check) and may jump at most 2^32 past it; a larger
+//! jump is refused loudly with the source, both seqs and the bound logged. An entry and its proof always come from
+//! the same candidate source. A candidate whose entry fails any check, or
+//! serves nothing, is excluded for the rest of the tick and the same page is
+//! retried from the next candidate; nothing from a refused entry is stored,
+//! and the tick errors only when every candidate failed.
+//! `avalon_chain::mirror::insert_mirrored_entry` repeats (3) at the storage
+//! boundary, and a row that already exists at the entry's `seq` is an error.
+//! **Pruned payloads are refused** (`payload_pruned`): a hash cannot be
+//! recomputed without the payload, so a pruned source is skipped and the shard
+//! mirrors only if another candidate keeps full history. A served JSON null
+//! payload that is not flagged pruned is a real payload and is hashed as null.
+//! A pruned or unverified entry is never stored or projected.
+
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
@@ -735,7 +760,9 @@ pub async fn run_worker(
     // hostile or unpinned network_id claim from ever reaching the DHT.
     let mut network_interest: HashMap<String, crate::interest::InterestGuard> = HashMap::new();
 
+    let mut tick = 0usize;
     loop {
+        tick = tick.wrapping_add(1);
         // Read live at the top of every tick — never a snapshot taken once
         // at startup — so an admitted or dropped known-list witness is
         // reflected starting this very tick, no restart needed.
@@ -920,6 +947,7 @@ pub async fn run_worker(
                 shard_id,
                 &observations,
                 limits,
+                tick,
             );
             // A self-certifying source may stall a request; the budget bounds the whole shard.
             let result = match limits {
@@ -979,6 +1007,16 @@ pub enum MirrorWatcherError {
     InvalidInclusionProof { seq: i64, tree_size: i64 },
     #[error("peer's inclusion-proof root_hash did not match the already-verified STH root_hash")]
     RootHashMismatch,
+    #[error("entry seq={seq}: content does not hash to its claimed entry_hash")]
+    EntryContentMismatch { seq: i64 },
+    #[error("entry seq={seq}: prev_hash does not link to the previous verified entry")]
+    EntryChainBroken { seq: i64 },
+    #[error("entry seq={seq}: seq does not increase past the last mirrored seq (or jumps implausibly far)")]
+    EntrySeqInvalid { seq: i64 },
+    #[error("entry seq={seq}: a different entry is already mirrored at this seq")]
+    EntryConflict { seq: i64 },
+    #[error("entry seq={seq}: payload is pruned, so its content cannot be verified")]
+    EntryPayloadPruned { seq: i64 },
     #[error("entry seq={seq} exceeds the per-entry size limit for a self-certifying shard")]
     EntryTooLarge { seq: i64 },
     #[error("self-certifying shard rejected: {0:?}")]
@@ -1057,7 +1095,6 @@ struct LedgerEntryDto {
     subject: String,
     payload: Option<serde_json::Value>,
     #[serde(default)]
-    #[allow(dead_code)] // carried through the response, not needed once verified/stored
     payload_pruned: bool,
     version: i32,
     #[serde(with = "time::serde::rfc3339")]
@@ -1834,6 +1871,7 @@ async fn check_equivocation(
 ///    on — not simply whichever peer happened to be first in the config
 ///    list. A peer reporting a different, smaller `tree_size` is just
 ///    behind, not disagreeing, and isn't counted against the winner.
+#[allow(clippy::too_many_arguments)]
 async fn backfill_network(
     client: &crate::node_http::NodeClient,
     pool: &PgPool,
@@ -1842,6 +1880,7 @@ async fn backfill_network(
     shard_id: &str,
     observations: &[(String, SignedTreeHead)],
     limits: Option<BackfillLimits>,
+    tick: usize,
 ) -> Result<(), MirrorWatcherError> {
     let equivocations = mirror::unresolved_equivocations(pool, network_id, shard_id).await?;
     if !equivocations.is_empty() {
@@ -1895,17 +1934,19 @@ async fn backfill_network(
         &target_sth,
         limits,
         projection_blocked,
+        tick,
     )
     .await
 }
 
 /// Fetches and independently verifies every entry between what's already
 /// been mirrored locally and `sth.tree_size`, storing only entries whose
-/// inclusion actually checks out. Round-robins across `candidate_peers`
-/// (every peer that corroborated `sth` this tick, per
-/// [`backfill_network`]) for each individual request — if one is
-/// unreachable mid-backfill, the next candidate is tried before giving up
-/// for this tick, rather than aborting outright. Storage is keyed on
+/// inclusion actually checks out. Starts at a rotating one of `candidate_peers`
+/// (every peer that corroborated `sth` this tick, per [`backfill_network`]);
+/// each page's entries and proofs come from one candidate, and a candidate
+/// that is unreachable, serves nothing or serves an entry that fails
+/// verification is excluded for the tick and the page retried from the next.
+/// Storage is keyed on
 /// `(network_id, shard_id, seq)`, so failing over between peers within the
 /// same shard never duplicates or restarts progress, and two different
 /// shards' entries — even at the same `seq` — are never confused for each
@@ -1934,7 +1975,8 @@ async fn backfill(
     candidate_peers: &[String],
     sth: &SignedTreeHead,
     limits: Option<BackfillLimits>,
-    mut projection_blocked: bool,
+    projection_blocked: bool,
+    tick: usize,
 ) -> Result<(), MirrorWatcherError> {
     if candidate_peers.is_empty() {
         return Ok(());
@@ -1947,7 +1989,7 @@ async fn backfill(
     // bug, not just theoretical: a node mirroring more than one shard of
     // the same network had its inclusion-proof verification state
     // silently collide between shards without this.
-    let mut progress = mirror::mirrored_progress(pool, &sth.network_id, shard_id, None).await?;
+    let progress = mirror::mirrored_progress(pool, &sth.network_id, shard_id, None).await?;
     if progress.verified_count >= sth.tree_size {
         return Ok(());
     }
@@ -1957,162 +1999,291 @@ async fn backfill(
     let mut root = [0u8; 32];
     root.copy_from_slice(&expected_root);
 
-    // Rotating start index so repeated ticks don't always hammer the same
-    // first candidate — simple round-robin, not load-aware.
-    let mut peer_cursor = 0usize;
-    let mut fetched = 0usize;
+    // The next entry must link to this hash: the last stored entry's, or genesis.
+    let prev_hash = match progress.verified_count {
+        0 => avalon_chain::GENESIS_HASH.to_string(),
+        _ => mirror::mirrored_entry_hash_at(pool, &sth.network_id, shard_id, progress.last_seq)
+            .await?
+            .ok_or_else(|| {
+                MirrorWatcherError::Decode("last mirrored entry vanished mid-backfill".into())
+            })?,
+    };
+
+    // Each tick starts at a different candidate so no single peer takes all the traffic.
+    let n = candidate_peers.len();
+    let mut peer_cursor = tick % n;
+    // A candidate that served bad or no data is skipped for the rest of this tick.
+    let mut excluded = vec![false; n];
+    let mut last_refusal: Option<MirrorWatcherError> = None;
+    let mut state = BackfillState {
+        progress,
+        prev_hash,
+        fetched: 0,
+        projection_blocked,
+    };
 
     loop {
-        if progress.verified_count >= sth.tree_size {
+        if state.progress.verified_count >= sth.tree_size {
             break;
         }
-        if limits.is_some_and(|l| l.exhausted(fetched, std::time::Instant::now())) {
+        if limits.is_some_and(|l| l.exhausted(state.fetched, std::time::Instant::now())) {
             tracing::info!(
                 shard_id,
                 "mirror-watcher: per-tick backfill budget spent, resuming next tick"
             );
             break;
         }
-
-        let (page, used_peer) = match fetch_entries_from_any(
-            client,
-            candidate_peers,
-            &mut peer_cursor,
-            shard_id,
-            progress.last_seq,
-            BACKFILL_PAGE_SIZE,
+        let Some(idx) = (0..n)
+            .map(|o| (peer_cursor + o) % n)
+            .find(|i| !excluded[*i])
+        else {
+            return match last_refusal {
+                Some(err) => Err(err),
+                None => {
+                    tracing::error!(
+                        "mirror-watcher: {}: no candidate peer could serve the next entries after seq={} — retrying next tick",
+                        sth.network_id, state.progress.last_seq
+                    );
+                    Ok(())
+                }
+            };
+        };
+        let peer = &candidate_peers[idx];
+        match backfill_page(
+            client, pool, indexer, shard_id, peer, sth, &root, limits, &mut state,
         )
         .await
         {
-            Ok(result) => result,
-            Err(MirrorWatcherError::AllPeersFailed) => {
+            Ok(PageEnd::Served) => peer_cursor = (idx + 1) % n,
+            Ok(PageEnd::Empty) => {
                 tracing::error!(
-                        "mirror-watcher: {}: every candidate peer failed to serve entries since_seq={} — retrying next tick",
-                        sth.network_id, progress.last_seq
-                    );
-                break;
-            }
-            Err(err) => return Err(err),
-        };
-        if page.is_empty() {
-            // The peer(s) don't (yet) have as many entries as the
-            // corroborated STH claims — a legitimate race (STH observed
-            // slightly ahead of the entries page becoming visible) rather
-            // than an error; pick up the rest on a later tick.
-            break;
-        }
-
-        for entry in page {
-            if progress.verified_count >= sth.tree_size {
-                break;
-            }
-            if let Some(l) = limits {
-                if l.exhausted(fetched, std::time::Instant::now()) {
-                    break;
-                }
-                if !entry_within_size_limit(&entry) {
-                    tracing::warn!(shard_id, seq = entry.seq, "mirror-watcher: entry exceeds the per-entry size limit, not mirroring this shard further");
-                    return Err(MirrorWatcherError::EntryTooLarge { seq: entry.seq });
-                }
-            }
-            fetched += 1;
-
-            // The leaf's rank among all committed entries — a running
-            // count of entries this node has already verified and
-            // accepted, matching how the authority side ranks entries
-            // (`leaf_index_for_seq`/`entry_hashes_up_to`, see
-            // `crates/chain/src/postgres.rs`'s module doc comment). This
-            // only stays correct because backfill always proceeds
-            // contiguously from `progress.last_seq` with no gaps skipped,
-            // regardless of which candidate peer actually served it.
-            let leaf_index = progress.verified_count as usize;
-
-            let proof_dto = match fetch_inclusion_proof_from_any(
-                client,
-                candidate_peers,
-                &mut peer_cursor,
-                shard_id,
-                entry.seq,
-                sth.tree_size,
-            )
-            .await
-            {
-                Ok(dto) => dto,
-                Err(MirrorWatcherError::AllPeersFailed) => {
-                    tracing::error!(
-                        "mirror-watcher: {}: every candidate peer failed to serve an inclusion proof for seq={} — retrying next tick",
-                        sth.network_id, entry.seq
-                    );
-                    return Ok(());
-                }
-                Err(err) => return Err(err),
-            };
-
-            if proof_dto.root_hash != sth.root_hash {
-                tracing::error!(
-                    "mirror-watcher: {}: inclusion-proof root_hash for seq={} did not match the already-verified/corroborated STH root_hash at tree_size={} — aborting backfill this tick",
-                    sth.network_id, entry.seq, sth.tree_size
+                    "mirror-watcher: {} (via {peer}): served no entries after seq={} although the verified head holds {} (mirrored {}) — trying another candidate (or a lagging source; retried next tick)",
+                    sth.network_id, state.progress.last_seq, sth.tree_size, state.progress.verified_count
                 );
-                return Err(MirrorWatcherError::RootHashMismatch);
+                excluded[idx] = true;
             }
-            if proof_dto.leaf_hash != entry.entry_hash {
-                tracing::error!(
-                    "mirror-watcher: {} (via {used_peer}): inclusion-proof leaf_hash for seq={} did not match the entry content fetched from GET /ledger/entries — aborting backfill this tick",
-                    sth.network_id, entry.seq
-                );
-                return Err(MirrorWatcherError::InvalidInclusionProof {
-                    seq: entry.seq,
-                    tree_size: sth.tree_size,
-                });
+            Err(PageError::Unreachable(err)) => {
+                tracing::error!("mirror-watcher: {} (via {peer}): request failed, trying the next candidate peer: {err}", sth.network_id);
+                excluded[idx] = true;
             }
-
-            let leaf_bytes = hex::decode(&entry.entry_hash).map_err(|e| {
-                MirrorWatcherError::Decode(format!("entry_hash not valid hex: {e}"))
-            })?;
-            let proof_nodes = decode_proof_nodes(&proof_dto.proof)?;
-
-            let verified = merkle::verify_inclusion_proof(
-                &leaf_bytes,
-                leaf_index,
-                sth.tree_size as usize,
-                &proof_nodes,
-                &root,
-            );
-            if !verified {
-                tracing::error!(
-                    "mirror-watcher: {}: inclusion proof did NOT verify for seq={} (leaf_index={leaf_index}) against tree_size={} — refusing to accept, aborting backfill this tick",
-                    sth.network_id, entry.seq, sth.tree_size
-                );
-                return Err(MirrorWatcherError::InvalidInclusionProof {
-                    seq: entry.seq,
-                    tree_size: sth.tree_size,
-                });
+            Err(PageError::Refused(err)) => {
+                tracing::error!("mirror-watcher: {} (via {peer}): refused ({err}) — nothing stored from the refused entry, excluding this source for the rest of the tick", sth.network_id);
+                excluded[idx] = true;
+                last_refusal = Some(err);
             }
-
-            let mirrored_entry = mirror::MirroredEntry {
-                source_url: used_peer.clone(),
-                network_id: sth.network_id.clone(),
-                shard_id: shard_id.to_string(),
-                seq: entry.seq,
-                event_id: entry.event_id,
-                kind: entry.kind,
-                issuer: entry.issuer,
-                subject: entry.subject,
-                payload: entry.payload,
-                event_timestamp: entry.event_timestamp,
-                version: entry.version,
-                prev_hash: entry.prev_hash,
-                entry_hash: entry.entry_hash,
-                batch_id: entry.batch_id,
-                verified_tree_size: sth.tree_size,
-            };
-            store_and_project(pool, indexer, &mirrored_entry, &mut projection_blocked).await?;
-
-            progress.last_seq = mirrored_entry.seq;
-            progress.verified_count += 1;
+            Err(PageError::Fatal(err)) => return Err(err),
         }
     }
 
+    Ok(())
+}
+
+/// Running state of one [`backfill`] tick.
+struct BackfillState {
+    progress: mirror::MirrorProgress,
+    /// Hash the next entry's `prev_hash` must equal.
+    prev_hash: String,
+    fetched: usize,
+    projection_blocked: bool,
+}
+
+/// How one page from one candidate ended without an error.
+enum PageEnd {
+    Served,
+    Empty,
+}
+
+/// Why a page from one candidate stopped. `Refused` and `Unreachable` fail over to the next
+/// candidate; `Fatal` (local storage) ends the tick.
+enum PageError {
+    Refused(MirrorWatcherError),
+    Unreachable(MirrorWatcherError),
+    Fatal(MirrorWatcherError),
+}
+
+/// Most a stored `seq` may jump past the previous one. Rolled-back commits burn identity values,
+/// so gaps are legitimate and can be large; the bound only stops absurd labels that would strand
+/// the since_seq cursor (2^32 is far beyond any real ledger).
+const MAX_SEQ_GAP: i64 = 1 << 32;
+
+/// Classifies a failed proof request: a transport failure or throttling is an outage, while a
+/// 4xx for an entry the source just served or a body that does not decode is a refusal.
+fn proof_failure(err: MirrorWatcherError) -> PageError {
+    let refused = match &err {
+        MirrorWatcherError::Decode(_) => true,
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Decode(_)) => true,
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Status(s)) => {
+            s.is_client_error() && *s != reqwest::StatusCode::TOO_MANY_REQUESTS
+        }
+        MirrorWatcherError::Http(crate::node_http::NodeHttpError::Http(e)) => {
+            e.is_decode()
+                || e.status().is_some_and(|s| {
+                    s.is_client_error() && s != reqwest::StatusCode::TOO_MANY_REQUESTS
+                })
+        }
+        _ => false,
+    };
+    if refused {
+        PageError::Refused(err)
+    } else {
+        PageError::Unreachable(err)
+    }
+}
+
+/// The payload to hash: absent only when the source says it was pruned, a served JSON null
+/// is a real payload.
+fn served_payload(entry: &LedgerEntryDto) -> Option<serde_json::Value> {
+    if entry.payload_pruned {
+        return None;
+    }
+    Some(entry.payload.clone().unwrap_or(serde_json::Value::Null))
+}
+
+/// Fetches one page from `peer` and verifies and stores its entries in order; the entries and
+/// their proofs both come from this one candidate.
+#[allow(clippy::too_many_arguments)]
+async fn backfill_page(
+    client: &crate::node_http::NodeClient,
+    pool: &PgPool,
+    indexer: &PostgresIndexer,
+    shard_id: &str,
+    peer: &str,
+    sth: &SignedTreeHead,
+    root: &[u8; 32],
+    limits: Option<BackfillLimits>,
+    state: &mut BackfillState,
+) -> Result<PageEnd, PageError> {
+    let page = fetch_entries(
+        client,
+        peer,
+        shard_id,
+        state.progress.last_seq,
+        BACKFILL_PAGE_SIZE,
+    )
+    .await
+    .map_err(PageError::Unreachable)?;
+    if page.is_empty() {
+        return Ok(PageEnd::Empty);
+    }
+    for entry in page {
+        if state.progress.verified_count >= sth.tree_size {
+            break;
+        }
+        if let Some(l) = limits {
+            if l.exhausted(state.fetched, std::time::Instant::now()) {
+                break;
+            }
+            if !entry_within_size_limit(&entry) {
+                tracing::warn!(shard_id, seq = entry.seq, "mirror-watcher: entry exceeds the per-entry size limit, not mirroring this shard further");
+                return Err(PageError::Refused(MirrorWatcherError::EntryTooLarge {
+                    seq: entry.seq,
+                }));
+            }
+        }
+        state.fetched += 1;
+
+        // seq is not covered by the entry hash, so it must at least keep the stored order.
+        let last_seq = state.progress.last_seq;
+        if entry.seq > last_seq && entry.seq - last_seq > MAX_SEQ_GAP {
+            tracing::error!(
+                "mirror-watcher: {} (via {peer}): entry seq={} jumps past the last mirrored seq={last_seq} by more than the bound {MAX_SEQ_GAP} — refusing it and excluding this source for the tick; mirror from another source or investigate this one",
+                sth.network_id, entry.seq
+            );
+        }
+        if entry.seq <= last_seq || entry.seq - last_seq > MAX_SEQ_GAP {
+            return Err(PageError::Refused(MirrorWatcherError::EntrySeqInvalid {
+                seq: entry.seq,
+            }));
+        }
+
+        // The leaf's rank among committed entries: how many this node has already accepted,
+        // which holds because backfill proceeds in order with no entry skipped.
+        let leaf_index = state.progress.verified_count as usize;
+        let proof_dto = fetch_inclusion_proof(client, peer, shard_id, entry.seq, sth.tree_size)
+            .await
+            .map_err(proof_failure)?;
+        if proof_dto.root_hash != sth.root_hash {
+            return Err(PageError::Refused(MirrorWatcherError::RootHashMismatch));
+        }
+
+        let mirrored_entry = mirror::MirroredEntry {
+            source_url: peer.to_string(),
+            network_id: sth.network_id.clone(),
+            shard_id: shard_id.to_string(),
+            seq: entry.seq,
+            event_id: entry.event_id,
+            kind: entry.kind.clone(),
+            issuer: entry.issuer.clone(),
+            subject: entry.subject.clone(),
+            payload: served_payload(&entry),
+            event_timestamp: entry.event_timestamp,
+            version: entry.version,
+            prev_hash: entry.prev_hash.clone(),
+            entry_hash: entry.entry_hash.clone(),
+            batch_id: entry.batch_id,
+            verified_tree_size: sth.tree_size,
+        };
+        let invalid_proof = || {
+            PageError::Refused(MirrorWatcherError::InvalidInclusionProof {
+                seq: mirrored_entry.seq,
+                tree_size: sth.tree_size,
+            })
+        };
+        if proof_dto.leaf_hash != mirrored_entry.entry_hash {
+            return Err(invalid_proof());
+        }
+        verify_entry_binding(&mirrored_entry, &proof_dto.leaf_hash, &state.prev_hash)
+            .map_err(PageError::Refused)?;
+
+        let leaf_bytes = hex::decode(&mirrored_entry.entry_hash).map_err(|e| {
+            PageError::Refused(MirrorWatcherError::Decode(format!(
+                "entry_hash not valid hex: {e}"
+            )))
+        })?;
+        let proof_nodes = decode_proof_nodes(&proof_dto.proof).map_err(PageError::Refused)?;
+        if !merkle::verify_inclusion_proof(
+            &leaf_bytes,
+            leaf_index,
+            sth.tree_size as usize,
+            &proof_nodes,
+            root,
+        ) {
+            return Err(invalid_proof());
+        }
+
+        store_and_project(
+            pool,
+            indexer,
+            &mirrored_entry,
+            &mut state.projection_blocked,
+        )
+        .await
+        .map_err(PageError::Fatal)?;
+        state.progress.last_seq = mirrored_entry.seq;
+        state.progress.verified_count += 1;
+        state.prev_hash = mirrored_entry.entry_hash;
+    }
+    Ok(PageEnd::Served)
+}
+
+/// Binds a fetched entry's content to the verified chain: its content must hash to the claimed
+/// `entry_hash`, which must equal the proof leaf, and its `prev_hash` must be the previous
+/// verified entry's hash. A pruned payload cannot be recomputed and is refused.
+fn verify_entry_binding(
+    entry: &mirror::MirroredEntry,
+    proof_leaf: &str,
+    expected_prev_hash: &str,
+) -> Result<(), MirrorWatcherError> {
+    let seq = entry.seq;
+    if entry.prev_hash != expected_prev_hash {
+        return Err(MirrorWatcherError::EntryChainBroken { seq });
+    }
+    let recomputed = entry
+        .recomputed_hash()
+        .ok_or(MirrorWatcherError::EntryPayloadPruned { seq })?;
+    if recomputed != entry.entry_hash || recomputed != proof_leaf {
+        return Err(MirrorWatcherError::EntryContentMismatch { seq });
+    }
     Ok(())
 }
 
@@ -2198,7 +2369,9 @@ async fn store_and_project(
 ) -> Result<(), MirrorWatcherError> {
     let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
     let mut tx = pool.begin().await.map_err(storage)?;
-    mirror::insert_mirrored_entry(&mut *tx, entry).await?;
+    if !mirror::insert_mirrored_entry(&mut *tx, entry).await? {
+        return Err(MirrorWatcherError::EntryConflict { seq: entry.seq });
+    }
     if projects_mirrored_entries(&entry.shard_id) {
         if *projection_blocked {
             mark_projection_failed(&entry.network_id, &entry.shard_id);
@@ -2469,61 +2642,6 @@ fn decode_proof_nodes(hex_nodes: &[String]) -> Result<Vec<[u8; 32]>, MirrorWatch
         .collect()
 }
 
-/// Tries `GET /ledger/entries` against each of `candidates`, starting from
-/// `*cursor` and wrapping around, returning the first success (and which
-/// peer served it) — advancing `*cursor` past whichever candidate answered
-/// so the next request in this backfill pass starts from a different one
-/// rather than always retrying the same first candidate.
-async fn fetch_entries_from_any(
-    client: &crate::node_http::NodeClient,
-    candidates: &[String],
-    cursor: &mut usize,
-    shard_id: &str,
-    since_seq: i64,
-    limit: i64,
-) -> Result<(Vec<LedgerEntryDto>, String), MirrorWatcherError> {
-    for offset in 0..candidates.len() {
-        let idx = (*cursor + offset) % candidates.len();
-        let peer = &candidates[idx];
-        match fetch_entries(client, peer, shard_id, since_seq, limit).await {
-            Ok(entries) => {
-                *cursor = (idx + 1) % candidates.len();
-                return Ok((entries, peer.clone()));
-            }
-            Err(err) => {
-                tracing::error!("mirror-watcher: {peer}: GET /ledger/entries failed, trying next candidate peer: {err}");
-            }
-        }
-    }
-    Err(MirrorWatcherError::AllPeersFailed)
-}
-
-/// Same round-robin-with-failover shape as [`fetch_entries_from_any`], for
-/// `GET /ledger/proof/inclusion`.
-async fn fetch_inclusion_proof_from_any(
-    client: &crate::node_http::NodeClient,
-    candidates: &[String],
-    cursor: &mut usize,
-    shard_id: &str,
-    seq: i64,
-    tree_size: i64,
-) -> Result<InclusionProofDto, MirrorWatcherError> {
-    for offset in 0..candidates.len() {
-        let idx = (*cursor + offset) % candidates.len();
-        let peer = &candidates[idx];
-        match fetch_inclusion_proof(client, peer, shard_id, seq, tree_size).await {
-            Ok(dto) => {
-                *cursor = (idx + 1) % candidates.len();
-                return Ok(dto);
-            }
-            Err(err) => {
-                tracing::error!("mirror-watcher: {peer}: GET /ledger/proof/inclusion failed, trying next candidate peer: {err}");
-            }
-        }
-    }
-    Err(MirrorWatcherError::AllPeersFailed)
-}
-
 /// Issue #604: `shard_id` sent as an explicit query param, same #573
 /// footgun as [`fetch_latest_sth`] — a peer serving more than one shard
 /// answers a bare request with whichever it treats as its own default.
@@ -2575,6 +2693,12 @@ async fn fetch_inclusion_proof(
 
 #[cfg(test)]
 mod p2p_source_tests;
+
+#[cfg(test)]
+mod entry_binding_tests;
+
+#[cfg(test)]
+mod real_authority_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3558,6 +3682,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &observations,
             None,
+            0,
         )
         .await
         .expect("backfill_network should return Ok(()) rather than error when gated");
@@ -3633,6 +3758,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &observations,
             None,
+            0,
         )
         .await;
         assert!(result.is_ok());
@@ -3649,7 +3775,7 @@ mod tests {
             "identity:{identity_id}:self:{}",
             kind.trim_start_matches("identity.")
         );
-        mirror::MirroredEntry {
+        let mut entry = mirror::MirroredEntry {
             source_url: "http://peer.invalid".to_string(),
             network_id: network_id.to_string(),
             shard_id: mirror::CORE_SHARD_ID.to_string(),
@@ -3665,7 +3791,12 @@ mod tests {
             entry_hash: format!("{seq:064x}"),
             batch_id: Uuid::new_v4(),
             verified_tree_size: seq,
+        };
+        // A pruned (payload-less) fixture keeps its placeholder hash: it can never be stored.
+        if let Some(hash) = entry.recomputed_hash() {
+            entry.entry_hash = hash;
         }
+        entry
     }
 
     fn b64(bytes: &[u8]) -> String {
@@ -3758,6 +3889,40 @@ mod tests {
         for entry in entries {
             mirror::insert_mirrored_entry(pool, entry).await.unwrap();
         }
+    }
+
+    /// Writes a row the way a pre-#1165 node could have stored a pruned entry, bypassing the
+    /// storage-boundary check, to exercise handling of legacy rows.
+    async fn insert_legacy_pruned_row(pool: &PgPool, e: &mirror::MirroredEntry) {
+        sqlx::query(
+            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14)",
+        )
+        .bind(&e.source_url)
+        .bind(&e.network_id)
+        .bind(&e.shard_id)
+        .bind(e.seq)
+        .bind(e.event_id)
+        .bind(&e.kind)
+        .bind(&e.issuer)
+        .bind(&e.subject)
+        .bind(e.event_timestamp)
+        .bind(e.version)
+        .bind(&e.prev_hash)
+        .bind(&e.entry_hash)
+        .bind(e.batch_id)
+        .bind(e.verified_tree_size)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn stored_count(pool: &PgPool, network_id: &str) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM mirrored_entries WHERE network_id = $1")
+            .bind(network_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     fn fresh_network(tag: &str) -> String {
@@ -3886,8 +4051,7 @@ mod tests {
         assert_eq!(after_restart.parked, 1, "the entry must be attempted again");
     }
 
-    /// A pruned-payload entry is skipped: not parked, and it leaves the clean
-    /// scan flag set.
+    /// A pruned-payload entry is never projected or parked, and storing one is refused.
     #[tokio::test]
     #[ignore]
     async fn undecodable_entries_are_skipped_not_parked() {
@@ -3905,14 +4069,17 @@ mod tests {
         );
         tx.rollback().await.unwrap();
 
-        mark_scan_clean(&network_id, mirror::CORE_SHARD_ID);
+        // A pruned entry is refused at the storage boundary, so it is neither stored nor parked.
         let mut blocked = false;
-        store_and_project(&pool, &indexer, &pruned, &mut blocked)
-            .await
-            .unwrap();
-        assert!(!blocked);
+        let refused = store_and_project(&pool, &indexer, &pruned, &mut blocked).await;
+        assert!(matches!(
+            refused,
+            Err(MirrorWatcherError::Storage(
+                avalon_chain::SettlementError::MirroredPayloadUnverifiable { seq: 1 }
+            ))
+        ));
+        assert_eq!(stored_count(&pool, &network_id).await, 0);
         assert!(!is_parked(&pruned.event_id));
-        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
     }
 
     /// A display-name conflict is deterministic: the entry fails permanently,
@@ -4036,7 +4203,7 @@ mod tests {
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("pruned");
         let pruned = mk_entry(&network_id, 1, "identity.created", Uuid::new_v4(), None);
-        store_entries(&pool, std::slice::from_ref(&pruned)).await;
+        insert_legacy_pruned_row(&pool, &pruned).await;
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
             .unwrap();
@@ -4227,6 +4394,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &obs,
             None,
+            0,
         )
         .await
         .unwrap();
@@ -4253,6 +4421,7 @@ mod tests {
             mirror::CORE_SHARD_ID,
             &[],
             None,
+            0,
         )
         .await
         .unwrap();

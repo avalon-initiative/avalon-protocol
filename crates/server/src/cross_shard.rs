@@ -653,7 +653,7 @@ mod tests {
         kind: &str,
         payload: serde_json::Value,
     ) -> avalon_chain::mirror::MirroredEntry {
-        avalon_chain::mirror::MirroredEntry {
+        let mut entry = avalon_chain::mirror::MirroredEntry {
             source_url: "http://peer".to_string(),
             network_id: network_id.to_string(),
             shard_id: "core".to_string(),
@@ -666,10 +666,12 @@ mod tests {
             event_timestamp: OffsetDateTime::now_utc(),
             version: 1,
             prev_hash: "aa".repeat(32),
-            entry_hash: format!("{seq:064x}"),
+            entry_hash: String::new(),
             batch_id: uuid::Uuid::new_v4(),
             verified_tree_size: seq,
-        }
+        };
+        entry.entry_hash = entry.recomputed_hash().expect("payload present");
+        entry
     }
 
     #[tokio::test]

@@ -31,7 +31,7 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
 use crate::sth::SignedTreeHead;
-use crate::SettlementError;
+use crate::{hash_entry, EntryContent, SettlementError};
 
 /// `source_url` used for this node's own signed history
 /// (`signed_tree_heads`) when it's folded into an equivocation check
@@ -822,6 +822,27 @@ pub struct MirroredEntry {
     pub verified_tree_size: i64,
 }
 
+impl MirroredEntry {
+    /// The entry hash this content produces under `network_id` and `prev_hash`, or `None`
+    /// when the payload is absent (pruned) and the hash cannot be recomputed.
+    pub fn recomputed_hash(&self) -> Option<String> {
+        let payload = self.payload.as_ref()?;
+        Some(hash_entry(
+            &self.network_id,
+            &self.prev_hash,
+            &EntryContent {
+                event_id: self.event_id,
+                kind: &self.kind,
+                issuer: &self.issuer,
+                subject: &self.subject,
+                payload,
+                timestamp: self.event_timestamp,
+                version: self.version,
+            },
+        ))
+    }
+}
+
 /// Writes `entry` into `mirrored_entries`, idempotently — keyed on
 /// `(network_id, shard_id, seq)`, **not** `source_url`: a re-fetch of an
 /// already-mirrored entry, whether from the same peer or a different
@@ -833,9 +854,13 @@ pub struct MirroredEntry {
 /// `shard_id` joined the key alongside `network_id` — two different
 /// shards' entries, even at the same `seq`, are never the same row.
 /// Callers must have already independently verified `entry`'s inclusion
-/// against a signature-checked STH before calling this — this function
-/// itself does not verify anything; see `avalon-server`'s mirror-watcher
-/// for the verification step.
+/// against a signature-checked STH and that it links to its predecessor.
+/// This function enforces the one check no caller may skip: the entry's
+/// content must hash (under its `network_id` and `prev_hash`) to its
+/// claimed `entry_hash`, so a genuine hash can never be stored with forged
+/// content. An entry without a payload cannot be recomputed and is refused.
+/// Returns `false` when a row already exists at that `(network_id, shard_id, seq)` and nothing was
+/// written; a caller that has just verified a new entry must treat that as an error.
 ///
 /// Generic over `sqlx::PgExecutor` (a bare `&PgPool`, or `&mut **tx` for a
 /// transaction already in progress) so issue #313's local-indexer-apply
@@ -844,11 +869,16 @@ pub struct MirroredEntry {
 pub async fn insert_mirrored_entry<'e, E>(
     executor: E,
     entry: &MirroredEntry,
-) -> Result<(), SettlementError>
+) -> Result<bool, SettlementError>
 where
     E: sqlx::PgExecutor<'e>,
 {
-    sqlx::query(
+    match entry.recomputed_hash() {
+        Some(hash) if hash == entry.entry_hash => {}
+        Some(_) => return Err(SettlementError::MirroredContentMismatch { seq: entry.seq }),
+        None => return Err(SettlementError::MirroredPayloadUnverifiable { seq: entry.seq }),
+    }
+    let result = sqlx::query(
         r#"
         INSERT INTO mirrored_entries
             (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size)
@@ -874,7 +904,7 @@ where
     .execute(executor)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 /// How many entries this node has already verified and mirrored for
@@ -928,6 +958,24 @@ pub async fn mirrored_progress(
             .try_get("count")
             .map_err(|e| SettlementError::Storage(e.to_string()))?,
     })
+}
+
+/// The `entry_hash` stored for `network_id`/`shard_id` at `seq`, if mirrored.
+pub async fn mirrored_entry_hash_at(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    seq: i64,
+) -> Result<Option<String>, SettlementError> {
+    sqlx::query_scalar(
+        "SELECT entry_hash FROM mirrored_entries WHERE network_id = $1 AND shard_id = $2 AND seq = $3",
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .bind(seq)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))
 }
 
 /// When `network_id`/`shard_id` last had a mirrored entry stored, if ever.

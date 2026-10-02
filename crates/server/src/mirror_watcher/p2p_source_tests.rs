@@ -38,9 +38,7 @@ fn origin(entries: usize) -> SharedOrigin {
     Arc::new(Mutex::new(Origin {
         signing,
         shard_id,
-        hashes: (0..entries)
-            .map(|_| hex::encode(rand::random::<[u8; 32]>()))
-            .collect(),
+        hashes: chain_hashes(entries, 8),
         payload_bytes: 8,
         corrupt_signature: false,
         key_override: None,
@@ -48,6 +46,34 @@ fn origin(entries: usize) -> SharedOrigin {
         gap: None,
         wrong_proof: false,
     }))
+}
+
+/// The genuine hash chain over the entries `Origin::respond` serves.
+fn chain_hashes(entries: usize, payload_bytes: usize) -> Vec<String> {
+    let payload = serde_json::json!({"p": "x".repeat(payload_bytes)});
+    let mut prev = avalon_chain::GENESIS_HASH.to_string();
+    (1..=entries)
+        .map(|seq| {
+            prev = avalon_chain::hash_entry(
+                NETWORK,
+                &prev,
+                &avalon_chain::EntryContent {
+                    event_id: Uuid::from_u128(seq as u128),
+                    kind: "k",
+                    issuer: "i",
+                    subject: "s",
+                    payload: &payload,
+                    timestamp: OffsetDateTime::parse(
+                        "2026-01-01T00:00:00Z",
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .unwrap(),
+                    version: 1,
+                },
+            );
+            prev.clone()
+        })
+        .collect()
 }
 
 fn shard_id(o: &SharedOrigin) -> String {
@@ -112,7 +138,11 @@ impl Origin {
                             "payload": {"p": "x".repeat(self.payload_bytes)},
                             "version": 1,
                             "event_timestamp": "2026-01-01T00:00:00Z",
-                            "prev_hash": "",
+                            "prev_hash": if seq == 1 {
+                                avalon_chain::GENESIS_HASH.to_string()
+                            } else {
+                                self.hashes[seq - 2].clone()
+                            },
                             "entry_hash": self.hashes[seq - 1],
                             "batch_id": Uuid::nil(),
                         })
@@ -288,6 +318,7 @@ async fn backfill_once(
         shard,
         &[(s.source.clone(), head.sth.clone())],
         Some(limits),
+        0,
     )
     .await
 }
@@ -901,10 +932,7 @@ async fn entries_with_a_gap_are_refused_on_either_transport() {
         let (head, _) = head_for(&s, &pool, &shard, &bounds).await.unwrap().unwrap();
         let r = backfill_once(&s, &pool, &shard, &head, limits(100)).await;
         assert!(
-            matches!(
-                r,
-                Err(MirrorWatcherError::InvalidInclusionProof { seq: 3, .. })
-            ),
+            matches!(r, Err(MirrorWatcherError::EntryChainBroken { seq: 3 })),
             "{transport:?}: {r:?}"
         );
         // Only the entry before the gap was stored.
