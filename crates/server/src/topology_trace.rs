@@ -5,9 +5,10 @@
 //! chosen active neighbor and waits. Each node prepends its own hop entry to
 //! the path that comes back, so the first node returns the whole path.
 //!
-//! One forward per hop, no fan-out. Forwards go only to the neighbor
-//! `next_hop` chose, through [`crate::outbound_policy`]. Every field of an
-//! incoming request is untrusted and clamped: hop budget, time budget, visited
+//! Forwards are sequential, never concurrent: the candidates `next_hop` ranks are tried
+//! in order (at most [`MAX_CANDIDATES`]), each through [`crate::outbound_policy`], and a
+//! timeout, unreachable neighbor or downstream `no_route` falls through to the next.
+//! Every field of an incoming request is untrusted and clamped: hop budget, time budget, visited
 //! list and identifiers. Durations are measured by each node on its own
 //! clock; no timestamps cross nodes. All hop data is self-reported by the
 //! nodes on the path and is advisory.
@@ -42,6 +43,10 @@ pub const MAX_BUDGET: Duration = Duration::from_secs(15);
 pub const DOWNSTREAM_MARGIN: Duration = Duration::from_millis(100);
 /// Below this remaining budget a hop stops instead of forwarding.
 pub const MIN_FORWARD_BUDGET: Duration = Duration::from_millis(50);
+/// Candidates one hop tries before reporting a failure.
+pub const MAX_CANDIDATES: usize = 3;
+/// Longest a hop waits on one candidate while others remain.
+pub const PER_HOP_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_VISITED: usize = 32;
 const MAX_URL_LEN: usize = 2048;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
@@ -185,6 +190,8 @@ pub struct TraceContext {
     pub protocol_version: String,
     pub target: OverlayNode,
     pub neighbors: Vec<OverlayNode>,
+    /// Canonical base URLs of neighbors with recent failed contact; tried last.
+    pub failing: HashSet<String>,
 }
 
 fn ms(d: Duration) -> f64 {
@@ -197,7 +204,6 @@ fn no_route_detail(r: &NoRouteReason) -> &'static str {
         NoRouteReason::ForeignNetwork => "foreign_network",
         NoRouteReason::NoNeighbors => "no_neighbors",
         NoRouteReason::AllVisited => "all_visited",
-        NoRouteReason::NoProgress => "no_progress",
     }
 }
 
@@ -260,60 +266,88 @@ pub async fn run_trace<F: Forwarder>(
 
     let mut visited: HashSet<String> = req.visited.iter().cloned().collect();
     visited.insert(my_url);
-    let next = match next_hop(&ctx.me, &ctx.target, &ctx.neighbors, &visited) {
-        NextHop::Direct(n) | NextHop::Forward(n) => n,
-        NextHop::NoRoute(reason) => {
-            return finish(
-                false,
-                Some(StopReason::NoRoute),
-                Some(no_route_detail(&reason).to_string()),
-                vec![hop(started.elapsed(), None, None)],
-            );
-        }
-    };
+    let candidates: Vec<OverlayNode> =
+        match next_hop(&ctx.me, &ctx.target, &ctx.neighbors, &visited, &ctx.failing) {
+            NextHop::Direct { target, fallbacks } => {
+                std::iter::once(target).chain(fallbacks).collect()
+            }
+            NextHop::Forward(v) => v,
+            NextHop::NoRoute(reason) => {
+                return finish(
+                    false,
+                    Some(StopReason::NoRoute),
+                    Some(no_route_detail(&reason).to_string()),
+                    vec![hop(started.elapsed(), None, None)],
+                );
+            }
+        };
+    let count = candidates.len().min(MAX_CANDIDATES);
 
-    let remaining = req.budget.saturating_sub(started.elapsed());
-    let downstream = remaining.saturating_sub(DOWNSTREAM_MARGIN);
-    if downstream < MIN_FORWARD_BUDGET {
-        return finish(
+    let mut failure: Option<(StopReason, Option<String>, Vec<TraceHop>)> = None;
+    for (i, next) in candidates.into_iter().take(count).enumerate() {
+        let remaining = req.budget.saturating_sub(started.elapsed());
+        let allowed = if i + 1 < count {
+            remaining.min(PER_HOP_TIMEOUT)
+        } else {
+            remaining
+        };
+        let downstream = allowed.saturating_sub(DOWNSTREAM_MARGIN);
+        if downstream < MIN_FORWARD_BUDGET {
+            break;
+        }
+        let mut visited_out: Vec<String> = visited.iter().cloned().collect();
+        visited_out.sort();
+        let forward_request = TraceRequest {
+            target: req.target.clone(),
+            ttl: Some(req.ttl - 1),
+            trace_id: Some(req.trace_id),
+            visited: Some(visited_out),
+            budget_ms: Some(downstream.as_millis() as u64),
+        };
+
+        let processing = started.elapsed();
+        let sent = Instant::now();
+        let outcome = forwarder.forward(&next, &forward_request, allowed).await;
+        let waited = sent.elapsed();
+        failure = Some(match outcome {
+            ForwardOutcome::Response(down, path) => {
+                let leg = waited.saturating_sub(Duration::from_secs_f64(down.total_ms / 1000.0));
+                let mut hops = vec![hop(processing, Some(leg), path)];
+                let retry = match down.stopped_reason {
+                    Some(
+                        r @ (StopReason::NoRoute
+                        | StopReason::Timeout
+                        | StopReason::TargetUnreachable),
+                    ) if !down.reached => Some(r),
+                    _ => None,
+                };
+                let Some(reason) = retry else {
+                    hops.extend(down.hops);
+                    return finish(down.reached, down.stopped_reason, down.detail, hops);
+                };
+                visited.extend(down.hops.iter().map(|h| canonical_base_url(&h.base_url)));
+                hops.extend(down.hops);
+                (reason, down.detail, hops)
+            }
+            ForwardOutcome::Timeout => (
+                StopReason::Timeout,
+                None,
+                vec![hop(processing, Some(waited), None)],
+            ),
+            ForwardOutcome::Unreachable(why) => (
+                StopReason::TargetUnreachable,
+                Some(why.to_string()),
+                vec![hop(processing, Some(waited), None)],
+            ),
+        });
+    }
+    match failure {
+        Some((reason, detail, hops)) => finish(false, Some(reason), detail, hops),
+        None => finish(
             false,
             Some(StopReason::Timeout),
             None,
             vec![hop(started.elapsed(), None, None)],
-        );
-    }
-    let mut visited_out: Vec<String> = visited.into_iter().collect();
-    visited_out.sort();
-    let forward_request = TraceRequest {
-        target: req.target.clone(),
-        ttl: Some(req.ttl - 1),
-        trace_id: Some(req.trace_id),
-        visited: Some(visited_out),
-        budget_ms: Some(downstream.as_millis() as u64),
-    };
-
-    let processing = started.elapsed();
-    let sent = Instant::now();
-    let outcome = forwarder.forward(&next, &forward_request, remaining).await;
-    let waited = sent.elapsed();
-    match outcome {
-        ForwardOutcome::Response(down, path) => {
-            let leg = waited.saturating_sub(Duration::from_secs_f64(down.total_ms / 1000.0));
-            let mut hops = vec![hop(processing, Some(leg), path)];
-            hops.extend(down.hops);
-            finish(down.reached, down.stopped_reason, down.detail, hops)
-        }
-        ForwardOutcome::Timeout => finish(
-            false,
-            Some(StopReason::Timeout),
-            None,
-            vec![hop(processing, Some(waited), None)],
-        ),
-        ForwardOutcome::Unreachable(why) => finish(
-            false,
-            Some(StopReason::TargetUnreachable),
-            Some(why.to_string()),
-            vec![hop(processing, Some(waited), None)],
         ),
     }
 }
@@ -504,6 +538,12 @@ pub async fn trace(
             },
         }
     };
+    let snapshot = state.peers.neighbors().snapshot();
+    let failing = snapshot
+        .iter()
+        .filter(|n| n.round_trip.as_ref().is_some_and(|r| r.failed_recent > 0))
+        .map(|n| canonical_base_url(&n.base_url))
+        .collect();
     let ctx = TraceContext {
         me: OverlayNode {
             base_url: own_url,
@@ -513,13 +553,8 @@ pub async fn trace(
         roles: crate::nodes::node_roles(),
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         target: overlay(&req.target),
-        neighbors: state
-            .peers
-            .neighbors()
-            .snapshot()
-            .iter()
-            .map(|n| overlay(&n.base_url))
-            .collect(),
+        neighbors: snapshot.iter().map(|n| overlay(&n.base_url)).collect(),
+        failing,
     };
     let forwarder = HttpForwarder {
         policy: OutboundPolicy::from_env(),
@@ -549,6 +584,7 @@ mod tests {
             protocol_version: "1.0.0".into(),
             target: node(target),
             neighbors: neighbors.iter().map(|n| node(n)).collect(),
+            failing: HashSet::new(),
         }
     }
 
@@ -620,6 +656,219 @@ mod tests {
                 out
             }
         }
+    }
+
+    impl Fake {
+        fn and(self, url: &str, outcome: ForwardOutcome) -> Self {
+            self.answer
+                .lock()
+                .unwrap()
+                .insert(canonical_base_url(url), outcome);
+            self
+        }
+
+        fn forwarded_to(&self) -> Vec<String> {
+            let seen = self.seen.lock().unwrap();
+            seen.iter().map(|s| s.0.clone()).collect()
+        }
+    }
+
+    /// `count` neighbor URLs of `me`, in the order the routing rule ranks them.
+    fn ranked(me: &str, target: &str, count: usize) -> Vec<String> {
+        let all: Vec<OverlayNode> = (0..count).map(|i| node(&format!("http://n{i}"))).collect();
+        let none = HashSet::new();
+        match next_hop(&node(me), &node(target), &all, &none, &none) {
+            NextHop::Forward(v) => v.into_iter().map(|n| n.base_url).collect(),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_single_neighbor_farther_than_this_node_still_carries_the_trace() {
+        let (me, target) = (node("http://a"), node("http://z"));
+        let far = (0..500)
+            .map(|i| format!("http://n{i}"))
+            .find(|u| {
+                crate::overlay_routing::url_distance(&node(u), &target)
+                    > crate::overlay_routing::url_distance(&me, &target)
+            })
+            .unwrap();
+        let c = ctx("http://a", "http://z", &[&far]);
+        let hops = vec![hop_of(&far, None), hop_of("http://z", None)];
+        let f = Fake::with(&far, down(hops, true, None));
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert!(r.reached);
+        assert_eq!(r.hops.len(), 3);
+        assert_eq!(f.forwarded_to(), vec![far]);
+    }
+
+    #[tokio::test]
+    async fn a_dead_neighbor_is_skipped_by_falling_through_to_the_next() {
+        for dead_outcome in [
+            ForwardOutcome::Timeout,
+            ForwardOutcome::Unreachable("connect"),
+        ] {
+            let order = ranked("http://a", "http://z", 2);
+            let c = ctx("http://a", "http://z", &[&order[0], &order[1]]);
+            let hops = vec![hop_of(&order[1], None), hop_of("http://z", None)];
+            let f = Fake::with(&order[0], dead_outcome).and(&order[1], down(hops, true, None));
+            let r = run_trace(
+                &c,
+                &f,
+                &req("http://z", 5, &[], DEFAULT_BUDGET),
+                Instant::now(),
+            )
+            .await;
+            assert!(r.reached, "{r:?}");
+            let urls: Vec<_> = r.hops.iter().map(|h| h.base_url.as_str()).collect();
+            assert_eq!(urls, ["http://a", order[1].as_str(), "http://z"]);
+            assert_eq!(f.forwarded_to(), order);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_downstream_no_route_falls_through_and_its_nodes_stay_visited() {
+        let order = ranked("http://a", "http://z", 2);
+        let c = ctx("http://a", "http://z", &[&order[0], &order[1]]);
+        let stuck = down(
+            vec![hop_of(&order[0], None), hop_of("http://dead-end", None)],
+            false,
+            Some(StopReason::NoRoute),
+        );
+        let hops = vec![hop_of(&order[1], None), hop_of("http://z", None)];
+        let f = Fake::with(&order[0], stuck).and(&order[1], down(hops, true, None));
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert!(r.reached);
+        let seen = f.seen.lock().unwrap();
+        let visited = seen[1].1.visited.as_ref().unwrap();
+        assert!(visited.contains(&"http://dead-end".to_string()));
+        assert!(visited.contains(&"http://a".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_ttl_or_loop_stop_downstream_is_final() {
+        let order = ranked("http://a", "http://z", 2);
+        let c = ctx("http://a", "http://z", &[&order[0], &order[1]]);
+        let f = Fake::with(
+            &order[0],
+            down(vec![hop_of(&order[0], None)], false, Some(StopReason::Ttl)),
+        );
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert_eq!(r.stopped_reason, Some(StopReason::Ttl));
+        assert_eq!(f.forwarded_to().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn at_most_max_candidates_are_tried_then_the_last_failure_is_reported() {
+        let order = ranked("http://a", "http://z", 6);
+        let names: Vec<&str> = order.iter().map(|s| s.as_str()).collect();
+        let c = ctx("http://a", "http://z", &names);
+        let f = Fake::with(&order[0], ForwardOutcome::Timeout);
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert_eq!(f.forwarded_to(), order[..MAX_CANDIDATES].to_vec());
+        assert!(!r.reached);
+        assert_eq!(r.stopped_reason, Some(StopReason::TargetUnreachable));
+        assert_eq!(r.hops.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn earlier_candidates_get_a_short_timeout_and_the_last_the_remaining_budget() {
+        let order = ranked("http://a", "http://z", 2);
+        let c = ctx("http://a", "http://z", &[&order[0], &order[1]]);
+        let f = Fake::with(&order[0], ForwardOutcome::Timeout);
+        let budget = Duration::from_secs(10);
+        run_trace(&c, &f, &req("http://z", 5, &[], budget), Instant::now()).await;
+        let seen = f.seen.lock().unwrap();
+        assert_eq!(seen[0].2, PER_HOP_TIMEOUT);
+        assert!(Duration::from_millis(seen[0].1.budget_ms.unwrap()) < PER_HOP_TIMEOUT);
+        assert!(seen[1].2 > PER_HOP_TIMEOUT && seen[1].2 <= budget);
+    }
+
+    #[tokio::test]
+    async fn a_failing_neighbor_is_tried_after_a_healthy_one() {
+        let (me, target) = (node("http://a"), node("http://z"));
+        let order: Vec<String> = ranked("http://a", "http://z", 40)
+            .into_iter()
+            .filter(|u| {
+                crate::overlay_routing::url_distance(&node(u), &target)
+                    < crate::overlay_routing::url_distance(&me, &target)
+            })
+            .take(2)
+            .collect();
+        let mut c = ctx("http://a", "http://z", &[&order[0], &order[1]]);
+        c.failing = HashSet::from([canonical_base_url(&order[0])]);
+        let hops = vec![hop_of(&order[1], None), hop_of("http://z", None)];
+        let f = Fake::with(&order[1], down(hops, true, None));
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert!(r.reached);
+        assert_eq!(f.forwarded_to(), vec![order[1].clone()]);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_direct_target_falls_back_to_another_neighbor() {
+        let other = "http://n1";
+        let c = ctx("http://a", "http://z", &["http://z", other]);
+        let hops = vec![hop_of(other, None), hop_of("http://z", None)];
+        let f = Fake::with("http://z", ForwardOutcome::Timeout).and(other, down(hops, true, None));
+        let r = run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        assert!(r.reached);
+        assert_eq!(f.forwarded_to(), vec!["http://z".to_string(), other.into()]);
+    }
+
+    #[tokio::test]
+    async fn a_trace_never_enters_a_node_twice_across_fallthrough() {
+        let order = ranked("http://a", "http://z", 3);
+        let names: Vec<&str> = order.iter().map(|s| s.as_str()).collect();
+        let c = ctx("http://a", "http://z", &names);
+        let f = Fake::with(&order[0], ForwardOutcome::Timeout)
+            .and(&order[1], ForwardOutcome::Unreachable("connect"))
+            .and(&order[2], ForwardOutcome::Timeout);
+        run_trace(
+            &c,
+            &f,
+            &req("http://z", 5, &[], DEFAULT_BUDGET),
+            Instant::now(),
+        )
+        .await;
+        let forwarded = f.forwarded_to();
+        let unique: HashSet<_> = forwarded.iter().collect();
+        assert_eq!(unique.len(), forwarded.len());
     }
 
     fn down(hops: Vec<TraceHop>, reached: bool, reason: Option<StopReason>) -> ForwardOutcome {
@@ -796,7 +1045,13 @@ mod tests {
             .map(|i| format!("http://n{i}"))
             .find(|url| {
                 matches!(
-                    next_hop(&node(me), &node(target), &[node(url)], &HashSet::new()),
+                    next_hop(
+                        &node(me),
+                        &node(target),
+                        &[node(url)],
+                        &HashSet::new(),
+                        &HashSet::new()
+                    ),
                     NextHop::Forward(_)
                 )
             })

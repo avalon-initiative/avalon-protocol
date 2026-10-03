@@ -75,53 +75,74 @@ struct Expected {
     reason: Option<&'static str>,
 }
 
-/// The path the overlay rule predicts, given each node's active neighbors.
+/// The path the overlay rule predicts, given each node's active neighbors: candidates in
+/// order (at most `MAX_CANDIDATES`), a failed branch's nodes stay visited for the next one.
 fn simulate(
     net: &str,
     adjacency: &HashMap<String, Vec<String>>,
     from: &str,
     target: &str,
-    mut ttl: u8,
+    ttl: u8,
+) -> Expected {
+    simulate_from(net, adjacency, from, target, ttl, &HashSet::new())
+}
+
+fn simulate_from(
+    net: &str,
+    adjacency: &HashMap<String, Vec<String>>,
+    from: &str,
+    target: &str,
+    ttl: u8,
+    inherited: &HashSet<String>,
 ) -> Expected {
     let node = |u: &str| OverlayNode {
         base_url: u.to_string(),
         network_id: net.to_string(),
         libp2p_peer_id: None,
     };
-    let target_node = node(target);
-    let mut visited = HashSet::new();
-    let mut path = vec![];
-    let mut at = from.to_string();
-    loop {
-        path.push(at.clone());
-        if canonical_base_url(&at) == canonical_base_url(target) {
-            return Expected {
-                path,
-                reached: true,
-                reason: None,
-            };
-        }
-        if ttl == 0 {
-            return Expected {
-                path,
-                reached: false,
-                reason: Some("ttl"),
-            };
-        }
-        visited.insert(canonical_base_url(&at));
-        let neighbors: Vec<OverlayNode> = adjacency[&at].iter().map(|u| node(u)).collect();
-        match next_hop(&node(&at), &target_node, &neighbors, &visited) {
-            NextHop::Direct(n) | NextHop::Forward(n) => at = n.base_url,
-            NextHop::NoRoute(_) => {
-                return Expected {
-                    path,
-                    reached: false,
-                    reason: Some("no_route"),
-                }
-            }
-        }
-        ttl -= 1;
+    let stop = |reason| Expected {
+        path: vec![from.to_string()],
+        reached: false,
+        reason: Some(reason),
+    };
+    if canonical_base_url(from) == canonical_base_url(target) {
+        return Expected {
+            path: vec![from.to_string()],
+            reached: true,
+            reason: None,
+        };
     }
+    if ttl == 0 {
+        return stop("ttl");
+    }
+    let mut visited = inherited.clone();
+    visited.insert(canonical_base_url(from));
+    let neighbors: Vec<OverlayNode> = adjacency[from].iter().map(|u| node(u)).collect();
+    let candidates = match next_hop(
+        &node(from),
+        &node(target),
+        &neighbors,
+        &visited,
+        &HashSet::new(),
+    ) {
+        NextHop::Direct { target, fallbacks } => std::iter::once(target).chain(fallbacks).collect(),
+        NextHop::Forward(v) => v,
+        NextHop::NoRoute(_) => return stop("no_route"),
+    };
+    let mut last = None;
+    for c in candidates.into_iter().take(3) {
+        let sub = simulate_from(net, adjacency, &c.base_url, target, ttl - 1, &visited);
+        let done = sub.reached || sub.reason != Some("no_route");
+        let mut path = vec![from.to_string()];
+        path.extend(sub.path.iter().cloned());
+        visited.extend(sub.path.iter().map(|u| canonical_base_url(u)));
+        let result = Expected { path, ..sub };
+        if done {
+            return result;
+        }
+        last = Some(result);
+    }
+    last.expect("a candidate list is never empty")
 }
 
 fn line_adjacency(line: &[u16]) -> HashMap<String, Vec<String>> {
@@ -225,7 +246,7 @@ async fn a_target_with_no_route_reports_why_it_stopped() {
     assert_eq!(t["reached"], false);
     assert_eq!(t["stopped_reason"], "no_route");
     let detail = t["detail"].as_str().expect("no_route names its reason");
-    assert!(["no_progress", "all_visited", "no_neighbors"].contains(&detail));
+    assert!(["all_visited", "no_neighbors"].contains(&detail));
     assert_matches(&t, &simulate(&net, &adjacency, &url(line[0]), target, 12));
 }
 
@@ -295,12 +316,11 @@ async fn a_target_that_never_answers_ends_in_timeout() {
 
 #[tokio::test]
 #[ignore]
-async fn a_neighbor_that_refuses_connections_is_target_unreachable() {
+async fn a_neighbor_that_refuses_connections_is_skipped_for_the_next_candidate() {
     let (edge, closed) = (url(port("TRACE_EDGE")), url(port("TRACE_CLOSED")));
-    let t = trace(&edge, json!({ "target": closed })).await;
+    let t = trace(&edge, json!({ "target": closed, "budget_ms": 1500 })).await;
     assert_eq!(t["reached"], false);
-    assert_eq!(t["stopped_reason"], "target_unreachable");
-    assert_eq!(t["detail"], "connect");
+    assert_eq!(t["stopped_reason"], "timeout");
     assert_eq!(hop_urls(&t), vec![edge]);
 }
 
