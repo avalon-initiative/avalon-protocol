@@ -2,8 +2,9 @@
 //!
 //! Pure and I/O-free. The rules, in order:
 //! 1. The target is an active neighbor: the next hop is the target itself.
-//! 2. Otherwise the unvisited active neighbor with the smallest XOR distance to the target,
-//!    and only if that distance is strictly smaller than this node's own distance.
+//! 2. Otherwise an ordered list of unvisited active neighbors: those strictly closer to the
+//!    target than this node first, then the rest, each tier by ascending XOR distance with
+//!    recently failing neighbors after healthy ones.
 //! 3. Otherwise [`NextHop::NoRoute`] with the reason.
 //!
 //! Only nodes on the caller's own `network_id` are ever selected.
@@ -36,19 +37,21 @@ pub enum NoRouteReason {
     ForeignNetwork,
     /// There are no active neighbors on this node's network.
     NoNeighbors,
-    /// Every neighbor closer to the target than this node has already been visited.
+    /// Every neighbor has already been visited.
     AllVisited,
-    /// No unvisited neighbor is strictly closer to the target than this node.
-    NoProgress,
 }
 
 /// The decision for one hop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NextHop {
-    /// The target is an active neighbor.
-    Direct(OverlayNode),
-    /// A neighbor strictly closer to the target.
-    Forward(OverlayNode),
+    /// The target is an active neighbor; `fallbacks` are the other candidates in order, for
+    /// when the target cannot be reached directly.
+    Direct {
+        target: OverlayNode,
+        fallbacks: Vec<OverlayNode>,
+    },
+    /// Unvisited neighbors to try in order; never empty.
+    Forward(Vec<OverlayNode>),
     NoRoute(NoRouteReason),
 }
 
@@ -77,6 +80,11 @@ fn url_key(node: &OverlayNode) -> [u8; 32] {
     Sha256::digest(canonical_base_url(&node.base_url).as_bytes()).into()
 }
 
+#[cfg(test)]
+pub(crate) fn url_distance(a: &OverlayNode, b: &OverlayNode) -> [u8; 32] {
+    xor(&url_key(a), &url_key(b))
+}
+
 fn xor(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     let mut out = [0u8; 32];
     for i in 0..32 {
@@ -85,13 +93,18 @@ fn xor(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     out
 }
 
-/// Chooses the next hop from `me` toward `target`. `visited` holds canonical base URLs
-/// (see [`canonical_base_url`]) of nodes the request already passed through.
+/// Sort key: not-closer tier, failing, distance, URL (for a deterministic order).
+type Rank<'a> = (bool, bool, [u8; 32], &'a str);
+
+/// Chooses the next hops from `me` toward `target`. `visited` and `failing` hold canonical
+/// base URLs (see [`canonical_base_url`]): nodes the request already passed through, and
+/// neighbors with recent failed contact.
 pub fn next_hop(
     me: &OverlayNode,
     target: &OverlayNode,
     active_neighbors: &[OverlayNode],
     visited: &HashSet<String>,
+    failing: &HashSet<String>,
 ) -> NextHop {
     let my_url = canonical_base_url(&me.base_url);
     let target_url = canonical_base_url(&target.base_url);
@@ -107,12 +120,13 @@ pub fn next_hop(
         .map(|n| (canonical_base_url(&n.base_url), n))
         .filter(|(url, _)| *url != my_url)
         .collect();
-    if let Some((_, hit)) = neighbors.iter().find(|(url, _)| *url == target_url) {
-        return NextHop::Direct((*hit).clone());
-    }
     if neighbors.is_empty() {
         return NoRouteReason::NoNeighbors.into();
     }
+    let direct = neighbors
+        .iter()
+        .find(|(url, _)| *url == target_url)
+        .map(|(_, n)| (*n).clone());
 
     let use_peer_ids = peer_id_key(me).is_some()
         && peer_id_key(target).is_some()
@@ -127,29 +141,24 @@ pub fn next_hop(
     let target_key = key(target);
     let my_distance = xor(&key(me), &target_key);
 
-    let mut best: Option<([u8; 32], &str, &OverlayNode)> = None;
-    let mut closer_but_visited = false;
-    for (url, n) in &neighbors {
-        let d = xor(&key(n), &target_key);
-        if d >= my_distance {
-            continue;
-        }
-        if visited.contains(url) {
-            closer_but_visited = true;
-            continue;
-        }
-        let better = match &best {
-            None => true,
-            Some((bd, burl, _)) => d < *bd || (d == *bd && url.as_str() < *burl),
-        };
-        if better {
-            best = Some((d, url.as_str(), n));
-        }
-    }
-    match best {
-        Some((_, _, n)) => NextHop::Forward(n.clone()),
-        None if closer_but_visited => NoRouteReason::AllVisited.into(),
-        None => NoRouteReason::NoProgress.into(),
+    let mut ranked: Vec<(Rank, &OverlayNode)> = neighbors
+        .iter()
+        .filter(|(url, _)| *url != target_url && !visited.contains(url))
+        .map(|(url, n)| {
+            let d = xor(&key(n), &target_key);
+            let rank = (d >= my_distance, failing.contains(url), d, url.as_str());
+            (rank, *n)
+        })
+        .collect();
+    ranked.sort_by(|a, b| a.0.cmp(&b.0));
+    let ordered: Vec<OverlayNode> = ranked.into_iter().map(|(_, n)| n.clone()).collect();
+    match direct {
+        Some(target) => NextHop::Direct {
+            target,
+            fallbacks: ordered,
+        },
+        None if ordered.is_empty() => NoRouteReason::AllVisited.into(),
+        None => NextHop::Forward(ordered),
     }
 }
 
@@ -174,6 +183,22 @@ mod tests {
         }
     }
 
+    fn route(
+        me: &OverlayNode,
+        t: &OverlayNode,
+        ns: &[OverlayNode],
+        visited: &HashSet<String>,
+    ) -> NextHop {
+        next_hop(me, t, ns, visited, &HashSet::new())
+    }
+
+    fn forward(h: NextHop) -> Vec<OverlayNode> {
+        match h {
+            NextHop::Forward(v) => v,
+            other => panic!("expected Forward, got {other:?}"),
+        }
+    }
+
     fn dist(a: &OverlayNode, b: &OverlayNode) -> [u8; 32] {
         xor(&url_key(a), &url_key(b))
     }
@@ -188,8 +213,14 @@ mod tests {
     #[test]
     fn direct_hit_when_target_is_neighbor() {
         let (me, t, o) = (node("http://a"), node("http://t"), node("http://o"));
-        let r = next_hop(&me, &t, &[o, t.clone()], &HashSet::new());
-        assert_eq!(r, NextHop::Direct(t));
+        let r = route(&me, &t, &[o.clone(), t.clone()], &HashSet::new());
+        assert_eq!(
+            r,
+            NextHop::Direct {
+                target: t,
+                fallbacks: vec![o]
+            }
+        );
     }
 
     #[test]
@@ -197,8 +228,11 @@ mod tests {
         let (me, t) = (node("http://a"), node("http://t"));
         let visited = HashSet::from([canonical_base_url("http://t")]);
         assert_eq!(
-            next_hop(&me, &t, std::slice::from_ref(&t), &visited),
-            NextHop::Direct(t)
+            route(&me, &t, std::slice::from_ref(&t), &visited),
+            NextHop::Direct {
+                target: t,
+                fallbacks: vec![]
+            }
         );
     }
 
@@ -206,7 +240,7 @@ mod tests {
     fn target_is_self() {
         let me = node("http://a");
         assert_eq!(
-            next_hop(
+            route(
                 &me,
                 &node("http://A/"),
                 &[node("http://b")],
@@ -219,64 +253,89 @@ mod tests {
     #[test]
     fn no_neighbors() {
         assert_eq!(
-            next_hop(&node("http://a"), &node("http://t"), &[], &HashSet::new()),
+            route(&node("http://a"), &node("http://t"), &[], &HashSet::new()),
             NextHop::NoRoute(NoRouteReason::NoNeighbors)
         );
     }
 
+    fn sorted_by_distance(t: &OverlayNode, n: usize) -> Vec<OverlayNode> {
+        let mut all: Vec<_> = (0..n).map(|i| node(&format!("http://n{i}"))).collect();
+        all.sort_by_key(|x| dist(x, t));
+        all
+    }
+
     #[test]
-    fn picks_closest_strictly_closer_neighbor() {
+    fn closer_neighbors_come_first_by_distance_then_the_rest() {
         let me = node("http://me");
         let t = node("http://target");
         let neighbors: Vec<_> = (0..40).map(|i| node(&format!("http://n{i}"))).collect();
-        let best = neighbors.iter().min_by_key(|n| dist(n, &t)).unwrap();
-        match next_hop(&me, &t, &neighbors, &HashSet::new()) {
-            NextHop::Forward(n) => {
-                assert_eq!(&n, best);
-                assert!(dist(&n, &t) < dist(&me, &t));
-            }
-            NextHop::NoRoute(NoRouteReason::NoProgress) => assert!(dist(best, &t) >= dist(&me, &t)),
-            other => panic!("unexpected {other:?}"),
+        let order = forward(route(&me, &t, &neighbors, &HashSet::new()));
+        assert_eq!(order.len(), neighbors.len());
+        let my_d = dist(&me, &t);
+        let closer = order.iter().take_while(|n| dist(n, &t) < my_d).count();
+        assert!(order[closer..].iter().all(|n| dist(n, &t) >= my_d));
+        for tier in [&order[..closer], &order[closer..]] {
+            assert!(tier.windows(2).all(|w| dist(&w[0], &t) <= dist(&w[1], &t)));
         }
     }
 
     #[test]
-    fn no_progress_when_all_neighbors_farther() {
+    fn a_node_with_no_closer_neighbor_still_forwards() {
         let t = node("http://target");
-        let neighbors: Vec<_> = (0..40).map(|i| node(&format!("http://n{i}"))).collect();
-        let me = neighbors
-            .iter()
-            .min_by_key(|n| dist(n, &t))
-            .unwrap()
-            .clone();
-        let others: Vec<_> = neighbors.into_iter().filter(|n| *n != me).collect();
+        let mut all = sorted_by_distance(&t, 20);
+        let me = all.remove(0);
+        let order = forward(route(&me, &t, &all, &HashSet::new()));
+        assert_eq!(order, all);
+    }
+
+    #[test]
+    fn a_single_neighbor_is_a_candidate_even_when_farther() {
+        let t = node("http://target");
+        let mut all = sorted_by_distance(&t, 20);
+        let me = all.remove(0);
+        let far = all.pop().unwrap();
         assert_eq!(
-            next_hop(&me, &t, &others, &HashSet::new()),
-            NextHop::NoRoute(NoRouteReason::NoProgress)
+            route(&me, &t, std::slice::from_ref(&far), &HashSet::new()),
+            NextHop::Forward(vec![far])
         );
+    }
+
+    #[test]
+    fn failing_neighbors_are_ordered_after_healthy_ones_within_each_tier() {
+        let t = node("http://target");
+        let mut all = sorted_by_distance(&t, 40);
+        let me = all.pop().unwrap();
+        // all are closer than me; the closest is failing.
+        let failing = HashSet::from([canonical_base_url(&all[0].base_url)]);
+        let order = forward(next_hop(&me, &t, &all, &HashSet::new(), &failing));
+        assert_eq!(order[0], all[1]);
+        assert_eq!(order.last().unwrap(), &all[0]);
+
+        // A failing closer neighbor still precedes a healthy not-closer one.
+        let all = sorted_by_distance(&t, 40);
+        let (closer, me, farther) = (&all[0], &all[1], &all[39]);
+        let failing = HashSet::from([canonical_base_url(&closer.base_url)]);
+        let ns = [farther.clone(), closer.clone()];
+        let order = forward(next_hop(me, &t, &ns, &HashSet::new(), &failing));
+        assert_eq!(order, vec![closer.clone(), farther.clone()]);
     }
 
     #[test]
     fn visited_neighbors_are_skipped() {
         let t = node("http://target");
-        let mut all: Vec<_> = (0..40).map(|i| node(&format!("http://n{i}"))).collect();
-        all.sort_by_key(|n| dist(n, &t));
+        let mut all = sorted_by_distance(&t, 40);
         let me = all.pop().unwrap();
         let mut visited = HashSet::new();
-        assert_eq!(
-            next_hop(&me, &t, &all, &visited),
-            NextHop::Forward(all[0].clone())
-        );
+        assert_eq!(forward(route(&me, &t, &all, &visited))[0], all[0]);
         visited.insert(canonical_base_url(&all[0].base_url));
-        assert_eq!(
-            next_hop(&me, &t, &all, &visited),
-            NextHop::Forward(all[1].clone())
-        );
+        let order = forward(route(&me, &t, &all, &visited));
+        assert_eq!(order[0], all[1]);
+        assert!(!order.contains(&all[0]));
         for n in &all {
             visited.insert(canonical_base_url(&n.base_url));
         }
         assert_eq!(
-            next_hop(&me, &t, &all, &visited),
+            route(&me, &t, &all, &visited),
             NextHop::NoRoute(NoRouteReason::AllVisited)
         );
     }
@@ -288,22 +347,21 @@ mod tests {
         all.sort_by_key(|n| dist(n, &t));
         let me = all.pop().unwrap();
         all[0].network_id = "other".into();
-        assert_eq!(
-            next_hop(&me, &t, &all, &HashSet::new()),
-            NextHop::Forward(all[1].clone())
-        );
+        let order = forward(route(&me, &t, &all, &HashSet::new()));
+        assert_eq!(order[0], all[1]);
+        assert!(!order.contains(&all[0]));
         let mut ft = t.clone();
         ft.network_id = "other".into();
         assert_eq!(
-            next_hop(&me, &ft, &all, &HashSet::new()),
+            route(&me, &ft, &all, &HashSet::new()),
             NextHop::NoRoute(NoRouteReason::ForeignNetwork)
         );
         let mut foreign_target = all[0].clone();
         foreign_target.network_id = "net".into();
         // A same-URL neighbor on another network is not a direct hit.
         assert!(!matches!(
-            next_hop(&me, &foreign_target, &all, &HashSet::new()),
-            NextHop::Direct(_)
+            route(&me, &foreign_target, &all, &HashSet::new()),
+            NextHop::Direct { .. }
         ));
     }
 
@@ -311,9 +369,9 @@ mod tests {
     fn deterministic_regardless_of_neighbor_order() {
         let (me, t) = (node("http://me"), node("http://target"));
         let mut ns: Vec<_> = (0..30).map(|i| node(&format!("http://n{i}"))).collect();
-        let a = next_hop(&me, &t, &ns, &HashSet::new());
+        let a = route(&me, &t, &ns, &HashSet::new());
         ns.reverse();
-        assert_eq!(a, next_hop(&me, &t, &ns, &HashSet::new()));
+        assert_eq!(a, route(&me, &t, &ns, &HashSet::new()));
     }
 
     #[test]
@@ -347,17 +405,15 @@ mod tests {
             .map(|i| with_peer_id(&format!("http://n{i}")))
             .collect();
         let tk = peer_id_key(&t).unwrap();
-        let my_d = xor(&peer_id_key(&me).unwrap(), &tk);
-        let best = ns
-            .iter()
-            .min_by_key(|n| xor(&peer_id_key(n).unwrap(), &tk))
-            .unwrap();
-        let expected = if xor(&peer_id_key(best).unwrap(), &tk) < my_d {
-            NextHop::Forward(best.clone())
-        } else {
-            NextHop::NoRoute(NoRouteReason::NoProgress)
-        };
-        assert_eq!(next_hop(&me, &t, &ns, &HashSet::new()), expected);
+        let d = |n: &OverlayNode| xor(&peer_id_key(n).unwrap(), &tk);
+        let my_d = d(&me);
+        let order = forward(route(&me, &t, &ns, &HashSet::new()));
+        assert_eq!(order.len(), ns.len());
+        let closer = order.iter().take_while(|n| d(n) < my_d).count();
+        assert_eq!(closer, ns.iter().filter(|n| d(n) < my_d).count());
+        for tier in [&order[..closer], &order[closer..]] {
+            assert!(tier.windows(2).all(|w| d(&w[0]) <= d(&w[1])));
+        }
     }
 
     #[test]
@@ -368,12 +424,15 @@ mod tests {
             .map(|i| with_peer_id(&format!("http://n{i}")))
             .collect();
         ns[0].libp2p_peer_id = None;
-        let mixed = next_hop(&me, &t, &ns, &HashSet::new());
+        let mixed = route(&me, &t, &ns, &HashSet::new());
         let stripped: Vec<_> = ns.iter().map(strip).collect();
-        let expected = next_hop(&strip(&me), &strip(&t), &stripped, &HashSet::new());
+        let expected = route(&strip(&me), &strip(&t), &stripped, &HashSet::new());
         let strip_hop = |h: NextHop| match h {
-            NextHop::Forward(n) => NextHop::Forward(strip(&n)),
-            NextHop::Direct(n) => NextHop::Direct(strip(&n)),
+            NextHop::Forward(v) => NextHop::Forward(v.iter().map(strip).collect()),
+            NextHop::Direct { target, fallbacks } => NextHop::Direct {
+                target: strip(&target),
+                fallbacks: fallbacks.iter().map(strip).collect(),
+            },
             x => x,
         };
         assert_eq!(strip_hop(mixed), expected);
@@ -399,12 +458,76 @@ mod tests {
         }
     }
 
-    /// Greedy routing over random bounded-degree overlays terminates, never revisits a
-    /// node, and either reaches the target or reports NoRoute.
+    /// Depth-first routing as the trace forwarder runs it: candidates in order, a failed
+    /// branch's nodes stay visited. Asserts no node is entered twice.
+    struct Overlay {
+        adj: HashMap<usize, HashSet<usize>>,
+        nodes: Vec<OverlayNode>,
+        dead: HashSet<usize>,
+        visited: HashSet<String>,
+        entered: Vec<usize>,
+    }
+
+    impl Overlay {
+        fn new(adj: HashMap<usize, HashSet<usize>>, nodes: Vec<OverlayNode>) -> Self {
+            Self {
+                adj,
+                nodes,
+                dead: HashSet::new(),
+                visited: HashSet::new(),
+                entered: vec![],
+            }
+        }
+
+        fn route(&mut self, cur: usize, dst: usize, ttl: usize) -> bool {
+            assert!(!self.entered.contains(&cur), "entered a node twice");
+            self.entered.push(cur);
+            self.visited
+                .insert(canonical_base_url(&self.nodes[cur].base_url));
+            if cur == dst {
+                return true;
+            }
+            if ttl == 0 {
+                return false;
+            }
+            let neighbors: Vec<_> = self.adj[&cur]
+                .iter()
+                .map(|&i| self.nodes[i].clone())
+                .collect();
+            let none = HashSet::new();
+            let hop = next_hop(
+                &self.nodes[cur],
+                &self.nodes[dst],
+                &neighbors,
+                &self.visited,
+                &none,
+            );
+            let cands = match hop {
+                NextHop::Direct { target, .. } => vec![target],
+                NextHop::Forward(v) => v,
+                NextHop::NoRoute(_) => return false,
+            };
+            for c in cands {
+                let idx = self.nodes.iter().position(|x| *x == c).unwrap();
+                assert!(self.adj[&cur].contains(&idx));
+                if self.dead.contains(&idx)
+                    || self.visited.contains(&canonical_base_url(&c.base_url))
+                {
+                    continue;
+                }
+                if self.route(idx, dst, ttl - 1) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
+    /// On random bounded-degree connected overlays routing never enters a node twice and
+    /// reaches every target within a TTL of the node count.
     #[test]
-    fn greedy_routing_reaches_target_or_reports_no_route_without_revisits() {
+    fn routing_is_loop_free_and_reaches_the_target_in_a_connected_graph() {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-        let (mut reached, mut stuck) = (0, 0);
         for _ in 0..200 {
             let n = 5 + rng.below(60);
             let max_degree = 3 + rng.below(4);
@@ -428,38 +551,38 @@ mod tests {
             }
             for _ in 0..10 {
                 let (src, dst) = (rng.below(n), rng.below(n));
-                if src == dst {
-                    continue;
-                }
-                let mut cur = src;
-                let mut visited = HashSet::from([canonical_base_url(&nodes[cur].base_url)]);
-                let mut path = vec![cur];
-                loop {
-                    assert!(path.len() <= n, "route longer than node count");
-                    let neighbors: Vec<_> = adj[&cur].iter().map(|&i| nodes[i].clone()).collect();
-                    match next_hop(&nodes[cur], &nodes[dst], &neighbors, &visited) {
-                        NextHop::Direct(t) => {
-                            assert_eq!(t, nodes[dst]);
-                            reached += 1;
-                            break;
-                        }
-                        NextHop::Forward(nx) => {
-                            let idx = nodes.iter().position(|x| *x == nx).unwrap();
-                            assert!(adj[&cur].contains(&idx));
-                            assert!(!path.contains(&idx), "revisited a node");
-                            assert!(dist(&nx, &nodes[dst]) < dist(&nodes[cur], &nodes[dst]));
-                            visited.insert(canonical_base_url(&nx.base_url));
-                            path.push(idx);
-                            cur = idx;
-                        }
-                        NextHop::NoRoute(_) => {
-                            stuck += 1;
-                            break;
-                        }
-                    }
-                }
+                let mut o = Overlay::new(adj.clone(), nodes.clone());
+                let reached = o.route(src, dst, n);
+                assert!(reached, "{src} -> {dst} not reached in a connected graph");
+                assert!(o.entered.len() <= n);
             }
         }
-        assert!(reached > 0 && stuck > 0, "reached={reached} stuck={stuck}");
+    }
+
+    #[test]
+    fn a_dead_neighbor_is_routed_around() {
+        let mut rng = Rng(0xDEAD_BEEF_1234_5678);
+        let n = 30;
+        let nodes: Vec<_> = (0..n)
+            .map(|i| node(&format!("http://r{i}.example")))
+            .collect();
+        // A ring plus the dead node's own bypass edges keeps the rest connected.
+        let mut adj: HashMap<usize, HashSet<usize>> = (0..n).map(|i| (i, HashSet::new())).collect();
+        for i in 0..n {
+            for d in [1, 2] {
+                let j = (i + d) % n;
+                adj.get_mut(&i).unwrap().insert(j);
+                adj.get_mut(&j).unwrap().insert(i);
+            }
+        }
+        for _ in 0..50 {
+            let (src, dst, dead) = (rng.below(n), rng.below(n), rng.below(n));
+            if dead == src || dead == dst {
+                continue;
+            }
+            let mut o = Overlay::new(adj.clone(), nodes.clone());
+            o.dead.insert(dead);
+            assert!(o.route(src, dst, n));
+        }
     }
 }

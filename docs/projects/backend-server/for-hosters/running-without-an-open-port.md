@@ -60,7 +60,9 @@ everywhere and the node behind a no-inbound NAT:
   `p2p://` URL go over the authenticated stream and report a `path`. Over the connection the
   node itself opened the path is `direct`; a path through a relay circuit is reported
   `relayed`, and a hole-punched one `traversed`. A trace routes through a node's active
-  neighbors, so run it from a node that has the target as a neighbor.
+  neighbors: the target itself when it is one, otherwise the closest unvisited neighbors in
+  order, falling through to the next when one fails or times out. A node with a single
+  neighbor therefore reaches, and is reached by, the rest of the network through it.
 - **Mirroring.** With `AVALON_MIRROR_PEERS` or `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` the
   node polls its sources over outbound HTTP, verifies their heads and serves the same
   head from `/ledger/sth/latest?shard_id=<shard>`.
