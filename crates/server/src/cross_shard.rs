@@ -614,13 +614,114 @@ pub async fn shard_family(
     let in_family = |id: &str| is_family_member(&owner, id);
     let config = state.known_shards.as_ref();
     let urls = scoped_shard_urls(&state, config, in_family);
-    if urls.len() + 1 > MAX_FAMILY_MEMBERS {
+    ensure_family_bound(urls.len())?;
+    let (shards, known) = gather_shard_heads(&state, config, &urls, in_family).await?;
+    build_family_response(&owner, query.member.as_deref(), &known, shards).map(Json)
+}
+
+/// One sibling shard of an owner with its verified current head.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct IntegratorShardEntry {
+    pub shard_id: String,
+    pub tree_size: i64,
+    pub root_hash: String,
+    pub signing_key_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
+    pub created_at: OffsetDateTime,
+    /// When this node last saw the shard announced; null when it only knows the shard from static config.
+    #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
+    pub last_seen_at: Option<OffsetDateTime>,
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct IntegratorShardsResponse {
+    /// The family owner id, `{category}:{slug}`.
+    pub owner: String,
+    /// Verified siblings in canonical shard id order.
+    pub shards: Vec<IntegratorShardEntry>,
+    /// `true` when `missing_shard_ids` is non-empty.
+    pub partial: bool,
+    /// Siblings this node knows of but could not verify a head for.
+    pub missing_shard_ids: Vec<String>,
+}
+
+/// Refuses a family that would exceed [`MAX_FAMILY_MEMBERS`] (this node's own shard included).
+fn ensure_family_bound(remote_shards: usize) -> Result<(), AppError> {
+    if remote_shards + 1 > MAX_FAMILY_MEMBERS {
         return Err(AppError::ShardFamilyTooLarge {
             max: MAX_FAMILY_MEMBERS,
         });
     }
+    Ok(())
+}
+
+/// The owner's verified sibling heads, from the same family gathering as
+/// `GET /ledger/shard-family`; `last_seen` looks up the registry's last announcement.
+fn build_shards_response(
+    owner: &str,
+    known: &BTreeSet<String>,
+    shards: Vec<ShardTreeHead>,
+    last_seen: impl Fn(&str) -> Option<OffsetDateTime>,
+) -> IntegratorShardsResponse {
+    let head = compute_shard_family_head(owner, known, shards);
+    IntegratorShardsResponse {
+        owner: head.owner,
+        partial: head.partial,
+        missing_shard_ids: head.missing_shard_ids,
+        shards: head
+            .members
+            .into_iter()
+            .map(|m| IntegratorShardEntry {
+                last_seen_at: last_seen(&m.shard_id),
+                shard_id: m.shard_id,
+                tree_size: m.sth.tree_size,
+                root_hash: m.sth.root_hash,
+                signing_key_id: m.sth.signing_key_id,
+                created_at: m.sth.created_at,
+            })
+            .collect(),
+    }
+}
+
+/// Lists an owner's sibling shards and their current heads. Public and
+/// unauthenticated like `GET /integrations/{slug}`. Advisory: only siblings this
+/// node knows of and whose head verified under the owner's registered keys are
+/// listed; a silent sibling is invisible, and unverified ones appear only in
+/// `missing_shard_ids`. A family over 256 shards is refused with 413, not truncated.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/shards",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    responses(
+        (status = 200, description = "The owner's verified sibling shards (advisory: only shards this node knows of and could verify)", body = IntegratorShardsResponse),
+        (status = 404, description = "No such integrator"),
+        (status = 413, description = "The owner's family exceeds 256 shards"),
+    ),
+)]
+pub async fn list_integrator_shards(
+    State(state): State<AppState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Result<Json<IntegratorShardsResponse>, AppError> {
+    let category: String = sqlx::query_scalar("SELECT category FROM integrators WHERE slug = $1")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::IntegratorNotFound)?;
+    let owner = format!("{category}:{slug}");
+    if !avalon_protocol::shard::is_family_owner_id(&owner) {
+        return Err(AppError::InvalidShardFamilyOwner);
+    }
+    let in_family = |id: &str| is_family_member(&owner, id);
+    let config = state.known_shards.as_ref();
+    let urls = scoped_shard_urls(&state, config, in_family);
+    ensure_family_bound(urls.len())?;
     let (shards, known) = gather_shard_heads(&state, config, &urls, in_family).await?;
-    build_family_response(&owner, query.member.as_deref(), &known, shards).map(Json)
+    Ok(Json(build_shards_response(&owner, &known, shards, |id| {
+        state.shard_registry.last_seen_at(id)
+    })))
 }
 
 #[cfg(test)]
@@ -724,6 +825,62 @@ mod tests {
         let resp = build_family_response("game:x", None, &BTreeSet::new(), Vec::new()).unwrap();
         assert_eq!(resp.shard_count, 0);
         assert!(resp.members.is_empty());
+    }
+
+    fn at(secs: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(secs).unwrap()
+    }
+
+    #[test]
+    fn shards_response_lists_verified_siblings_with_last_seen() {
+        let known: BTreeSet<String> = ["game:x", "game:x/2", "game:x/3"]
+            .map(String::from)
+            .into_iter()
+            .collect();
+        let shards = vec![head("game:x/2", "bb"), head("game:x", "aa")];
+        let resp = build_shards_response("game:x", &known, shards, |id| {
+            (id == "game:x/2").then(|| at(100))
+        });
+        assert_eq!(resp.owner, "game:x");
+        let ids: Vec<&str> = resp.shards.iter().map(|s| s.shard_id.as_str()).collect();
+        assert_eq!(ids, ["game:x", "game:x/2"]);
+        assert_eq!(resp.shards[1].tree_size, 4);
+        assert_eq!(resp.shards[1].root_hash, "bb");
+        assert_eq!(resp.shards[1].last_seen_at, Some(at(100)));
+        assert_eq!(resp.shards[0].last_seen_at, None);
+        assert!(resp.partial);
+        assert_eq!(resp.missing_shard_ids, vec!["game:x/3"]);
+    }
+
+    #[test]
+    fn shards_response_omits_foreign_and_prefix_lookalike_shards() {
+        let shards = vec![
+            head("game:x", "aa"),
+            head("game:xy", "dd"),
+            head("app:x", "ee"),
+            head("core", "cc"),
+        ];
+        let resp = build_shards_response("game:x", &BTreeSet::new(), shards, |_| None);
+        let ids: Vec<&str> = resp.shards.iter().map(|s| s.shard_id.as_str()).collect();
+        assert_eq!(ids, ["game:x"]);
+    }
+
+    #[test]
+    fn shards_response_for_an_owner_with_no_siblings_is_empty() {
+        let resp = build_shards_response("game:x", &BTreeSet::new(), Vec::new(), |_| None);
+        assert!(resp.shards.is_empty());
+        assert!(!resp.partial);
+    }
+
+    #[test]
+    fn family_bound_refuses_rather_than_truncates() {
+        assert!(ensure_family_bound(MAX_FAMILY_MEMBERS - 1).is_ok());
+        assert!(matches!(
+            ensure_family_bound(MAX_FAMILY_MEMBERS),
+            Err(AppError::ShardFamilyTooLarge {
+                max: MAX_FAMILY_MEMBERS
+            })
+        ));
     }
 
     fn registry_with(shard_id: &str, url: &str) -> ShardRegistry {

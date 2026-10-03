@@ -32,7 +32,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
-        version = "0.10.0"
+        version = "0.11.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -69,6 +69,7 @@ use utoipa::OpenApi;
         crate::cross_node_login::poll,
         crate::cross_node_login::start,
         crate::cross_node_login::submit,
+        crate::cross_shard::list_integrator_shards,
         crate::device_pairing::approve_pairing,
         crate::device_pairing::deny_pairing,
         crate::device_pairing::poll_pairing,
@@ -260,6 +261,8 @@ use utoipa::OpenApi;
         crate::cross_node_login::SubmitGrantRequest,
         crate::cross_node_login::SubmitGrantResponse,
         crate::cross_node_login::UserCodeRequest,
+        crate::cross_shard::IntegratorShardEntry,
+        crate::cross_shard::IntegratorShardsResponse,
         crate::device_pairing::ApprovePairingRequest,
         crate::device_pairing::PollPairingResponse,
         crate::device_pairing::ResolvePairingResponse,

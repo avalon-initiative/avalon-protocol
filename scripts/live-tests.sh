@@ -230,6 +230,7 @@ group_aggregator() {
     export AVALON_SERVER_URL="http://127.0.0.1:$core"
     export AVALON_AGGREGATOR_A_URL="http://127.0.0.1:$a"
     export AVALON_AGGREGATOR_B_URL="http://127.0.0.1:$b"
+    export AVALON_SECOND_SHARD_URL="http://127.0.0.1:$second"
     run_test aggregator/cross_shard avalon-server cross_shard
     printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
     echo "$FAILED" >"$LOG_DIR/subshell-failed"
