@@ -1,0 +1,1783 @@
+{
+  "$schema": "./SCHEMA.md#shard-family-head",
+  "description": "The per-owner shard family head (avalon_chain::cross_shard compute_shard_family_head, family_inclusion_proof, verify_family_inclusion; avalon_protocol::shard shard_family_owner, is_family_owner_id) served by GET /ledger/shard-family. A family is the owner's shard ids {namespace}:{slug} and {namespace}:{slug}/{instance}; heads of any other shard are ignored. Leaf = 'avalon-shard-family-leaf-v1' || u32be(len(owner)) || owner || u32be(len(shard_id)) || shard_id || i64be(tree_size) || u32be(len(root_hash)) || root_hash || u32be(len(signing_key_id)) || signing_key_id || u32be(len(signature)) || signature, every length counting UTF-8 bytes and every string used as its text (hex is not decoded). Members are sorted bytewise by shard id and combined with the RFC 6962 tree hash; the empty family root is SHA-256('avalon-shard-family-empty-v1' || u32be(len(owner)) || owner). The signatures are placeholders: the leaf commits to their text and no vector verifies them. verified is false for any failure, including a malformed root hash.",
+  "familyOwnerVectors": [
+    {
+      "expectedOwner": "game:x",
+      "shardId": "game:x"
+    },
+    {
+      "expectedOwner": "game:x",
+      "shardId": "game:x/2"
+    },
+    {
+      "expectedOwner": "game:x",
+      "shardId": "game:x/eu-1"
+    },
+    {
+      "expectedOwner": "game:xy",
+      "shardId": "game:xy"
+    },
+    {
+      "expectedOwner": "game:xy",
+      "shardId": "game:xy/2"
+    },
+    {
+      "expectedOwner": "app:x",
+      "shardId": "app:x"
+    },
+    {
+      "expectedOwner": "app:x",
+      "shardId": "app:x/2"
+    },
+    {
+      "expectedOwner": "service:y",
+      "shardId": "service:y/b"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "core"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "node:abababababababababababababababababababababababababababababababab"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "node:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "node:abcd"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": ""
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:/2"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/2/3"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/UP"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/-a"
+    },
+    {
+      "expectedOwner": "game:x",
+      "shardId": "game:x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x:y"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x y"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x/2 "
+    },
+    {
+      "expectedOwner": null,
+      "shardId": " game:x"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x\n"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x "
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:　"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game: x"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "game:x "
+    },
+    {
+      "expectedOwner": "game:​",
+      "shardId": "game:​"
+    },
+    {
+      "expectedOwner": "game:﻿x",
+      "shardId": "game:﻿x"
+    },
+    {
+      "expectedOwner": "game:é",
+      "shardId": "game:é"
+    },
+    {
+      "expectedOwner": "game:é",
+      "shardId": "game:é/2"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "GAME:x"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "other:x"
+    },
+    {
+      "expectedOwner": null,
+      "shardId": "x"
+    }
+  ],
+  "familyVectors": [
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:x",
+          "game:x/10",
+          "game:x/2"
+        ],
+        "rootHashHex": "3292897e28c94f65d7367363104af827093132b0fd902abf6dab646334e5dd80",
+        "shardCount": 3
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "72e36919864d027f80438ab429546cb69ea512917687da45bf43e7f83e210e83",
+            "shardId": "game:x/2",
+            "signatureHex": "a2172810d4275da50b4dd4e7813ff1238d491d8c8e3bc43f6378286756dfc90ff62f10e06b6f8e92e8cd42bf4dae2e0563df640bad7e3d8bdc963a62d534b6d4",
+            "signingKeyId": "key-noisy",
+            "treeSize": 7
+          },
+          {
+            "rootHashHex": "0b5044a0086ea5c598e622897348e1d2df74bd1429594549ec3ecf2db1203ba8",
+            "shardId": "core",
+            "signatureHex": "245124dd9be901035e7b1959ce9857035ea0a0627bd7be5ce884bed9600ac11d3ed802c2c41cc1974487197b3144728913a545529a4094a4381ac3906ec2383f",
+            "signingKeyId": "key-noisy",
+            "treeSize": 99
+          },
+          {
+            "rootHashHex": "03868042e6ba4d44f2949c6205ff457fd84339a1ab24e07cfc6d3841c3434fb9",
+            "shardId": "game:xy",
+            "signatureHex": "5398b15b32430b040982a77b5fc8de7478a4631966ce73f6f8518de8b61ba77fa8b1fe59dd563c654746a9dd5f2911215f9c2a565847a173cd3e7c492478c94b",
+            "signingKeyId": "key-noisy",
+            "treeSize": 3
+          },
+          {
+            "rootHashHex": "5ab26bfab4c64d1dbd881fc0dab49a3ac1bdc26a7489fc3bfee7aea384549cf4",
+            "shardId": "game:x",
+            "signatureHex": "503a80796a267f7f42e1c01a320b379db5895615d5d4425bec8d6ffa2b0f459e5d97b73ef0d8d65a018125162ae37daba96e63cf725904c002a1ca955eb3ea80",
+            "signingKeyId": "key-noisy",
+            "treeSize": 5
+          },
+          {
+            "rootHashHex": "85ae0303ba9a22cf24381bc28a25346ba19d867ca253030b06c6316dc4a12a41",
+            "shardId": "app:x",
+            "signatureHex": "794af2f196569a3668e5d971d9ea1ba45c227c0f873f007e5d61363af093c82faf930da74d9354f856c707ddba5e4abf1e5eae8c18f6b83415c91fdf7ef5e711",
+            "signingKeyId": "key-noisy",
+            "treeSize": 4
+          },
+          {
+            "rootHashHex": "61ac46fd1ec8579b6dcad6c5a8c3876d6c5133abc1b641670be3cc65b0654e96",
+            "shardId": "node:abababababababababababababababababababababababababababababababab",
+            "signatureHex": "030d9477c90f56ab9129376eb571bc77e4eca58c7e2b9a5aa8041e3a3c8705b0291f7f2c9f63b2eb6d5d14b1a3cb3019d5d1755bf91b3d84b7506ca917b7f177",
+            "signingKeyId": "key-noisy",
+            "treeSize": 8
+          },
+          {
+            "rootHashHex": "3d4a8de83f73e1739efa48e7f03ac0a95b2b1297591153e28393167d20cfe1a0",
+            "shardId": "game:x/10",
+            "signatureHex": "ee038b863f61421937734d7051579c1c66c836d0e45c3fdb28ad953928b23ccc14098a43110ffa45d0673a17776db2a6d9b97d68e50d6a7f90123e2160018f40",
+            "signingKeyId": "key-noisy",
+            "treeSize": 6
+          },
+          {
+            "rootHashHex": "83d7102b6b7a161c93dfb0705f4ca515214107037180a600a4d8632949e321f6",
+            "shardId": "game:xy/2",
+            "signatureHex": "14c1201d90230ef60a67cfb9e1b067ba0cb530c07ab53fe42476f4e95c0294f61f227da9213376a20db7f1f75b2c4fc621f90b5ac70d9f0c54239968d77c015a",
+            "signingKeyId": "key-noisy",
+            "treeSize": 2
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "members out of order with non-members ignored"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "app:x"
+        ],
+        "rootHashHex": "1ee2c43b8b3cee0b248487a01d24c49db2c475b68c875d5b903869faf22c54cf",
+        "shardCount": 1
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "72e36919864d027f80438ab429546cb69ea512917687da45bf43e7f83e210e83",
+            "shardId": "game:x/2",
+            "signatureHex": "a2172810d4275da50b4dd4e7813ff1238d491d8c8e3bc43f6378286756dfc90ff62f10e06b6f8e92e8cd42bf4dae2e0563df640bad7e3d8bdc963a62d534b6d4",
+            "signingKeyId": "key-noisy",
+            "treeSize": 7
+          },
+          {
+            "rootHashHex": "0b5044a0086ea5c598e622897348e1d2df74bd1429594549ec3ecf2db1203ba8",
+            "shardId": "core",
+            "signatureHex": "245124dd9be901035e7b1959ce9857035ea0a0627bd7be5ce884bed9600ac11d3ed802c2c41cc1974487197b3144728913a545529a4094a4381ac3906ec2383f",
+            "signingKeyId": "key-noisy",
+            "treeSize": 99
+          },
+          {
+            "rootHashHex": "03868042e6ba4d44f2949c6205ff457fd84339a1ab24e07cfc6d3841c3434fb9",
+            "shardId": "game:xy",
+            "signatureHex": "5398b15b32430b040982a77b5fc8de7478a4631966ce73f6f8518de8b61ba77fa8b1fe59dd563c654746a9dd5f2911215f9c2a565847a173cd3e7c492478c94b",
+            "signingKeyId": "key-noisy",
+            "treeSize": 3
+          },
+          {
+            "rootHashHex": "5ab26bfab4c64d1dbd881fc0dab49a3ac1bdc26a7489fc3bfee7aea384549cf4",
+            "shardId": "game:x",
+            "signatureHex": "503a80796a267f7f42e1c01a320b379db5895615d5d4425bec8d6ffa2b0f459e5d97b73ef0d8d65a018125162ae37daba96e63cf725904c002a1ca955eb3ea80",
+            "signingKeyId": "key-noisy",
+            "treeSize": 5
+          },
+          {
+            "rootHashHex": "85ae0303ba9a22cf24381bc28a25346ba19d867ca253030b06c6316dc4a12a41",
+            "shardId": "app:x",
+            "signatureHex": "794af2f196569a3668e5d971d9ea1ba45c227c0f873f007e5d61363af093c82faf930da74d9354f856c707ddba5e4abf1e5eae8c18f6b83415c91fdf7ef5e711",
+            "signingKeyId": "key-noisy",
+            "treeSize": 4
+          },
+          {
+            "rootHashHex": "61ac46fd1ec8579b6dcad6c5a8c3876d6c5133abc1b641670be3cc65b0654e96",
+            "shardId": "node:abababababababababababababababababababababababababababababababab",
+            "signatureHex": "030d9477c90f56ab9129376eb571bc77e4eca58c7e2b9a5aa8041e3a3c8705b0291f7f2c9f63b2eb6d5d14b1a3cb3019d5d1755bf91b3d84b7506ca917b7f177",
+            "signingKeyId": "key-noisy",
+            "treeSize": 8
+          },
+          {
+            "rootHashHex": "3d4a8de83f73e1739efa48e7f03ac0a95b2b1297591153e28393167d20cfe1a0",
+            "shardId": "game:x/10",
+            "signatureHex": "ee038b863f61421937734d7051579c1c66c836d0e45c3fdb28ad953928b23ccc14098a43110ffa45d0673a17776db2a6d9b97d68e50d6a7f90123e2160018f40",
+            "signingKeyId": "key-noisy",
+            "treeSize": 6
+          },
+          {
+            "rootHashHex": "83d7102b6b7a161c93dfb0705f4ca515214107037180a600a4d8632949e321f6",
+            "shardId": "game:xy/2",
+            "signatureHex": "14c1201d90230ef60a67cfb9e1b067ba0cb530c07ab53fe42476f4e95c0294f61f227da9213376a20db7f1f75b2c4fc621f90b5ac70d9f0c54239968d77c015a",
+            "signingKeyId": "key-noisy",
+            "treeSize": 2
+          }
+        ],
+        "owner": "app:x"
+      },
+      "name": "same heads under another owner keep only that owner's member"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:x/1",
+          "game:x/10",
+          "game:x/2"
+        ],
+        "rootHashHex": "5c1d4fc8f6bb0a39ad3801f91cc2fd1c115647b8a540bc81e880bd8f51c97c5f",
+        "shardCount": 3
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "84345d6a56ba04a2ef5f8622fb3a8d1bcb599937a927058e91e148c18a50b600",
+            "shardId": "game:x/2",
+            "signatureHex": "7ed4ad28d0129fe888e7ccf7a9213381609261c295426765861f376279b42ff8ffaac0b93a010d1a4e07af5bf0203d4a9f349770ed051260a6e14cda5801072d",
+            "signingKeyId": "key-order",
+            "treeSize": 1
+          },
+          {
+            "rootHashHex": "b8d32d5880c47950af1adbccb9b3f84d378a413f1734b51fc8021c2cd8de20e1",
+            "shardId": "game:x/10",
+            "signatureHex": "3613864c44136dcd05c166cfb5c65b338a7ef9e242a2c720654fe55ca0a48c85663a3ae027e02e9be42cf9d5c73b930042c5906bb7021dbbedd5bfe6ca63a564",
+            "signingKeyId": "key-order",
+            "treeSize": 1
+          },
+          {
+            "rootHashHex": "79e58c0f7104d4dc5021e2091630ad24d881dc5d3a660690c5dfa3e0582b550e",
+            "shardId": "game:x/1",
+            "signatureHex": "e5d002a62944e4c93c144c9f1bced4e81d9f934ac3aec8cdadd0f08c99f3516b57bdfb56a130d512c13388a4d3e7597304152b8b3f46446889a37c4ee802ee48",
+            "signingKeyId": "key-order",
+            "treeSize": 1
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "instance order is bytewise, not numeric"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:x"
+        ],
+        "rootHashHex": "cd84f707852ed718956976883f0e1a32e98ffdcb54c71b8844d48ae9232fbc27",
+        "shardCount": 1
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "969e11e6699ca53a1f7f2bf6914bcaaa901096898f02619617b05fe1f874bf8b",
+            "shardId": "game:x",
+            "signatureHex": "6e1671ba6a6fd5655339b99fc9a479021f924a4bbbeff793462086a9b90e80c8221a4db4aab6c3db22990a1e2e735fa3982b674cb5a83bac2b8f244685559f1c",
+            "signingKeyId": "key-one",
+            "treeSize": 4
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "single member"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "service:x/eu-1"
+        ],
+        "rootHashHex": "0add5845e0c1048e8858037f7ebec0c2916da0b2b95d73d9bf975c94c51666d0",
+        "shardCount": 1
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "8ffabea522e07ce1dda067f96315cf5a6f9c8910dfa9fcfa9aa80a6d700afe1e",
+            "shardId": "service:x/eu-1",
+            "signatureHex": "364ece54511bc012916cd11ad0e4b58a696e017d5da6a5a604e94fcc908c85b3c3792c868c3db559bf91a3a9fdc686758e5c44a79b3553cdc4c99cfc5ad8a3bb",
+            "signingKeyId": "key-inst",
+            "treeSize": 9
+          }
+        ],
+        "owner": "service:x"
+      },
+      "name": "only an instance, no bare owner shard"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:x",
+          "game:x/2"
+        ],
+        "rootHashHex": "4fd98c5965426f4372cc08d6feb9d1618021b76c4e7d4c094bf2803f3f4db8f4",
+        "shardCount": 2
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "d4803f79f91dfe1aeb35336f91747245635893468cb06e7e09dbba0a187d70f8",
+            "shardId": "game:x/2",
+            "signatureHex": "2e9e4f134d9a9ef4b2bb6b6bd161b7320ba3e0276d298c7595e6ed85855742589107a6cd0505213317085a0241494e6adad1d29d5b366489959e1370a59f872b",
+            "signingKeyId": "key-p2",
+            "treeSize": 3
+          },
+          {
+            "rootHashHex": "166dd55ca9727c2af66ce4b0f4feaee01dac45d29f1b62156cf87e2cdb14c9c9",
+            "shardId": "game:x",
+            "signatureHex": "732f66d2467c47df4aa7d59f13b756313a22528003aa1ac9627819d141ffc63b2e3162c5844811d4850e36bc950216e27a3c0e8de43b4f2b64a081bcb098db25",
+            "signingKeyId": "key-p2",
+            "treeSize": 2
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "two members"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:x",
+          "game:x/1",
+          "game:x/10",
+          "game:x/2",
+          "game:x/b-3"
+        ],
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardCount": 5
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "09ce10f444a2b384671ba805487190a50edcb88e500612d7149580651bc37de8",
+            "shardId": "game:x/b-3",
+            "signatureHex": "f8a9abcda2038f63ec2e9a28fb82c093bafb9133a691c4ed767b30fc9125a90d693c03e218a5534c8f4ca92412ef0d4c80a0a294d919697ab3e20313ff384693",
+            "signingKeyId": "key-five",
+            "treeSize": 14
+          },
+          {
+            "rootHashHex": "eb3f0879f497bf642169ae1ea258dec4cc8e322fd57be800bd606e1b32830cd4",
+            "shardId": "game:x/2",
+            "signatureHex": "ecb4d1527976706dffb6f3164951414bee39afa8107d910ddae04f6095549c238c1d1d1ebca2e33f82318058817a2defb93073dfe63d7204b537432d7a93efd8",
+            "signingKeyId": "key-five",
+            "treeSize": 13
+          },
+          {
+            "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+            "shardId": "game:x/10",
+            "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+            "signingKeyId": "key-five",
+            "treeSize": 12
+          },
+          {
+            "rootHashHex": "87131faf4f9ec42e2089ccb1f9e9648f78936c896f6789f678b91153f3c11c69",
+            "shardId": "game:x/1",
+            "signatureHex": "7b00010b3eecdf48ae202b480cd38d37e2c8fd04de8c1013f585ee53f91c261994d0947199ec8f187a55757af6abf8b22d98beadc5352cfb731f4e1944f65069",
+            "signingKeyId": "key-five",
+            "treeSize": 11
+          },
+          {
+            "rootHashHex": "bf700e5692d04b536606e78bd6b071363e73625eeb1a3b9c56d8fdef2a7074d2",
+            "shardId": "game:x",
+            "signatureHex": "8c4c557911769a50dce83a961838c9f16ddd23a46da349dc9b456461dd5510922b294109e35dd3cd6d857397291480102407e134c39979f3f520396ab225eb40",
+            "signingKeyId": "key-five",
+            "treeSize": 10
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "five members reversed"
+    },
+    {
+      "expected": {
+        "memberShardIds": [],
+        "rootHashHex": "00c2bcc54f3d0a778577716d54f4ad1f494d930c78cfee16a26ef09efb0ad0e1",
+        "shardCount": 0
+      },
+      "input": {
+        "heads": [],
+        "owner": "game:x"
+      },
+      "name": "empty family: no heads at all"
+    },
+    {
+      "expected": {
+        "memberShardIds": [],
+        "rootHashHex": "00c2bcc54f3d0a778577716d54f4ad1f494d930c78cfee16a26ef09efb0ad0e1",
+        "shardCount": 0
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "49de7e73a39cb63dd7f0edaa7fd886290c93cbf76dfa65fb85687068a1533b81",
+            "shardId": "game:xy",
+            "signatureHex": "d8002bac7c0ab1b8f555eb8f23f04a6dfcc876b02bcc64f5bcd6480c56518121168ebf1b66568b10ec64a9366d4fa01b66139ba403a114737bfacc0a340fdbb1",
+            "signingKeyId": "key-none",
+            "treeSize": 1
+          },
+          {
+            "rootHashHex": "28c7ff8ed9ac0f607fad358966cfaa3dd966067580e3032b192b0ea4c5a4983c",
+            "shardId": "core",
+            "signatureHex": "b4053da54787a7722d6337b0597720a9a5e776f27747c38fd9849e3b5b7e2891593000a674e8a182d5a85d90af14c626dabc71964b4e30446323606dc27fd060",
+            "signingKeyId": "key-none",
+            "treeSize": 2
+          }
+        ],
+        "owner": "game:x"
+      },
+      "name": "empty family: only non-members"
+    },
+    {
+      "expected": {
+        "memberShardIds": [],
+        "rootHashHex": "7ed21b58c5e35b4ada652e1c1043b5826189d806af9950d3eddcb05ea3348e93",
+        "shardCount": 0
+      },
+      "input": {
+        "heads": [],
+        "owner": "game:y"
+      },
+      "name": "empty family of another owner is a different root"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:éx",
+          "game:éx/2"
+        ],
+        "rootHashHex": "00f0e0781379292a59e5b46b76310650ca686a070cd8f8f300dcbf5e1813174d",
+        "shardCount": 2
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "832a41fa7dc78f54be0827b297706d091e2efb74e2929cb137b77a41f0a5925c",
+            "shardId": "game:éx/2",
+            "signatureHex": "c34c8006cddeca6d96a340cb2dd3fb43b2a1896666f1bbfb775db47bb76db26e7dcb33b26a7e219201d8c7840ede76ec30a80a50217bd217b36e415ddc4e2b38",
+            "signingKeyId": "key-utf8",
+            "treeSize": 5
+          },
+          {
+            "rootHashHex": "0233ecf9df96e0dd28cdaa1a667e0e3eee5567fd71d7b174ef781a680c970e78",
+            "shardId": "game:éx",
+            "signatureHex": "9d8987a96fefc9fd95e6b4bc5905fb17260cb590e9daec2a910e4448306aee5de7dd716d76711df82ebda3ec9100136401d5321448e91df49f8482f9960c905a",
+            "signingKeyId": "key-utf8",
+            "treeSize": 6
+          }
+        ],
+        "owner": "game:éx"
+      },
+      "name": "non-ascii owner is length-prefixed in utf-8 bytes"
+    },
+    {
+      "expected": {
+        "memberShardIds": [
+          "game:big",
+          "game:big/2",
+          "game:big/3"
+        ],
+        "rootHashHex": "16faec51a8859cb645171897862855bcc09e46daf01212a6126c68fcf6313dea",
+        "shardCount": 3
+      },
+      "input": {
+        "heads": [
+          {
+            "rootHashHex": "347214ba1525b73a8704e6683b0ca6695e96138f2a624406eabd69286ac2b745",
+            "shardId": "game:big",
+            "signatureHex": "f82b98bff4dcd046122147c0ebcef3180078b58124493791dc94e4dd003f913630f56985cc5b3ad4e7e3a9bc82dc6cfce107b72fbb1e0e7d2adb3dd885618f12",
+            "signingKeyId": "key-big",
+            "treeSize": "9223372036854775807"
+          },
+          {
+            "rootHashHex": "96956a7fd0c6609a28c7446912a13439e0c888a689a4ce16ec1520462d4de746",
+            "shardId": "game:big/2",
+            "signatureHex": "cb71c9581a41bd19383ca00c3986c6716c455ceda5795cf5dedf21de338c16c4eb216d266b3f8ecda9e82102343f52e2b5a5e6f198c19636f4fda58753379a5f",
+            "signingKeyId": "key-big",
+            "treeSize": "9007199254740992"
+          },
+          {
+            "rootHashHex": "e4201cdc7003042b873a6372e773e6e59080ba10d580bbb2875753b681e872df",
+            "shardId": "game:big/3",
+            "signatureHex": "618a5003db76b3c405ffe0c079ddc096050bc41e650c85156080d0b331bc3fcae6072ae21f2d664b7f175f6bbaf9e4467af73e84558bd2086ff6681ec3068bd0",
+            "signingKeyId": "key-big",
+            "treeSize": 0
+          }
+        ],
+        "owner": "game:big"
+      },
+      "name": "tree sizes at the i64 edges"
+    }
+  ],
+  "generation": "Generated by crates/chain/tests/shard_family_vectors.rs from the functions named above; AVALON_REGEN_VECTORS=1 rewrites this file and the test fails when it is stale. Head hashes are SHA-256 of a label, signatures are two such hashes, and created_at is not part of a leaf so it is omitted. Every outcome is what the chain functions return, except 'path element is not 32 bytes', which the wire parser rejects before the chain code and is fixed as not verified.",
+  "memberVectors": [
+    {
+      "expected": true,
+      "owner": "game:x",
+      "shardId": "game:x"
+    },
+    {
+      "expected": true,
+      "owner": "game:x",
+      "shardId": "game:x/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "game:xy"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "game:xy/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "app:x"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "core"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "node:abababababababababababababababababababababababababababababababab"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "game:x/"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "game:x/UP"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": "game:x y"
+    },
+    {
+      "expected": false,
+      "owner": "game:x",
+      "shardId": ""
+    },
+    {
+      "expected": false,
+      "owner": "game:x/2",
+      "shardId": "game:x/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/2",
+      "shardId": "game:x"
+    },
+    {
+      "expected": false,
+      "owner": "",
+      "shardId": ""
+    },
+    {
+      "expected": true,
+      "owner": "game:é",
+      "shardId": "game:é/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:e",
+      "shardId": "game:é/2"
+    }
+  ],
+  "ownerIdVectors": [
+    {
+      "expected": true,
+      "owner": "game:x"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/eu-1"
+    },
+    {
+      "expected": true,
+      "owner": "game:xy"
+    },
+    {
+      "expected": false,
+      "owner": "game:xy/2"
+    },
+    {
+      "expected": true,
+      "owner": "app:x"
+    },
+    {
+      "expected": false,
+      "owner": "app:x/2"
+    },
+    {
+      "expected": false,
+      "owner": "service:y/b"
+    },
+    {
+      "expected": false,
+      "owner": "core"
+    },
+    {
+      "expected": false,
+      "owner": "node:abababababababababababababababababababababababababababababababab"
+    },
+    {
+      "expected": false,
+      "owner": "node:ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+    },
+    {
+      "expected": false,
+      "owner": "node:abcd"
+    },
+    {
+      "expected": false,
+      "owner": ""
+    },
+    {
+      "expected": false,
+      "owner": "game:"
+    },
+    {
+      "expected": false,
+      "owner": "game:/2"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/2/3"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/UP"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/-a"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "expected": false,
+      "owner": "game:x:y"
+    },
+    {
+      "expected": false,
+      "owner": "game:x y"
+    },
+    {
+      "expected": false,
+      "owner": "game:x/2 "
+    },
+    {
+      "expected": false,
+      "owner": " game:x"
+    },
+    {
+      "expected": false,
+      "owner": "game:x\n"
+    },
+    {
+      "expected": false,
+      "owner": "game:x "
+    },
+    {
+      "expected": false,
+      "owner": "game:"
+    },
+    {
+      "expected": false,
+      "owner": "game:　"
+    },
+    {
+      "expected": false,
+      "owner": "game: x"
+    },
+    {
+      "expected": false,
+      "owner": "game:x "
+    },
+    {
+      "expected": true,
+      "owner": "game:​"
+    },
+    {
+      "expected": true,
+      "owner": "game:﻿x"
+    },
+    {
+      "expected": true,
+      "owner": "game:é"
+    },
+    {
+      "expected": false,
+      "owner": "game:é/2"
+    },
+    {
+      "expected": false,
+      "owner": "GAME:x"
+    },
+    {
+      "expected": false,
+      "owner": "other:x"
+    },
+    {
+      "expected": false,
+      "owner": "x"
+    }
+  ],
+  "proofVectors": [
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "50ec8f71d18299152c09dda56bd570ee65f56da073bbc035ebd821e1f9c8912b",
+          "shardId": "game:x",
+          "signatureHex": "2959877e03f3f3ce2e2a23651ed7fb06d4e597f1fe16972171f44f53f3333888410bf862c724fb77c08d833e2a605c68dab1c29895f8b5cc3f5302aed99f454c",
+          "signingKeyId": "key-p3",
+          "treeSize": 5
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 0,
+          "pathHex": [
+            "7a4cac47ac95071d416e1d8af6efd2329044529b09cb190663a3495e197880a1",
+            "35f99298a2caf6725279d2e791726f44406a22a36ae78a2c703c4a2850747114"
+          ],
+          "treeSize": 3
+        },
+        "rootHashHex": "17efc38b94f84cba9bd118d138cf6222e47898bf49df438f4400bc8931d8d997",
+        "shardId": "game:x"
+      },
+      "name": "three-member family: proof for game:x"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "07be86d6529a363ece5ebaaf56858ee77ecb243c03a2e17c93dec3913f0b64d6",
+          "shardId": "game:x/10",
+          "signatureHex": "a91820f00bd4a5fe37aa85a16281c6c64b195ffecd34dfa14f55d546ec2276dd3c506b11285b974f525ca52c4864529b65e8d842b99f2c83ec3f70aa2c301547",
+          "signingKeyId": "key-p3",
+          "treeSize": 6
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 1,
+          "pathHex": [
+            "a75b82fb80ece6037eb367005d3a89b6429ff3ca5fb3ed32a92b548a552bd3e3",
+            "35f99298a2caf6725279d2e791726f44406a22a36ae78a2c703c4a2850747114"
+          ],
+          "treeSize": 3
+        },
+        "rootHashHex": "17efc38b94f84cba9bd118d138cf6222e47898bf49df438f4400bc8931d8d997",
+        "shardId": "game:x/10"
+      },
+      "name": "three-member family: proof for game:x/10"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "c5b13a596e8020b5921431222c21d51e458d5e7f95a773c89e5304a7efe58ce4",
+          "shardId": "game:x/2",
+          "signatureHex": "45631cd9e0d756532397a7d14976ed7f7171c09613caa38411791b7d728329b81e69578c5ffda4ef626f59f2c287898801d9e205c9ec9ef35fcadc36ebddb4c9",
+          "signingKeyId": "key-p3",
+          "treeSize": 7
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "844f06dc2904a09d08cba807de80d6a7dfb63221b6ad925d19f7f4db4c67d2d2"
+          ],
+          "treeSize": 3
+        },
+        "rootHashHex": "17efc38b94f84cba9bd118d138cf6222e47898bf49df438f4400bc8931d8d997",
+        "shardId": "game:x/2"
+      },
+      "name": "three-member family: proof for game:x/2"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "bf700e5692d04b536606e78bd6b071363e73625eeb1a3b9c56d8fdef2a7074d2",
+          "shardId": "game:x",
+          "signatureHex": "8c4c557911769a50dce83a961838c9f16ddd23a46da349dc9b456461dd5510922b294109e35dd3cd6d857397291480102407e134c39979f3f520396ab225eb40",
+          "signingKeyId": "key-five",
+          "treeSize": 10
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 0,
+          "pathHex": [
+            "c8cc2007f9ad714791428b2ee667dcc57fa0fec6e6a3045ef5c0be5184bd54af",
+            "5b3a3565b64a67179ddce73bf68983dc6f8a38c682463c772e2084bfdb27cd5b",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x"
+      },
+      "name": "five-member family: proof for game:x"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "87131faf4f9ec42e2089ccb1f9e9648f78936c896f6789f678b91153f3c11c69",
+          "shardId": "game:x/1",
+          "signatureHex": "7b00010b3eecdf48ae202b480cd38d37e2c8fd04de8c1013f585ee53f91c261994d0947199ec8f187a55757af6abf8b22d98beadc5352cfb731f4e1944f65069",
+          "signingKeyId": "key-five",
+          "treeSize": 11
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 1,
+          "pathHex": [
+            "4f6a3f7ff47587704657a30bf668a2ab3712aeaf6d9219088cceaa59fd1d69ea",
+            "5b3a3565b64a67179ddce73bf68983dc6f8a38c682463c772e2084bfdb27cd5b",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/1"
+      },
+      "name": "five-member family: proof for game:x/1"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "five-member family: proof for game:x/10"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "eb3f0879f497bf642169ae1ea258dec4cc8e322fd57be800bd606e1b32830cd4",
+          "shardId": "game:x/2",
+          "signatureHex": "ecb4d1527976706dffb6f3164951414bee39afa8107d910ddae04f6095549c238c1d1d1ebca2e33f82318058817a2defb93073dfe63d7204b537432d7a93efd8",
+          "signingKeyId": "key-five",
+          "treeSize": 13
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 3,
+          "pathHex": [
+            "030a816e43ff5d30ca05d6db5d64f6ce2feff6b817d9efb01465dd44348e5780",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/2"
+      },
+      "name": "five-member family: proof for game:x/2"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "09ce10f444a2b384671ba805487190a50edcb88e500612d7149580651bc37de8",
+          "shardId": "game:x/b-3",
+          "signatureHex": "f8a9abcda2038f63ec2e9a28fb82c093bafb9133a691c4ed767b30fc9125a90d693c03e218a5534c8f4ca92412ef0d4c80a0a294d919697ab3e20313ff384693",
+          "signingKeyId": "key-five",
+          "treeSize": 14
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 4,
+          "pathHex": [
+            "3b68754e9b741b7fa78afb8b7a88a05af736e0aa510d745ecc8fe6a3ff25b919"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/b-3"
+      },
+      "name": "five-member family: proof for game:x/b-3"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "166dd55ca9727c2af66ce4b0f4feaee01dac45d29f1b62156cf87e2cdb14c9c9",
+          "shardId": "game:x",
+          "signatureHex": "732f66d2467c47df4aa7d59f13b756313a22528003aa1ac9627819d141ffc63b2e3162c5844811d4850e36bc950216e27a3c0e8de43b4f2b64a081bcb098db25",
+          "signingKeyId": "key-p2",
+          "treeSize": 2
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 0,
+          "pathHex": [
+            "26edfd9665bf4da3b502b5d315adb20e96d538060e721bfd5403563252ac038d"
+          ],
+          "treeSize": 2
+        },
+        "rootHashHex": "4fd98c5965426f4372cc08d6feb9d1618021b76c4e7d4c094bf2803f3f4db8f4",
+        "shardId": "game:x"
+      },
+      "name": "two-member family: proof for game:x"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "d4803f79f91dfe1aeb35336f91747245635893468cb06e7e09dbba0a187d70f8",
+          "shardId": "game:x/2",
+          "signatureHex": "2e9e4f134d9a9ef4b2bb6b6bd161b7320ba3e0276d298c7595e6ed85855742589107a6cd0505213317085a0241494e6adad1d29d5b366489959e1370a59f872b",
+          "signingKeyId": "key-p2",
+          "treeSize": 3
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 1,
+          "pathHex": [
+            "dd25af5b3d076e74c58bd251b547b16e09adf02c9c1cd589e30295574e9fc824"
+          ],
+          "treeSize": 2
+        },
+        "rootHashHex": "4fd98c5965426f4372cc08d6feb9d1618021b76c4e7d4c094bf2803f3f4db8f4",
+        "shardId": "game:x/2"
+      },
+      "name": "two-member family: proof for game:x/2"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "dc1b6bd41c2743ce5cf2d911dcce30f34fbc8de85795ce34bd9d81d4c315569d",
+          "shardId": "game:x",
+          "signatureHex": "d525f9bbc83217335cde850f06292f42c0f28c1d4d08652b9290627f30b6f115e69b60d0f32cb59d8f4e7a9bb5cb7c972548b973e9c76d76ddcbce5a51ebeb3a",
+          "signingKeyId": "key-p1",
+          "treeSize": 4
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 0,
+          "pathHex": [],
+          "treeSize": 1
+        },
+        "rootHashHex": "df6ecb773062c86b8e5df7f925c8645f268223ce852cccc8558f8052fde9e4a3",
+        "shardId": "game:x"
+      },
+      "name": "one-member family: proof for game:x"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "e22f1443c5ecebb9d283429d738b82b15234ecfad2cdc66da4c7912ed15ebed9",
+          "shardId": "game:big",
+          "signatureHex": "830e860b12e446770e39071721e1b037cb084f122a633b071ab37046603bef2de7daae31b99599cfcb4d820fff2dcd4b57c32511b907c34c8e8ad9e412f4819c",
+          "signingKeyId": "key-pb",
+          "treeSize": "9223372036854775807"
+        },
+        "owner": "game:big",
+        "proof": {
+          "leafIndex": 0,
+          "pathHex": [
+            "10655fd551bba25cf5a915e018bcb8ba67862b339ae3bcf95033f26d17d3765a"
+          ],
+          "treeSize": 2
+        },
+        "rootHashHex": "5fe7c0f00849b608bc63a0bf95cbf25f5d4dc6ebed4887b2c97fbf372649b630",
+        "shardId": "game:big"
+      },
+      "name": "big-member family: proof for game:big"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "e773bccdbcd5dea58e267d75213d1f9eccf7f8633f8606798f0e7cae9aaec15f",
+          "shardId": "game:big/2",
+          "signatureHex": "9ad3ff3c96807fda7cd7994ceb573852c9d20d1e4a4bba0365cf909d17af6152d4871956c41c843260b7b37a7514cd65e18aaf128bf0358798e927d75d119404",
+          "signingKeyId": "key-pb",
+          "treeSize": "9007199254740992"
+        },
+        "owner": "game:big",
+        "proof": {
+          "leafIndex": 1,
+          "pathHex": [
+            "a41101614b15ee1c94462e0c2318a8393376cf12a1a8eaa4e587233d9fc8dd73"
+          ],
+          "treeSize": 2
+        },
+        "rootHashHex": "5fe7c0f00849b608bc63a0bf95cbf25f5d4dc6ebed4887b2c97fbf372649b630",
+        "shardId": "game:big/2"
+      },
+      "name": "big-member family: proof for game:big/2"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "app:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "wrong owner: another family"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:xy",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "wrong owner: sibling-looking owner"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:xy"
+      },
+      "name": "shard is not a member of the owner"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/2"
+      },
+      "name": "shard id is another member's"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fd2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered path: first element"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4a52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered path: last element"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "path too short"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3",
+            "c8dee78f8c7b466c881847accc196998bad00e2b96c5ef913dfbe454d3807c96"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "path too long"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "empty path for a multi-member family"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "path element is not 32 bytes"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9f05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered head: signature"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 13
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered head: tree size"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a7f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered head: root hash"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-fivex",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tampered head: signing key id"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "eb3f0879f497bf642169ae1ea258dec4cc8e322fd57be800bd606e1b32830cd4",
+          "shardId": "game:x/2",
+          "signatureHex": "ecb4d1527976706dffb6f3164951414bee39afa8107d910ddae04f6095549c238c1d1d1ebca2e33f82318058817a2defb93073dfe63d7204b537432d7a93efd8",
+          "signingKeyId": "key-five",
+          "treeSize": 13
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "head of a different member"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7f445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "root hash is not the family root"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "shardId": "game:x/10"
+      },
+      "name": "root hash is not hex"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a9",
+        "shardId": "game:x/10"
+      },
+      "name": "root hash is too short"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 3,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "wrong leaf index"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 5,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 5
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "leaf index equals tree size"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 3
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tree size of a different path shape"
+    },
+    {
+      "expected": {
+        "verified": false
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 1
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tree size of one"
+    },
+    {
+      "expected": {
+        "verified": true
+      },
+      "input": {
+        "head": {
+          "rootHashHex": "a6f48dd0325676aadcc8d25fe2837692ee18be71012aeca2afa6ad9cbb0e3a1f",
+          "shardId": "game:x/10",
+          "signatureHex": "9e05892c3e88e40aa6255e0fa146b14c75bce7c24e19685f9ac9c08c3a8aa37e5f11ca64fe8902da2525208937f39e179f4550c053553102f87f8334d01a6289",
+          "signingKeyId": "key-five",
+          "treeSize": 12
+        },
+        "owner": "game:x",
+        "proof": {
+          "leafIndex": 2,
+          "pathHex": [
+            "fc2e3911e2280bbf8d9da4b0a68fcdb9936313c689072ddd6a1fb1519edc70c6",
+            "177c24a1d1966150dfeb4e3da200921511712c9ff0f05337f33bb735c576978e",
+            "4b52c0dfd7016a12473597ceeba77af7eae39594a43edd60612c117d26450cd3"
+          ],
+          "treeSize": 6
+        },
+        "rootHashHex": "7e445a8308a97085c0ea64bcd065c7d5a9a2cac148c3d9c766e6249095a3a960",
+        "shardId": "game:x/10"
+      },
+      "name": "tree size one larger with the same path shape"
+    }
+  ],
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ]
+}
