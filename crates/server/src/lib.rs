@@ -616,6 +616,11 @@ fn full_routes(state: AppState) -> Router {
             post(integrators::register_integrator).get(integrators::list_integrators),
         )
         .route("/integrations/{slug}", get(integrators::get_integrator))
+        // Issue #1193: an owner's verified sibling shards.
+        .route(
+            "/integrations/{slug}/shards",
+            get(cross_shard::list_integrator_shards),
+        )
         .route(
             "/integrations/{slug}/challenge",
             post(integrators::create_integrator_challenge),

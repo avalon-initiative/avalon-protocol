@@ -911,6 +911,15 @@ impl ShardRegistry {
             .map(|(url, _)| url.clone())
     }
 
+    /// The newest `last_seen_at` on record for `shard_id` under any URL.
+    pub fn last_seen_at(&self, shard_id: &str) -> Option<OffsetDateTime> {
+        self.shards
+            .read()
+            .expect("shard registry lock poisoned")
+            .get(shard_id)
+            .and_then(|urls| urls.values().max().copied())
+    }
+
     #[cfg(test)]
     fn shard_count(&self) -> usize {
         self.shards

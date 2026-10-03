@@ -172,3 +172,36 @@ async fn two_independent_nodes_agree_on_a_shard_family_head_and_its_proof() {
         404
     );
 }
+
+/// `GET /integrations/{slug}/shards` lists the registered owner's verified
+/// sibling with its head on the node hosting it, and is a 404 for an
+/// integrator the node has no registration for.
+#[tokio::test]
+#[ignore]
+async fn integrator_shards_lists_the_owners_verified_sibling() {
+    let http = reqwest::Client::new();
+    let second = require_aggregator_url("AVALON_SECOND_SHARD_URL");
+    let a = require_aggregator_url("AVALON_AGGREGATOR_A_URL");
+
+    let resp: serde_json::Value = http
+        .get(format!("{second}/integrations/agg-second/shards"))
+        .send()
+        .await
+        .expect("request failed")
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp["owner"], "game:agg-second", "{resp:?}");
+    assert_eq!(resp["shards"][0]["shard_id"], "game:agg-second", "{resp:?}");
+    assert!(resp["shards"][0]["tree_size"].as_i64().unwrap() >= 1);
+    assert_eq!(resp["shards"].as_array().unwrap().len(), 1, "{resp:?}");
+
+    // Registered only on the second node, so the aggregator has no such integrator.
+    let status = http
+        .get(format!("{a}/integrations/agg-second/shards"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 404);
+}

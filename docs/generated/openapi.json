@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.10.0"
+    "version": "0.11.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -4226,6 +4226,43 @@
         }
       }
     },
+    "/integrations/{slug}/shards": {
+      "get": {
+        "tags": [
+          "integrators"
+        ],
+        "summary": "Lists an owner's sibling shards and their current heads. Public and\nunauthenticated like `GET /integrations/{slug}`. Advisory: only siblings this\nnode knows of and whose head verified under the owner's registered keys are\nlisted; a silent sibling is invisible, and unverified ones appear only in\n`missing_shard_ids`. A family over 256 shards is refused with 413, not truncated.",
+        "operationId": "list_integrator_shards",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The owner's verified sibling shards (advisory: only shards this node knows of and could verify)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegratorShardsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such integrator"
+          },
+          "413": {
+            "description": "The owner's family exceeds 256 shards"
+          }
+        }
+      }
+    },
     "/issuers/register": {
       "post": {
         "tags": [
@@ -8200,6 +8237,77 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "IntegratorShardEntry": {
+        "type": "object",
+        "description": "One sibling shard of an owner with its verified current head.",
+        "required": [
+          "shard_id",
+          "tree_size",
+          "root_hash",
+          "signing_key_id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this node last saw the shard announced; null when it only knows the shard from static config."
+          },
+          "root_hash": {
+            "type": "string"
+          },
+          "shard_id": {
+            "type": "string"
+          },
+          "signing_key_id": {
+            "type": "string"
+          },
+          "tree_size": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "IntegratorShardsResponse": {
+        "type": "object",
+        "required": [
+          "owner",
+          "shards",
+          "partial",
+          "missing_shard_ids"
+        ],
+        "properties": {
+          "missing_shard_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Siblings this node knows of but could not verify a head for."
+          },
+          "owner": {
+            "type": "string",
+            "description": "The family owner id, `{category}:{slug}`."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when `missing_shard_ids` is non-empty."
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegratorShardEntry"
+            },
+            "description": "Verified siblings in canonical shard id order."
           }
         }
       },
