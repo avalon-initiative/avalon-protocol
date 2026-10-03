@@ -35,7 +35,8 @@
 //! `run_worker` keeps its own growing `active_peers` list, seeded from the
 //! bootstrap set (which is never evicted — it's still how this node first
 //! reaches the mesh at all) and extended, capped by
-//! `AVALON_NODE_MAX_PEERS`, with peers discovered via announce responses —
+//! `AVALON_NODE_MAX_PEERS`, with peers discovered via announce responses and
+//! with peers that announced to this node —
 //! the same bounded-fan-out/full-eventual-reach property Kademlia's
 //! k-bucket maintenance and gossip-membership protocols (SWIM, HyParView)
 //! rely on. A peer that later drops out of the peer table (pruned for not
@@ -1284,17 +1285,20 @@ pub async fn announce(
         if let P2pAnnounce::Authenticated(id) = p2p {
             info.base_url = crate::node_http::p2p_base_url(&id);
             info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+            let announcer = info.base_url.clone();
             store_authenticated_p2p_announcer(
                 &state.peers,
                 adm,
                 client_ip(source, &headers),
                 info,
             )?;
+            state.peers.neighbors().note_inbound(&announcer);
         } else {
             info.base_url = adm
                 .check_shape(&info.base_url)
                 .map_err(TopologyError::from)?;
             info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+            let announcer = info.base_url.clone();
             if state.peers.contains(&info.base_url) {
                 let info = rebind_existing(
                     &state.peers,
@@ -1308,6 +1312,7 @@ pub async fn announce(
             } else {
                 admit_new_announcer(&state, adm, client_ip(source, &headers), info).await?;
             }
+            state.peers.neighbors().note_inbound(&announcer);
         }
     } else {
         state.peers.admit_if_supported(info);
@@ -2370,19 +2375,31 @@ fn promote_discovered_peers(
     own_base_url: &str,
     max_peers: usize,
 ) -> Vec<String> {
+    let urls: Vec<String> = discovered.iter().map(|i| i.base_url.clone()).collect();
+    promote_urls(active_peers, &urls, own_base_url, max_peers)
+}
+
+/// Promotes peers that announced to this node into the active set, under the same bound and
+/// de-duplication as [`promote_discovered_peers`], so routing can use them as neighbors.
+fn promote_urls(
+    active_peers: &mut Vec<String>,
+    urls: &[String],
+    own_base_url: &str,
+    max_peers: usize,
+) -> Vec<String> {
     let mut promoted = Vec::new();
-    for info in discovered {
-        if info.base_url == own_base_url {
+    for url in urls {
+        if url == own_base_url {
             continue;
         }
         if active_peers.len() >= max_peers {
             break;
         }
-        if active_peers.iter().any(|p| p == &info.base_url) {
+        if active_peers.iter().any(|p| p == url) {
             continue;
         }
-        active_peers.push(info.base_url.clone());
-        promoted.push(info.base_url.clone());
+        active_peers.push(url.clone());
+        promoted.push(url.clone());
     }
     promoted
 }
@@ -2478,6 +2495,12 @@ pub async fn run_worker(
     let mut vouch_cursor = 0usize;
     loop {
         let round_started = tokio::time::Instant::now();
+        promote_urls(
+            &mut active_peers,
+            &neighbors.take_inbound(),
+            config.own_base_url.as_deref().unwrap_or_default(),
+            config.max_peers,
+        );
         neighbors.set_active(&active_peers, &config.peers);
         // Issue #599, Layer 2: before announcing, refresh this node's own
         // authoritative claim (if it has one) so it's part of the
@@ -3487,6 +3510,39 @@ mod tests {
         let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 1);
         assert!(promoted.is_empty());
         assert_eq!(active, vec!["http://bootstrap".to_string()]);
+    }
+
+    #[test]
+    fn an_inbound_p2p_announcer_becomes_an_active_neighbor_once() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let inbound = vec!["p2p://peer-6".to_string()];
+        let promoted = promote_urls(&mut active, &inbound, "http://self", 10);
+        assert_eq!(promoted, inbound);
+        assert!(promote_urls(&mut active, &inbound, "http://self", 10).is_empty());
+        assert_eq!(active, vec!["http://bootstrap", "p2p://peer-6"]);
+    }
+
+    #[test]
+    fn inbound_announcers_respect_the_active_cap_and_never_evict_bootstrap() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let inbound = vec!["p2p://a".to_string(), "p2p://b".to_string()];
+        assert_eq!(
+            promote_urls(&mut active, &inbound, "http://self", 2),
+            ["p2p://a"]
+        );
+        assert_eq!(active, vec!["http://bootstrap", "p2p://a"]);
+        assert!(promote_urls(&mut active, &inbound, "http://self", 1).is_empty());
+        assert_eq!(active.len(), 2);
+    }
+
+    #[test]
+    fn a_stale_inbound_neighbor_is_pruned_with_its_table_entry() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let bootstrap = active.clone();
+        promote_urls(&mut active, &["p2p://gone".to_string()], "http://self", 10);
+        let known: HashSet<String> = HashSet::from(["http://bootstrap".to_string()]);
+        retain_reachable_active_peers(&mut active, &bootstrap, &known);
+        assert_eq!(active, bootstrap);
     }
 
     // Issue #599, Layer 1: `retain_reachable_active_peers` unit tests.

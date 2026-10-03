@@ -125,10 +125,16 @@ struct Inner {
     /// Last valid coordinate each active neighbor reported for itself.
     neighbor_coordinates: HashMap<String, Coordinate>,
     coordinate_updates_rejected: u64,
+    /// Peers admitted by an inbound announce that the worker has not yet considered.
+    inbound: Vec<String>,
 }
 
+/// Most inbound announcers held between two announce rounds.
+const MAX_PENDING_INBOUND: usize = 256;
+
 /// Shared, cheaply cloneable view of the announce worker's active set and
-/// the per-neighbor statistics. Written by the announce worker only.
+/// the per-neighbor statistics. The announce worker owns the active set; announce
+/// handlers only queue inbound announcers for it.
 #[derive(Clone, Default)]
 pub struct NeighborTable {
     inner: Arc<RwLock<Inner>>,
@@ -153,6 +159,25 @@ impl NeighborTable {
             .expect("neighbor table lock poisoned")
             .own_libp2p_peer_id
             .clone()
+    }
+
+    /// Queues a peer admitted by an inbound announce as a candidate neighbor.
+    pub fn note_inbound(&self, peer: &str) {
+        let mut inner = self.inner.write().expect("neighbor table lock poisoned");
+        if inner.inbound.len() < MAX_PENDING_INBOUND && !inner.inbound.iter().any(|p| p == peer) {
+            inner.inbound.push(peer.to_string());
+        }
+    }
+
+    /// Takes the queued inbound announcers, oldest first.
+    pub fn take_inbound(&self) -> Vec<String> {
+        std::mem::take(
+            &mut self
+                .inner
+                .write()
+                .expect("neighbor table lock poisoned")
+                .inbound,
+        )
     }
 
     /// Replaces the active set and drops statistics of peers that left it.
@@ -306,6 +331,25 @@ mod tests {
         assert!((s.min_ms.unwrap() - 50.0).abs() < 1e-6);
         assert!(s.jitter_ms.unwrap().abs() < 1e-6);
         assert_eq!(s.samples, RTT_WINDOW as u64 + 1);
+    }
+
+    #[test]
+    fn inbound_announcers_are_queued_once_and_taken_in_order() {
+        let t = NeighborTable::new();
+        t.note_inbound("p2p://a");
+        t.note_inbound("p2p://b");
+        t.note_inbound("p2p://a");
+        assert_eq!(t.take_inbound(), urls(&["p2p://a", "p2p://b"]));
+        assert!(t.take_inbound().is_empty());
+    }
+
+    #[test]
+    fn the_inbound_queue_is_bounded() {
+        let t = NeighborTable::new();
+        for i in 0..MAX_PENDING_INBOUND + 10 {
+            t.note_inbound(&format!("p2p://{i}"));
+        }
+        assert_eq!(t.take_inbound().len(), MAX_PENDING_INBOUND);
     }
 
     #[test]
