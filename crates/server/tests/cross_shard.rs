@@ -109,3 +109,66 @@ async fn an_unconfigured_node_falls_back_to_its_own_local_sth_as_the_one_shard()
     assert_eq!(response["shards"][0]["shard_id"], "core");
     assert!(!response["partial"].as_bool().unwrap());
 }
+
+/// Two aggregators over the same shards agree on an owner's family head, its
+/// inclusion proof verifies, and bad owners and members are refused.
+/// `AVALON_FAMILY_OWNER` names a family the aggregators know (default
+/// `game:agg-second`, as `scripts/live-tests.sh` configures).
+#[tokio::test]
+#[ignore]
+async fn two_independent_nodes_agree_on_a_shard_family_head_and_its_proof() {
+    let http = reqwest::Client::new();
+    let a = require_aggregator_url("AVALON_AGGREGATOR_A_URL");
+    let b = require_aggregator_url("AVALON_AGGREGATOR_B_URL");
+    let owner =
+        std::env::var("AVALON_FAMILY_OWNER").unwrap_or_else(|_| "game:agg-second".to_string());
+    let get = |base: String, query: String| {
+        let http = http.clone();
+        async move {
+            http.get(format!("{base}/ledger/shard-family?{query}"))
+                .send()
+                .await
+                .expect("request failed")
+        }
+    };
+
+    let resp_a: serde_json::Value = get(a.clone(), format!("owner={owner}"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let resp_b: serde_json::Value = get(b, format!("owner={owner}")).await.json().await.unwrap();
+    assert_eq!(resp_a["root_hash"], resp_b["root_hash"], "{resp_a:?}");
+    assert_eq!(resp_a["shard_count"], 1, "{resp_a:?}");
+    assert!(!resp_a["partial"].as_bool().unwrap(), "{resp_a:?}");
+
+    let cross: serde_json::Value = http
+        .get(format!("{a}/ledger/cross-shard-root"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(resp_a["root_hash"], cross["root_hash"]);
+
+    let member = resp_a["members"][0]["shard_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let with_proof: serde_json::Value = get(a.clone(), format!("owner={owner}&member={member}"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(with_proof["proof"]["shard_id"], member.as_str());
+    assert_eq!(with_proof["proof"]["tree_size"], 1);
+
+    assert_eq!(get(a.clone(), "owner=core".into()).await.status(), 400);
+    assert_eq!(get(a.clone(), "owner=game:x/2".into()).await.status(), 400);
+    assert_eq!(get(a.clone(), String::new()).await.status(), 400);
+    assert_eq!(
+        get(a, format!("owner={owner}&member=core")).await.status(),
+        404
+    );
+}
