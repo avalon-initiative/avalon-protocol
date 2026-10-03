@@ -459,8 +459,10 @@ fn shard_family_vectors_match_the_chain_functions() {
     }
     let current = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    let current: serde_json::Value =
+        serde_json::from_str(&current).unwrap_or_else(|e| panic!("{FILE} is not valid JSON: {e}"));
     assert!(
-        current == text,
+        current == doc,
         "{FILE} is stale: rerun with AVALON_REGEN_VECTORS=1"
     );
 }
