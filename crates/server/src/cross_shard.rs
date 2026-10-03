@@ -41,10 +41,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use avalon_chain::cross_shard::{compute_cross_shard_root_checked, CrossShardRoot, ShardTreeHead};
+use avalon_chain::cross_shard::{
+    compute_cross_shard_root_checked, compute_shard_family_head, family_inclusion_proof,
+    is_family_member, CrossShardRoot, ShardTreeHead,
+};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::sth::SignedTreeHead;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -418,9 +421,33 @@ pub async fn compute_for_this_node(
     state: &AppState,
     config: Option<&KnownShardsConfig>,
 ) -> Result<(CrossShardRoot, Vec<ShardTreeHead>), avalon_chain::SettlementError> {
+    let urls = scoped_shard_urls(state, config, |_| true);
+    let (shards, known) = gather_shard_heads(state, config, &urls, |_| true).await?;
+    let root = compute_cross_shard_root_checked(&known, shards.clone(), OffsetDateTime::now_utc());
+    Ok((root, shards))
+}
+
+/// The shard URLs worth fetching (static plus discovered, minus this node's
+/// own shard) whose id passes `keep`.
+fn scoped_shard_urls(
+    state: &AppState,
+    config: Option<&KnownShardsConfig>,
+    keep: impl Fn(&str) -> bool,
+) -> HashMap<String, String> {
     let mut urls = combined_shard_urls(config, &state.shard_registry);
     urls.remove(&state.own_shard_id);
+    urls.retain(|id, _| keep(id));
+    urls
+}
 
+/// Verified heads for `urls` plus this node's own shard (when it passes
+/// `keep` and has history), and every shard id known among them.
+async fn gather_shard_heads(
+    state: &AppState,
+    config: Option<&KnownShardsConfig>,
+    urls: &HashMap<String, String>,
+    keep: impl Fn(&str) -> bool,
+) -> Result<(Vec<ShardTreeHead>, BTreeSet<String>), avalon_chain::SettlementError> {
     let (mut shards, mut known): (Vec<ShardTreeHead>, BTreeSet<String>) = if urls.is_empty() {
         (Vec::new(), BTreeSet::new())
     } else {
@@ -430,7 +457,7 @@ pub async fn compute_for_this_node(
         let (_urls_only_root, ext_shards) = fetch_and_compute(
             &state.pool,
             state.chain.network_id(),
-            &urls,
+            urls,
             &static_verify_keys,
             &known_list,
             &sources,
@@ -439,16 +466,16 @@ pub async fn compute_for_this_node(
         (ext_shards, urls.keys().cloned().collect())
     };
 
-    if let Some(sth) = state.chain.latest_signed_tree_head().await? {
-        known.insert(state.own_shard_id.clone());
-        shards.push(ShardTreeHead {
-            shard_id: state.own_shard_id.clone(),
-            sth,
-        });
+    if keep(&state.own_shard_id) {
+        if let Some(sth) = state.chain.latest_signed_tree_head().await? {
+            known.insert(state.own_shard_id.clone());
+            shards.push(ShardTreeHead {
+                shard_id: state.own_shard_id.clone(),
+                sth,
+            });
+        }
     }
-
-    let root = compute_cross_shard_root_checked(&known, shards.clone(), OffsetDateTime::now_utc());
-    Ok((root, shards))
+    Ok((shards, known))
 }
 
 #[derive(serde::Serialize)]
@@ -490,18 +517,110 @@ pub async fn cross_shard_root(
         shard_count: root.shard_count,
         partial: root.partial,
         missing_shard_ids: root.missing_shard_ids,
-        shards: shards
-            .into_iter()
-            .map(|s| ShardSthEntry {
-                shard_id: s.shard_id,
-                tree_size: s.sth.tree_size,
-                root_hash: s.sth.root_hash,
-                signing_key_id: s.sth.signing_key_id,
-                signature: s.sth.signature,
-                created_at: s.sth.created_at,
-            })
-            .collect(),
+        shards: shards.into_iter().map(sth_entry).collect(),
     }))
+}
+
+/// Most members one shard-family response carries; a larger family is refused
+/// (413) rather than truncated, since a truncated root would not recompute.
+pub const MAX_FAMILY_MEMBERS: usize = 256;
+
+#[derive(Deserialize)]
+pub struct ShardFamilyQuery {
+    owner: Option<String>,
+    member: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct FamilyInclusionProofResponse {
+    pub shard_id: String,
+    pub leaf_index: usize,
+    pub tree_size: usize,
+    /// Hex-encoded sibling hashes, leaf to root.
+    pub path: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ShardFamilyResponse {
+    pub owner: String,
+    pub root_hash: String,
+    pub shard_count: usize,
+    pub partial: bool,
+    pub missing_shard_ids: Vec<String>,
+    /// The exact member heads `root_hash` was computed from, in canonical order.
+    pub members: Vec<ShardSthEntry>,
+    /// Present only when `?member=` named a member of the family.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<FamilyInclusionProofResponse>,
+}
+
+fn sth_entry(s: ShardTreeHead) -> ShardSthEntry {
+    ShardSthEntry {
+        shard_id: s.shard_id,
+        tree_size: s.sth.tree_size,
+        root_hash: s.sth.root_hash,
+        signing_key_id: s.sth.signing_key_id,
+        signature: s.sth.signature,
+        created_at: s.sth.created_at,
+    }
+}
+
+/// The family head response for `owner` over the gathered heads, with the
+/// inclusion proof when `member` is given. A `member` outside the family or
+/// without a verified head is a 404.
+fn build_family_response(
+    owner: &str,
+    member: Option<&str>,
+    known: &BTreeSet<String>,
+    shards: Vec<ShardTreeHead>,
+) -> Result<ShardFamilyResponse, AppError> {
+    let proof = match member {
+        None => None,
+        Some(id) => {
+            let proof = family_inclusion_proof(owner, &shards, id)
+                .and_then(Result::ok)
+                .ok_or(AppError::ShardFamilyMemberNotFound)?;
+            Some(FamilyInclusionProofResponse {
+                shard_id: id.to_string(),
+                leaf_index: proof.leaf_index,
+                tree_size: proof.tree_size,
+                path: proof.path.iter().map(hex::encode).collect(),
+            })
+        }
+    };
+    let head = compute_shard_family_head(owner, known, shards);
+    Ok(ShardFamilyResponse {
+        owner: head.owner,
+        root_hash: head.root_hash,
+        shard_count: head.shard_count,
+        partial: head.partial,
+        missing_shard_ids: head.missing_shard_ids,
+        members: head.members.into_iter().map(sth_entry).collect(),
+        proof,
+    })
+}
+
+/// `GET /ledger/shard-family?owner=<namespace>:<slug>[&member=<shard_id>]` —
+/// public and unauthenticated like `GET /ledger/cross-shard-root`. No known
+/// member is a 200 with `shard_count` 0, as the cross-shard root does.
+pub async fn shard_family(
+    State(state): State<AppState>,
+    Query(query): Query<ShardFamilyQuery>,
+) -> Result<Json<ShardFamilyResponse>, AppError> {
+    let owner = query
+        .owner
+        .filter(|o| avalon_protocol::shard::is_family_owner_id(o))
+        .ok_or(AppError::InvalidShardFamilyOwner)?;
+    let in_family = |id: &str| is_family_member(&owner, id);
+    let config = state.known_shards.as_ref();
+    let urls = scoped_shard_urls(&state, config, in_family);
+    if urls.len() + 1 > MAX_FAMILY_MEMBERS {
+        return Err(AppError::ShardFamilyTooLarge {
+            max: MAX_FAMILY_MEMBERS,
+        });
+    }
+    let (shards, known) = gather_shard_heads(&state, config, &urls, in_family).await?;
+    build_family_response(&owner, query.member.as_deref(), &known, shards).map(Json)
 }
 
 #[cfg(test)]
@@ -513,6 +632,98 @@ mod tests {
         assert!(pinned_core_verify_key("avalon-dev-local", "core").is_some());
         assert!(pinned_core_verify_key("avalon-dev-local", "game:wow-demo/1").is_none());
         assert!(pinned_core_verify_key("no-such-network", "core").is_none());
+    }
+
+    fn head(shard_id: &str, root: &str) -> ShardTreeHead {
+        ShardTreeHead {
+            shard_id: shard_id.to_string(),
+            sth: SignedTreeHead {
+                tree_size: 4,
+                root_hash: root.to_string(),
+                network_id: "n".to_string(),
+                signing_key_id: "k".to_string(),
+                signature: "sig".to_string(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        }
+    }
+
+    #[test]
+    fn family_response_lists_members_and_flags_missing_siblings() {
+        let known: BTreeSet<String> = ["game:x", "game:x/2", "game:x/3"]
+            .map(String::from)
+            .into_iter()
+            .collect();
+        let shards = vec![
+            head("game:x/2", "bb"),
+            head("game:x", "aa"),
+            head("core", "cc"),
+        ];
+        let resp = build_family_response("game:x", None, &known, shards).unwrap();
+        assert_eq!(resp.shard_count, 2);
+        assert!(resp.partial);
+        assert_eq!(resp.missing_shard_ids, vec!["game:x/3"]);
+        let ids: Vec<&str> = resp.members.iter().map(|m| m.shard_id.as_str()).collect();
+        assert_eq!(ids, ["game:x", "game:x/2"]);
+        assert!(resp.proof.is_none());
+    }
+
+    #[test]
+    fn family_response_proof_verifies_against_the_returned_root() {
+        let shards = vec![
+            head("game:x/2", "bb"),
+            head("game:x", "aa"),
+            head("game:x/3", "cc"),
+        ];
+        let resp =
+            build_family_response("game:x", Some("game:x/2"), &BTreeSet::new(), shards).unwrap();
+        let proof = resp.proof.expect("proof requested");
+        let member = resp
+            .members
+            .iter()
+            .find(|m| m.shard_id == "game:x/2")
+            .unwrap();
+        let path: Vec<[u8; 32]> = proof
+            .path
+            .iter()
+            .map(|h| hex::decode(h).unwrap().try_into().unwrap())
+            .collect();
+        let sth = head("game:x/2", &member.root_hash).sth;
+        let ok = avalon_chain::cross_shard::verify_family_inclusion(
+            "game:x",
+            &resp.root_hash,
+            &avalon_chain::cross_shard::FamilyInclusionProof {
+                leaf_index: proof.leaf_index,
+                tree_size: proof.tree_size,
+                path,
+            },
+            "game:x/2",
+            &sth,
+        )
+        .unwrap();
+        assert!(ok);
+    }
+
+    #[test]
+    fn family_response_member_outside_the_family_is_not_found() {
+        let shards = vec![head("game:x", "aa"), head("game:xy", "dd")];
+        for member in ["game:xy", "core", "game:x/9"] {
+            let err =
+                build_family_response("game:x", Some(member), &BTreeSet::new(), shards.clone())
+                    .err()
+                    .expect("must be refused");
+            assert!(
+                matches!(err, AppError::ShardFamilyMemberNotFound),
+                "{member}"
+            );
+        }
+    }
+
+    #[test]
+    fn family_response_with_no_members_is_empty_not_an_error() {
+        let resp = build_family_response("game:x", None, &BTreeSet::new(), Vec::new()).unwrap();
+        assert_eq!(resp.shard_count, 0);
+        assert!(resp.members.is_empty());
     }
 
     fn registry_with(shard_id: &str, url: &str) -> ShardRegistry {

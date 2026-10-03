@@ -43,6 +43,12 @@ pub enum AppError {
     PresenceActiveInMismatch,
     #[error("invalid profile query")]
     InvalidProfileQuery,
+    #[error("owner must be `{{namespace}}:{{slug}}` (game, app or service) with no instance")]
+    InvalidShardFamilyOwner,
+    #[error("no verified head for that member in this owner's shard family")]
+    ShardFamilyMemberNotFound,
+    #[error("this owner's shard family is larger than the {max} members one response carries")]
+    ShardFamilyTooLarge { max: usize },
     #[error("no profile matches that handle")]
     HandleNotFound,
     /// Issue #510: `display_name` (case-insensitive) is already held by a
@@ -521,6 +527,9 @@ impl AppError {
             AppError::InvalidPresenceQuery => "INVALID_PRESENCE_QUERY",
             AppError::PresenceActiveInMismatch => "PRESENCE_ACTIVE_IN_MISMATCH",
             AppError::InvalidProfileQuery => "INVALID_PROFILE_QUERY",
+            AppError::InvalidShardFamilyOwner => "INVALID_SHARD_FAMILY_OWNER",
+            AppError::ShardFamilyMemberNotFound => "SHARD_FAMILY_MEMBER_NOT_FOUND",
+            AppError::ShardFamilyTooLarge { .. } => "SHARD_FAMILY_TOO_LARGE",
             AppError::HandleNotFound => "HANDLE_NOT_FOUND",
             AppError::DisplayNameTaken => "DISPLAY_NAME_TAKEN",
             AppError::InvalidAvatarUrl => "INVALID_AVATAR_URL",
@@ -718,7 +727,10 @@ impl IntoResponse for AppError {
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
             AppError::SelfFriendRequest
             | AppError::InvalidPresenceQuery
-            | AppError::InvalidProfileQuery => StatusCode::BAD_REQUEST,
+            | AppError::InvalidProfileQuery
+            | AppError::InvalidShardFamilyOwner => StatusCode::BAD_REQUEST,
+            AppError::ShardFamilyMemberNotFound => StatusCode::NOT_FOUND,
+            AppError::ShardFamilyTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             // An integrator authenticated fine and even holds `presence.publish`
             // under an active binding — this is a distinct, narrower
             // rejection than `Forbidden` below: the one thing a capability

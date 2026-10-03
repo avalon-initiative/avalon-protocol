@@ -411,6 +411,8 @@ fn settlement_only_routes(state: AppState) -> Router {
             "/ledger/cross-shard-root",
             get(cross_shard::cross_shard_root),
         )
+        // Issue #1192: per-owner shard family head.
+        .route("/ledger/shard-family", get(cross_shard::shard_family))
         // Issue #526: forwarding-node discovery hint.
         .route(
             "/ledger/remote-submit-status",
@@ -924,6 +926,8 @@ fn full_routes(state: AppState) -> Router {
             "/ledger/cross-shard-root",
             get(cross_shard::cross_shard_root),
         )
+        // Issue #1192: per-owner shard family head.
+        .route("/ledger/shard-family", get(cross_shard::shard_family))
         // Issue #526: forwarding-node discovery hint — see
         // `crate::settlement::remote_submit_status`.
         .route(
