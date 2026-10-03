@@ -63,8 +63,12 @@ pub struct CrossShardRoot {
 /// detectable via this tree too, not only via the per-shard log's own
 /// consistency proofs.
 fn shard_leaf_bytes(shard_id: &str, sth: &SignedTreeHead) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"avalon-cross-shard-leaf-v1");
+    let mut bytes = b"avalon-cross-shard-leaf-v1".to_vec();
+    append_shard_fields(&mut bytes, shard_id, sth);
+    bytes
+}
+
+fn append_shard_fields(bytes: &mut Vec<u8>, shard_id: &str, sth: &SignedTreeHead) {
     bytes.extend_from_slice(&(shard_id.len() as u32).to_be_bytes());
     bytes.extend_from_slice(shard_id.as_bytes());
     bytes.extend_from_slice(&sth.tree_size.to_be_bytes());
@@ -74,7 +78,6 @@ fn shard_leaf_bytes(shard_id: &str, sth: &SignedTreeHead) -> Vec<u8> {
     bytes.extend_from_slice(sth.signing_key_id.as_bytes());
     bytes.extend_from_slice(&(sth.signature.len() as u32).to_be_bytes());
     bytes.extend_from_slice(sth.signature.as_bytes());
-    bytes
 }
 
 /// Sorts `shards` by `shard_id`, byte-wise ascending (#529's canonical
@@ -193,6 +196,147 @@ pub fn verify_shard_inclusion(
         .map_err(|_| "root_hash must be exactly 32 bytes".to_string())?;
     Ok(merkle::verify_inclusion_proof(
         &leaf, leaf_index, tree_size, proof, &root,
+    ))
+}
+
+const FAMILY_LEAF_TAG: &[u8] = b"avalon-shard-family-leaf-v1";
+const FAMILY_EMPTY_TAG: &[u8] = b"avalon-shard-family-empty-v1";
+
+/// Family leaf: the cross-shard leaf fields under a distinct tag with the
+/// owner (`{namespace}:{slug}`) length-prefixed in, so a family root never
+/// equals a network cross-shard root over the same heads.
+fn family_leaf_bytes(owner: &str, shard_id: &str, sth: &SignedTreeHead) -> Vec<u8> {
+    let mut bytes = FAMILY_LEAF_TAG.to_vec();
+    bytes.extend_from_slice(&(owner.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(owner.as_bytes());
+    append_shard_fields(&mut bytes, shard_id, sth);
+    bytes
+}
+
+/// The heads of `owner`'s family only, in canonical order. Heads of other
+/// owners, `core` and `node:` shards are dropped.
+fn family_members(owner: &str, shards: Vec<ShardTreeHead>) -> Vec<ShardTreeHead> {
+    let members = shards
+        .into_iter()
+        .filter(|s| is_family_member(owner, &s.shard_id))
+        .collect();
+    canonical_order(members)
+}
+
+fn family_leaves(owner: &str, ordered: &[ShardTreeHead]) -> Vec<Vec<u8>> {
+    ordered
+        .iter()
+        .map(|s| family_leaf_bytes(owner, &s.shard_id, &s.sth))
+        .collect()
+}
+
+/// Whether `shard_id` is a member of the family owned by `owner`
+/// (`{namespace}:{slug}`): `{ns}:{slug}` and `{ns}:{slug}/{instance}`.
+pub fn is_family_member(owner: &str, shard_id: &str) -> bool {
+    avalon_protocol::shard::shard_family_owner(shard_id).is_some_and(|o| o == owner)
+}
+
+/// A per-owner head over that owner's sibling shard heads, recomputable by
+/// anyone from the public heads. Like [`CrossShardRoot`] it is not signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardFamilyHead {
+    pub owner: String,
+    pub root_hash: String,
+    pub shard_count: usize,
+    /// Members in canonical (shard id) order: the exact inputs of `root_hash`.
+    pub members: Vec<ShardTreeHead>,
+    /// `true` when `known_shard_ids` names a family member with no head here.
+    pub partial: bool,
+    pub missing_shard_ids: Vec<String>,
+}
+
+/// Computes the family head for `owner` over the members found in `shards`
+/// (order-independent). The empty family hashes a distinct tagged constant so
+/// it never equals the network's empty root. `known_shard_ids` only feeds the
+/// advisory `partial`/`missing_shard_ids` and does not affect the root.
+pub fn compute_shard_family_head(
+    owner: &str,
+    known_shard_ids: &std::collections::BTreeSet<String>,
+    shards: Vec<ShardTreeHead>,
+) -> ShardFamilyHead {
+    let members = family_members(owner, shards);
+    let root = if members.is_empty() {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(FAMILY_EMPTY_TAG);
+        hasher.update((owner.len() as u32).to_be_bytes());
+        hasher.update(owner.as_bytes());
+        hasher.finalize().into()
+    } else {
+        merkle::mth(&family_leaves(owner, &members))
+    };
+    let present: std::collections::BTreeSet<&str> =
+        members.iter().map(|m| m.shard_id.as_str()).collect();
+    let missing_shard_ids: Vec<String> = known_shard_ids
+        .iter()
+        .filter(|id| is_family_member(owner, id) && !present.contains(id.as_str()))
+        .cloned()
+        .collect();
+    ShardFamilyHead {
+        owner: owner.to_string(),
+        root_hash: hex::encode(root),
+        shard_count: members.len(),
+        members,
+        partial: !missing_shard_ids.is_empty(),
+        missing_shard_ids,
+    }
+}
+
+/// An inclusion proof of one member head against a family root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyInclusionProof {
+    pub leaf_index: usize,
+    pub tree_size: usize,
+    pub path: Vec<[u8; 32]>,
+}
+
+/// Inclusion proof for `shard_id` in `owner`'s family over `shards`, or `None`
+/// when it is not a member present in `shards`.
+pub fn family_inclusion_proof(
+    owner: &str,
+    shards: &[ShardTreeHead],
+    shard_id: &str,
+) -> Option<Result<FamilyInclusionProof, String>> {
+    let members = family_members(owner, shards.to_vec());
+    let leaf_index = members.iter().position(|s| s.shard_id == shard_id)?;
+    let leaves = family_leaves(owner, &members);
+    let tree_size = leaves.len();
+    Some(
+        merkle::inclusion_proof(leaf_index, &leaves).map(|path| FamilyInclusionProof {
+            leaf_index,
+            tree_size,
+            path,
+        }),
+    )
+}
+
+/// Verifies `proof` that `(shard_id, sth)` is a member of `owner`'s family
+/// whose root is `root_hash`.
+pub fn verify_family_inclusion(
+    owner: &str,
+    root_hash: &str,
+    proof: &FamilyInclusionProof,
+    shard_id: &str,
+    sth: &SignedTreeHead,
+) -> Result<bool, String> {
+    if !is_family_member(owner, shard_id) {
+        return Ok(false);
+    }
+    let root_bytes = hex::decode(root_hash).map_err(|e| e.to_string())?;
+    let root: [u8; 32] = root_bytes
+        .try_into()
+        .map_err(|_| "root_hash must be exactly 32 bytes".to_string())?;
+    Ok(merkle::verify_inclusion_proof(
+        &family_leaf_bytes(owner, shard_id, sth),
+        proof.leaf_index,
+        proof.tree_size,
+        &proof.path,
+        &root,
     ))
 }
 
@@ -350,5 +494,176 @@ mod tests {
             sth: sth("aa", 5),
         }];
         assert!(inclusion_proof_for_shard(&shards, "game:nonexistent").is_none());
+    }
+
+    fn fam_shards() -> Vec<ShardTreeHead> {
+        vec![
+            ShardTreeHead {
+                shard_id: "game:x/2".to_string(),
+                sth: sth("bb", 7),
+            },
+            ShardTreeHead {
+                shard_id: "game:x".to_string(),
+                sth: sth("aa", 5),
+            },
+            ShardTreeHead {
+                shard_id: "game:x/10".to_string(),
+                sth: sth("cc", 9),
+            },
+            ShardTreeHead {
+                shard_id: "game:xy".to_string(),
+                sth: sth("dd", 1),
+            },
+            ShardTreeHead {
+                shard_id: "core".to_string(),
+                sth: sth("ee", 2),
+            },
+        ]
+    }
+
+    fn no_known() -> std::collections::BTreeSet<String> {
+        std::collections::BTreeSet::new()
+    }
+
+    #[test]
+    fn family_membership_follows_the_shard_id_grammar() {
+        assert!(is_family_member("game:x", "game:x"));
+        assert!(is_family_member("game:x", "game:x/2"));
+        assert!(!is_family_member("game:x", "game:xy"));
+        assert!(!is_family_member("game:x", "game:xy/2"));
+        assert!(!is_family_member("game:x", "app:x"));
+        assert!(!is_family_member("game:x", "core"));
+        assert!(!is_family_member(
+            "game:x",
+            &format!("node:{}", "a".repeat(64))
+        ));
+    }
+
+    #[test]
+    fn family_head_ignores_non_members_and_input_order() {
+        let mut reversed = fam_shards();
+        reversed.reverse();
+        let a = compute_shard_family_head("game:x", &no_known(), fam_shards());
+        let b = compute_shard_family_head("game:x", &no_known(), reversed);
+        assert_eq!(a, b);
+        assert_eq!(a.shard_count, 3);
+        let ids: Vec<&str> = a.members.iter().map(|m| m.shard_id.as_str()).collect();
+        assert_eq!(ids, ["game:x", "game:x/10", "game:x/2"]);
+    }
+
+    #[test]
+    fn family_root_differs_from_the_cross_shard_root_over_the_same_heads() {
+        let now = time::OffsetDateTime::from_unix_timestamp(0).unwrap();
+        let members: Vec<ShardTreeHead> = fam_shards()
+            .into_iter()
+            .filter(|s| is_family_member("game:x", &s.shard_id))
+            .collect();
+        let family = compute_shard_family_head("game:x", &no_known(), members.clone());
+        let network = compute_cross_shard_root(members, now);
+        assert_ne!(family.root_hash, network.root_hash);
+
+        let one = vec![fam_shards().remove(1)];
+        assert_ne!(
+            compute_shard_family_head("game:x", &no_known(), one.clone()).root_hash,
+            compute_cross_shard_root(one, now).root_hash
+        );
+    }
+
+    #[test]
+    fn the_owner_is_bound_into_the_family_root() {
+        let head = sth("aa", 5);
+        let as_x = ShardTreeHead {
+            shard_id: "game:x".to_string(),
+            sth: head.clone(),
+        };
+        let a = compute_shard_family_head("game:x", &no_known(), vec![as_x.clone()]);
+        // Same bytes of head under another owner must not collide.
+        assert_ne!(
+            family_leaf_bytes("game:x", "game:x", &head),
+            family_leaf_bytes("game:y", "game:x", &head)
+        );
+        let other = compute_shard_family_head("game:y", &no_known(), vec![as_x]);
+        assert_eq!(other.shard_count, 0);
+        assert_ne!(a.root_hash, other.root_hash);
+    }
+
+    #[test]
+    fn an_empty_family_does_not_equal_the_network_empty_root() {
+        let empty = compute_shard_family_head("game:x", &no_known(), Vec::new());
+        assert_eq!(empty.shard_count, 0);
+        assert_ne!(empty.root_hash, hex::encode(merkle::empty_root()));
+        let other = compute_shard_family_head("game:y", &no_known(), Vec::new());
+        assert_ne!(empty.root_hash, other.root_hash);
+    }
+
+    #[test]
+    fn a_changed_member_head_changes_the_family_root() {
+        let a = compute_shard_family_head("game:x", &no_known(), fam_shards());
+        let mut changed = fam_shards();
+        changed[0].sth = sth("bb", 8);
+        let b = compute_shard_family_head("game:x", &no_known(), changed);
+        assert_ne!(a.root_hash, b.root_hash);
+    }
+
+    #[test]
+    fn known_but_headless_siblings_mark_the_family_partial() {
+        let known: std::collections::BTreeSet<String> = ["game:x", "game:x/3", "game:xy/9", "core"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let head = compute_shard_family_head("game:x", &known, fam_shards());
+        assert!(head.partial);
+        assert_eq!(head.missing_shard_ids, vec!["game:x/3"]);
+        let complete = compute_shard_family_head("game:x", &no_known(), fam_shards());
+        assert!(!complete.partial);
+        assert_eq!(complete.root_hash, head.root_hash);
+    }
+
+    #[test]
+    fn family_inclusion_proof_verifies_for_every_member() {
+        let head = compute_shard_family_head("game:x", &no_known(), fam_shards());
+        for member in &head.members {
+            let proof = family_inclusion_proof("game:x", &fam_shards(), &member.shard_id)
+                .expect("member present")
+                .expect("proof generation");
+            assert_eq!(proof.tree_size, 3);
+            assert!(verify_family_inclusion(
+                "game:x",
+                &head.root_hash,
+                &proof,
+                &member.shard_id,
+                &member.sth
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn a_tampered_family_inclusion_proof_fails() {
+        let head = compute_shard_family_head("game:x", &no_known(), fam_shards());
+        let member = &head.members[1];
+        let proof = family_inclusion_proof("game:x", &fam_shards(), &member.shard_id)
+            .unwrap()
+            .unwrap();
+
+        let mut bad_path = proof.clone();
+        bad_path.path[0][0] ^= 1;
+        let check = |p: &FamilyInclusionProof, owner: &str, sth: &SignedTreeHead| {
+            verify_family_inclusion(owner, &head.root_hash, p, &member.shard_id, sth).unwrap()
+        };
+        assert!(check(&proof, "game:x", &member.sth));
+        assert!(!check(&bad_path, "game:x", &member.sth));
+        assert!(!check(&proof, "game:x", &sth("zz", 99)));
+        assert!(!check(&proof, "game:y", &member.sth));
+        let mut bad_index = proof.clone();
+        bad_index.leaf_index = 0;
+        assert!(!check(&bad_index, "game:x", &member.sth));
+    }
+
+    #[test]
+    fn family_inclusion_proof_for_a_non_member_is_none() {
+        assert!(family_inclusion_proof("game:x", &fam_shards(), "game:xy").is_none());
+        assert!(family_inclusion_proof("game:x", &fam_shards(), "core").is_none());
+        assert!(family_inclusion_proof("game:x", &fam_shards(), "game:x/99").is_none());
     }
 }

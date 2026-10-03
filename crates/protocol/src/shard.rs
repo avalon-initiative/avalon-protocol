@@ -151,6 +151,23 @@ pub fn shard_authority(id: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// The family owner id (`{namespace}:{slug}`) a shard id belongs to: both
+/// `{ns}:{slug}` and `{ns}:{slug}/{instance}` map to `{ns}:{slug}`. `core`,
+/// `node:<key-hash>` and anything that does not parse are not in a family.
+pub fn shard_family_owner(id: &str) -> Option<String> {
+    let (namespace, owner) = shard_authority(id)?;
+    Some(format!("{namespace}:{owner}"))
+}
+
+/// Whether `owner` is a well-formed family owner id: an owned shard id with
+/// no instance component.
+pub fn is_family_owner_id(owner: &str) -> bool {
+    matches!(
+        parse_shard_id(owner),
+        Ok(ParsedShardId::Owned { instance: None, .. })
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +276,33 @@ mod tests {
             parse_shard_id("node:"),
             Err(ShardIdError::InvalidKeyHash(_))
         ));
+    }
+
+    #[test]
+    fn family_owner_groups_an_owner_and_its_instances() {
+        assert_eq!(shard_family_owner("game:x"), Some("game:x".to_string()));
+        assert_eq!(shard_family_owner("game:x/2"), Some("game:x".to_string()));
+        assert_ne!(shard_family_owner("game:xy"), shard_family_owner("game:x"));
+        assert_ne!(shard_family_owner("app:x"), shard_family_owner("game:x"));
+    }
+
+    #[test]
+    fn core_node_and_invalid_ids_have_no_family() {
+        assert_eq!(shard_family_owner("core"), None);
+        assert_eq!(
+            shard_family_owner(&format!("node:{}", "a".repeat(64))),
+            None
+        );
+        assert_eq!(shard_family_owner("game:x/BAD"), None);
+        assert_eq!(shard_family_owner(""), None);
+    }
+
+    #[test]
+    fn family_owner_ids_carry_no_instance() {
+        assert!(is_family_owner_id("game:x"));
+        assert!(!is_family_owner_id("game:x/2"));
+        assert!(!is_family_owner_id("core"));
+        assert!(!is_family_owner_id("x"));
+        assert!(!is_family_owner_id(&format!("node:{}", "a".repeat(64))));
     }
 }
