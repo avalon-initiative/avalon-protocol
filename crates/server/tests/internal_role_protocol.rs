@@ -77,6 +77,11 @@ use uuid::Uuid;
 const SCHEMA: &str = "test_internal_role_661";
 const DEFAULT_ROLE_KEY: &str = "test-internal-role-key-661";
 
+/// The network the Indexer-role process under test runs on.
+fn network_id() -> String {
+    std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
+}
+
 fn role_key() -> String {
     std::env::var("AVALON_INTERNAL_ROLE_KEY").unwrap_or_else(|_| DEFAULT_ROLE_KEY.to_string())
 }
@@ -151,7 +156,13 @@ fn identity_created_event(who: &TestIdentity, display_name: &str) -> ProtocolEve
         kind: "identity.created".to_string(),
         issuer: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
         subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
-        payload: serde_json::to_value(who.created_payload(display_name)).unwrap(),
+        payload: serde_json::to_value(who.created_payload_for(
+            &network_id(),
+            "core",
+            Uuid::new_v4(),
+            display_name,
+        ))
+        .unwrap(),
         timestamp: time::OffsetDateTime::now_utc(),
         version: 2,
         identity_chain: None,
@@ -179,7 +190,7 @@ async fn profile_display_name(
 #[ignore]
 async fn apply_via_remote_matches_direct_postgres_indexer() {
     let pool = setup_schema().await;
-    let local_indexer = PostgresIndexer::new(pool.clone());
+    let local_indexer = PostgresIndexer::new(pool.clone()).with_local_origin(network_id(), "core");
     let remote_indexer = RemoteIndexer::new(remote_indexer_url(), Some(role_key()));
 
     let local_who = TestIdentity::new();
@@ -219,7 +230,7 @@ async fn apply_via_remote_matches_direct_postgres_indexer() {
 #[ignore]
 async fn rebuild_via_remote_matches_direct_postgres_indexer() {
     let pool = setup_schema().await;
-    let local_indexer = PostgresIndexer::new(pool.clone());
+    let local_indexer = PostgresIndexer::new(pool.clone()).with_local_origin(network_id(), "core");
     let remote_indexer = RemoteIndexer::new(remote_indexer_url(), Some(role_key()));
 
     let local_who = TestIdentity::new();
