@@ -78,6 +78,17 @@ async fn seed_signing_key(
     .await
     .expect("failed to seed signing key");
     let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    // The projection the node verifies approvals against holds the same key.
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(key_id)
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .execute(pool)
+    .await
+    .expect("failed to seed projected signing key");
 
     (key_id, signing_key)
 }

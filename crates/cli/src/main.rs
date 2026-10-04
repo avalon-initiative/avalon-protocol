@@ -516,16 +516,52 @@ async fn rebuild_index() {
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
     let chain = PostgresSettlementProvider::new(pool.clone(), network_id);
+    let configured_shard = std::env::var("AVALON_OWN_SHARD_ID").ok();
+    let own_shard_id = configured_shard
+        .clone()
+        .unwrap_or_else(|| "core".to_string());
+
+    let ledger = avalon_server::rebuild::load_ledger_events(&chain)
+        .await
+        .expect("failed to read the ledger");
+    // Before anything is truncated: creations that do not verify for this shard would be
+    // refused, silently losing the node's own history.
+    let unverifiable = avalon_server::rebuild::unverifiable_creations(
+        &ledger.events,
+        chain.network_id(),
+        &own_shard_id,
+    );
+    if unverifiable > 0 {
+        let source = if configured_shard.is_some() {
+            "AVALON_OWN_SHARD_ID"
+        } else {
+            "AVALON_OWN_SHARD_ID is unset, so `core`"
+        };
+        eprintln!(
+            "error: {unverifiable} identity creations in the ledger were not made on `{own_shard_id}` \
+             ({source}). Set AVALON_OWN_SHARD_ID to this node's shard and run again; nothing was changed."
+        );
+        std::process::exit(1);
+    }
 
     let started = std::time::Instant::now();
-    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
-        .await
-        .expect("failed to rebuild index from ledger");
+    let report = avalon_server::rebuild::rebuild_index_from_events(
+        chain.network_id(),
+        &pool,
+        &own_shard_id,
+        ledger,
+    )
+    .await
+    .expect("failed to rebuild index from ledger");
     let elapsed = started.elapsed();
 
     println!(
-        "rebuilt index from {} ledger entries ({} events applied, {} skipped as undecodable) in {:.2?}",
-        report.entries_read, report.events_applied, report.entries_skipped_undecodable, elapsed
+        "rebuilt index from {} ledger entries ({} events applied, {} refused, {} skipped as undecodable) in {:.2?}",
+        report.entries_read,
+        report.events_applied,
+        report.events_refused,
+        report.entries_skipped_undecodable,
+        elapsed
     );
 }
 

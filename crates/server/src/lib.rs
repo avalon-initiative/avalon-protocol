@@ -1109,9 +1109,10 @@ mod node_auth_wiring {
         );
         AppState {
             chain: avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test"),
-            indexer: state::IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(
-                pool.clone(),
-            )),
+            indexer: state::IndexerHandle::Local(
+                avalon_indexer::postgres::PostgresIndexer::new(pool.clone())
+                    .with_local_origin("avalon-test", "core"),
+            ),
             pool,
             webauthn,
             presence: presence::PresenceStore::from_env(),

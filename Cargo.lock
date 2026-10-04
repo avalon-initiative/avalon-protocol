@@ -314,6 +314,7 @@ dependencies = [
  "avalon-protocol",
  "base64 0.23.1",
  "dotenvy",
+ "ed25519-dalek",
  "hex",
  "serde",
  "serde_json",
