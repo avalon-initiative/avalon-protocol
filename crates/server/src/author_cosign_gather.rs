@@ -28,7 +28,7 @@ pub struct AuthorGatherState {
 }
 
 /// Known-list witnesses to ask this tick: reachable, not in backoff, and without a stored
-/// cosignature or with one at least [`refresh_after`] old. Never-held first, then stalest.
+/// cosignature or with one at least [`refresh_after`] old.
 pub fn select_wanted(
     known_list: &[(String, VerifyingKey)],
     sources: &[cosign_gather::WitnessSource],
@@ -43,12 +43,42 @@ pub fn select_wanted(
         .filter(|(id, _)| state.refresh.backoff.ready(id, shard_id, now))
         .filter(|(id, _)| held.get(id).is_none_or(|at| now - *at >= refresh_after()))
         .collect();
-    wanted.sort_by(|a, b| held.get(&a.0).cmp(&held.get(&b.0)).then(a.0.cmp(&b.0)));
+    // Never-held first, then stalest; ties go to whoever was asked longest ago so witnesses
+    // stuck in short retries cannot hold every slot.
+    wanted.sort_by(|a, b| {
+        held.get(&a.0)
+            .cmp(&held.get(&b.0))
+            .then_with(|| {
+                state
+                    .refresh
+                    .last_asked(&a.0, shard_id)
+                    .cmp(&state.refresh.last_asked(&b.0, shard_id))
+            })
+            .then(a.0.cmp(&b.0))
+    });
     wanted
         .into_iter()
         .take(MAX_ASKED_PER_TICK)
         .cloned()
         .collect()
+}
+
+/// Whether the read-back holds `signature` for `key_id` over `sth`. No read-back (the read
+/// failed) trusts the store's own success.
+fn confirmed_stored(
+    readback: Option<&[avalon_protocol::witness::WitnessCosignature]>,
+    key_id: &str,
+    sth: &avalon_protocol::sth::SignedTreeHead,
+    signature: &str,
+) -> bool {
+    readback.is_none_or(|rows| {
+        rows.iter().any(|c| {
+            c.witness_key_id == key_id
+                && c.root_hash == sth.root_hash
+                && c.author_created_at == sth.created_at
+                && c.signature == signature
+        })
+    })
 }
 
 /// A witness's outcome awaiting read-back: (key id, attempt, label, stored time and signature).
@@ -179,17 +209,12 @@ pub async fn gather_once(
     let now_stored = chain
         .list_witness_cosignatures(chain.network_id(), own_shard_id, sth.tree_size)
         .await
-        .unwrap_or_default();
+        .ok();
     let mut written = 0;
     let mut gained: HashMap<String, OffsetDateTime> = HashMap::new();
     for (key_id, mut attempt, mut label, applied) in staged {
         if let Some((at, signature)) = applied {
-            let in_place = now_stored.iter().any(|c| {
-                c.witness_key_id == key_id
-                    && c.root_hash == sth.root_hash
-                    && c.author_created_at == sth.created_at
-                    && c.signature == signature
-            });
+            let in_place = confirmed_stored(now_stored.as_deref(), &key_id, &sth, &signature);
             if in_place {
                 written += 1;
                 gained.insert(key_id.clone(), at);
@@ -401,5 +426,65 @@ mod tests {
                 "never-held witness must be asked first"
             );
         }
+    }
+
+    #[test]
+    fn stuck_witnesses_in_short_retries_cannot_starve_healthy_ones() {
+        let mut all: Vec<_> = (1..=24u8).map(witness).collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        let (stuck, healthy) = all.split_at(20);
+        let sources: Vec<_> = all.iter().map(|(id, _)| source(id)).collect();
+        let mut state = AuthorGatherState::default();
+        let mut held = HashMap::new();
+        let mut now = OffsetDateTime::now_utc();
+        let mut healthy_asked_at_tick = None;
+        for tick in 0..4 {
+            now += time::Duration::seconds(5);
+            let wanted = select_wanted(&all, &sources, &held, &state, "core", now);
+            assert!(wanted.len() <= MAX_ASKED_PER_TICK);
+            for (id, _) in &wanted {
+                state.refresh.asked(id, "core", now);
+                if stuck.iter().any(|(s, _)| s == id) {
+                    state
+                        .refresh
+                        .backoff
+                        .record(id, "core", Attempt::Lagging, now);
+                } else {
+                    held.insert(id.clone(), now);
+                    healthy_asked_at_tick.get_or_insert(tick);
+                }
+            }
+        }
+        assert!(
+            healthy_asked_at_tick.is_some_and(|t| t <= 1),
+            "healthy witnesses must be reached within two ticks"
+        );
+        assert!(healthy.iter().all(|(id, _)| held.contains_key(id)));
+    }
+
+    #[test]
+    fn a_failed_readback_trusts_the_store_and_a_missing_row_does_not() {
+        use ed25519_dalek::SigningKey;
+        let key = SigningKey::from_bytes(&[1u8; 32]);
+        let created = OffsetDateTime::now_utc();
+        let sth =
+            avalon_protocol::sth::sign_tree_head(&key, "k", 4, &"ab".repeat(32), "n", created);
+        let cosig = avalon_protocol::witness::sign_witness_cosignature(
+            &key,
+            "w",
+            4,
+            &sth.root_hash,
+            "n",
+            created,
+            created,
+        );
+        assert!(confirmed_stored(None, "w", &sth, &cosig.signature));
+        assert!(!confirmed_stored(Some(&[]), "w", &sth, &cosig.signature));
+        assert!(confirmed_stored(
+            Some(&[cosig.clone()]),
+            "w",
+            &sth,
+            &cosig.signature
+        ));
     }
 }

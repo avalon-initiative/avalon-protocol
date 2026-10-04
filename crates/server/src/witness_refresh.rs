@@ -187,6 +187,14 @@ impl Backoff {
     }
 }
 
+/// A cached Merkle root with the entry count and last entry hash it was computed for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRoot {
+    pub count: i64,
+    pub last_hash: String,
+    pub root: String,
+}
+
 /// Per-node memory that shapes selection: backoff, when each (witness, shard) was last asked, and
 /// which witnesses last delivered a cosignature for each shard.
 #[derive(Debug, Default)]
@@ -195,12 +203,18 @@ pub struct RefreshState {
     last_asked: HashMap<(String, String), OffsetDateTime>,
     previous: HashMap<String, HashSet<String>>,
     salt: std::collections::hash_map::RandomState,
-    /// Merkle root at a shard's backfilled entry count, keyed by (network, shard); the count
-    /// only grows, so a cached root is valid for the count it was computed at.
-    pub served_roots: HashMap<(String, String), (i64, String)>,
+    /// Merkle root of a shard's backfilled entries, keyed by (network, shard), valid while the
+    /// count and the last entry's hash (which commits to every earlier entry) are unchanged.
+    pub served_roots: HashMap<(String, String), ServedRoot>,
 }
 
 impl RefreshState {
+    pub fn last_asked(&self, key_id: &str, shard_id: &str) -> Option<OffsetDateTime> {
+        self.last_asked
+            .get(&(key_id.to_string(), shard_id.to_string()))
+            .copied()
+    }
+
     pub fn asked(&mut self, key_id: &str, shard_id: &str, now: OffsetDateTime) {
         if self.last_asked.len() >= MAX_BACKOFF_ENTRIES {
             self.last_asked.clear();
