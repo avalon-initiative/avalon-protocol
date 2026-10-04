@@ -501,7 +501,7 @@ async fn rebuild_reproduces_integrator_data_deletion() {
     );
 
     let chain = chain(&pool).await;
-    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
         .await
         .expect("rebuild failed");
 
@@ -612,7 +612,7 @@ async fn rebuild_reproduces_projections_exactly() {
 
     let started = std::time::Instant::now();
     let chain = chain(&pool).await;
-    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
         .await
         .expect("rebuild failed");
     let elapsed = started.elapsed();
@@ -837,7 +837,7 @@ async fn rebuild_reproduces_rollback_reversals() {
         snapshot_table(&pool, "indexer_guild_members").await,
     );
     let chain = chain(&pool).await;
-    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
         .await
         .expect("rebuild failed");
     let rebuilt = (
@@ -906,12 +906,12 @@ async fn replay_onto_rebuilt_index_is_noop() {
     wait_for_outbox_drain(&pool).await;
 
     let chain = chain(&pool).await;
-    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
         .await
         .expect("first rebuild failed");
     let first_snapshot = snapshot_all_projections(&pool).await;
 
-    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
         .await
         .expect("second rebuild failed");
     let second_snapshot = snapshot_all_projections(&pool).await;

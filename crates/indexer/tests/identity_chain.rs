@@ -8,6 +8,7 @@ use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
+use avalon_protocol::identity_id::{device_grant_approval_signing_bytes_v2, TestIdentity};
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -52,8 +53,58 @@ fn chained(
     event
 }
 
-async fn seed_identity(pool: &PgPool) -> IdentityId {
-    let who = avalon_protocol::identity_id::TestIdentity::new();
+fn indexer(pool: &PgPool) -> PostgresIndexer {
+    PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core")
+}
+
+/// A signed `identity.signing_key_added` payload for a fresh device key, approved by `approver`.
+fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> serde_json::Value {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let device = TestIdentity::from_seed([seed; 32]);
+    let grant_id = Uuid::new_v4();
+    let bytes = device_grant_approval_signing_bytes_v2(grant_id, &who.id, &device.public_key());
+    let b64 = base64::engine::general_purpose::STANDARD;
+    serde_json::json!({
+        "signing_key_id": Uuid::new_v4(),
+        "public_key": b64.encode(device.public_key()),
+        "device_label": null,
+        "approved_by_signing_key_id": approver_key_id,
+        "identity_id": who.id,
+        "kind": "device_grant",
+        "grant_id": grant_id,
+        "approval_signature": b64.encode(who.signing_key.sign(&bytes).to_bytes()),
+    })
+}
+
+/// Applies the identity's inception key (unchained) and returns its key id.
+async fn add_inception_key(indexer: &PostgresIndexer, who: &TestIdentity) -> Uuid {
+    use base64::Engine as _;
+    let key_id = Uuid::new_v4();
+    let mut event = chained(
+        who.id,
+        "identity.signing_key_added",
+        "signing_key_added",
+        serde_json::json!({
+            "signing_key_id": key_id,
+            "public_key": base64::engine::general_purpose::STANDARD.encode(who.public_key()),
+            "device_label": null,
+            "approved_by_signing_key_id": key_id,
+            "identity_id": who.id,
+            "kind": "inception",
+        }),
+        50,
+        1,
+        None,
+    );
+    event.version = 2;
+    event.identity_chain = None;
+    indexer.apply(&event).await.unwrap();
+    key_id
+}
+
+async fn seed_identity(pool: &PgPool) -> TestIdentity {
+    let who = TestIdentity::new();
     let identity_id = who.id;
     sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
         .bind(identity_id)
@@ -67,7 +118,7 @@ async fn seed_identity(pool: &PgPool) -> IdentityId {
         .execute(pool)
         .await
         .unwrap();
-    identity_id
+    who
 }
 
 async fn reset(pool: &PgPool, identity_id: IdentityId, events: &[&ProtocolEvent]) {
@@ -111,8 +162,8 @@ async fn profile(pool: &PgPool, identity_id: IdentityId) -> (Option<String>, Opt
 #[ignore]
 async fn conflicting_profile_edits_converge_in_any_arrival_order() {
     let pool = test_pool().await;
-    let indexer = PostgresIndexer::new(pool.clone());
-    let id = seed_identity(&pool).await;
+    let indexer = indexer(&pool);
+    let id = seed_identity(&pool).await.id;
 
     let root = chained(
         id,
@@ -178,27 +229,31 @@ async fn conflicting_profile_edits_converge_in_any_arrival_order() {
 #[ignore]
 async fn conflicting_key_events_fork_and_recovery_resolves() {
     let pool = test_pool().await;
-    let indexer = PostgresIndexer::new(pool.clone());
-    let id = seed_identity(&pool).await;
+    let indexer = indexer(&pool);
+    let who = seed_identity(&pool).await;
+    let id = who.id;
+    let inception = add_inception_key(&indexer, &who).await;
 
-    let a = chained(
+    let mut a = chained(
         id,
         "identity.signing_key_added",
         "signing_key_added",
-        serde_json::json!({"public_key": "AAAA"}),
+        device_grant_payload(&who, inception, 7),
         100,
         1,
         None,
     );
-    let b = chained(
+    let mut b = chained(
         id,
         "identity.signing_key_added",
         "signing_key_added",
-        serde_json::json!({"public_key": "BBBB"}),
+        device_grant_payload(&who, inception, 8),
         100,
         1,
         None,
     );
+    a.version = 2;
+    b.version = 2;
     let recovered = chained(
         id,
         "identity.recovered",
@@ -233,7 +288,7 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
 #[ignore]
 async fn local_assignment_chains_events_and_freezes_on_fork() {
     let pool = test_pool().await;
-    let id = seed_identity(&pool).await;
+    let id = seed_identity(&pool).await.id;
 
     let mut tx = pool.begin().await.unwrap();
     let mut first = chained(

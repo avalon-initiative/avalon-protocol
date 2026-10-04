@@ -19,7 +19,9 @@
 //! `avalon-docs/architecture/disaster-recovery.md`.
 
 use avalon_chain::PostgresSettlementProvider;
+use avalon_indexer::identity_proof::{verify_created, EventOrigin};
 use avalon_indexer::postgres::PostgresIndexer;
+use avalon_protocol::events::ProtocolEvent;
 use sqlx::PgPool;
 
 /// `entries_skipped_undecodable` counts a ledger entry whose payload was
@@ -32,7 +34,50 @@ use sqlx::PgPool;
 pub struct RebuildReport {
     pub entries_read: usize,
     pub events_applied: usize,
+    /// Events the indexer refused, or whose dependencies never arrived.
+    pub events_refused: usize,
     pub entries_skipped_undecodable: usize,
+}
+
+/// How many `identity.created` events in `events` do not verify as created on
+/// (`network_id`, `own_shard_id`). A rebuild that assumes the wrong own shard would refuse them.
+pub fn unverifiable_creations(
+    events: &[ProtocolEvent],
+    network_id: &str,
+    own_shard_id: &str,
+) -> usize {
+    let origin = EventOrigin::local(network_id, own_shard_id);
+    events
+        .iter()
+        .filter(|e| e.kind == "identity.created")
+        .filter(|e| verify_created(e, &origin).is_err())
+        .count()
+}
+
+/// A ledger read once: its decodable events in `seq` order and how many entries were skipped.
+pub struct LedgerEvents {
+    pub entries_read: usize,
+    pub entries_skipped_undecodable: usize,
+    pub events: Vec<ProtocolEvent>,
+}
+
+pub async fn load_ledger_events(
+    chain: &PostgresSettlementProvider,
+) -> Result<LedgerEvents, avalon_chain::SettlementError> {
+    let entries = chain.list_entries().await?;
+    let mut events = Vec::with_capacity(entries.len());
+    let mut skipped = 0usize;
+    for entry in &entries {
+        match entry.to_protocol_event() {
+            Some(event) => events.push(event),
+            None => skipped += 1,
+        }
+    }
+    Ok(LedgerEvents {
+        entries_read: entries.len(),
+        entries_skipped_undecodable: skipped,
+        events,
+    })
 }
 
 /// Truncates every projection table and replays `ledger_entries` back
@@ -43,28 +88,71 @@ pub struct RebuildReport {
 pub async fn rebuild_index_from_ledger(
     chain: &PostgresSettlementProvider,
     index_pool: &PgPool,
+    own_shard_id: &str,
 ) -> Result<RebuildReport, avalon_chain::SettlementError> {
-    let entries = chain.list_entries().await?;
-    let entries_read = entries.len();
+    let ledger = load_ledger_events(chain).await?;
+    rebuild_index_from_events(chain.network_id(), index_pool, own_shard_id, ledger).await
+}
 
-    let mut events = Vec::with_capacity(entries_read);
-    let mut skipped = 0usize;
-    for entry in &entries {
-        match entry.to_protocol_event() {
-            Some(event) => events.push(event),
-            None => skipped += 1,
-        }
-    }
-
-    let indexer = PostgresIndexer::new(index_pool.clone());
-    let events_applied = indexer
-        .rebuild_from_scratch(&events)
+/// [`rebuild_index_from_ledger`] over a ledger already read.
+pub async fn rebuild_index_from_events(
+    network_id: &str,
+    index_pool: &PgPool,
+    own_shard_id: &str,
+    ledger: LedgerEvents,
+) -> Result<RebuildReport, avalon_chain::SettlementError> {
+    let indexer =
+        PostgresIndexer::new(index_pool.clone()).with_local_origin(network_id, own_shard_id);
+    let outcome = indexer
+        .rebuild_from_scratch(&ledger.events)
         .await
         .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
 
     Ok(RebuildReport {
-        entries_read,
-        events_applied,
-        entries_skipped_undecodable: skipped,
+        entries_read: ledger.entries_read,
+        events_applied: outcome.applied,
+        events_refused: outcome.refused,
+        entries_skipped_undecodable: ledger.entries_skipped_undecodable,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use avalon_protocol::identity_id::TestIdentity;
+    use avalon_protocol::ids::GlobalId;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    fn created_on(who: &TestIdentity, network: &str, shard: &str) -> ProtocolEvent {
+        let gid = GlobalId::new("identity", &who.id.to_string(), "self", "created");
+        ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: gid.clone(),
+            subject: gid,
+            payload: serde_json::to_value(who.created_payload_for(
+                network,
+                shard,
+                Uuid::new_v4(),
+                "Ada",
+            ))
+            .unwrap(),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 2,
+            identity_chain: None,
+        }
+    }
+
+    #[test]
+    fn creations_for_another_shard_are_counted_before_a_rebuild() {
+        let (a, b) = (TestIdentity::new(), TestIdentity::new());
+        let events = vec![
+            created_on(&a, "net", "core"),
+            created_on(&b, "net", "game:slug/1"),
+        ];
+        assert_eq!(unverifiable_creations(&events, "net", "core"), 1);
+        assert_eq!(unverifiable_creations(&events, "net", "game:slug/1"), 1);
+        assert_eq!(unverifiable_creations(&events, "other", "core"), 2);
+    }
 }

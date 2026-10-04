@@ -40,15 +40,14 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
-use crate::auth::{generate_session_token, verify_event_signature};
+use crate::auth::verify_event_signature;
 use crate::error::{AppError, IdPath};
 use crate::outbox;
 use crate::state::AppState;
 
-const SESSION_LIFETIME_DAYS: i64 = 30;
 const CEREMONY_TTL_MINUTES: i64 = 5;
 
-fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
     headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -98,17 +97,7 @@ async fn resolve_token(state: &AppState, token: &str) -> Result<IdentityId, AppE
         return crate::continuation::verify(state, body).await;
     }
 
-    let row = sqlx::query("SELECT identity_id, expires_at FROM sessions WHERE token = $1")
-        .bind(token)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-
-    let expires_at: OffsetDateTime = row.try_get("expires_at")?;
-    if expires_at < OffsetDateTime::now_utc() {
-        return Err(AppError::Unauthorized);
-    }
-    Ok(row.try_get("identity_id")?)
+    crate::sessions::resolve(&state.pool, token).await
 }
 
 /// Decodes the base64 inception key and applies the key-acceptability policy.
@@ -705,20 +694,29 @@ pub async fn session_finish(
         }
     }
 
-    let token = generate_session_token();
-    let session_expires_at =
-        OffsetDateTime::now_utc() + time::Duration::days(SESSION_LIFETIME_DAYS);
-
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token)
-        .bind(identity_id)
-        .bind(session_expires_at)
-        .execute(&state.pool)
-        .await?;
+    let mut tx = state.pool.begin().await?;
+    let passkey_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM identity_keys WHERE credential_id = $1 AND identity_id = $2 FOR SHARE",
+    )
+    .bind(auth_result.cred_id().as_ref() as &[u8])
+    .bind(identity_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::WebauthnFailed)?;
+    let session = crate::sessions::mint(
+        &mut *tx,
+        identity_id,
+        crate::sessions::SessionOrigin {
+            passkey_id: Some(passkey_id),
+            signing_key_id: None,
+        },
+    )
+    .await?;
+    tx.commit().await?;
 
     Ok(Json(SessionFinishResponse {
-        token,
-        expires_at: session_expires_at,
+        token: session.token,
+        expires_at: session.expires_at,
     }))
 }
 

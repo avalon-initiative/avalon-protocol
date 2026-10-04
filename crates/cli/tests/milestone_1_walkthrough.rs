@@ -970,7 +970,7 @@ async fn milestone_1_end_to_end_vertical_slice() {
             .expect("step 16: no genesis network_id set — has `make start` ever run against this database?");
         let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone(), network_id);
 
-        let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+        let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
             .await
             .expect("step 16: rebuild_index_from_ledger failed");
         assert!(

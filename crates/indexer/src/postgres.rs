@@ -18,11 +18,11 @@
 //!   writing `profiles` themselves.
 
 use async_trait::async_trait;
-use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::identity_chain_store::{self, Recorded};
+use crate::identity_proof::{self, EventOrigin, Verified};
 use crate::projections::{
     attestations, friendships, guild_rosters, identity_passkeys, identity_signing_keys,
     integrator_bindings, integrator_data_instances, integrator_recognitions,
@@ -55,18 +55,43 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
     "indexer_identity_passkey_revocations",
+    "indexer_identity_homes",
     "identity_chain_events",
     "identity_chain_state",
 ];
 
+/// How a rebuild went: events applied (including deliberate no-ops) and events refused or whose
+/// dependencies never arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildOutcome {
+    pub applied: usize,
+    pub refused: usize,
+}
+
 #[derive(Clone)]
 pub struct PostgresIndexer {
     pool: PgPool,
+    local_origin: Option<EventOrigin>,
 }
 
 impl PostgresIndexer {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            local_origin: None,
+        }
+    }
+
+    /// Sets the network and shard of events this node authors itself, which
+    /// [`Self::apply_in_tx`] and [`Indexer::apply`] verify against. Without it
+    /// those entry points refuse every event that needs an origin.
+    pub fn with_local_origin(
+        mut self,
+        network_id: impl Into<String>,
+        shard_id: impl Into<String>,
+    ) -> Self {
+        self.local_origin = Some(EventOrigin::local(network_id, shard_id));
+        self
     }
 
     /// Drops and rebuilds every projection table from `events` alone —
@@ -82,13 +107,13 @@ impl PostgresIndexer {
     /// database missing whatever hadn't been replayed yet when a later
     /// event failed to decode/apply, rather than leaving the pre-rebuild
     /// state untouched for an operator to investigate. Returns how many
-    /// events were actually applied (an event whose kind no projection
+    /// events were applied or refused (an event whose kind no projection
     /// recognizes still counts — [`PostgresIndexer::apply_in_tx`] treats
     /// that as a deliberate no-op, not a skip worth distinguishing here).
     pub async fn rebuild_from_scratch(
         &self,
         events: &[ProtocolEvent],
-    ) -> Result<usize, IndexError> {
+    ) -> Result<RebuildOutcome, IndexError> {
         let mut tx = self.pool.begin().await?;
         for table in PROJECTION_TABLES {
             // `table` always comes from the fixed `PROJECTION_TABLES`
@@ -100,87 +125,101 @@ impl PostgresIndexer {
                 .await?;
         }
 
-        // `identities` is the registry every projection row references, and
-        // it is not truncated above. A ledger replayed into a database that
-        // never held these identities (a promoted node) has to recreate the
-        // rows first: older ledgers record a registration's passkey and
-        // signing-key events ahead of its `identity.created` (new
-        // registrations no longer do), so creating each row while replaying
-        // would be too late for them.
-        for event in events {
-            if event.kind != "identity.created" {
-                continue;
-            }
-            if event.version != 2 {
-                continue;
-            }
-            let Ok(created) =
-                serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
-            else {
-                continue;
-            };
-            let Some(public_key) = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &created.public_key,
-            )
-            .ok()
-            .and_then(|k| <[u8; 32]>::try_from(k).ok())
-            .filter(|k| created.identity_id.matches_key(k)) else {
-                continue;
-            };
-            if !avalon_protocol::identity_id::display_name_permitted(&created.display_name) {
-                continue;
-            }
-            let identity_id = created.identity_id;
-            sqlx::query(
-                "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
-                 ON CONFLICT (id) DO NOTHING",
-            )
-            .bind(identity_id)
-            .bind(event.timestamp)
-            .bind(public_key.to_vec())
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        for event in events {
-            // Each event applies in its own savepoint so a refused one rolls back completely.
-            let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
-            match self.apply_in_tx(&mut savepoint, event).await {
-                Ok(()) => savepoint.commit().await?,
-                // Refused by a validity rule, not a storage fault: the same event is refused on
-                // every replay, so it must not abort the whole rebuild.
-                Err(
-                    IndexError::DisplayNameNotPermitted
-                    | IndexError::DisplayNameTaken
-                    | IndexError::Rejected(_),
-                ) => {
-                    eprintln!(
-                        "indexer: skipping refused event {} ({})",
-                        event.id, event.kind
-                    );
-                    savepoint.rollback().await?;
-                    // The first pass created this identity's row; without its profile it must go.
-                    if event.kind == "identity.created" {
-                        if let Ok(created) =
-                            serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
-                        {
-                            sqlx::query(
-                                "DELETE FROM identities WHERE id = $1 \
-                                 AND NOT EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)",
-                            )
-                            .bind(created.identity_id)
-                            .execute(&mut *tx)
-                            .await?;
-                        }
+        // An event waiting on state later in the history is retried until a pass makes no progress.
+        let mut pending: Vec<&ProtocolEvent> = events.iter().collect();
+        let mut refused = 0usize;
+        loop {
+            let mut deferred = Vec::new();
+            for event in &pending {
+                // Each event applies in its own savepoint so a refused one rolls back completely.
+                let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+                match self
+                    .apply_verified(&mut savepoint, event, self.local_origin.as_ref())
+                    .await
+                {
+                    Ok(()) => savepoint.commit().await?,
+                    Err(IndexError::Deferred(_) | IndexError::AwaitingKey(_)) => {
+                        savepoint.rollback().await?;
+                        deferred.push(*event);
                     }
+                    // Refused by a validity rule, not a storage fault: the same event is refused
+                    // on every replay, so it must not abort the whole rebuild.
+                    Err(
+                        IndexError::DisplayNameNotPermitted
+                        | IndexError::DisplayNameTaken
+                        | IndexError::Rejected(_),
+                    ) => {
+                        eprintln!(
+                            "indexer: skipping refused event {} ({})",
+                            event.id, event.kind
+                        );
+                        savepoint.rollback().await?;
+                        refused += 1;
+                    }
+                    Err(other) => return Err(other),
                 }
-                Err(other) => return Err(other),
+            }
+            let progressed = deferred.len() < pending.len();
+            pending = deferred;
+            if pending.is_empty() || !progressed {
+                break;
             }
         }
+        for event in &pending {
+            eprintln!(
+                "indexer: skipping event {} ({}) whose dependencies never arrived",
+                event.id, event.kind
+            );
+        }
+        refused += pending.len();
 
         tx.commit().await?;
-        Ok(events.len())
+        Ok(RebuildOutcome {
+            applied: events.len() - refused,
+            refused,
+        })
+    }
+
+    /// Applies an event this node authored itself, verified against the origin set by
+    /// [`Self::with_local_origin`]. See [`Self::apply_in_tx_from`].
+    pub async fn apply_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+    ) -> Result<(), IndexError> {
+        self.apply_verified(tx, event, self.local_origin.as_ref())
+            .await
+    }
+
+    /// Applies an event read from `origin`. The event is verified first
+    /// ([`identity_proof::verify`]) and applied in a savepoint, so a refused or failed event
+    /// leaves nothing behind: no dedup claim, identity row, profile, key or chain record.
+    pub async fn apply_in_tx_from(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+        origin: &EventOrigin,
+    ) -> Result<(), IndexError> {
+        self.apply_verified(tx, event, Some(origin)).await
+    }
+
+    async fn apply_verified(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+        origin: Option<&EventOrigin>,
+    ) -> Result<(), IndexError> {
+        let mut savepoint = sqlx::Acquire::begin(&mut **tx).await?;
+        match self.dispatch(&mut savepoint, event, origin).await {
+            Ok(()) => {
+                savepoint.commit().await?;
+                Ok(())
+            }
+            Err(err) => {
+                savepoint.rollback().await?;
+                Err(err)
+            }
+        }
     }
 
     /// The real dispatch. Marks `event.id` as applied first (inside `tx`,
@@ -188,22 +227,28 @@ impl PostgresIndexer {
     /// already claimed — a redelivery, or a rebuild replaying history
     /// that's already reflected here — returns `Ok(())` without touching
     /// any projection table a second time.
-    pub async fn apply_in_tx(
+    async fn dispatch(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         event: &ProtocolEvent,
+        origin: Option<&EventOrigin>,
     ) -> Result<(), IndexError> {
         let claimed = sqlx::query(
-            "INSERT INTO indexer_applied_events (event_id) VALUES ($1) \
+            "INSERT INTO indexer_applied_events (event_id, shard_id) VALUES ($1, $2) \
              ON CONFLICT DO NOTHING RETURNING event_id",
         )
         .bind(event.id)
+        .bind(origin.map_or("", |o| o.shard_id.as_str()))
         .fetch_optional(&mut **tx)
         .await?;
 
         if claimed.is_none() {
             return Ok(());
         }
+
+        // Proof comes before the identity chain: a refused event must not reach it either.
+        let local_network = self.local_origin.as_ref().map(|o| o.network_id.as_str());
+        let verified = identity_proof::verify(tx, event, origin, local_network).await?;
 
         // Chained events are recorded and resolved first; only `profile.updated`
         // is projected through the resolved chain (see `apply_profile_chained`).
@@ -235,7 +280,12 @@ impl PostgresIndexer {
         }
 
         match event.kind.as_str() {
-            "identity.created" | "profile.updated" => {
+            "identity.created" => {
+                if let (Verified::Creation(created), Some(origin)) = (&verified, origin) {
+                    profiles::apply_created(tx, event.timestamp, created, origin).await?;
+                }
+            }
+            "profile.updated" => {
                 if let Some(write) = profiles::decode(event) {
                     profiles::apply(tx, &write).await?;
                 }

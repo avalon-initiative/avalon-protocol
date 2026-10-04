@@ -47,7 +47,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 
     let token = format!("test-token-{}", Uuid::new_v4());
     let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
         .bind(&token)
         .bind(identity_id)
         .bind(expires_at)
@@ -78,6 +78,17 @@ async fn seed_signing_key(
     .await
     .expect("failed to seed signing key");
     let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    // The projection the node verifies approvals against holds the same key.
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(key_id)
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .execute(pool)
+    .await
+    .expect("failed to seed projected signing key");
 
     (key_id, signing_key)
 }

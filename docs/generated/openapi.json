@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.11.0"
+    "version": "0.12.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -224,7 +224,7 @@
         "tags": [
           "devices"
         ],
-        "summary": "`POST /auth/device/approve` — requires the approver's own existing\nauthenticated session (normal session-bearer auth). Mints a real session\nfor the approver's own identity via `auth::generate_session_token`/the\n`sessions` table — the exact same mechanism `handlers::session_finish`\nuses for a normal login — and attaches it to the pairing so the waiting\nclient picks it up on its next poll.",
+        "summary": "`POST /auth/device/approve` — requires the approver's own existing\nauthenticated session (normal session-bearer auth). Marks the pairing approved for the\napprover's identity and signing key; the waiting client's next poll mints the session.",
         "operationId": "approve_pairing",
         "requestBody": {
           "content": {
@@ -5252,6 +5252,55 @@
         }
       }
     },
+    "/me/sessions": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "`GET /me/sessions` — the caller's live sessions, newest first.",
+        "operationId": "list_sessions",
+        "responses": {
+          "200": {
+            "description": "The caller's live sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSessionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/sessions/{id}/revoke": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "`POST /me/sessions/{id}/revoke` — ends one of the caller's own sessions (404 for any other).",
+        "operationId": "revoke_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session revoked"
+          },
+          "404": {
+            "description": "SESSION_NOT_FOUND"
+          }
+        }
+      }
+    },
     "/nodes/probe": {
       "post": {
         "tags": [
@@ -5699,6 +5748,20 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/sessions/logout": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "`POST /sessions/logout` — ends the session the request authenticated with.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "The presented session no longer exists"
           }
         }
       }
@@ -8532,6 +8595,20 @@
           }
         }
       },
+      "ListSessionsResponse": {
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            }
+          }
+        }
+      },
       "LocationsResponse": {
         "type": "object",
         "required": [
@@ -10526,6 +10603,49 @@
           "ticket_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "SessionSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "expires_at",
+          "current"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether this is the session the request itself authenticated with."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "origin_passkey_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The passkey that produced this session, when it came from a passkey login."
+          },
+          "origin_signing_key_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The signing key that approved this session, when it came from device pairing or a\ncross-node login."
           }
         }
       },

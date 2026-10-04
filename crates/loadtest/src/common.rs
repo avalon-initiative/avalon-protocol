@@ -139,7 +139,7 @@ pub async fn seed_identities(pool: &PgPool, n: usize) -> Result<Vec<(String, Str
         .bind(&names)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) SELECT unnest($1::text[]), unnest($2::text[]), $3")
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) SELECT sha256(convert_to(t, 'UTF8')), i, $3 FROM unnest($1::text[], $2::text[]) AS u(t, i)")
         .bind(&tokens)
         .bind(&ids)
         .bind(expires)

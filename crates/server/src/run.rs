@@ -459,6 +459,14 @@ pub async fn run_with_tracing(
         std::process::exit(1);
     }
 
+    // Events this node authors are verified against its own network and shard.
+    let indexer = match indexer {
+        IndexerHandle::Local(local) => {
+            IndexerHandle::Local(local.with_local_origin(&network_id, &own_shard_id))
+        }
+        remote => remote,
+    };
+
     // A node committing `own_shard_id` through a remote authority does not sign it locally.
     let signs_own_shard_locally = !replica_only
         && remote_submit
@@ -703,6 +711,8 @@ pub async fn run_with_tracing(
         None
     };
 
+    tokio::spawn(crate::sessions::run_prune_worker(state.clone()));
+
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs. Gateway-only:
     // guild chat archives only exist because a Gateway
@@ -734,7 +744,8 @@ pub async fn run_with_tracing(
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
             chain.clone(),
-            avalon_indexer::postgres::PostgresIndexer::new(pool.clone()),
+            avalon_indexer::postgres::PostgresIndexer::new(pool.clone())
+                .with_local_origin(&network_id, &own_shard_id),
             mirror_config,
             mirror_watcher::MirrorWatcherHandles {
                 interest: state.interest.clone(),

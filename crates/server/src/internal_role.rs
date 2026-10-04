@@ -97,7 +97,7 @@ fn require_internal_role_key(state: &AppState, headers: &HeaderMap) -> Result<()
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(AppError::Unauthorized)?;
-    if provided != expected {
+    if !crate::auth::secrets_equal(provided, expected) {
         return Err(AppError::Unauthorized);
     }
     Ok(())

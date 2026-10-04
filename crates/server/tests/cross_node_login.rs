@@ -247,6 +247,10 @@ async fn same_device_submit_returns_a_real_session_directly() {
         .await
         .unwrap();
     assert_eq!(me["identity_id"], identity_id.to_string());
+    assert_eq!(
+        session_origin_signing_key(token).await,
+        Some(signing_key_id)
+    );
 }
 
 /// The cross-device path: start on one "client", submit the grant (as if
@@ -329,6 +333,10 @@ async fn cross_device_start_submit_poll_round_trip_delivers_a_session_exactly_on
         .await
         .unwrap();
     assert_eq!(me["identity_id"], identity_id.to_string());
+    assert_eq!(
+        session_origin_signing_key(token).await,
+        Some(signing_key_id)
+    );
 
     // Single-use: a second poll of the same request_code never returns the
     // token again.
@@ -718,4 +726,80 @@ async fn lookup_of_an_unknown_user_code_is_not_found() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+async fn session_origin_signing_key(token: &str) -> Option<uuid::Uuid> {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(&url)
+        .await
+        .unwrap();
+    sqlx::query_scalar(
+        "SELECT origin_signing_key_id FROM sessions WHERE token_hash = sha256(convert_to($1::text, 'UTF8'))",
+    )
+    .bind(token)
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_same_device_submit_waits_for_an_in_flight_revocation_of_its_key() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, session_token, signing_key) = create_identity_and_log_in(&http, &base).await;
+    let signing_key_id = first_signing_key_id(&http, &base, &session_token).await;
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/cross-node/start"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let destination = start["requesting_context"].as_str().unwrap().to_string();
+    let now = time::OffsetDateTime::now_utc();
+    let grant = mint_grant(
+        identity_id,
+        signing_key_id,
+        &destination,
+        &destination,
+        &signing_key,
+        now,
+        now + time::Duration::seconds(30),
+    );
+
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(&url)
+        .await
+        .unwrap();
+    let mut revoking = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM identity_signing_keys WHERE id = $1 FOR UPDATE")
+        .bind(signing_key_id)
+        .fetch_one(&mut *revoking)
+        .await
+        .unwrap();
+    let submitter = {
+        let (http, base) = (http.clone(), base.clone());
+        tokio::spawn(async move {
+            http.post(format!("{base}/auth/cross-node/submit"))
+                .json(&serde_json::json!({ "grant": grant }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    sqlx::query("UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1")
+        .bind(signing_key_id)
+        .execute(&mut *revoking)
+        .await
+        .unwrap();
+    revoking.commit().await.unwrap();
+
+    assert_eq!(submitter.await.unwrap(), 401);
 }
