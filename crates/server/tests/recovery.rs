@@ -353,6 +353,7 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     };
     assert_eq!(me_status(owner_token.clone()).await, 200);
 
+    let stale_code = format!("stale-pairing-code-{}", Uuid::new_v4());
     // A pre-recovery passkey with a session it created, and an approved pairing nobody collected.
     let old_passkey: Uuid = sqlx::query_scalar(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) \
@@ -364,10 +365,11 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     .unwrap();
     sqlx::query(
         "INSERT INTO device_pairings (device_code_hash, user_code, status, identity_id, approved_by_signing_key_id, expires_at) \
-         VALUES (encode(sha256(convert_to('stale-pairing-code', 'UTF8')), 'hex'), $2, 'approved', $1, gen_random_uuid(), now() + interval '1 hour')",
+         VALUES (encode(sha256(convert_to($3::text, 'UTF8')), 'hex'), $2, 'approved', $1, gen_random_uuid(), now() + interval '1 hour')",
     )
     .bind(owner_id)
     .bind(format!("T{}", &Uuid::new_v4().simple().to_string()[..7]))
+    .bind(&stale_code)
     .execute(&pool)
     .await
     .unwrap();
@@ -407,7 +409,7 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     assert_eq!(revoked_durably, 1);
     let poll = http
         .post(format!("{base}/auth/device/poll"))
-        .bearer_auth("stale-pairing-code")
+        .bearer_auth(&stale_code)
         .send()
         .await
         .unwrap();

@@ -1147,7 +1147,7 @@ pub async fn finalize_request(
     .await?;
 
     // Whoever held a session before recovery is exactly who recovery is meant to lock out.
-    crate::sessions::end_all_for_identity(&mut *tx, request.identity_id).await?;
+    crate::sessions::end_all_for_identity(&mut tx, request.identity_id).await?;
 
     let completed_at = now;
     sqlx::query(
