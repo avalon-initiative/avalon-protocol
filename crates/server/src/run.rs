@@ -459,6 +459,14 @@ pub async fn run_with_tracing(
         std::process::exit(1);
     }
 
+    // Events this node authors are verified against its own network and shard.
+    let indexer = match indexer {
+        IndexerHandle::Local(local) => {
+            IndexerHandle::Local(local.with_local_origin(&network_id, &own_shard_id))
+        }
+        remote => remote,
+    };
+
     // A node committing `own_shard_id` through a remote authority does not sign it locally.
     let signs_own_shard_locally = !replica_only
         && remote_submit

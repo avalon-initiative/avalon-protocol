@@ -35,7 +35,6 @@
 //! client burns a whole WebAuthn ceremony on a name that's already gone) —
 //! it is never the actual correctness guarantee.
 
-use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
@@ -95,30 +94,6 @@ fn identity_id_from_global_id(id: &avalon_protocol::ids::GlobalId) -> Option<Ide
 
 pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
     match event.kind.as_str() {
-        "identity.created" => {
-            if event.version != 2 {
-                return None;
-            }
-            let created: IdentityCreatedPayload =
-                serde_json::from_value(event.payload.clone()).ok()?;
-            let identity_id = created.identity_id;
-            let display_name = created.display_name;
-            Some(ProfileWrite {
-                identity_id,
-                display_name: Some(display_name),
-                avatar_url: None,
-                bio: None,
-                favorite_genres: None,
-                pronouns: None,
-                banner_url: None,
-                status: None,
-                links: None,
-                timezone: None,
-                theme_color: None,
-                location: None,
-                main_guild: None,
-            })
-        }
         "profile.updated" => {
             let identity_id = identity_id_from_global_id(&event.subject)?;
             let display_name = event
@@ -211,6 +186,84 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
         }
         _ => None,
     }
+}
+
+/// The name `identity_id` is stored under when another identity holds `name`: `name` cut to
+/// leave room for `~` and the first 12 hex characters of the id.
+pub fn disambiguated_display_name(name: &str, identity_id: &IdentityId) -> String {
+    let suffix = format!("~{}", &identity_id.to_string()[..12]);
+    let keep = avalon_protocol::identity_id::MAX_DISPLAY_NAME_CHARS - suffix.chars().count();
+    let base: String = name.trim().chars().take(keep).collect();
+    format!("{}{suffix}", base.trim_end())
+}
+
+/// Creates the identity row and its profile from a verified `identity.created`.
+///
+/// The row, the profile and (for an id that already has a profile) the refusal are one unit: the
+/// caller's savepoint rolls all of it back. An existing profile is never overwritten; a second
+/// creation with the same name is a no-op and one with another name is refused.
+///
+/// A name held by another identity is a conflict. A local creation is refused (first come on this
+/// node's own shard). A mirrored one is resolved without regard to apply order: the identity with
+/// the smaller id keeps the name and the other is stored under [`disambiguated_display_name`].
+pub async fn apply_created(
+    tx: &mut Transaction<'_, Postgres>,
+    created_at: OffsetDateTime,
+    created: &crate::identity_proof::VerifiedCreation,
+    mirrored: bool,
+) -> Result<(), IndexError> {
+    let identity_id = created.identity_id;
+    let name = created.display_name.as_str();
+    sqlx::query(
+        "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(identity_id)
+    .bind(created_at)
+    .bind(created.inception_key.as_slice())
+    .execute(&mut **tx)
+    .await?;
+
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM profiles WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if let Some(existing) = existing {
+        return if existing == name {
+            Ok(())
+        } else {
+            Err(IndexError::Rejected(format!(
+                "identity {identity_id} already has a profile; a creation naming {name:?} is a conflicting claim"
+            )))
+        };
+    }
+
+    let holder: Option<IdentityId> = sqlx::query_scalar(
+        "SELECT identity_id FROM profiles WHERE lower(display_name) = lower($1)",
+    )
+    .bind(name)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let stored = match holder {
+        None => name.to_string(),
+        Some(_) if !mirrored => return Err(IndexError::DisplayNameTaken),
+        Some(holder) if identity_id < holder => {
+            sqlx::query("UPDATE profiles SET display_name = $2 WHERE identity_id = $1")
+                .bind(holder)
+                .bind(disambiguated_display_name(name, &holder))
+                .execute(&mut **tx)
+                .await?;
+            name.to_string()
+        }
+        Some(_) => disambiguated_display_name(name, &identity_id),
+    };
+    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
+        .bind(identity_id)
+        .bind(stored)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// A write that clears every optional field `write` sets, leaving
@@ -523,25 +576,6 @@ mod tests {
 
     use super::*;
 
-    fn identity_created_event(identity_id: IdentityId) -> ProtocolEvent {
-        ProtocolEvent {
-            id: Uuid::new_v4(),
-            kind: "identity.created".to_string(),
-            issuer: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
-            subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
-            payload: serde_json::json!({
-                "identity_id": identity_id,
-                "display_name": "nova",
-                "ticket_id": Uuid::nil(),
-                "public_key": "a2V5",
-                "signature": "c2ln",
-            }),
-            timestamp: OffsetDateTime::now_utc(),
-            version: 2,
-            identity_chain: None,
-        }
-    }
-
     fn profile_updated_event(identity_id: IdentityId, payload: serde_json::Value) -> ProtocolEvent {
         ProtocolEvent {
             id: Uuid::new_v4(),
@@ -566,19 +600,23 @@ mod tests {
     }
 
     #[test]
-    fn identity_created_v1_is_rejected() {
-        let mut event = identity_created_event(IdentityId::random_for_tests());
-        event.version = 1;
+    fn identity_created_is_not_decoded_as_a_profile_write() {
+        let id = IdentityId::random_for_tests();
+        let mut event = profile_updated_event(id, serde_json::json!({}));
+        event.kind = "identity.created".to_string();
         assert_eq!(decode(&event), None);
     }
 
     #[test]
-    fn decodes_identity_created_into_a_full_write() {
-        let identity_id = IdentityId::random_for_tests();
-        let write = decode(&identity_created_event(identity_id)).unwrap();
-        assert_eq!(write.identity_id, identity_id);
-        assert_eq!(write.display_name.as_deref(), Some("nova"));
-        assert_eq!(write.avatar_url, None);
+    fn a_disambiguated_name_is_stable_permitted_and_bounded() {
+        let id = IdentityId::random_for_tests();
+        let long = "n".repeat(avalon_protocol::identity_id::MAX_DISPLAY_NAME_CHARS);
+        for name in ["nova", long.as_str()] {
+            let got = disambiguated_display_name(name, &id);
+            assert_eq!(got, disambiguated_display_name(name, &id));
+            assert!(got.ends_with(&format!("~{}", &id.to_string()[..12])));
+            assert!(avalon_protocol::identity_id::display_name_permitted(&got));
+        }
     }
 
     #[test]

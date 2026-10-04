@@ -1,0 +1,2 @@
+ALTER TABLE mirrored_entries DROP COLUMN projection_rejection;
+DROP INDEX indexer_identity_signing_keys_identity_public_key_idx;

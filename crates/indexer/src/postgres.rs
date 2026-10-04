@@ -18,11 +18,11 @@
 //!   writing `profiles` themselves.
 
 use async_trait::async_trait;
-use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::identity_chain_store::{self, Recorded};
+use crate::identity_proof::{self, EventOrigin, Verified};
 use crate::projections::{
     attestations, friendships, guild_rosters, identity_passkeys, identity_signing_keys,
     integrator_bindings, integrator_data_instances, integrator_recognitions,
@@ -62,11 +62,27 @@ pub const PROJECTION_TABLES: &[&str] = &[
 #[derive(Clone)]
 pub struct PostgresIndexer {
     pool: PgPool,
+    local_origin: Option<EventOrigin>,
 }
 
 impl PostgresIndexer {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            local_origin: None,
+        }
+    }
+
+    /// Sets the network and shard of events this node authors itself, which
+    /// [`Self::apply_in_tx`] and [`Indexer::apply`] verify against. Without it
+    /// those entry points refuse every event that needs an origin.
+    pub fn with_local_origin(
+        mut self,
+        network_id: impl Into<String>,
+        shard_id: impl Into<String>,
+    ) -> Self {
+        self.local_origin = Some(EventOrigin::local(network_id, shard_id));
+        self
     }
 
     /// Drops and rebuilds every projection table from `events` alone —
@@ -100,53 +116,13 @@ impl PostgresIndexer {
                 .await?;
         }
 
-        // `identities` is the registry every projection row references, and
-        // it is not truncated above. A ledger replayed into a database that
-        // never held these identities (a promoted node) has to recreate the
-        // rows first: older ledgers record a registration's passkey and
-        // signing-key events ahead of its `identity.created` (new
-        // registrations no longer do), so creating each row while replaying
-        // would be too late for them.
-        for event in events {
-            if event.kind != "identity.created" {
-                continue;
-            }
-            if event.version != 2 {
-                continue;
-            }
-            let Ok(created) =
-                serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
-            else {
-                continue;
-            };
-            let Some(public_key) = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &created.public_key,
-            )
-            .ok()
-            .and_then(|k| <[u8; 32]>::try_from(k).ok())
-            .filter(|k| created.identity_id.matches_key(k)) else {
-                continue;
-            };
-            if !avalon_protocol::identity_id::display_name_permitted(&created.display_name) {
-                continue;
-            }
-            let identity_id = created.identity_id;
-            sqlx::query(
-                "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
-                 ON CONFLICT (id) DO NOTHING",
-            )
-            .bind(identity_id)
-            .bind(event.timestamp)
-            .bind(public_key.to_vec())
-            .execute(&mut *tx)
-            .await?;
-        }
-
         for event in events {
             // Each event applies in its own savepoint so a refused one rolls back completely.
             let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
-            match self.apply_in_tx(&mut savepoint, event).await {
+            match self
+                .apply_verified(&mut savepoint, event, self.local_origin.as_ref())
+                .await
+            {
                 Ok(()) => savepoint.commit().await?,
                 // Refused by a validity rule, not a storage fault: the same event is refused on
                 // every replay, so it must not abort the whole rebuild.
@@ -160,20 +136,6 @@ impl PostgresIndexer {
                         event.id, event.kind
                     );
                     savepoint.rollback().await?;
-                    // The first pass created this identity's row; without its profile it must go.
-                    if event.kind == "identity.created" {
-                        if let Ok(created) =
-                            serde_json::from_value::<IdentityCreatedPayload>(event.payload.clone())
-                        {
-                            sqlx::query(
-                                "DELETE FROM identities WHERE id = $1 \
-                                 AND NOT EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)",
-                            )
-                            .bind(created.identity_id)
-                            .execute(&mut *tx)
-                            .await?;
-                        }
-                    }
                 }
                 Err(other) => return Err(other),
             }
@@ -183,15 +145,58 @@ impl PostgresIndexer {
         Ok(events.len())
     }
 
+    /// Applies an event this node authored itself, verified against the origin set by
+    /// [`Self::with_local_origin`]. See [`Self::apply_in_tx_from`].
+    pub async fn apply_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+    ) -> Result<(), IndexError> {
+        self.apply_verified(tx, event, self.local_origin.as_ref())
+            .await
+    }
+
+    /// Applies an event read from `origin`. The event is verified first
+    /// ([`identity_proof::verify`]) and applied in a savepoint, so a refused or failed event
+    /// leaves nothing behind: no dedup claim, identity row, profile, key or chain record.
+    pub async fn apply_in_tx_from(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+        origin: &EventOrigin,
+    ) -> Result<(), IndexError> {
+        self.apply_verified(tx, event, Some(origin)).await
+    }
+
+    async fn apply_verified(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+        origin: Option<&EventOrigin>,
+    ) -> Result<(), IndexError> {
+        let mut savepoint = sqlx::Acquire::begin(&mut **tx).await?;
+        match self.dispatch(&mut savepoint, event, origin).await {
+            Ok(()) => {
+                savepoint.commit().await?;
+                Ok(())
+            }
+            Err(err) => {
+                savepoint.rollback().await?;
+                Err(err)
+            }
+        }
+    }
+
     /// The real dispatch. Marks `event.id` as applied first (inside `tx`,
     /// so the claim and the projection write commit together); if it was
     /// already claimed — a redelivery, or a rebuild replaying history
     /// that's already reflected here — returns `Ok(())` without touching
     /// any projection table a second time.
-    pub async fn apply_in_tx(
+    async fn dispatch(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         event: &ProtocolEvent,
+        origin: Option<&EventOrigin>,
     ) -> Result<(), IndexError> {
         let claimed = sqlx::query(
             "INSERT INTO indexer_applied_events (event_id) VALUES ($1) \
@@ -204,6 +209,9 @@ impl PostgresIndexer {
         if claimed.is_none() {
             return Ok(());
         }
+
+        // Proof comes before the identity chain: a refused event must not reach it either.
+        let verified = identity_proof::verify(tx, event, origin).await?;
 
         // Chained events are recorded and resolved first; only `profile.updated`
         // is projected through the resolved chain (see `apply_profile_chained`).
@@ -235,7 +243,13 @@ impl PostgresIndexer {
         }
 
         match event.kind.as_str() {
-            "identity.created" | "profile.updated" => {
+            "identity.created" => {
+                if let Verified::Creation(created) = &verified {
+                    let mirrored = origin.is_none_or(|o| !o.local);
+                    profiles::apply_created(tx, event.timestamp, created, mirrored).await?;
+                }
+            }
+            "profile.updated" => {
                 if let Some(write) = profiles::decode(event) {
                     profiles::apply(tx, &write).await?;
                 }

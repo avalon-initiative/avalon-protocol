@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
 
 pub mod identity_chain_store;
+pub mod identity_proof;
 pub mod postgres;
 pub mod projections;
 pub mod registry;

@@ -80,11 +80,11 @@ use std::time::Duration;
 
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
 use avalon_chain::{merkle, PostgresSettlementProvider};
+use avalon_indexer::identity_proof::EventOrigin;
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
-use avalon_protocol::event_payloads::IdentityCreatedPayload;
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::ids::{GlobalId, IdentityId};
+use avalon_protocol::ids::GlobalId;
 use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -2523,31 +2523,63 @@ async fn project_mirrored_entry(
         return Ok(ProjectionOutcome::Skipped);
     };
     let mut savepoint = tx.begin().await.map_err(storage)?;
-    let applied = async {
-        ensure_identity_row_exists(&mut savepoint, &event).await?;
-        indexer.apply_in_tx(&mut savepoint, &event).await
-    }
-    .await;
-    match applied {
+    let origin = EventOrigin::mirrored(&entry.network_id, &entry.shard_id);
+    match indexer
+        .apply_in_tx_from(&mut savepoint, &event, &origin)
+        .await
+    {
         Ok(()) => {
             savepoint.commit().await.map_err(storage)?;
+            set_projection_rejection(tx, entry, None).await?;
             Ok(ProjectionOutcome::Applied)
         }
         Err(err) => {
             savepoint.rollback().await.map_err(storage)?;
             let reason = err.to_string();
-            let (kind, outcome) = if err.is_transient() {
-                ("transient", ProjectionOutcome::Transient(reason))
-            } else {
-                ("permanent", ProjectionOutcome::Permanent(reason))
-            };
-            tracing::error!(
-                "mirror-watcher: {}: event_id={} seq={} verified and mirrored, but the local indexer projection failed ({kind}): {err}",
-                entry.network_id, entry.event_id, entry.seq
-            );
-            Ok(outcome)
+            if err.is_transient() {
+                tracing::error!(
+                    "mirror-watcher: {}: event_id={} seq={} verified and mirrored, but the local indexer projection failed (transient): {err}",
+                    entry.network_id, entry.event_id, entry.seq
+                );
+                return Ok(ProjectionOutcome::Transient(reason));
+            }
+            set_projection_rejection(tx, entry, Some(&reason)).await?;
+            let key = format!("projection-rejected:{}:{}", entry.shard_id, entry.kind);
+            if let Some(held_back) = permit_log(&key) {
+                tracing::warn!(
+                    held_back,
+                    shard_id = %entry.shard_id,
+                    kind = %entry.kind,
+                    event_id = %entry.event_id,
+                    seq = entry.seq,
+                    "mirror-watcher: mirrored but not projected, refused by the indexer: {reason}"
+                );
+            }
+            Ok(ProjectionOutcome::Permanent(reason))
         }
     }
+}
+
+/// Records why an entry was not projected (`None` clears a previous reason), so an operator can
+/// list refused entries from `mirrored_entries`.
+async fn set_projection_rejection(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    entry: &mirror::MirroredEntry,
+    reason: Option<&str>,
+) -> Result<(), MirrorWatcherError> {
+    sqlx::query(
+        "UPDATE mirrored_entries SET projection_rejection = $4 \
+         WHERE network_id = $1 AND shard_id = $2 AND seq = $3 \
+           AND projection_rejection IS DISTINCT FROM $4",
+    )
+    .bind(&entry.network_id)
+    .bind(&entry.shard_id)
+    .bind(entry.seq)
+    .bind(reason)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    Ok(())
 }
 
 const REPROJECT_BATCH: i64 = 500;
@@ -2695,58 +2727,6 @@ fn global_id_from_str(raw: &str) -> Option<GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
-/// The identity row an `identity.created` v2 event may create: its payload id and inception
-/// key, only when the id is derived from the key and matches the id embedded in issuer and subject.
-fn identity_row_target(event: &ProtocolEvent) -> Option<(IdentityId, [u8; 32])> {
-    if event.kind != "identity.created" || event.version != 2 {
-        return None;
-    }
-    let created: IdentityCreatedPayload = serde_json::from_value(event.payload.clone()).ok()?;
-    let key = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &created.public_key,
-    )
-    .ok()
-    .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-    .filter(|key| {
-        avalon_protocol::ed25519_key::parse_ed25519_public_key(key).is_some()
-            && created.identity_id.matches_key(key)
-    })?;
-    let embedded = |g: &GlobalId| g.as_str().split(':').nth(1).map(str::to_owned);
-    let want = created.identity_id.to_string();
-    (embedded(&event.issuer).as_deref() == Some(want.as_str())
-        && embedded(&event.subject).as_deref() == Some(want.as_str()))
-    .then_some((created.identity_id, key))
-}
-
-/// Idempotently inserts the `identities` row an `identity.created` event describes, so a
-/// replay-only node (which never ran the local registration) can project the identity's history.
-async fn ensure_identity_row_exists(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    event: &ProtocolEvent,
-) -> Result<(), avalon_indexer::IndexError> {
-    if event.kind != "identity.created" {
-        return Ok(());
-    }
-    let Some((identity_id, inception_key)) = identity_row_target(event) else {
-        tracing::warn!(
-            "mirror-watcher: event {} ({}) is not a valid v2 identity creation; not creating an identity row",
-            event.id, event.kind
-        );
-        return Ok(());
-    };
-    sqlx::query(
-        "INSERT INTO identities (id, created_at, inception_public_key) VALUES ($1, $2, $3) \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(identity_id)
-    .bind(event.timestamp)
-    .bind(inception_key.as_slice())
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 fn decode_proof_nodes(hex_nodes: &[String]) -> Result<Vec<[u8; 32]>, MirrorWatcherError> {
     hex_nodes
         .iter()
@@ -2880,6 +2860,7 @@ mod tests {
 
     use super::*;
     use avalon_protocol::identity_id::TestIdentity;
+    use avalon_protocol::ids::IdentityId;
 
     #[test]
     fn a_peer_at_the_current_protocol_version_passes() {
@@ -4195,8 +4176,21 @@ mod tests {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
     }
 
-    fn created_payload(who: &TestIdentity, name: &str) -> serde_json::Value {
-        serde_json::to_value(who.created_payload(name)).unwrap()
+    fn created_payload(who: &TestIdentity, network_id: &str, name: &str) -> serde_json::Value {
+        let payload = who.created_payload_for(network_id, "core", Uuid::new_v4(), name);
+        serde_json::to_value(payload).unwrap()
+    }
+
+    /// A creation whose signature was made by another key: refused at projection.
+    fn forged_created_payload(
+        who: &TestIdentity,
+        network_id: &str,
+        name: &str,
+    ) -> serde_json::Value {
+        let mut payload = created_payload(who, network_id, name);
+        payload["signature"] =
+            created_payload(&TestIdentity::new(), network_id, name)["signature"].clone();
+        payload
     }
 
     fn passkey_payload(identity_id: IdentityId, passkey_id: Uuid) -> serde_json::Value {
@@ -4228,7 +4222,7 @@ mod tests {
             for (kind, payload) in [
                 (
                     "identity.created",
-                    created_payload(&who, &format!("replay-{id}")),
+                    created_payload(&who, network_id, &format!("replay-{id}")),
                 ),
                 (
                     "identity.passkey_registered",
@@ -4364,7 +4358,7 @@ mod tests {
         assert_eq!(again, ReprojectReport::default());
     }
 
-    /// Two registrations sharing a display name (the second fails permanently),
+    /// A valid registration followed by a forged one (which fails permanently),
     /// followed by a full child-first history that must still project.
     fn poison_history(network_id: &str) -> Vec<mirror::MirroredEntry> {
         let name = format!("poison-{}", Uuid::new_v4());
@@ -4375,14 +4369,14 @@ mod tests {
                 1,
                 "identity.created",
                 a.id,
-                Some(created_payload(&a, &name)),
+                Some(created_payload(&a, network_id, &name)),
             ),
             mk_entry(
                 network_id,
                 2,
                 "identity.created",
                 b.id,
-                Some(created_payload(&b, &name)),
+                Some(forged_created_payload(&b, network_id, &name)),
             ),
         ];
         for mut e in full_history(network_id, 1) {
@@ -4482,11 +4476,11 @@ mod tests {
         assert!(!is_parked(&pruned.event_id));
     }
 
-    /// A display-name conflict is deterministic: the entry fails permanently,
-    /// stays unclaimed (savepoint rolled back) and does not stop the next one.
+    /// A forged creation fails permanently, leaves a recorded reason, stays unclaimed
+    /// (savepoint rolled back) and does not stop the next entry.
     #[tokio::test]
     #[ignore]
-    async fn a_display_name_conflict_fails_permanently_and_leaves_the_entry_unclaimed() {
+    async fn a_forged_creation_fails_permanently_and_leaves_the_entry_unclaimed() {
         let pool = live_test_pool().await;
         let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("dupname");
@@ -4497,14 +4491,14 @@ mod tests {
             1,
             "identity.created",
             a.id,
-            Some(created_payload(&a, &name)),
+            Some(created_payload(&a, &network_id, &name)),
         );
         let second = mk_entry(
             &network_id,
             2,
             "identity.created",
             b.id,
-            Some(created_payload(&b, &name)),
+            Some(forged_created_payload(&b, &network_id, &name)),
         );
         let after = mk_entry(
             &network_id,
@@ -4632,7 +4626,7 @@ mod tests {
             1,
             "identity.created",
             id,
-            Some(created_payload(&who, &format!("revoke-{id}"))),
+            Some(created_payload(&who, &network_id, &format!("revoke-{id}"))),
         );
         let registered = mk_entry(
             &network_id,
@@ -4667,65 +4661,6 @@ mod tests {
         .await
         .unwrap();
         assert!(revoked_at.is_some(), "the passkey must end up revoked");
-    }
-
-    fn created_event(who: &TestIdentity, embedded: IdentityId) -> ProtocolEvent {
-        let global = GlobalId::new("identity", &embedded.to_string(), "self", "created");
-        ProtocolEvent {
-            id: Uuid::new_v4(),
-            kind: "identity.created".to_string(),
-            issuer: global.clone(),
-            subject: global,
-            payload: created_payload(who, "target-test"),
-            timestamp: OffsetDateTime::now_utc(),
-            version: 2,
-            identity_chain: None,
-        }
-    }
-
-    #[test]
-    fn identity_row_target_requires_a_v2_creation_with_a_matching_embedded_id() {
-        let who = TestIdentity::new();
-        assert_eq!(
-            identity_row_target(&created_event(&who, who.id)),
-            Some((who.id, who.public_key()))
-        );
-        assert_eq!(
-            identity_row_target(&created_event(&who, IdentityId::random_for_tests())),
-            None
-        );
-        let mut v1 = created_event(&who, who.id);
-        v1.version = 1;
-        assert_eq!(identity_row_target(&v1), None);
-        let mut other_kind = created_event(&who, who.id);
-        other_kind.kind = "identity.passkey_registered".to_string();
-        assert_eq!(identity_row_target(&other_kind), None);
-        let mut wrong_key = created_event(&who, who.id);
-        wrong_key.payload["identity_id"] =
-            serde_json::json!(IdentityId::random_for_tests().to_string());
-        assert_eq!(identity_row_target(&wrong_key), None);
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn ensure_identity_row_only_inserts_for_a_valid_creation() {
-        let pool = live_test_pool().await;
-        let mut tx = pool.begin().await.unwrap();
-        let (good, bad) = (TestIdentity::new(), TestIdentity::new());
-        let mut event = created_event(&good, good.id);
-        event.timestamp = OffsetDateTime::UNIX_EPOCH + time::Duration::days(400);
-        ensure_identity_row_exists(&mut tx, &event).await.unwrap();
-        ensure_identity_row_exists(&mut tx, &created_event(&bad, good.id))
-            .await
-            .unwrap();
-        let rows: Vec<(IdentityId, OffsetDateTime)> =
-            sqlx::query_as("SELECT id, created_at FROM identities WHERE id = ANY($1)")
-                .bind(vec![good.id, bad.id])
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap();
-        tx.rollback().await.unwrap();
-        assert_eq!(rows, vec![(good.id, event.timestamp)]);
     }
 
     #[test]
