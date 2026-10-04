@@ -65,6 +65,8 @@ impl LookupPools {
 
 /// How long a host that failed to resolve is refused without a new lookup.
 const NEGATIVE_TTL: Duration = Duration::from_secs(45);
+/// Timed-out lookups still running before new untrusted lookups are refused.
+const MAX_ABANDONED_LOOKUPS: usize = 32;
 /// Most failed hosts remembered at once.
 const MAX_NEGATIVE_HOSTS: usize = 512;
 
@@ -87,6 +89,25 @@ struct Resolver {
     lookup: LookupFn,
     limit: Duration,
     negative_ttl: Duration,
+    /// Lookups that hit the deadline but whose blocking call has not returned yet.
+    abandoned: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    max_abandoned: usize,
+}
+
+/// Removes a host's in-flight entry however its lookup task ends.
+struct FlightGuard {
+    resolver: std::sync::Arc<Resolver>,
+    host: String,
+}
+
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        self.resolver
+            .flights
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.host);
+    }
 }
 
 impl Resolver {
@@ -98,6 +119,8 @@ impl Resolver {
             lookup,
             limit,
             negative_ttl,
+            abandoned: Default::default(),
+            max_abandoned: MAX_ABANDONED_LOOKUPS,
         }
     }
 
@@ -136,43 +159,55 @@ impl Resolver {
         if self.recently_failed(&host) {
             return Err(PolicyError::Resolve);
         }
-        let mut rx =
-            {
-                let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
-                match flights.get(&host) {
-                    Some(rx) => rx.clone(),
-                    None => {
-                        let permit = self
-                            .pools
-                            .slots(purpose)
-                            .clone()
-                            .try_acquire_owned()
-                            .map_err(|_| PolicyError::Resolve)?;
-                        let (tx, rx) = tokio::sync::watch::channel(None);
-                        flights.insert(host.clone(), rx.clone());
-                        let (this, key) = (self.clone(), host.clone());
-                        tokio::spawn(async move {
-                            let answer =
-                                match tokio::time::timeout(this.limit, (this.lookup)(key.clone()))
-                                    .await
-                                {
-                                    Ok(Ok(addrs)) if !addrs.is_empty() => Ok(addrs),
-                                    _ => Err(PolicyError::Resolve),
-                                };
-                            if answer.is_err() {
-                                this.remember_failure(&key);
-                            }
-                            this.flights
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .remove(&key);
-                            drop(permit);
-                            let _ = tx.send(Some(answer));
-                        });
-                        rx
+        let mut rx = {
+            let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+            match flights.get(&host) {
+                Some(rx) => rx.clone(),
+                None => {
+                    let abandoned = self.abandoned.load(std::sync::atomic::Ordering::SeqCst);
+                    if purpose == LookupPurpose::Untrusted && abandoned >= self.max_abandoned {
+                        return Err(PolicyError::Resolve);
                     }
+                    let permit = self
+                        .pools
+                        .slots(purpose)
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|_| PolicyError::Resolve)?;
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    flights.insert(host.clone(), rx.clone());
+                    let (this, key) = (self.clone(), host.clone());
+                    tokio::spawn(async move {
+                        let _guard = FlightGuard {
+                            resolver: this.clone(),
+                            host: key.clone(),
+                        };
+                        let mut inner = tokio::spawn((this.lookup)(key.clone()));
+                        let answer = match tokio::time::timeout(this.limit, &mut inner).await {
+                            Ok(Ok(Ok(addrs))) if !addrs.is_empty() => Ok(addrs),
+                            Ok(_) => Err(PolicyError::Resolve),
+                            Err(_) => {
+                                // The blocking call cannot be cancelled; count it until it returns.
+                                let count = this.abandoned.clone();
+                                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                tokio::spawn(async move {
+                                    let _ = inner.await;
+                                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                                });
+                                Err(PolicyError::Resolve)
+                            }
+                        };
+                        if answer.is_err() {
+                            this.remember_failure(&key);
+                        }
+                        drop(_guard);
+                        drop(permit);
+                        let _ = tx.send(Some(answer));
+                    });
+                    rx
                 }
-            };
+            }
+        };
         let answer = rx
             .wait_for(Option::is_some)
             .await
@@ -615,7 +650,7 @@ mod tests {
                         Ok(vec![ip("93.184.216.34")])
                     }
                     "dead.test" => Err(std::io::Error::other("no such host")),
-                    "hang.test" => std::future::pending().await,
+                    n if n.starts_with("hang.test") => std::future::pending().await,
                     _ => Ok(vec![ip("93.184.216.35")]),
                 }
             })
@@ -680,6 +715,35 @@ mod tests {
                 .is_ok(),
             "the slot came back with the deadline"
         );
+    }
+
+    #[tokio::test]
+    async fn abandoned_lookups_are_capped_for_untrusted_names_only() {
+        let (r, calls) = fake_resolver(
+            LookupPools::new(8, 8),
+            Duration::from_millis(30),
+            Duration::from_secs(60),
+        );
+        let r = Arc::new(Resolver {
+            max_abandoned: 2,
+            ..Arc::try_unwrap(r).ok().unwrap()
+        });
+        for i in 0..2 {
+            let host = format!("hang.test{i}");
+            let _ = r.resolve(&host, 80, LookupPurpose::Untrusted).await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(r.abandoned.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            r.resolve("fresh.test", 80, LookupPurpose::Untrusted).await,
+            Err(PolicyError::Resolve)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "no lookup past the cap");
+        assert!(!r.recently_failed("fresh.test"), "a refusal is not cached");
+        assert!(r
+            .resolve("fresh.test", 80, LookupPurpose::Critical)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

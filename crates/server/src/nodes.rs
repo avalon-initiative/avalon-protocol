@@ -1118,24 +1118,14 @@ impl HeadGossipTracker {
                     .write()
                     .expect("head gossip tracker lock poisoned");
                 Self::evict_if_full(&mut seen, &key);
-                // The first reporter stays: a later sender repeating a root must not become the
-                // source a conflict is fetched from.
-                match seen.get_mut(&key) {
-                    Some(tracked) => {
-                        tracked.summary = summary.clone();
-                        tracked.last_seen_at = now;
-                    }
-                    None => {
-                        seen.insert(
-                            key,
-                            TrackedHeadSummary {
-                                summary: summary.clone(),
-                                reported_by: from_peer.to_string(),
-                                last_seen_at: now,
-                            },
-                        );
-                    }
-                }
+                seen.insert(
+                    key,
+                    TrackedHeadSummary {
+                        summary: summary.clone(),
+                        reported_by: from_peer.to_string(),
+                        last_seen_at: now,
+                    },
+                );
 
                 if !already_equivocating {
                     for ((other_shard, other_size, other_root), tracked) in seen.iter() {
@@ -1928,10 +1918,17 @@ async fn merge_gossip(
                 skipped.rejected += 1;
                 continue;
             }
-            if slot.is_none() {
+            // Only a hostname is resolved; an IP literal needs no lookup slot.
+            let needs_lookup = matches!(
+                crate::outbound_policy::OutboundPolicy::parse_base_url(&info.base_url)
+                    .ok()
+                    .and_then(|u| u.host().map(|h| matches!(h, url::Host::Domain(_)))),
+                Some(true)
+            );
+            if needs_lookup && slot.is_none() {
                 slot = adm.enter_check().ok();
             }
-            if slot.is_none() {
+            if needs_lookup && slot.is_none() {
                 skipped.rejected += 1;
                 continue;
             }
@@ -5846,24 +5843,17 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_root_keeps_its_first_reporter() {
+    fn an_attacker_registering_a_root_first_cannot_block_confirming_a_later_conflict() {
         let tracker = HeadGossipTracker::new();
         let now = OffsetDateTime::now_utc();
+        tracker.merge("attacker", &[head_summary("u1207-src", 5, 1)], now);
         tracker.merge("honest-a", &[head_summary("u1207-src", 5, 1)], now);
         let (_, conflicts, _) = tracker.merge("honest-b", &[head_summary("u1207-src", 5, 2)], now);
-        assert_eq!(conflicts[0].source_b, "honest-a");
-        let (_, again, _) = tracker.merge("attacker", &[head_summary("u1207-src", 5, 1)], now);
-        let sources: Vec<String> = tracker
-            .seen
-            .read()
-            .unwrap()
-            .values()
-            .map(|t| t.reported_by.clone())
-            .collect();
-        assert!(!sources.iter().any(|s| s == "attacker"), "{sources:?}");
-        assert!(again.iter().all(|c| c.source_a == "attacker"));
-        let (_, conflicts, _) = tracker.merge("honest-b", &[head_summary("u1207-src", 5, 2)], now);
-        assert_eq!(conflicts[0].source_b, "honest-a", "the honest source stays");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].source_b, "honest-a",
+            "the honest repeat is the source"
+        );
     }
 
     #[tokio::test]
@@ -6075,6 +6065,19 @@ mod tests {
         let _busy = adm.enter_check().unwrap();
         merge_gossip(&table, &adm, "avalon-dev-local", hostname_peers(6)).await;
         assert_eq!(lookups(&adm), 0, "no slot, no lookup");
+    }
+
+    #[tokio::test]
+    async fn gossiped_ip_literals_need_no_lookup_slot() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(false, |c| c.max_concurrent_checks = 1);
+        let _busy = adm.enter_check().unwrap();
+        let now = OffsetDateTime::now_utc();
+        let literals = (1..=3)
+            .map(|i| supported(&format!("http://8.8.8.{i}"), now))
+            .collect();
+        merge_gossip(&table, &adm, "avalon-dev-local", literals).await;
+        assert_eq!(table.unverified_len(), 3);
     }
 
     #[tokio::test]
