@@ -22,10 +22,11 @@ ALTER TABLE mirrored_entries ADD COLUMN projection_rejection TEXT;
 -- The shards where an identity's own signed creation was projected: the only non-core shards
 -- whose key events are accepted for it.
 CREATE TABLE indexer_identity_homes (
-    identity_id TEXT NOT NULL CHECK (identity_id ~ '^[0-9a-f]{64}$'),
+    identity_id TEXT NOT NULL,
     network_id TEXT NOT NULL,
     shard_id TEXT NOT NULL,
-    PRIMARY KEY (identity_id, network_id, shard_id)
+    PRIMARY KEY (identity_id, network_id, shard_id),
+    CONSTRAINT indexer_identity_homes_identity_id_hex_chk CHECK (identity_id ~ '^[0-9a-f]{64}$')
 );
 
 -- An event id is claimed per shard, so one shard's copy cannot suppress another's.
