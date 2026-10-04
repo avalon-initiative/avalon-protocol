@@ -361,14 +361,21 @@ impl PeerTable {
     }
 
     /// [`Self::upsert`] for an entry relayed by a neighbor: the stored `last_announced_at` is kept,
-    /// since a relayed time is older than a direct contact and would age a live peer out.
+    /// since a relayed time is older than a direct contact and would age a live peer out, and a
+    /// bound entry keeps its libp2p id, addresses and connectivity, which only the peer's own
+    /// announce or answer may change. A relayed advert still follows the replacement rule.
     pub fn upsert_relayed(&self, mut info: PeerInfo) {
         let mut peers = self.peers.write().expect("peer table lock poisoned");
         if let Some(stored) = peers.get(&info.base_url) {
             info.last_announced_at = stored.last_announced_at;
         }
+        if let Some(stored) = peers.get(&info.base_url).filter(|p| p.identity_bound) {
+            info.libp2p_peer_id = stored.libp2p_peer_id.clone();
+            info.libp2p_listen_addrs = stored.libp2p_listen_addrs.clone();
+            info.connectivity = stored.connectivity;
+            info.identity_bound = true;
+        }
         carry_witness(peers.get(&info.base_url), &mut info);
-        carry_identity(peers.get(&info.base_url), &mut info);
         peers.insert(info.base_url.clone(), info);
     }
 
@@ -1299,10 +1306,14 @@ fn truncate_for_log(raw: &str) -> String {
 /// table write, and no shard or head-summary gossip is merged.
 ///
 /// Head summaries are merged only when the announcer proves who it is: an authenticated
-/// `p2p://` id, or a known URL whose libp2p identity its own server confirmed. A newly admitted
-/// HTTP URL is stored but proves nothing about who sent the announce, so its heads are skipped.
-/// An announce for a known URL that proves nothing changes no stored field and queues no
-/// neighbor; only its verified witness advert is kept.
+/// `p2p://` id, or a known URL that names a libp2p id different from the stored one and whose
+/// own server confirms the new id. A newly admitted HTTP URL is stored but proves nothing about
+/// who sent the announce, so its heads are skipped.
+///
+/// A known HTTP URL that re-announces with the id already stored, or whose stored entry is
+/// unbound (for example with `AVALON_ANNOUNCE_VERIFY_REACHABILITY=false`), is unproven: no
+/// upsert, no liveness refresh, no neighbor queued and no heads merged. Only its verified
+/// witness advert is kept, so such a peer stays listed through this node's own outbound contact.
 ///
 /// A caller announcing `p2p://<peer id>` (no URL of its own) is admitted only over a libp2p
 /// stream authenticated as that peer id; over plain HTTP it gets the response and nothing
@@ -1361,7 +1372,7 @@ async fn announce_under(
         return Ok(Json(announce_response(&state, &caller_base_url)));
     }
     let source_ip = client_ip(source, &headers);
-    // `listed`: the announcer is in the table on its own merit; `proven`: it showed who it is.
+    // `listed`: in the table on its own merit; `proven`: an authenticated stream, or its own server confirmed a changed id.
     let (announcer, listed, proven) = if let P2pAnnounce::Authenticated(id) = p2p {
         info.base_url = crate::node_http::p2p_base_url(&id);
         info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
@@ -5797,6 +5808,41 @@ mod tests {
             vec![(crate::equivocation::Standing::of(true), url)],
             "a peer this node completed round trips with has standing"
         );
+    }
+
+    #[test]
+    fn a_relayed_entry_cannot_change_a_bound_peers_identity_addresses_or_direct_witness() {
+        let (real, other) = (fresh_libp2p(), fresh_libp2p());
+        let table = PeerTable::new();
+        let mut stored = table_entry("http://v.test", Some(&real), true);
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let mut advert = WitnessSigner::new(key, id.clone())
+            .unwrap()
+            .advert("http://v.test", OffsetDateTime::now_utc());
+        advert.direct = true;
+        stored.witness = Some(advert);
+        table.upsert(stored.clone());
+
+        for relayed_id in [&other, &real] {
+            let mut relayed = table_entry("http://v.test", Some(relayed_id), false);
+            relayed.libp2p_listen_addrs = vec!["/ip4/198.51.100.9/tcp/1".into()];
+            relayed.connectivity = Some(avalon_protocol::connectivity::Connectivity::Direct);
+            let rival = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+            let rival_id = hex::encode(rival.verifying_key().to_bytes());
+            relayed.witness = Some(
+                WitnessSigner::new(rival, rival_id)
+                    .unwrap()
+                    .advert("http://v.test", OffsetDateTime::now_utc()),
+            );
+            table.upsert_relayed(relayed);
+            let now = table.list_all().remove(0);
+            assert!(now.identity_bound);
+            assert_eq!(now.libp2p_peer_id, stored.libp2p_peer_id);
+            assert_eq!(now.libp2p_listen_addrs, stored.libp2p_listen_addrs);
+            assert_eq!(now.connectivity, stored.connectivity);
+            assert_eq!(now.witness.map(|w| w.key_id), Some(id.clone()));
+        }
     }
 
     #[test]

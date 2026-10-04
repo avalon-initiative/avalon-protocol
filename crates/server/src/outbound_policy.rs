@@ -701,6 +701,43 @@ mod tests {
             .is_ok());
         assert!(held.await.unwrap().is_ok());
     }
+    /// Modules that fetch from peer-supplied addresses must build their clients through
+    /// `NodeClient::guarded`; any other constructor in their non-test code is a bypass.
+    #[test]
+    fn peer_fetching_modules_build_only_guarded_clients() {
+        let modules = [
+            ("replication", include_str!("replication.rs")),
+            ("cross_shard", include_str!("cross_shard.rs")),
+            ("cross_shard_fetch", include_str!("cross_shard_fetch.rs")),
+            ("mirror_watcher", include_str!("mirror_watcher.rs")),
+            ("mirror_push", include_str!("mirror_push.rs")),
+            ("chat_replication", include_str!("chat_replication.rs")),
+            ("equivocation", include_str!("equivocation.rs")),
+            ("nodes", include_str!("nodes.rs")),
+        ];
+        let bypasses = [
+            "NodeClient::new(",
+            "NodeClient::peer(",
+            "NodeClient::from(",
+            "reqwest::Client::new(",
+            "reqwest::Client::builder(",
+            "peer_client(",
+        ];
+        for (name, source) in modules {
+            let production = source.split("#[cfg(test)]\nmod ").next().unwrap();
+            assert!(
+                production.contains("NodeClient::guarded"),
+                "{name} no longer builds a guarded client"
+            );
+            for bypass in bypasses {
+                assert!(
+                    !production.contains(bypass),
+                    "{name} builds an unguarded client with {bypass}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn only_a_private_address_refusal_is_reported_as_liftable() {
         let strict = OutboundPolicy::new(false);
