@@ -140,6 +140,17 @@ Each file has this shape:
   newline or NUL is a failure). The file's
   `generation` field says how the two fixed keys and every signature were
   produced. Supported in all three SDKs.
+- `shard-sibling-routing.json` — routing a write to one of an owner's sibling shards by a caller-supplied key
+  (`shard_family::route_write`, `ShardFamily.RouteWrite`, `routeWrite`). Client-side only, so it originates here and has no
+  protocol-side runner. Rendezvous hashing: the weight of a candidate is SHA-256 of `avalon-shard-route-v1` (UTF-8, no
+  length) then owner, key and shard id, each as a u32 big-endian UTF-8 byte length and the bytes; the greatest weight
+  (32 big-endian bytes) wins, ties go to the bytewise smaller shard id, candidates are first reduced to unique members of
+  the owner's family and none left means no route (`shardId` null). Three arrays instead of `vectors`. `weightVectors`:
+  `input` `owner`, `key`, `shardId`; `expected` `preimageHex`, `weightHex`. `routeVectors`: `input` `owner`, `key`,
+  `siblings`; `expected.shardId` (stability, order and duplicates, non-members, empty set, Unicode keys, tie-break).
+  `movementVectors`: `input` `owner`, `keys`, `before`, `after` sibling sets; `expected` `before` and `after` route per key
+  (a key only moves onto an added sibling or off a removed one; the runners assert that too). No cross-sibling atomicity.
+  Supported in all three SDKs.
 - `known-list-selection.json` — the client's known-list rules
   (`avalon_protocol::client_known_list`). It has two arrays instead of
   `vectors`. `prefixVectors`: the diversity prefix derived from a node base url
@@ -204,14 +215,13 @@ Each file has this shape:
 - `signing-key-revoked.json` — signing-key revocation bytes
   `avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}`
   and signature; key ids are UUID text, so no `:` can occur in them. These four files are asserted
-  by the protocol runner only so far (`supportedIn` is `["rust"]`, meaning the protocol crate; the
-  SDK runners gate on this field and skip the rest). `identity-id.json` also has `strict_verify`
+  by all three SDK runners (and by the protocol runner). `identity-id.json` also has `strict_verify`
   vectors: Ed25519 verification must be strict (S below the group order L, and no small-order R
   or key), and `identity-created-signing.json` has `domainSeparationVectors` showing the v1 and
-  v2 bytes differ. For the next slice: the server's existing non-strict verify sites
-  (`auth.rs` `verify_event_signature` and similar) accept a small-order R that `verify_strict`
-  rejects, so the server switches identity-bound verification to
-  `ed25519_key::verify_strict_signature`, and the SDKs must reject small-order R and S >= L.
+  v2 bytes differ. The server's existing non-strict verify sites (`auth.rs`
+  `verify_event_signature` and similar) accept a small-order R that `verify_strict` rejects, so
+  the server switches identity-bound verification to `ed25519_key::verify_strict_signature`, and
+  the SDKs reject small-order R and S >= L.
 
 ## Both sides of the wire
 

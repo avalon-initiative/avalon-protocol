@@ -1,0 +1,807 @@
+{
+  "description": "Routing a write to one of an owner's sibling shards by a caller-supplied key (stable partitioning). Rendezvous (highest-random-weight) hashing: for each candidate shard id the weight is SHA-256 of the preimage 'avalon-shard-route-v1' (UTF-8 tag, no length) followed by the owner, the key and the shard id, each as a u32 big-endian UTF-8 byte length then the bytes. The candidate with the greatest weight, compared as 32 big-endian bytes, wins. Candidates are first reduced to the unique ids that are members of the owner's family (shard-family-head.json memberVectors); equal weights can only come from equal ids, so the tie-break is the bytewise smaller shard id and duplicates collapse. No candidates left means no route (shardId null). Adding or removing a sibling moves only the keys whose winner is that sibling. The key is hashed as its UTF-8 bytes with no Unicode normalisation. This is client-side only: the server does not route writes, and nothing here makes writes across siblings atomic.",
+  "generation": "Deterministic; produced by an independent implementation (SHA-256 over the stated preimage), not by any SDK.",
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
+  "weightVectors": [
+    {
+      "name": "ascii key",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d7300000005616c6963650000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "58acfd57d92fc076c7ec734c0a76196d70d713d6c02f62fa2c558ab12edbfea8"
+      }
+    },
+    {
+      "name": "same key, other shard",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "shardId": "game:ashen-realms/2"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d7300000005616c6963650000001367616d653a617368656e2d7265616c6d732f32",
+        "weightHex": "654b8fd4e4bf8d17618cf9f7bfdbb67815701e2084a4a3f5184b21930c72ddd4"
+      }
+    },
+    {
+      "name": "other key",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "bob",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d7300000003626f620000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "e2599ae95a5c95442ad10b325dab6fd9e2e344573bf054f96f3d45115981d7e1"
+      }
+    },
+    {
+      "name": "empty key",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d73000000000000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "833e6a9e1fa4912b2913a334435c3bb1c871f18a910ca1a131b81c774766f9cc"
+      }
+    },
+    {
+      "name": "multi-byte key",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "日本語",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d7300000009e697a5e69cace8aa9e0000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "f45e9b14d478891ff127d86bae2836942b63a3633b9c0a17efd28b1a8c769b6f"
+      }
+    },
+    {
+      "name": "precomposed e-acute",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "é",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d7300000002c3a90000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "fa996911608bb92aa15fd2e1aa50e58fd3f941a657522f703b87e4c321330ab3"
+      }
+    },
+    {
+      "name": "decomposed e-acute (differs from precomposed: no normalisation)",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "é",
+        "shardId": "game:ashen-realms/1"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000001167616d653a617368656e2d7265616c6d730000000365cc810000001367616d653a617368656e2d7265616c6d732f31",
+        "weightHex": "47dc2be304463ba2b13ceba001b7a1f9971dcbb6b96f8ccc2a3cbdc798e15a42"
+      }
+    },
+    {
+      "name": "length prefixes keep (owner, key) boundaries distinct",
+      "input": {
+        "owner": "game:ab",
+        "key": "c",
+        "shardId": "game:ab/d"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000000767616d653a616200000001630000000967616d653a61622f64",
+        "weightHex": "ff6d0c2850ada5fce6318d6b9c44efb1cc54133124440dc055840b92e83445ae"
+      }
+    },
+    {
+      "name": "weight",
+      "input": {
+        "owner": "game:a",
+        "key": "bc",
+        "shardId": "game:a/d"
+      },
+      "expected": {
+        "preimageHex": "6176616c6f6e2d73686172642d726f7574652d76310000000667616d653a610000000262630000000867616d653a612f64",
+        "weightHex": "d116c57caa569c23e75c8f88dec6da886ef15921b768d8fc395e84cd18d63a34"
+      }
+    }
+  ],
+  "routeVectors": [
+    {
+      "name": "single-sibling",
+      "description": "one candidate always wins",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/1"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/1"
+      }
+    },
+    {
+      "name": "three-siblings-alice",
+      "description": "",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "three-siblings-alice-reordered",
+      "description": "same set in another order, same answer",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "three-siblings-alice-repeated",
+      "description": "same call again, same answer",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "three-siblings-bob",
+      "description": "",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "bob",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/2"
+      }
+    },
+    {
+      "name": "duplicates-collapse",
+      "description": "a repeated id counts once",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "bob",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/2"
+      }
+    },
+    {
+      "name": "owner-shard-is-a-member",
+      "description": "the owner's own shard (no instance) is a sibling too",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "carol",
+        "siblings": [
+          "game:ashen-realms",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "non-members-ignored",
+      "description": "other owners, core, node: ids and malformed ids are dropped before choosing",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:other/1",
+          "game:ashen-realms-2/1",
+          "core",
+          "node:abababababababababababababababababababababababababababababababab",
+          "app:ashen-realms/1",
+          "game:ashen-realms/Bad",
+          "",
+          "not a shard id"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "only-non-members",
+      "description": "nothing eligible",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": [
+          "game:other/1",
+          "core"
+        ]
+      },
+      "expected": {
+        "shardId": null
+      }
+    },
+    {
+      "name": "empty-set",
+      "description": "no candidates",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "alice",
+        "siblings": []
+      },
+      "expected": {
+        "shardId": null
+      }
+    },
+    {
+      "name": "malformed-owner",
+      "description": "an owner that is not a well-formed owner id matches nothing",
+      "input": {
+        "owner": "game:ashen-realms/1",
+        "key": "alice",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": null
+      }
+    },
+    {
+      "name": "unicode-u65e5-672c-8a9e",
+      "description": "key hashed as its UTF-8 bytes, no normalisation",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "日本語",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/1"
+      }
+    },
+    {
+      "name": "unicode-u043a-043b-044e-0447",
+      "description": "key hashed as its UTF-8 bytes, no normalisation",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "ключ",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/2"
+      }
+    },
+    {
+      "name": "unicode-u1f642-0020-006b-0065-0079",
+      "description": "key hashed as its UTF-8 bytes, no normalisation",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "🙂 key",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/3"
+      }
+    },
+    {
+      "name": "unicode-u0065-0301",
+      "description": "key hashed as its UTF-8 bytes, no normalisation",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "é",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/1"
+      }
+    },
+    {
+      "name": "unicode-u00e9",
+      "description": "key hashed as its UTF-8 bytes, no normalisation",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "é",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/1"
+      }
+    },
+    {
+      "name": "unicode-empty-key",
+      "description": "an empty key is valid",
+      "input": {
+        "owner": "game:ashen-realms",
+        "key": "",
+        "siblings": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "shardId": "game:ashen-realms/2"
+      }
+    },
+    {
+      "name": "service-namespace",
+      "description": "",
+      "input": {
+        "owner": "service:billing",
+        "key": "order#7",
+        "siblings": [
+          "service:billing/a",
+          "service:billing/b",
+          "service:billing/c",
+          "service:billing/d"
+        ]
+      },
+      "expected": {
+        "shardId": "service:billing/d"
+      }
+    }
+  ],
+  "movementVectors": [
+    {
+      "name": "add-a-sibling",
+      "description": "keys that move land only on the added sibling",
+      "input": {
+        "owner": "game:ashen-realms",
+        "keys": [
+          "alice",
+          "bob",
+          "carol",
+          "dave",
+          "erin",
+          "frank",
+          "grace",
+          "heidi",
+          "ivan",
+          "judy",
+          "mallory",
+          "niaj",
+          "olivia",
+          "peggy",
+          "rupert",
+          "sybil",
+          "trent",
+          "victor",
+          "walter",
+          "zoe",
+          "player:1001",
+          "player:1002",
+          "guild/42",
+          "order#7"
+        ],
+        "before": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ],
+        "after": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4"
+        ]
+      },
+      "expected": {
+        "before": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ],
+        "after": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/4"
+        ]
+      }
+    },
+    {
+      "name": "remove-a-sibling",
+      "description": "only the keys on the removed sibling move",
+      "input": {
+        "owner": "game:ashen-realms",
+        "keys": [
+          "alice",
+          "bob",
+          "carol",
+          "dave",
+          "erin",
+          "frank",
+          "grace",
+          "heidi",
+          "ivan",
+          "judy",
+          "mallory",
+          "niaj",
+          "olivia",
+          "peggy",
+          "rupert",
+          "sybil",
+          "trent",
+          "victor",
+          "walter",
+          "zoe",
+          "player:1001",
+          "player:1002",
+          "guild/42",
+          "order#7"
+        ],
+        "before": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4"
+        ],
+        "after": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "before": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/4",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/4"
+        ],
+        "after": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ]
+      }
+    },
+    {
+      "name": "remove-from-three",
+      "description": "only the keys that were on game:ashen-realms/2 move",
+      "input": {
+        "owner": "game:ashen-realms",
+        "keys": [
+          "alice",
+          "bob",
+          "carol",
+          "dave",
+          "erin",
+          "frank",
+          "grace",
+          "heidi",
+          "ivan",
+          "judy",
+          "mallory",
+          "niaj",
+          "olivia",
+          "peggy",
+          "rupert",
+          "sybil",
+          "trent",
+          "victor",
+          "walter",
+          "zoe",
+          "player:1001",
+          "player:1002",
+          "guild/42",
+          "order#7"
+        ],
+        "before": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ],
+        "after": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/3"
+        ]
+      },
+      "expected": {
+        "before": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ],
+        "after": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ]
+      }
+    },
+    {
+      "name": "add-with-non-member-noise",
+      "description": "adding ids outside the family moves nothing",
+      "input": {
+        "owner": "game:ashen-realms",
+        "keys": [
+          "alice",
+          "bob",
+          "carol",
+          "dave",
+          "erin",
+          "frank",
+          "grace",
+          "heidi",
+          "ivan",
+          "judy",
+          "mallory",
+          "niaj",
+          "olivia",
+          "peggy",
+          "rupert",
+          "sybil",
+          "trent",
+          "victor",
+          "walter",
+          "zoe",
+          "player:1001",
+          "player:1002",
+          "guild/42",
+          "order#7"
+        ],
+        "before": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3"
+        ],
+        "after": [
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:other/1",
+          "core"
+        ]
+      },
+      "expected": {
+        "before": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ],
+        "after": [
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/2",
+          "game:ashen-realms/3",
+          "game:ashen-realms/3",
+          "game:ashen-realms/1",
+          "game:ashen-realms/1"
+        ]
+      }
+    }
+  ]
+}
