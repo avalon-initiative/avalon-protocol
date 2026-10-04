@@ -61,6 +61,14 @@ pub fn verify_event_signature(
     avalon_protocol::ed25519_key::verify_strict_signature(&verifying_key, message, &sig_array)
 }
 
+/// Constant-time equality of two secrets; both are hashed first so length is not leaked.
+pub fn secrets_equal(a: &str, b: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    use subtle::ConstantTimeEq;
+    let (a, b) = (Sha256::digest(a.as_bytes()), Sha256::digest(b.as_bytes()));
+    bool::from(a.ct_eq(&b))
+}
+
 /// 32 bytes of CSPRNG output, base64url-encoded (no padding) — carries no
 /// embedded data, unlike a JWT. Session state lives in the `sessions` table.
 pub fn generate_session_token() -> String {
@@ -89,6 +97,14 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn secrets_equal_accepts_only_identical_secrets() {
+        assert!(secrets_equal("s3cret", "s3cret"));
+        assert!(!secrets_equal("s3cret", "s3creT"));
+        assert!(!secrets_equal("s3cret", "s3cret "));
+        assert!(!secrets_equal("", "s3cret"));
+    }
 
     fn test_webauthn() -> Webauthn {
         build_webauthn("localhost", "http://localhost:8080").expect("test Webauthn should build")

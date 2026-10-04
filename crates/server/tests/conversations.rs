@@ -40,7 +40,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 
     let token = format!("test-token-{}", Uuid::new_v4());
     let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
         .bind(&token)
         .bind(identity_id)
         .bind(expires_at)

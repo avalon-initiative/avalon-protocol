@@ -428,10 +428,11 @@ pub async fn revoke_passkey(
     // unsigned, leaving zero. `FOR UPDATE` can't be combined with an
     // aggregate (`COUNT(*)`) — Postgres rejects that outright — so this
     // fetches the locked rows themselves and counts them in Rust.
-    let locked_rows = sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 FOR UPDATE")
-        .bind(identity_id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let locked_rows =
+        sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id FOR UPDATE")
+            .bind(identity_id)
+            .fetch_all(&mut *tx)
+            .await?;
     let remaining_before_revoke: i64 = locked_rows.len() as i64;
 
     if needs_fresh_signature(remaining_before_revoke) {
@@ -457,6 +458,7 @@ pub async fn revoke_passkey(
     if deleted.rows_affected() == 0 {
         return Err(AppError::PasskeyNotFound);
     }
+    crate::sessions::end_for_passkey(&mut *tx, identity_id, passkey_id).await?;
 
     // Issue #523: a mirror-only node must reject a login against a
     // credential it has also seen revoked, via mirrored history alone —

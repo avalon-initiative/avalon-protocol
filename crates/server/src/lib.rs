@@ -100,6 +100,7 @@ pub mod rollback;
 pub mod run;
 pub mod self_certifying_keys;
 pub mod serve;
+pub mod sessions;
 pub mod settlement;
 pub mod shutdown;
 pub mod signature_gate;
@@ -459,6 +460,9 @@ fn full_routes(state: AppState) -> Router {
         )
         .route("/sessions/start", post(handlers::session_start))
         .route("/sessions/finish", post(handlers::session_finish))
+        .route("/sessions/logout", post(sessions::logout))
+        .route("/me/sessions", get(sessions::list_sessions))
+        .route("/me/sessions/{id}/revoke", post(sessions::revoke_session))
         // Issue #307: cross-device pairing, bootstrapping a session for a
         // client with no WebAuthn surface at all — see
         // `crate::device_pairing`'s module docs.

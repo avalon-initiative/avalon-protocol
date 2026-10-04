@@ -92,6 +92,8 @@ pub enum AppError {
     SigningKeyNotFound,
     #[error("passkey not found")]
     PasskeyNotFound,
+    #[error("session not found")]
+    SessionNotFound,
     #[error(
         "this identity's event chain is forked; operations that depend on which key controls it are frozen until social recovery resolves it"
     )]
@@ -549,6 +551,7 @@ impl AppError {
             AppError::BlockNotFound => "BLOCK_NOT_FOUND",
             AppError::SigningKeyNotFound => "SIGNING_KEY_NOT_FOUND",
             AppError::PasskeyNotFound => "PASSKEY_NOT_FOUND",
+            AppError::SessionNotFound => "SESSION_NOT_FOUND",
             AppError::IdentityChainForked => "IDENTITY_CHAIN_FORKED",
             AppError::RollbackNoCompletedRecovery => "ROLLBACK_NO_COMPLETED_RECOVERY",
             AppError::InvalidRollbackWindow => "INVALID_ROLLBACK_WINDOW",
@@ -762,6 +765,7 @@ impl IntoResponse for AppError {
             AppError::SigningKeyNotFound
             | AppError::DeviceGrantNotFound
             | AppError::PasskeyNotFound
+            | AppError::SessionNotFound
             | AppError::RollbackEventNotEligible => StatusCode::NOT_FOUND,
             AppError::InvalidRollbackWindow => StatusCode::BAD_REQUEST,
             AppError::RollbackNoCompletedRecovery
