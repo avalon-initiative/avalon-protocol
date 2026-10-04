@@ -3529,7 +3529,7 @@ mod tests {
             mirror::insert_observation(
                 &pool,
                 &ObservedSth::from_sth(
-                    &format!("http://127.0.0.1:{}", 2 + i),
+                    format!("http://127.0.0.1:{}", 2 + i),
                     "core",
                     &decoy,
                     created_at,

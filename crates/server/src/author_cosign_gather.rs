@@ -51,6 +51,9 @@ pub fn select_wanted(
         .collect()
 }
 
+/// A witness's outcome awaiting read-back: (key id, attempt, label, stored time and signature).
+type Staged = (String, Attempt, String, Option<(OffsetDateTime, String)>);
+
 /// One pass: fetches and stores cosignatures for this node's newest head. Returns how many were
 /// stored or refreshed. Every failure is logged and skipped.
 pub async fn gather_once(
@@ -133,7 +136,7 @@ pub async fn gather_once(
     let results =
         cosign_gather::gather_own_cosignatures(policy, &wanted, &sources, &sth, own_shard_id).await;
     // Phase 1: store what verified and is newer than what is held.
-    let mut staged: Vec<(String, Attempt, String, Option<(OffsetDateTime, String)>)> = Vec::new();
+    let mut staged: Vec<Staged> = Vec::new();
     for (key_id, outcome) in results {
         let mut attempt = witness_refresh::attempt_for(&outcome, now);
         let mut applied = None;
