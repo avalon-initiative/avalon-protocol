@@ -89,7 +89,7 @@ fn replication_target_from(peers: Vec<crate::nodes::PeerInfo>) -> Option<String>
 
 fn replication_client() -> &'static crate::node_http::NodeClient {
     static CLIENT: OnceLock<crate::node_http::NodeClient> = OnceLock::new();
-    CLIENT.get_or_init(crate::node_http::NodeClient::new)
+    CLIENT.get_or_init(crate::node_http::NodeClient::guarded)
 }
 
 /// Posts `event` to this node's one designated replication target, if it

@@ -292,7 +292,7 @@ pub async fn run_worker(
     own_shard_id: String,
     config: ReplicationConfig,
 ) {
-    let client = crate::node_http::NodeClient::peer();
+    let client = crate::node_http::NodeClient::guarded();
     loop {
         let mut shard_ids = shard_registry.known_shard_ids();
         if own_shard_id != crate::replica::NO_AUTHORED_SHARD {

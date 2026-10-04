@@ -24,6 +24,27 @@ use url::{Host, Url};
 
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Longest a hostname lookup may take before the host counts as unresolvable.
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `lookup` bounded by `limit`; a lookup that never answers is [`PolicyError::Resolve`].
+async fn bounded_lookup<F>(lookup: F, limit: Duration) -> Result<Vec<SocketAddr>, PolicyError>
+where
+    F: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>>,
+{
+    match tokio::time::timeout(limit, lookup).await {
+        Ok(Ok(addrs)) => Ok(addrs),
+        _ => Err(PolicyError::Resolve),
+    }
+}
+
+async fn resolve_host(name: &str, port: u16) -> Result<Vec<SocketAddr>, PolicyError> {
+    bounded_lookup(
+        async { Ok(tokio::net::lookup_host((name, port)).await?.collect()) },
+        DNS_LOOKUP_TIMEOUT,
+    )
+    .await
+}
 
 /// HTTP client for requests to other nodes, which follows no redirects and uses no proxy so a
 /// signed request never reaches a host other than the one named: a peer that accepts the connection but never answers
@@ -46,9 +67,7 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let policy = self.0;
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> =
-                tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            let addrs = check_answer(policy, addrs)?;
+            let addrs = check_answer(policy, resolve_host(name.as_str(), 0).await?)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -311,10 +330,7 @@ impl OutboundPolicy {
             Host::Ipv4(ip) => self.literal(base, IpAddr::V4(ip), port),
             Host::Ipv6(ip) => self.literal(base, IpAddr::V6(ip), port),
             Host::Domain(name) => {
-                let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name, port))
-                    .await
-                    .map_err(|_| PolicyError::Resolve)?
-                    .collect();
+                let addrs = resolve_host(name, port).await?;
                 for a in &addrs {
                     self.check_ip(a.ip())?;
                 }
@@ -364,6 +380,24 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lookup_that_never_answers_gives_up_as_unresolvable() {
+        let never = std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
+        let outer = Duration::from_secs(60);
+        let got = tokio::time::timeout(outer, bounded_lookup(never, DNS_LOOKUP_TIMEOUT)).await;
+        assert_eq!(
+            got.expect("the lookup bound must fire"),
+            Err(PolicyError::Resolve)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lookup_that_answers_in_time_passes_through() {
+        let addr = SocketAddr::new(ip("93.184.216.34"), 80);
+        let got = bounded_lookup(async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
+        assert_eq!(got, Ok(vec![addr]));
     }
 
     #[test]

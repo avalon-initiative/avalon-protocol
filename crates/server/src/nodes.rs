@@ -1290,51 +1290,47 @@ pub async fn announce(
         connectivity: body.connectivity,
         identity_bound: false,
     };
-    if crate::version::is_supported(&info.protocol_version) {
-        if let P2pAnnounce::Authenticated(id) = p2p {
-            info.base_url = crate::node_http::p2p_base_url(&id);
-            info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
-            let announcer = info.base_url.clone();
-            store_authenticated_p2p_announcer(
-                &state.peers,
-                adm,
-                client_ip(source, &headers),
-                info,
-            )?;
-            state.peers.neighbors().note_inbound(&announcer);
-        } else {
-            info.base_url = adm
-                .check_shape(&info.base_url)
-                .map_err(TopologyError::from)?;
-            info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
-            let announcer = info.base_url.clone();
-            if state.peers.contains(&info.base_url) {
-                let info = rebind_existing(
-                    &state.peers,
-                    state.chain.network_id(),
-                    adm,
-                    client_ip(source, &headers),
-                    info,
-                )
-                .await;
-                state.peers.upsert(info);
-            } else {
-                admit_new_announcer(&state, adm, client_ip(source, &headers), info).await?;
-            }
-            state.peers.neighbors().note_inbound(&announcer);
-        }
-    } else {
+    if !crate::version::is_supported(&info.protocol_version) {
+        // Not admitted: nothing the caller sent is validated, stored or gossiped.
         state.peers.admit_if_supported(info);
+        return Ok(Json(announce_response(&state, &caller_base_url)));
     }
+    let source_ip = client_ip(source, &headers);
+    let announcer = if let P2pAnnounce::Authenticated(id) = p2p {
+        info.base_url = crate::node_http::p2p_base_url(&id);
+        info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+        let announcer = info.base_url.clone();
+        store_authenticated_p2p_announcer(&state.peers, adm, source_ip, info)?;
+        announcer
+    } else {
+        info.base_url = adm
+            .check_shape(&info.base_url)
+            .map_err(TopologyError::from)?;
+        info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
+        let announcer = info.base_url.clone();
+        if state.peers.contains(&info.base_url) {
+            let info =
+                rebind_existing(&state.peers, state.chain.network_id(), adm, source_ip, info).await;
+            state.peers.upsert(info);
+        } else {
+            admit_new_announcer(&state, adm, source_ip, info).await?;
+        }
+        announcer
+    };
+    state.peers.neighbors().note_inbound(&announcer);
 
-    // Shard claims are discovery data whatever the caller's protocol version;
-    // downstream key verification is unconditional.
-    let (shards, rejected_shards) =
-        validated_shards(adm, &state.shard_registry, &body.known_shards).await;
+    // Only an admitted announcer's address is ever a gossip source; the raw body string is not.
+    let (shards, rejected_shards) = validated_shards(
+        adm,
+        &state.shard_registry,
+        &body.known_shards,
+        Some(source_ip),
+    )
+    .await;
     if rejected_shards > 0 {
         tracing::warn!(
             event = "shard_gossip_entries_rejected",
-            from_peer = %caller_base_url,
+            from_peer = %announcer,
             rejected = rejected_shards,
             "skipped shard entries that failed address validation or limits",
         );
@@ -1344,7 +1340,7 @@ pub async fn announce(
         tracing::info!(
             event = "shard_discovered",
             shard_id = %shard_id,
-            from_peer = %caller_base_url,
+            from_peer = %announcer,
             "learned of a new shard via peer-announce gossip",
         );
     }
@@ -1352,15 +1348,14 @@ pub async fn announce(
     // Head-summary gossip rides the same exchange, bounded and
     // validated the same way shard gossip is above — see
     // `HeadGossipTracker::merge`'s own doc comment.
-    let (_admitted_heads, conflicts, rejected_heads) = state.head_gossip.merge(
-        &caller_base_url,
-        &body.head_summaries,
-        OffsetDateTime::now_utc(),
-    );
+    let (_admitted_heads, conflicts, rejected_heads) =
+        state
+            .head_gossip
+            .merge(&announcer, &body.head_summaries, OffsetDateTime::now_utc());
     if rejected_heads > 0 {
         tracing::warn!(
             event = "head_summary_gossip_entries_rejected",
-            from_peer = %caller_base_url,
+            from_peer = %announcer,
             rejected = rejected_heads,
             "skipped head-summary entries that failed validation or exceeded the per-exchange \
              limit",
@@ -1392,7 +1387,7 @@ pub async fn announce(
         });
     }
 
-    Ok(Json(announce_response(&state, &caller_base_url)))
+    Ok(Json(announce_response(&state, &announcer)))
 }
 
 /// This node's answer to an announce from `caller_base_url`.
@@ -1848,14 +1843,18 @@ async fn merge_gossip(
 
 /// Keeps the shard entries fit for the registry: known `(shard, url)` pairs
 /// as they are, unseen URLs only after the shape and address checks, with at
-/// most `max_new_shard_urls_per_exchange` unseen URLs examined. Returns the
-/// entries to merge and how many were refused.
+/// most `max_new_shard_urls_per_exchange` unseen URLs examined. Resolving an
+/// unseen host takes an in-flight slot and, for an inbound `source`, one unit
+/// of its new-URL budget; with neither available the entry is refused. Returns
+/// the entries to merge and how many were refused.
 async fn validated_shards(
     adm: &PeerAdmission,
     registry: &ShardRegistry,
     incoming: &[ShardAnnouncement],
+    source: Option<IpAddr>,
 ) -> (Vec<ShardAnnouncement>, usize) {
     let now = OffsetDateTime::now_utc();
+    let mut slot = None;
     let mut kept = Vec::new();
     let (mut examined, mut refused, mut p2p_new) = (0usize, 0usize, 0usize);
     for entry in incoming {
@@ -1888,6 +1887,13 @@ async fn validated_shards(
             refused += 1;
             continue;
         };
+        if slot.is_none() {
+            slot = adm.enter_check().ok();
+        }
+        if slot.is_none() || source.is_some_and(|ip| adm.admit_new_url_from(ip).is_err()) {
+            refused += 1;
+            continue;
+        }
         if adm.check_address(&base).await.is_err() {
             refused += 1;
             continue;
@@ -2136,8 +2142,6 @@ pub struct AnnounceConfig {
     pub witness: Option<WitnessSigner>,
 }
 
-/// Upper bound on one announce round trip; a slower peer counts as loss.
-const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
 /// A peer not re-announced within this many multiples of the announce
 /// interval is pruned — generous enough that one or two missed ticks
@@ -2485,15 +2489,7 @@ pub async fn run_worker(
         );
     }
 
-    let client = crate::node_http::NodeClient::from(
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .timeout(ANNOUNCE_TIMEOUT)
-            .build()
-            .unwrap_or_default(),
-    )
-    .with_timeout(ANNOUNCE_TIMEOUT);
+    let client = crate::node_http::NodeClient::guarded();
     let roles = node_roles();
     let network_id = chain.network_id().to_string();
     let mut active_peers: Vec<String> = config.peers.clone();
@@ -2617,7 +2613,8 @@ pub async fn run_worker(
                         }
 
                         let (shards, rejected_shards) =
-                            validated_shards(adm, &shard_registry, &discovered.known_shards).await;
+                            validated_shards(adm, &shard_registry, &discovered.known_shards, None)
+                                .await;
                         if rejected_shards > 0 {
                             tracing::warn!(
                                 event = "shard_gossip_entries_rejected",
@@ -4196,7 +4193,7 @@ mod tests {
             shard_announcement("beyond-limit", "http://8.8.8.8", now),
             shard_announcement("", "http://8.8.4.4", now),
         ];
-        let (kept, refused) = validated_shards(&adm, &registry, &incoming).await;
+        let (kept, refused) = validated_shards(&adm, &registry, &incoming, None).await;
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].shard_id, "known");
         assert_eq!(refused, 4);
@@ -4205,6 +4202,7 @@ mod tests {
             &adm,
             &registry,
             &[shard_announcement("fresh", "http://8.8.8.8/", now)],
+            None,
         )
         .await;
         assert_eq!((kept.len(), refused), (1, 0));
@@ -5102,6 +5100,7 @@ mod tests {
                 entry(crate::node_http::p2p_base_url(&id)),
                 entry("http://127.0.0.1:1".into()),
             ],
+            None,
         )
         .await;
         assert_eq!(kept.len(), 1);
@@ -5260,7 +5259,7 @@ mod tests {
                 last_seen_at: OffsetDateTime::now_utc(),
             })
             .collect();
-        let (kept, refused) = validated_shards(&adm, &ShardRegistry::new(), &entries).await;
+        let (kept, refused) = validated_shards(&adm, &ShardRegistry::new(), &entries, None).await;
         assert_eq!(kept.len(), MAX_P2P_SHARD_URLS_PER_EXCHANGE);
         assert_eq!(refused, 3);
     }

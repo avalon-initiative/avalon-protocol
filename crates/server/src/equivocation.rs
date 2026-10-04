@@ -84,14 +84,26 @@ impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
     }
 }
 
+/// `source` as a base URL fit to fetch from: a `p2p://` peer or a plain http(s) URL of bounded
+/// length. Its address is checked by the guarded client when the connection is made.
+fn fetchable_source(source: &str) -> Result<String, String> {
+    if let Some(peer) = crate::node_http::parse_p2p_base(source) {
+        return Ok(crate::node_http::p2p_base_url(&peer));
+    }
+    crate::peer_admission::admission()
+        .check_shape(source)
+        .map_err(|e| format!("conflict source is not a usable base URL: {e:?}"))
+}
+
 /// Fetches full cosignature detail for `shard_id` at `tree_size` directly
-/// from `base_url` — the fetch-on-demand half of head-summary gossip.
+/// from `source` — the fetch-on-demand half of head-summary gossip.
 async fn fetch_cosigned_head(
     client: &crate::node_http::NodeClient,
-    base_url: &str,
+    source: &str,
     shard_id: &str,
     tree_size: i64,
 ) -> Result<CosignedTreeHead, String> {
+    let base_url = fetchable_source(source)?;
     let dto: FetchedSthWithWitnesses = client
         .get(format!("{base_url}/ledger/sth/{tree_size}"))
         .query(&[("shard_id", shard_id), ("witnesses", "1")])
@@ -195,7 +207,7 @@ pub async fn confirm_and_record(
         return;
     }
 
-    let client = crate::node_http::NodeClient::peer();
+    let client = crate::node_http::NodeClient::guarded();
     let (head_a, head_b) = tokio::join!(
         fetch_cosigned_head(
             &client,
