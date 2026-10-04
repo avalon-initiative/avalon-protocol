@@ -1099,7 +1099,7 @@ mod node_auth_wiring {
         state_with_pool(pool)
     }
 
-    fn state_with_pool(pool: sqlx::PgPool) -> AppState {
+    pub(crate) fn state_with_pool(pool: sqlx::PgPool) -> AppState {
         let webauthn = std::sync::Arc::new(
             auth::build_webauthn("localhost", "http://localhost:8080").expect("webauthn"),
         );

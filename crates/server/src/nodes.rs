@@ -5428,4 +5428,134 @@ mod tests {
         )
         .await;
     }
+
+    // --- announce admission before gossip (#1207) -----------------------
+
+    fn lazy_state() -> AppState {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@127.0.0.1:1/none")
+            .expect("a lazy pool never connects while it is built");
+        crate::node_auth_wiring::state_with_pool(pool)
+    }
+
+    async fn announce_from(
+        state: &AppState,
+        base_url: &str,
+        version: &str,
+        shards: Vec<ShardAnnouncement>,
+        heads: Vec<HeadSummary>,
+    ) -> Result<Json<AnnounceResponse>, AnnounceError> {
+        let mut body = announce_request(
+            base_url,
+            &[],
+            "avalon-test",
+            None,
+            &shards,
+            &heads,
+            None,
+            Coordinate::default(),
+        );
+        body.protocol_version = version.to_string();
+        announce(
+            State(state.clone()),
+            ConnectInfo("203.0.113.9:4000".parse().unwrap()),
+            HeaderMap::new(),
+            None,
+            Json(body),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_version_announce_reaches_no_gossip_and_no_address() {
+        let victim = wiremock::MockServer::start().await;
+        let state = lazy_state();
+        let now = OffsetDateTime::now_utc();
+        let response = announce_from(
+            &state,
+            &victim.uri(),
+            "0.0.1",
+            vec![shard_announcement("core", "http://8.8.8.8", now)],
+            vec![head_summary("core", 5, 1), head_summary("core", 5, 2)],
+        )
+        .await
+        .expect("an unsupported version is answered, not refused");
+        assert!(response.0.peers.is_empty());
+        assert!(state.shard_registry.snapshot().is_empty());
+        assert!(state.head_gossip.snapshot().is_empty());
+        assert!(state.peers.list_all().is_empty());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(victim.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_known_announcer_is_the_gossip_source_under_its_normalized_url() {
+        let state = lazy_state();
+        let known = "http://known.invalid:8080";
+        state.peers.upsert(table_entry(known, None, false));
+        announce_from(
+            &state,
+            " http://Known.invalid:8080/ ",
+            crate::version::PROTOCOL_VERSION,
+            vec![],
+            vec![head_summary("core", 5, 1)],
+        )
+        .await
+        .unwrap();
+        let sources: Vec<String> = state
+            .head_gossip
+            .seen
+            .read()
+            .unwrap()
+            .values()
+            .map(|t| t.reported_by.clone())
+            .collect();
+        assert_eq!(sources, vec![known.to_string()]);
+    }
+
+    fn strict_admission(urls_per_source: usize, checks: usize) -> PeerAdmission {
+        PeerAdmission::new(
+            crate::peer_admission::AdmissionConfig {
+                new_urls_per_source: urls_per_source,
+                max_concurrent_checks: checks,
+                ..Default::default()
+            },
+            crate::outbound_policy::OutboundPolicy::new(false),
+        )
+    }
+
+    fn fresh_public_shards(n: u8) -> Vec<ShardAnnouncement> {
+        let now = OffsetDateTime::now_utc();
+        (0..n)
+            .map(|i| shard_announcement(&format!("s{i}"), &format!("http://8.8.8.{}", i + 1), now))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn shard_validation_spends_the_senders_new_url_budget() {
+        let adm = strict_admission(2, 4);
+        let source: IpAddr = "203.0.113.9".parse().unwrap();
+        let (kept, refused) = validated_shards(
+            &adm,
+            &ShardRegistry::new(),
+            &fresh_public_shards(5),
+            Some(source),
+        )
+        .await;
+        assert_eq!((kept.len(), refused), (2, 3));
+    }
+
+    #[tokio::test]
+    async fn shard_validation_needs_a_free_in_flight_slot_for_unseen_urls_only() {
+        let adm = strict_admission(100, 1);
+        let _busy = adm.enter_check().unwrap();
+        let registry = ShardRegistry::new();
+        let known = shard_announcement("known", "http://8.8.4.4", OffsetDateTime::now_utc());
+        registry.merge(std::slice::from_ref(&known));
+        let mut incoming = fresh_public_shards(3);
+        incoming.push(known);
+        let (kept, refused) = validated_shards(&adm, &registry, &incoming, None).await;
+        assert_eq!((kept.len(), refused), (1, 3));
+        assert_eq!(kept[0].shard_id, "known");
+    }
 }
