@@ -436,13 +436,16 @@ pub async fn poll(
             };
             let identity_id: Option<IdentityId> = consumed.try_get("identity_id")?;
             let Some(identity_id) = identity_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
             let signing_key_id: Option<Uuid> = consumed.try_get("approved_by_signing_key_id")?;
             let Some(key_id) = signing_key_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
             if !signing_key_usable(&mut tx, identity_id, key_id, false).await? {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             }
             let session = mint(
@@ -851,7 +854,12 @@ pub async fn submit(
     };
 
     let Some(user_code) = body.user_code else {
-        let session = mint(&state.pool, identity_id, origin).await?;
+        let mut tx = state.pool.begin().await?;
+        if !signing_key_usable(&mut tx, identity_id, body.grant.signing_key_id, false).await? {
+            return Err(AppError::Unauthorized);
+        }
+        let session = mint(&mut *tx, identity_id, origin).await?;
+        tx.commit().await?;
         return Ok(Json(SubmitGrantResponse {
             token: Some(session.token),
             expires_at: Some(session.expires_at),

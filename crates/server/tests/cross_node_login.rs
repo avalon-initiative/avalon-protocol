@@ -742,3 +742,64 @@ async fn session_origin_signing_key(token: &str) -> Option<uuid::Uuid> {
     .await
     .unwrap()
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_same_device_submit_waits_for_an_in_flight_revocation_of_its_key() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, session_token, signing_key) = create_identity_and_log_in(&http, &base).await;
+    let signing_key_id = first_signing_key_id(&http, &base, &session_token).await;
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/cross-node/start"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let destination = start["requesting_context"].as_str().unwrap().to_string();
+    let now = time::OffsetDateTime::now_utc();
+    let grant = mint_grant(
+        identity_id,
+        signing_key_id,
+        &destination,
+        &destination,
+        &signing_key,
+        now,
+        now + time::Duration::seconds(30),
+    );
+
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(&url)
+        .await
+        .unwrap();
+    let mut revoking = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM identity_signing_keys WHERE id = $1 FOR UPDATE")
+        .bind(signing_key_id)
+        .fetch_one(&mut *revoking)
+        .await
+        .unwrap();
+    let submitter = {
+        let (http, base) = (http.clone(), base.clone());
+        tokio::spawn(async move {
+            http.post(format!("{base}/auth/cross-node/submit"))
+                .json(&serde_json::json!({ "grant": grant }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    sqlx::query("UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1")
+        .bind(signing_key_id)
+        .execute(&mut *revoking)
+        .await
+        .unwrap();
+    revoking.commit().await.unwrap();
+
+    assert_eq!(submitter.await.unwrap(), 401);
+}

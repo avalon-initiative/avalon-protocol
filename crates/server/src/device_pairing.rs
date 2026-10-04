@@ -242,13 +242,16 @@ pub async fn poll_pairing(
             };
             let identity_id: Option<IdentityId> = consumed.try_get("identity_id")?;
             let Some(identity_id) = identity_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
             let signing_key_id: Option<Uuid> = consumed.try_get("approved_by_signing_key_id")?;
             let Some(key_id) = signing_key_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
             if !signing_key_usable(&mut tx, identity_id, key_id, true).await? {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             }
             let session = mint(

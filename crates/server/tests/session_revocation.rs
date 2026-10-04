@@ -804,6 +804,7 @@ async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
 
     let polled = poll_pairing(&http, &base, &device_code).await;
     assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(pairing_status(&pool, &device_code).await, "expired");
     assert_eq!(session_count(&pool, identity_id).await, 1);
 }
 
@@ -840,6 +841,7 @@ async fn a_poll_waits_for_an_in_flight_revocation_of_the_approving_key() {
 
     let polled = poller.await.unwrap();
     assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(pairing_status(&pool, &device_code).await, "expired");
     assert_eq!(session_count(&pool, identity_id).await, 1);
 }
 
@@ -958,5 +960,16 @@ async fn no_session_is_minted_without_an_origin_credential() {
     .unwrap();
     let polled = poll_pairing(&http, &base, &device_code).await;
     assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(pairing_status(&pool, &device_code).await, "expired");
     assert_eq!(session_count(&pool, identity_id).await, 0);
+}
+
+async fn pairing_status(pool: &PgPool, device_code: &str) -> String {
+    sqlx::query_scalar(
+        "SELECT status FROM device_pairings WHERE device_code_hash = encode(sha256(convert_to($1::text, 'UTF8')), 'hex')",
+    )
+    .bind(device_code)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }

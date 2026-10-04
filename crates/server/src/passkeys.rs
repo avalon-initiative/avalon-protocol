@@ -428,10 +428,11 @@ pub async fn revoke_passkey(
     // unsigned, leaving zero. `FOR UPDATE` can't be combined with an
     // aggregate (`COUNT(*)`) — Postgres rejects that outright — so this
     // fetches the locked rows themselves and counts them in Rust.
-    let locked_rows = sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 FOR UPDATE")
-        .bind(identity_id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let locked_rows =
+        sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id FOR UPDATE")
+            .bind(identity_id)
+            .fetch_all(&mut *tx)
+            .await?;
     let remaining_before_revoke: i64 = locked_rows.len() as i64;
 
     if needs_fresh_signature(remaining_before_revoke) {

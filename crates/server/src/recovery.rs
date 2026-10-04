@@ -1107,11 +1107,16 @@ pub async fn finalize_request(
 
     // Recovery replaces the passkeys: every pre-existing one is revoked, durably, like
     // `passkeys::revoke_passkey` does.
-    let old_passkeys: Vec<Uuid> =
-        sqlx::query_scalar("DELETE FROM identity_keys WHERE identity_id = $1 RETURNING id")
-            .bind(request.identity_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let old_passkeys: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id FOR UPDATE",
+    )
+    .bind(request.identity_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM identity_keys WHERE identity_id = $1")
+        .bind(request.identity_id)
+        .execute(&mut *tx)
+        .await?;
     let mut revoked_events = Vec::with_capacity(old_passkeys.len());
     for passkey_id in old_passkeys {
         let mut event = ProtocolEvent {
