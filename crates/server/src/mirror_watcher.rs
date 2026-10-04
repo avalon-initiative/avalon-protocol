@@ -3646,6 +3646,7 @@ mod tests {
     async fn insert_chain(
         pool: &PgPool,
         network: &str,
+        shard: &str,
         source: &str,
         salt: &str,
         n: i64,
@@ -3656,7 +3657,7 @@ mod tests {
             let mut e = mirror::MirroredEntry {
                 source_url: source.into(),
                 network_id: network.into(),
-                shard_id: "core".into(),
+                shard_id: shard.into(),
                 seq,
                 event_id: Uuid::new_v4(),
                 kind: "test.noop".into(),
@@ -3681,6 +3682,7 @@ mod tests {
     async fn observe(
         pool: &PgPool,
         network: &str,
+        shard: &str,
         source: &str,
         size: i64,
         root: &str,
@@ -3689,7 +3691,7 @@ mod tests {
         let at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let author = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
         let sth = sign_tree_head(&author, "op", size, root, network, at);
-        let obs = ObservedSth::from_sth(source, "core", &sth, at);
+        let obs = ObservedSth::from_sth(source, shard, &sth, at);
         mirror::insert_observation(pool, &obs).await.unwrap();
         obs
     }
@@ -3701,27 +3703,28 @@ mod tests {
     async fn the_served_root_cache_is_dropped_when_rows_are_replaced() {
         let pool = live_test_pool().await;
         let net = format!("avalon-test-cache-{}", Uuid::new_v4());
+        let shard = format!("game:cache-{}", Uuid::new_v4().simple());
         let src = "http://127.0.0.1:1";
-        let latest = observe(&pool, &net, src, 5, &hex::encode([2u8; 32])).await;
+        let latest = observe(&pool, &net, &shard, src, 5, &hex::encode([2u8; 32])).await;
         let mut state = crate::witness_refresh::RefreshState::default();
 
-        let root_a = insert_chain(&pool, &net, src, "a", 3).await;
-        observe(&pool, &net, src, 3, &root_a).await;
-        let got = served_head_observation(&pool, &mut state, "core", None, &latest).await;
+        let root_a = insert_chain(&pool, &net, &shard, src, "a", 3).await;
+        observe(&pool, &net, &shard, src, 3, &root_a).await;
+        let got = served_head_observation(&pool, &mut state, &shard, None, &latest).await;
         assert_eq!(got.map(|o| o.root_hash), Some(root_a));
 
-        mirror::discard_mirrored_entries_from(&pool, &net, "core", 0)
+        mirror::discard_mirrored_entries_from(&pool, &net, &shard, 0)
             .await
             .unwrap();
         assert!(
-            served_head_observation(&pool, &mut state, "core", None, &latest)
+            served_head_observation(&pool, &mut state, &shard, None, &latest)
                 .await
                 .is_none()
         );
 
-        let root_b = insert_chain(&pool, &net, src, "b", 3).await;
-        observe(&pool, &net, "http://127.0.0.1:3", 3, &root_b).await;
-        let got = served_head_observation(&pool, &mut state, "core", None, &latest).await;
+        let root_b = insert_chain(&pool, &net, &shard, src, "b", 3).await;
+        observe(&pool, &net, &shard, "http://127.0.0.1:3", 3, &root_b).await;
+        let got = served_head_observation(&pool, &mut state, &shard, None, &latest).await;
         assert_eq!(got.map(|o| o.root_hash), Some(root_b));
     }
 
@@ -3731,19 +3734,20 @@ mod tests {
     async fn the_served_head_lookup_is_scoped_to_the_configured_source() {
         let pool = live_test_pool().await;
         let net = format!("avalon-test-scope-{}", Uuid::new_v4());
+        let shard = format!("game:scope-{}", Uuid::new_v4().simple());
         let (src, other) = ("http://127.0.0.1:1", "http://127.0.0.1:2");
-        let latest = observe(&pool, &net, src, 5, &hex::encode([2u8; 32])).await;
-        let root = insert_chain(&pool, &net, src, "a", 3).await;
+        let latest = observe(&pool, &net, &shard, src, 5, &hex::encode([2u8; 32])).await;
+        let root = insert_chain(&pool, &net, &shard, src, "a", 3).await;
         // Only a different source reported the matching head.
-        observe(&pool, &net, other, 3, &root).await;
+        observe(&pool, &net, &shard, other, 3, &root).await;
         let mut state = crate::witness_refresh::RefreshState::default();
         assert!(
-            served_head_observation(&pool, &mut state, "core", Some(src), &latest)
+            served_head_observation(&pool, &mut state, &shard, Some(src), &latest)
                 .await
                 .is_none()
         );
         assert!(
-            served_head_observation(&pool, &mut state, "core", None, &latest)
+            served_head_observation(&pool, &mut state, &shard, None, &latest)
                 .await
                 .is_some()
         );
