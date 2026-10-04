@@ -92,8 +92,23 @@ pub async fn apply(
             added_at,
         } => {
             // Keys are unique per (identity, key id), so another identity cannot occupy this id.
-            // A re-delivery is idempotent; one that would swap the public key is refused. A
+            // A re-delivery is idempotent; one that would swap the public key is refused, as is
+            // the same public key under a second id (it would resurrect a revoked key). A
             // revocation that arrived before this addition is applied to the new row.
+            let duplicate: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_keys \
+                 WHERE identity_id = $1 AND public_key = $2 AND signing_key_id <> $3)",
+            )
+            .bind(identity_id)
+            .bind(public_key)
+            .bind(signing_key_id)
+            .fetch_one(&mut **tx)
+            .await?;
+            if duplicate {
+                return Err(IndexError::Rejected(format!(
+                    "public key of signing key {signing_key_id} is already registered under another key id"
+                )));
+            }
             let written = sqlx::query(
                 "INSERT INTO indexer_identity_signing_keys AS k \
                  (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \

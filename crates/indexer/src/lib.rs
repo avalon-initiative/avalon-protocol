@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
 
 pub mod identity_chain_store;
+pub mod identity_proof;
 pub mod postgres;
 pub mod projections;
 pub mod registry;
@@ -42,6 +43,14 @@ pub enum IndexError {
     /// signing key to another identity or key); it is refused, not applied.
     #[error("event rejected: {0}")]
     Rejected(String),
+    /// The event references a parent row (an identity) that is not projected yet. Later events of
+    /// the same shard must wait behind it, so the shard's order is kept.
+    #[error("event deferred: {0}")]
+    Deferred(String),
+    /// The key that signed the event is not projected yet (it may arrive from another shard).
+    /// Retried when it does, without holding up the shard's other events.
+    #[error("event awaiting a key: {0}")]
+    AwaitingKey(String),
     /// The display name is an identity-id lookalike or carries hidden characters.
     #[error("display_name is not permitted")]
     DisplayNameNotPermitted,
@@ -65,10 +74,23 @@ pub enum IndexError {
     Unavailable(String),
 }
 
+/// Unique index over `(identity_id, public_key)` of `indexer_identity_signing_keys`.
+const SIGNING_KEY_UNIQUE_INDEX: &str = "indexer_identity_signing_keys_identity_public_key_idx";
+
 impl IndexError {
     /// Whether retrying the same event later can succeed.
     pub fn is_transient(&self) -> bool {
         matches!(self, Self::Unavailable(_) | Self::RemoteUnreachable(_))
+    }
+
+    /// Whether the event is waiting on state that may still arrive.
+    pub fn is_deferred(&self) -> bool {
+        matches!(self, Self::Deferred(_) | Self::AwaitingKey(_))
+    }
+
+    /// Whether later events of the same shard must wait behind this one.
+    pub fn blocks_shard_order(&self) -> bool {
+        matches!(self, Self::Deferred(_))
     }
 }
 
@@ -102,14 +124,23 @@ impl From<sqlx::Error> for IndexError {
         if is_display_name_conflict {
             return IndexError::DisplayNameTaken;
         }
-        // A child event whose parent identity was never created (or was refused) is invalid, not a
+        // A child event whose parent identity has not been projected (yet) waits; it is not a
         // storage fault.
         if err
             .as_database_error()
             .and_then(|db| db.code())
             .is_some_and(|code| code == "23503")
         {
-            return IndexError::Rejected(format!("references a missing parent row: {err}"));
+            return IndexError::Deferred(format!("references a missing parent row: {err}"));
+        }
+        // A second registration of one public key for an identity is a rule outcome.
+        if err
+            .as_database_error()
+            .is_some_and(|db| db.constraint() == Some(SIGNING_KEY_UNIQUE_INDEX))
+        {
+            return IndexError::Rejected(
+                "public key is already registered for this identity".to_string(),
+            );
         }
         if is_unavailable(&err) {
             return IndexError::Unavailable(err.to_string());
