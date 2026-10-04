@@ -481,7 +481,7 @@ mod tests {
         assert!(confirmed_stored(None, "w", &sth, &cosig.signature));
         assert!(!confirmed_stored(Some(&[]), "w", &sth, &cosig.signature));
         assert!(confirmed_stored(
-            Some(&[cosig.clone()]),
+            Some(std::slice::from_ref(&cosig)),
             "w",
             &sth,
             &cosig.signature
