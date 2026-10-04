@@ -594,6 +594,7 @@ pub async fn revoke_device(
     if revoked.rows_affected() == 0 {
         return Err(AppError::SigningKeyNotFound);
     }
+    crate::sessions::end_for_signing_key(&mut *tx, identity_id, signing_key_id).await?;
 
     let mut event = ProtocolEvent {
         id: Uuid::new_v4(),

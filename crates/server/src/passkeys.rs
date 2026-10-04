@@ -457,6 +457,7 @@ pub async fn revoke_passkey(
     if deleted.rows_affected() == 0 {
         return Err(AppError::PasskeyNotFound);
     }
+    crate::sessions::end_for_passkey(&mut *tx, identity_id, passkey_id).await?;
 
     // Issue #523: a mirror-only node must reject a login against a
     // credential it has also seen revoked, via mirrored history alone —

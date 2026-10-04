@@ -1114,6 +1114,9 @@ pub async fn finalize_request(
     .execute(&mut *tx)
     .await?;
 
+    // Whoever held a session before recovery is exactly who recovery is meant to lock out.
+    crate::sessions::end_all_for_identity(&mut *tx, request.identity_id).await?;
+
     let completed_at = now;
     sqlx::query(
         "UPDATE recovery_requests SET status = 'completed', completed_at = $2 WHERE id = $1",
