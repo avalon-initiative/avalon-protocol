@@ -535,7 +535,7 @@ async fn rebuild_index() {
         report.entries_skipped_undecodable,
         elapsed
     );
-    if report.events_refused > 0 && configured_shard.is_none() {
+    if report.failed_without_own_shard(configured_shard.is_some()) {
         eprintln!(
             "error: {} events were refused while AVALON_OWN_SHARD_ID is unset (assumed `core`). \
              On a node that authors another shard, set AVALON_OWN_SHARD_ID to it and rebuild again.",

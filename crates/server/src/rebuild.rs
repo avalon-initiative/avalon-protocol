@@ -37,6 +37,14 @@ pub struct RebuildReport {
     pub entries_skipped_undecodable: usize,
 }
 
+impl RebuildReport {
+    /// Whether the rebuild must be reported as failed: events were refused while the node's own
+    /// shard was not configured, so a non-core node would have lost its own history silently.
+    pub fn failed_without_own_shard(&self, own_shard_configured: bool) -> bool {
+        !own_shard_configured && self.events_refused > 0
+    }
+}
+
 /// Truncates every projection table and replays `ledger_entries` back
 /// through the indexer, in order. `chain` and `indexer` may point at
 /// different pools (the read model is never required to live in the same
@@ -72,4 +80,25 @@ pub async fn rebuild_index_from_ledger(
         events_refused: outcome.refused,
         entries_skipped_undecodable: skipped,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(refused: usize) -> RebuildReport {
+        RebuildReport {
+            entries_read: 10,
+            events_applied: 10 - refused,
+            events_refused: refused,
+            entries_skipped_undecodable: 0,
+        }
+    }
+
+    #[test]
+    fn refusals_without_a_configured_own_shard_fail_the_rebuild() {
+        assert!(report(2).failed_without_own_shard(false));
+        assert!(!report(0).failed_without_own_shard(false));
+        assert!(!report(2).failed_without_own_shard(true));
+    }
 }
