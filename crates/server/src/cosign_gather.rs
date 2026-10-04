@@ -125,7 +125,13 @@ async fn fetch_own_cosignature(
     sth: &SignedTreeHead,
     shard_id: &str,
 ) -> GatherOutcome {
-    let Ok(target) = policy.check_node_url(&source.base_url).await else {
+    let Ok(target) = policy
+        .check_node_url_for(
+            &source.base_url,
+            crate::outbound_policy::LookupPurpose::Critical,
+        )
+        .await
+    else {
         return GatherOutcome::Blocked;
     };
     let client = target.node_client(WITNESS_FETCH_TIMEOUT);

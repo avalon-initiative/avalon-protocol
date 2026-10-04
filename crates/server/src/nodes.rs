@@ -343,18 +343,6 @@ impl PeerTable {
         peers.insert(info.base_url.clone(), info);
     }
 
-    /// Marks a known peer as heard from now without taking any field from the announce.
-    pub fn touch(&self, base_url: &str, at: OffsetDateTime) {
-        if let Some(p) = self
-            .peers
-            .write()
-            .expect("peer table lock poisoned")
-            .get_mut(base_url)
-        {
-            p.last_announced_at = at;
-        }
-    }
-
     /// Records a verified witness advert on an existing entry (main table or
     /// unverified pool) under the replacement rule; a no-op for an unknown
     /// peer.
@@ -1271,9 +1259,11 @@ fn truncate_for_log(raw: &str) -> String {
 /// unban step. Such an announce is answered and nothing else: no address check, no peer
 /// table write, and no shard or head-summary gossip is merged.
 ///
-/// Head summaries are merged only from a proven announcer: a newly admitted URL, an
-/// authenticated `p2p://` id, or a known URL whose libp2p identity its own server confirmed.
-/// An unproven announce for a known URL only refreshes that entry's last-heard time.
+/// Head summaries are merged only when the announcer proves who it is: an authenticated
+/// `p2p://` id, or a known URL whose libp2p identity its own server confirmed. A newly admitted
+/// HTTP URL is stored but proves nothing about who sent the announce, so its heads are skipped.
+/// An announce for a known URL that proves nothing changes no stored field and queues no
+/// neighbor; only its verified witness advert is kept.
 ///
 /// A caller announcing `p2p://<peer id>` (no URL of its own) is admitted only over a libp2p
 /// stream authenticated as that peer id; over plain HTTP it gets the response and nothing
@@ -1285,11 +1275,21 @@ pub async fn announce(
     remote: Option<Extension<crate::node_http::RemotePeer>>,
     Json(body): Json<AnnounceRequest>,
 ) -> Result<Json<AnnounceResponse>, AnnounceError> {
+    announce_under(admission(), state, source, headers, remote, body).await
+}
+
+async fn announce_under(
+    adm: &PeerAdmission,
+    state: AppState,
+    source: SocketAddr,
+    headers: HeaderMap,
+    remote: Option<Extension<crate::node_http::RemotePeer>>,
+    body: AnnounceRequest,
+) -> Result<Json<AnnounceResponse>, AnnounceError> {
     if body.network_id != state.chain.network_id() {
         return Err(AppError::PeerNetworkMismatch.into());
     }
 
-    let adm = admission();
     let caller_base_url = body.base_url.clone();
     let p2p = classify_p2p_announce(
         &body.base_url,
@@ -1322,12 +1322,14 @@ pub async fn announce(
         return Ok(Json(announce_response(&state, &caller_base_url)));
     }
     let source_ip = client_ip(source, &headers);
-    let (announcer, proven) = if let P2pAnnounce::Authenticated(id) = p2p {
+    let p2p_authenticated = matches!(p2p, P2pAnnounce::Authenticated(_));
+    // `listed`: the announcer is in the table on its own merit; `proven`: it showed who it is.
+    let (announcer, listed, proven) = if let P2pAnnounce::Authenticated(id) = p2p {
         info.base_url = crate::node_http::p2p_base_url(&id);
         info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
         let announcer = info.base_url.clone();
         store_authenticated_p2p_announcer(&state.peers, adm, source_ip, info)?;
-        (announcer, true)
+        (announcer, true, true)
     } else {
         info.base_url = adm
             .check_shape(&info.base_url)
@@ -1335,22 +1337,26 @@ pub async fn announce(
         info.witness = verified_advert(&info.base_url, body.witness, info.last_announced_at);
         let announcer = info.base_url.clone();
         if state.peers.contains(&info.base_url) {
+            let advert = info.witness.clone();
             let info =
                 rebind_existing(&state.peers, state.chain.network_id(), adm, source_ip, info).await;
             // Anyone can name a known URL; only the URL's own server confirming the id proves it.
             let proven = info.identity_bound;
             if proven {
                 state.peers.upsert(info);
-            } else {
-                state.peers.touch(&announcer, info.last_announced_at);
+            } else if let Some(advert) = advert {
+                // A verified advert needs no proof of who sent it.
+                state.peers.attach_witness(&announcer, advert);
             }
-            (announcer, proven)
+            (announcer, proven, proven)
         } else {
             admit_new_announcer(&state, adm, source_ip, info).await?;
-            (announcer, true)
+            (announcer, true, false)
         }
     };
-    state.peers.neighbors().note_inbound(&announcer);
+    if listed {
+        state.peers.neighbors().note_inbound(&announcer);
+    }
 
     // Only an admitted announcer's address is ever a gossip source; the raw body string is not.
     let (shards, rejected_shards) = validated_shards(
@@ -1415,6 +1421,7 @@ pub async fn announce(
             &state.head_gossip,
             &state.peers,
             &state.known_list,
+            crate::equivocation::Standing::of(&state.shard_registry, p2p_authenticated, &conflict),
             conflict,
         );
     }
@@ -1891,7 +1898,15 @@ async fn validated_shards(
     let mut failed_lookups = 0usize;
     let mut kept = Vec::new();
     let (mut examined, mut refused, mut p2p_new) = (0usize, 0usize, 0usize);
-    for entry in incoming {
+    let start = adm.shard_cursor.load(std::sync::atomic::Ordering::Relaxed) % incoming.len().max(1);
+    let mut resumed_after = 0usize;
+    for (position, entry) in incoming
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(incoming.len())
+        .enumerate()
+    {
         let mut entry = entry.clone();
         entry.last_seen_at = entry.last_seen_at.min(now);
         if !adm.shard_id_ok(&entry.shard_id) {
@@ -1932,6 +1947,7 @@ async fn validated_shards(
             refused += 1;
             continue;
         }
+        resumed_after = position + 1;
         if adm.check_address(&base).await.is_err() {
             failed_lookups += 1;
             refused += 1;
@@ -1940,6 +1956,8 @@ async fn validated_shards(
         entry.url = base;
         kept.push(entry);
     }
+    adm.shard_cursor
+        .fetch_add(resumed_after, std::sync::atomic::Ordering::Relaxed);
     (kept, refused)
 }
 
@@ -2704,6 +2722,11 @@ pub async fn run_worker(
                                 &head_gossip,
                                 &peers,
                                 &known_list,
+                                crate::equivocation::Standing::of(
+                                    &shard_registry,
+                                    false,
+                                    &conflict,
+                                ),
                                 conflict,
                             );
                         }
@@ -5470,14 +5493,12 @@ mod tests {
         crate::node_auth_wiring::state_with_pool(pool)
     }
 
-    async fn announce_with(
-        state: &AppState,
+    fn request(
         base_url: &str,
         version: &str,
         shards: Vec<ShardAnnouncement>,
         heads: Vec<HeadSummary>,
-        remote: Option<PeerId>,
-    ) -> Result<Json<AnnounceResponse>, AnnounceError> {
+    ) -> AnnounceRequest {
         let mut body = announce_request(
             base_url,
             &["storage".to_string()],
@@ -5489,13 +5510,22 @@ mod tests {
             Coordinate::default(),
         );
         body.protocol_version = version.to_string();
-        body.libp2p_peer_id = remote.map(|id| id.to_string());
-        announce(
-            State(state.clone()),
-            ConnectInfo("203.0.113.9:4000".parse().unwrap()),
+        body
+    }
+
+    async fn send(
+        adm: &PeerAdmission,
+        state: &AppState,
+        body: AnnounceRequest,
+        remote: Option<PeerId>,
+    ) -> Result<Json<AnnounceResponse>, AnnounceError> {
+        announce_under(
+            adm,
+            state.clone(),
+            "203.0.113.9:4000".parse().unwrap(),
             HeaderMap::new(),
             remote.map(|id| Extension(crate::node_http::RemotePeer(id))),
-            Json(body),
+            body,
         )
         .await
     }
@@ -5507,11 +5537,25 @@ mod tests {
         shards: Vec<ShardAnnouncement>,
         heads: Vec<HeadSummary>,
     ) -> Result<Json<AnnounceResponse>, AnnounceError> {
-        announce_with(state, base_url, version, shards, heads, None).await
+        send(
+            admission(),
+            state,
+            request(base_url, version, shards, heads),
+            None,
+        )
+        .await
     }
 
-    fn two_conflicting_heads() -> Vec<HeadSummary> {
-        vec![head_summary("core", 5, 1), head_summary("core", 5, 2)]
+    /// Admission that allows loopback, so mock servers can play announcers.
+    fn lax_admission() -> PeerAdmission {
+        PeerAdmission::new(
+            crate::peer_admission::AdmissionConfig::default(),
+            crate::outbound_policy::OutboundPolicy::new(true),
+        )
+    }
+
+    fn conflicting_heads(shard: &str) -> Vec<HeadSummary> {
+        vec![head_summary(shard, 5, 1), head_summary(shard, 5, 2)]
     }
 
     fn head_sources(state: &AppState) -> Vec<String> {
@@ -5525,17 +5569,41 @@ mod tests {
             .collect()
     }
 
+    fn confirmations_attempted(shard: &str) -> usize {
+        crate::equivocation::attempted()
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.as_str() == shard)
+            .count()
+    }
+
+    async fn test_net_status_server(libp2p_peer_id: &PeerId) -> wiremock::MockServer {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/nodes/status"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "network_id": "avalon-test",
+                    "libp2p_peer_id": libp2p_peer_id.to_string(),
+                })),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
     #[tokio::test]
     async fn an_unsupported_version_announce_reaches_no_gossip_and_no_address() {
         let victim = wiremock::MockServer::start().await;
         let state = lazy_state();
         let now = OffsetDateTime::now_utc();
+        let shard = "u1207-unsupported";
         let response = announce_from(
             &state,
             &victim.uri(),
             "0.0.1",
             vec![shard_announcement("core", "http://8.8.8.8", now)],
-            two_conflicting_heads(),
+            conflicting_heads(shard),
         )
         .await
         .expect("an unsupported version is answered, not refused");
@@ -5543,6 +5611,7 @@ mod tests {
         assert!(state.shard_registry.snapshot().is_empty());
         assert!(state.head_gossip.snapshot().is_empty());
         assert!(state.peers.list_all().is_empty());
+        assert_eq!(confirmations_attempted(shard), 0);
         assert!(victim.received_requests().await.unwrap().is_empty());
     }
 
@@ -5551,6 +5620,7 @@ mod tests {
         let victim = wiremock::MockServer::start().await;
         let now = OffsetDateTime::now_utc();
         let port = victim.address().port();
+        let shard = "u1207-refused";
         for base in [
             victim.uri(),
             format!("{}/?x=1", victim.uri()),
@@ -5562,7 +5632,7 @@ mod tests {
                 &base,
                 crate::version::PROTOCOL_VERSION,
                 vec![shard_announcement("core", "http://8.8.8.8", now)],
-                two_conflicting_heads(),
+                conflicting_heads(shard),
             )
             .await;
             assert!(got.is_err(), "{base} must be refused");
@@ -5570,31 +5640,95 @@ mod tests {
             assert!(state.head_gossip.snapshot().is_empty(), "{base}");
             assert!(state.peers.list_all().is_empty(), "{base}");
         }
+        assert_eq!(confirmations_attempted(shard), 0);
         assert!(victim.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn an_unproven_announce_for_a_known_url_merges_no_heads_and_keeps_stored_fields() {
+    async fn an_unproven_announce_for_a_known_url_changes_nothing_but_a_verified_advert() {
         let state = lazy_state();
         let known = "http://known.invalid:8080";
+        let shard = "u1207-known";
         let mut stored = table_entry(known, None, false);
         stored.last_announced_at = OffsetDateTime::now_utc() - time::Duration::hours(1);
         let before = stored.last_announced_at;
         state.peers.upsert(stored);
-        announce_from(
-            &state,
+        let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let advert = WitnessSigner::new(key, id.clone())
+            .unwrap()
+            .advert(known, OffsetDateTime::now_utc());
+        let mut body = request(
             " http://Known.invalid:8080/ ",
             crate::version::PROTOCOL_VERSION,
             vec![],
-            two_conflicting_heads(),
+            conflicting_heads(shard),
+        );
+        body.witness = Some(advert);
+        send(admission(), &state, body, None)
+            .await
+            .map(|_| ())
+            .unwrap();
+        assert!(head_sources(&state).is_empty(), "spoofed attribution");
+        assert_eq!(confirmations_attempted(shard), 0);
+        assert!(state.peers.neighbors().take_inbound().is_empty());
+        let entry = state.peers.list_all().remove(0);
+        assert_eq!(entry.roles, vec!["combined".to_string()]);
+        assert_eq!(entry.last_announced_at, before, "no liveness refresh");
+        assert_eq!(entry.witness.map(|w| w.key_id), Some(id));
+    }
+
+    #[tokio::test]
+    async fn a_newly_admitted_http_announcer_is_listed_but_its_heads_are_not_merged() {
+        let id = fresh_libp2p();
+        let server = test_net_status_server(&id).await;
+        let state = lazy_state();
+        let shard = "u1207-new";
+        let url = normalized_base_url(&server.uri());
+        send(
+            &lax_admission(),
+            &state,
+            request(
+                &server.uri(),
+                crate::version::PROTOCOL_VERSION,
+                vec![],
+                conflicting_heads(shard),
+            ),
+            None,
         )
         .await
         .map(|_| ())
         .unwrap();
-        assert!(head_sources(&state).is_empty(), "spoofed attribution");
-        let entry = state.peers.list_all().remove(0);
-        assert_eq!(entry.roles, vec!["combined".to_string()]);
-        assert!(entry.last_announced_at > before, "heard from is refreshed");
+        assert!(state.peers.contains(&url));
+        assert_eq!(state.peers.neighbors().take_inbound(), vec![url]);
+        assert!(
+            head_sources(&state).is_empty(),
+            "newly admitted proves nothing"
+        );
+        assert_eq!(confirmations_attempted(shard), 0);
+    }
+
+    #[tokio::test]
+    async fn a_known_url_whose_own_server_confirms_the_id_is_a_proven_head_source() {
+        let (stored_id, claimed) = (fresh_libp2p(), fresh_libp2p());
+        let server = test_net_status_server(&claimed).await;
+        let state = lazy_state();
+        let url = normalized_base_url(&server.uri());
+        state
+            .peers
+            .upsert(table_entry(&url, Some(&stored_id), true));
+        let mut body = request(
+            &server.uri(),
+            crate::version::PROTOCOL_VERSION,
+            vec![],
+            vec![head_summary("u1207-rebind", 5, 1)],
+        );
+        body.libp2p_peer_id = Some(claimed.to_string());
+        send(&lax_admission(), &state, body, None)
+            .await
+            .map(|_| ())
+            .unwrap();
+        assert_eq!(head_sources(&state), vec![url]);
     }
 
     #[tokio::test]
@@ -5602,17 +5736,17 @@ mod tests {
         let state = lazy_state();
         let id = fresh_libp2p();
         let url = crate::node_http::p2p_base_url(&id);
-        announce_with(
-            &state,
+        let mut body = request(
             &url,
             crate::version::PROTOCOL_VERSION,
             vec![],
             vec![head_summary("core", 5, 1)],
-            Some(id),
-        )
-        .await
-        .map(|_| ())
-        .unwrap();
+        );
+        body.libp2p_peer_id = Some(id.to_string());
+        send(admission(), &state, body, Some(id))
+            .await
+            .map(|_| ())
+            .unwrap();
         assert_eq!(head_sources(&state), vec![url]);
     }
 
@@ -5721,5 +5855,35 @@ mod tests {
         let adm = cfg(8, Duration::ZERO);
         validated_shards(&adm, &ShardRegistry::new(), &hostname_shards(6), None).await;
         assert_eq!(lookups(&adm), 0);
+    }
+
+    #[tokio::test]
+    async fn dead_urls_at_the_head_of_a_list_cannot_starve_the_rest_across_rounds() {
+        let adm = PeerAdmission::new(
+            crate::peer_admission::AdmissionConfig {
+                max_failed_lookups: 2,
+                ..Default::default()
+            },
+            crate::outbound_policy::OutboundPolicy::new(false),
+        );
+        let now = OffsetDateTime::now_utc();
+        let mut list = hostname_shards(4);
+        list.push(shard_announcement("live-a", "http://8.8.8.8", now));
+        list.push(shard_announcement("live-b", "http://8.8.4.4", now));
+        let registry = ShardRegistry::new();
+        let mut kept = 0;
+        for _ in 0..3 {
+            kept += validated_shards(&adm, &registry, &list, None).await.0.len();
+        }
+        assert_eq!(kept, 2, "the live entries are reached on the third round");
+    }
+
+    #[tokio::test]
+    async fn a_future_last_seen_is_clamped_to_now() {
+        let adm = strict_admission(100, 4);
+        let future = OffsetDateTime::now_utc() + time::Duration::days(30);
+        let entry = shard_announcement("core", "http://8.8.8.8", future);
+        let (kept, _) = validated_shards(&adm, &ShardRegistry::new(), &[entry], None).await;
+        assert!(kept[0].last_seen_at <= OffsetDateTime::now_utc());
     }
 }

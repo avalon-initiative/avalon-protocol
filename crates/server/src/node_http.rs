@@ -651,7 +651,10 @@ impl NodeRequestBuilder {
         if let Some(hit) = stats.cached_vet(peer, base, policy.allow_private, now) {
             return hit;
         }
-        let vetted = bounded_check(policy.check_base_url(base)).await;
+        let vetted = bounded_check(
+            policy.check_base_url_for(base, crate::outbound_policy::LookupPurpose::Critical),
+        )
+        .await;
         stats.store_vet(peer, base, policy.allow_private, vetted.clone(), now);
         vetted
     }

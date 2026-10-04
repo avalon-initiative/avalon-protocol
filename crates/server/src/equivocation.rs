@@ -188,7 +188,28 @@ fn confirm_author_equivocation(
 /// Most confirmations running at once on this node.
 const MAX_CONFIRMATIONS_IN_FLIGHT: usize = 4;
 
-/// Bounds running confirmations: one per `(shard, tree size)` and a fixed number overall.
+/// Whether a conflict comes from a shard this node knows or an authenticated source; such
+/// conflicts may use the slot held back from the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Standing(bool);
+
+impl Standing {
+    pub fn of(
+        shard_registry: &crate::nodes::ShardRegistry,
+        authenticated: bool,
+        conflict: &HeadConflict,
+    ) -> Self {
+        Self(
+            authenticated
+                || shard_registry
+                    .known_shard_ids()
+                    .contains(&conflict.shard_id),
+        )
+    }
+}
+
+/// Bounds running confirmations: one per `(shard, tree size)` and a fixed number overall, with
+/// one slot kept for conflicts of good standing.
 struct ConfirmGate {
     running: std::sync::Mutex<std::collections::HashSet<(String, i64)>>,
     limit: usize,
@@ -207,10 +228,20 @@ impl ConfirmGate {
         }
     }
 
-    fn try_enter(&self, shard_id: &str, tree_size: i64) -> Option<ConfirmSlot<'_>> {
+    fn try_enter(
+        &self,
+        shard_id: &str,
+        tree_size: i64,
+        standing: Standing,
+    ) -> Option<ConfirmSlot<'_>> {
         let key = (shard_id.to_string(), tree_size);
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        if running.len() >= self.limit || !running.insert(key.clone()) {
+        let limit = if standing.0 {
+            self.limit
+        } else {
+            self.limit.saturating_sub(1)
+        };
+        if running.len() >= limit || !running.insert(key.clone()) {
             return None;
         }
         Some(ConfirmSlot { gate: self, key })
@@ -232,6 +263,14 @@ fn confirm_gate() -> &'static ConfirmGate {
     GATE.get_or_init(|| ConfirmGate::new(MAX_CONFIRMATIONS_IN_FLIGHT))
 }
 
+/// Shard ids [`spawn_confirmation`] was asked about, for tests of what a path must not start.
+#[cfg(test)]
+pub(crate) fn attempted() -> &'static std::sync::Mutex<Vec<String>> {
+    static ATTEMPTED: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> =
+        std::sync::OnceLock::new();
+    ATTEMPTED.get_or_init(Default::default)
+}
+
 /// Runs [`confirm_and_record`] in the background unless this conflict's shard and size is already
 /// being confirmed or the node-wide limit is reached; a dropped conflict resurfaces on the next
 /// gossip round.
@@ -240,16 +279,28 @@ pub fn spawn_confirmation(
     head_gossip: &HeadGossipTracker,
     peers: &PeerTable,
     known_list: &KnownListHandle,
+    standing: Standing,
     conflict: HeadConflict,
 ) {
+    #[cfg(test)]
+    attempted().lock().unwrap().push(conflict.shard_id.clone());
     let gate = confirm_gate();
-    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size) else {
-        tracing::debug!(
-            event = "equivocation_confirmation_skipped",
-            shard_id = %conflict.shard_id,
-            tree_size = conflict.tree_size,
-            "a confirmation for this head is running or the node-wide limit is reached",
-        );
+    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size, standing) else {
+        static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> =
+            std::sync::OnceLock::new();
+        let log = LOG.get_or_init(|| {
+            crate::log_throttle::LogThrottle::new(std::time::Duration::from_secs(60))
+        });
+        let key = format!("{}:{}", conflict.shard_id, conflict.tree_size);
+        if let Some(held_back) = log.permit(&key, std::time::Instant::now()) {
+            tracing::warn!(
+                event = "equivocation_confirmation_skipped",
+                shard_id = %conflict.shard_id,
+                tree_size = conflict.tree_size,
+                held_back,
+                "a confirmation for this head is running or the node-wide limit is reached",
+            );
+        }
         return;
     };
     // The slot borrows the static gate; moved into the task so it is held until the end.
@@ -452,26 +503,40 @@ mod tests {
         (key, key_id)
     }
 
+    #[test]
+    fn the_confirm_gate_admits_one_run_per_head_and_keeps_a_slot_for_good_standing() {
+        let (known, unknown) = (Standing(true), Standing(false));
+        let gate = ConfirmGate::new(3);
+        let a = gate.try_enter("core", 5, unknown).expect("first run");
+        assert!(
+            gate.try_enter("core", 5, known).is_none(),
+            "same head twice"
+        );
+        let _b = gate.try_enter("core", 6, unknown).expect("another size");
+        assert!(
+            gate.try_enter("junk", 1, unknown).is_none(),
+            "reserved slot"
+        );
+        let _c = gate
+            .try_enter("known", 1, known)
+            .expect("reserved slot is usable");
+        assert!(
+            gate.try_enter("known", 2, known).is_none(),
+            "over the limit"
+        );
+        drop(a);
+        assert!(
+            gate.try_enter("known", 2, known).is_some(),
+            "a freed slot is reusable"
+        );
+    }
+
     /// The end-to-end scenario the ticket asks for: a log shows two
     /// different roots at the same `tree_size`, each independently
     /// majority-cosigned by a different (but overlapping) witness group —
     /// mirrors `cosigned_sth::conflicting_majority_cosigned_heads_share_a_witness`,
     /// exercised through this module's fetch-independent confirmation path
     /// instead of calling `find_equivocating_witnesses` directly.
-    #[test]
-    fn the_confirm_gate_admits_one_run_per_head_and_a_bounded_number_overall() {
-        let gate = ConfirmGate::new(2);
-        let a = gate.try_enter("core", 5).expect("first run");
-        assert!(gate.try_enter("core", 5).is_none(), "same head twice");
-        let _b = gate.try_enter("core", 6).expect("another size");
-        assert!(gate.try_enter("other", 1).is_none(), "over the limit");
-        drop(a);
-        assert!(
-            gate.try_enter("other", 1).is_some(),
-            "a freed slot is reusable"
-        );
-    }
-
     #[test]
     fn confirms_an_equivocation_shown_to_disjoint_witness_groups() {
         let author_key = SigningKey::generate(&mut rand::rng());

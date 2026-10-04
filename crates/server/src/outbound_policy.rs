@@ -27,8 +27,41 @@ pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest a hostname lookup may take before the host counts as unresolvable.
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Most hostname lookups running at once, counting ones that timed out but have not returned.
-const MAX_LOOKUPS_RUNNING: usize = 32;
+/// Most lookups running at once for the node's own fetches.
+const MAX_CRITICAL_LOOKUPS: usize = 32;
+/// Most lookups running at once for names an unauthenticated caller can supply.
+pub(crate) const MAX_UNTRUSTED_LOOKUPS: usize = 8;
+
+/// Who a hostname came from, which decides the slot pool its lookup runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupPurpose {
+    /// The node's own outbound fetches to peers it already chose.
+    Critical,
+    /// A name a remote caller supplied: announces, gossip, probes.
+    Untrusted,
+}
+
+/// Separate slot pools, so abandoned lookups of caller-supplied names cannot starve the node's own.
+struct LookupPools {
+    critical: std::sync::Arc<tokio::sync::Semaphore>,
+    untrusted: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+impl LookupPools {
+    fn new(critical: usize, untrusted: usize) -> Self {
+        Self {
+            critical: std::sync::Arc::new(tokio::sync::Semaphore::new(critical)),
+            untrusted: std::sync::Arc::new(tokio::sync::Semaphore::new(untrusted)),
+        }
+    }
+
+    fn slots(&self, purpose: LookupPurpose) -> &std::sync::Arc<tokio::sync::Semaphore> {
+        match purpose {
+            LookupPurpose::Critical => &self.critical,
+            LookupPurpose::Untrusted => &self.untrusted,
+        }
+    }
+}
 
 /// Runs `lookup` on its own task holding one of `slots` until it truly finishes, and gives up
 /// waiting after `limit`; with no slot free, or on timeout, the host is [`PolicyError::Resolve`].
@@ -55,14 +88,16 @@ where
     }
 }
 
-async fn resolve_host(name: &str, port: u16) -> Result<Vec<SocketAddr>, PolicyError> {
-    static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    let slots =
-        SLOTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_LOOKUPS_RUNNING)));
+async fn resolve_host(
+    name: &str,
+    port: u16,
+    purpose: LookupPurpose,
+) -> Result<Vec<SocketAddr>, PolicyError> {
+    static POOLS: std::sync::OnceLock<LookupPools> = std::sync::OnceLock::new();
+    let pools = POOLS.get_or_init(|| LookupPools::new(MAX_CRITICAL_LOOKUPS, MAX_UNTRUSTED_LOOKUPS));
     let name = name.to_string();
     slotted_lookup(
-        slots,
+        pools.slots(purpose),
         async move {
             Ok(tokio::net::lookup_host((name.as_str(), port))
                 .await?
@@ -86,32 +121,25 @@ pub fn peer_client() -> reqwest::Client {
         .expect("static reqwest client configuration is valid")
 }
 
-/// Most distinct targets a private-address refusal is logged for.
-const MAX_REFUSAL_WARNINGS: usize = 256;
-
 /// Whether `err` is a refusal only `AVALON_ALLOW_PRIVATE_PEERS` would lift.
 fn lifted_by_private_peers(policy: OutboundPolicy, err: &PolicyError) -> bool {
     matches!(err, PolicyError::Forbidden(ip)
         if !policy.allow_private && !always_forbidden(*ip) && is_private(*ip))
 }
 
-/// True the first time `target` is seen, and never once `MAX_REFUSAL_WARNINGS` are held.
-fn first_refusal(seen: &std::sync::Mutex<std::collections::HashSet<String>>, target: &str) -> bool {
-    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
-    seen.len() < MAX_REFUSAL_WARNINGS && seen.insert(target.to_string())
-}
-
-/// Warns once per `target` when the policy refused a private address that
+/// Warns at most once per `target` per interval when the policy refused a private address that
 /// `AVALON_ALLOW_PRIVATE_PEERS=true` would allow, so private deployments are not silent.
 pub(crate) fn note_refusal(policy: OutboundPolicy, target: &str, err: &PolicyError) {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    if lifted_by_private_peers(policy, err)
-        && first_refusal(SEEN.get_or_init(Default::default), target)
-    {
+    static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> = std::sync::OnceLock::new();
+    if !lifted_by_private_peers(policy, err) {
+        return;
+    }
+    let log = LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(Duration::from_secs(300)));
+    if let Some(held_back) = log.permit(target, std::time::Instant::now()) {
         tracing::warn!(
             event = "private_peer_refused",
             target = %target,
+            held_back,
             "outbound request to a private address refused; set AVALON_ALLOW_PRIVATE_PEERS=true \
              if this node's peers are on a private network",
         );
@@ -126,8 +154,11 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let policy = self.0;
         Box::pin(async move {
-            let addrs = check_answer(policy, resolve_host(name.as_str(), 0).await?)
-                .inspect_err(|e| note_refusal(policy, name.as_str(), e))?;
+            let addrs = check_answer(
+                policy,
+                resolve_host(name.as_str(), 0, LookupPurpose::Critical).await?,
+            )
+            .inspect_err(|e| note_refusal(policy, name.as_str(), e))?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -383,6 +414,16 @@ impl OutboundPolicy {
     /// Resolves the URL's host, requires every resolved address to pass the
     /// policy, and returns the target pinned to the first one.
     pub async fn check_base_url(&self, base_url: &str) -> Result<CheckedTarget, PolicyError> {
+        self.check_base_url_for(base_url, LookupPurpose::Untrusted)
+            .await
+    }
+
+    /// [`Self::check_base_url`] with its lookup in the pool for `purpose`.
+    pub async fn check_base_url_for(
+        &self,
+        base_url: &str,
+        purpose: LookupPurpose,
+    ) -> Result<CheckedTarget, PolicyError> {
         let url = Self::parse_base_url(base_url)?;
         let port = url.port_or_known_default().ok_or(PolicyError::InvalidUrl)?;
         let base = url.as_str().trim_end_matches('/').to_string();
@@ -390,7 +431,7 @@ impl OutboundPolicy {
             Host::Ipv4(ip) => self.literal(base, IpAddr::V4(ip), port),
             Host::Ipv6(ip) => self.literal(base, IpAddr::V6(ip), port),
             Host::Domain(name) => {
-                let addrs = resolve_host(name, port).await?;
+                let addrs = resolve_host(name, port, purpose).await?;
                 for a in &addrs {
                     self.check_ip(a.ip())?;
                 }
@@ -408,6 +449,15 @@ impl OutboundPolicy {
     /// Like [`Self::check_base_url`], but also accepts a `p2p://<peer id>` node URL, which is
     /// reached over a libp2p stream and so has no address to check.
     pub async fn check_node_url(&self, url: &str) -> Result<NodeTarget, PolicyError> {
+        self.check_node_url_for(url, LookupPurpose::Untrusted).await
+    }
+
+    /// [`Self::check_node_url`] with its lookup in the pool for `purpose`.
+    pub async fn check_node_url_for(
+        &self,
+        url: &str,
+        purpose: LookupPurpose,
+    ) -> Result<NodeTarget, PolicyError> {
         if let Some(peer) = crate::node_http::parse_p2p_base(url) {
             return Ok(NodeTarget {
                 base_url: crate::node_http::p2p_base_url(&peer),
@@ -415,7 +465,7 @@ impl OutboundPolicy {
                 policy: *self,
             });
         }
-        Ok(self.check_base_url(url).await?.into())
+        Ok(self.check_base_url_for(url, purpose).await?.into())
     }
 
     fn literal(
@@ -508,15 +558,46 @@ mod tests {
         assert!(!lifted_by_private_peers(strict, &PolicyError::Resolve));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn caller_supplied_lookups_cannot_starve_the_nodes_own() {
+        let pools = LookupPools::new(2, 1);
+        let never = || std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
+        let addr = SocketAddr::new(ip("93.184.216.34"), 80);
+        let abandoned = slotted_lookup(
+            pools.slots(LookupPurpose::Untrusted),
+            never(),
+            DNS_LOOKUP_TIMEOUT,
+        )
+        .await;
+        assert_eq!(abandoned, Err(PolicyError::Resolve));
+        let blocked = slotted_lookup(
+            pools.slots(LookupPurpose::Untrusted),
+            async move { Ok(vec![addr]) },
+            DNS_LOOKUP_TIMEOUT,
+        )
+        .await;
+        assert_eq!(
+            blocked,
+            Err(PolicyError::Resolve),
+            "the untrusted pool is full"
+        );
+        let critical = slotted_lookup(
+            pools.slots(LookupPurpose::Critical),
+            async move { Ok(vec![addr]) },
+            DNS_LOOKUP_TIMEOUT,
+        )
+        .await;
+        assert_eq!(critical, Ok(vec![addr]));
+    }
+
     #[test]
-    fn a_refusal_is_reported_once_per_target_and_the_set_is_bounded() {
-        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
-        assert!(first_refusal(&seen, "http://a.test"));
-        assert!(!first_refusal(&seen, "http://a.test"));
-        for i in 0..MAX_REFUSAL_WARNINGS {
-            first_refusal(&seen, &format!("t{i}"));
+    fn junk_targets_cannot_silence_the_private_peers_hint_for_good() {
+        let log = crate::log_throttle::LogThrottle::new(Duration::from_secs(300));
+        let now = std::time::Instant::now();
+        for i in 0..5000 {
+            log.permit(&format!("junk{i}"), now);
         }
-        assert!(!first_refusal(&seen, "one-more"));
+        assert!(log.permit("http://seed.lan", now).is_some());
     }
 
     #[test]
