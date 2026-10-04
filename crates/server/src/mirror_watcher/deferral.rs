@@ -41,8 +41,6 @@ struct ShardBook {
 #[derive(Default)]
 pub(super) struct Scheduler {
     clean: HashSet<(String, String)>,
-    /// Pairs whose rows changed behind a running scan; its end must not mark them clean.
-    rescan: HashSet<(String, String)>,
     shards: HashMap<(String, String), ShardBook>,
 }
 
@@ -61,18 +59,7 @@ impl Scheduler {
     }
 
     pub(super) fn mark_clean(&mut self, network_id: &str, shard_id: &str) {
-        let key = pair(network_id, shard_id);
-        if !self.rescan.remove(&key) {
-            self.clean.insert(key);
-        }
-    }
-
-    /// Rows of the shard became projectable again (a refused entry was reopened): scan it again,
-    /// even if a scan already running finishes first.
-    pub(super) fn request_rescan(&mut self, network_id: &str, shard_id: &str) {
-        let key = pair(network_id, shard_id);
-        self.clean.remove(&key);
-        self.rescan.insert(key);
+        self.clean.insert(pair(network_id, shard_id));
     }
 
     /// Drops waiting entries first tracked before `scanned_from` that `seen` does not contain.
@@ -233,10 +220,6 @@ pub(super) fn mark_projection_failed(network_id: &str, shard_id: &str) {
     with(|s| s.mark_failed(network_id, shard_id));
 }
 
-pub(super) fn request_rescan(network_id: &str, shard_id: &str) {
-    with(|s| s.request_rescan(network_id, shard_id));
-}
-
 pub(super) fn prune_unseen(
     network_id: &str,
     shard_id: &str,
@@ -273,11 +256,6 @@ pub(super) fn forget_waiting(network_id: &str, shard_id: &str, event_id: Uuid) {
     with(|s| s.forget(network_id, shard_id, event_id));
 }
 
-/// Whether projecting an entry of this kind can unblock entries that wait for an identity or key.
-pub(super) fn changes_keys(kind: &str) -> bool {
-    kind == "identity.created" || kind.starts_with("identity.signing_key_")
-}
-
 pub(super) fn entry_applied(
     network_id: &str,
     shard_id: &str,
@@ -285,7 +263,7 @@ pub(super) fn entry_applied(
     kind: &str,
     identity: Option<&str>,
 ) {
-    let changes_keys = changes_keys(kind);
+    let changes_keys = kind == "identity.created" || kind.starts_with("identity.signing_key_");
     with(|s| {
         s.applied(
             network_id,
@@ -479,17 +457,5 @@ mod tests {
         assert!(s.holding("net", "core", gone, start).is_none());
         assert!(s.holding("net", "core", seen, start).is_some());
         assert!(s.holding("net", "core", newer, start).is_some());
-    }
-
-    #[test]
-    fn a_rescan_request_survives_the_end_of_a_running_scan() {
-        let mut s = Scheduler::default();
-        s.mark_clean("net", "core");
-        assert!(!s.scan_due("net", "core", Instant::now()));
-        s.request_rescan("net", "core");
-        s.mark_clean("net", "core");
-        assert!(s.scan_due("net", "core", Instant::now()));
-        s.mark_clean("net", "core");
-        assert!(!s.scan_due("net", "core", Instant::now()));
     }
 }
