@@ -24,6 +24,226 @@ use url::{Host, Url};
 
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Longest a hostname lookup may take before the host counts as unresolvable.
+const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Most lookups running at once for the node's own fetches.
+const MAX_CRITICAL_LOOKUPS: usize = 32;
+/// Most lookups running at once for names an unauthenticated caller can supply.
+pub(crate) const MAX_UNTRUSTED_LOOKUPS: usize = 8;
+
+/// Who a hostname came from, which decides the slot pool its lookup runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupPurpose {
+    /// The node's own outbound fetches to peers it already chose.
+    Critical,
+    /// A name a remote caller supplied: announces, gossip, probes.
+    Untrusted,
+}
+
+/// Separate slot pools, so abandoned lookups of caller-supplied names cannot starve the node's own.
+struct LookupPools {
+    critical: std::sync::Arc<tokio::sync::Semaphore>,
+    untrusted: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+impl LookupPools {
+    fn new(critical: usize, untrusted: usize) -> Self {
+        Self {
+            critical: std::sync::Arc::new(tokio::sync::Semaphore::new(critical)),
+            untrusted: std::sync::Arc::new(tokio::sync::Semaphore::new(untrusted)),
+        }
+    }
+
+    fn slots(&self, purpose: LookupPurpose) -> &std::sync::Arc<tokio::sync::Semaphore> {
+        match purpose {
+            LookupPurpose::Critical => &self.critical,
+            LookupPurpose::Untrusted => &self.untrusted,
+        }
+    }
+}
+
+/// How long a host that failed to resolve is refused without a new lookup.
+const NEGATIVE_TTL: Duration = Duration::from_secs(45);
+/// Timed-out lookups still running before new untrusted lookups are refused.
+const MAX_ABANDONED_LOOKUPS: usize = 32;
+/// Most failed hosts remembered at once.
+const MAX_NEGATIVE_HOSTS: usize = 512;
+
+type LookupAnswer = Result<Vec<IpAddr>, PolicyError>;
+type LookupFn = std::sync::Arc<
+    dyn Fn(String) -> futures_util::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>>
+        + Send
+        + Sync,
+>;
+
+/// Hostname lookups with bounded slot pools. One lookup runs per host at a time and later
+/// callers wait on it; a host that failed is refused for [`NEGATIVE_TTL`] without a lookup, so
+/// one bad name cannot take a fresh slot per retry. A lookup's slot is freed at its deadline.
+struct Resolver {
+    pools: LookupPools,
+    flights: std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::watch::Receiver<Option<LookupAnswer>>>,
+    >,
+    failed: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    lookup: LookupFn,
+    limit: Duration,
+    negative_ttl: Duration,
+    /// Lookups that hit the deadline but whose blocking call has not returned yet.
+    abandoned: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    max_abandoned: usize,
+}
+
+/// Removes a host's in-flight entry however its lookup task ends.
+struct FlightGuard {
+    resolver: std::sync::Arc<Resolver>,
+    host: String,
+}
+
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        self.resolver
+            .flights
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.host);
+    }
+}
+
+impl Resolver {
+    fn new(pools: LookupPools, lookup: LookupFn, limit: Duration, negative_ttl: Duration) -> Self {
+        Self {
+            pools,
+            flights: Default::default(),
+            failed: Default::default(),
+            lookup,
+            limit,
+            negative_ttl,
+            abandoned: Default::default(),
+            max_abandoned: MAX_ABANDONED_LOOKUPS,
+        }
+    }
+
+    fn remember_failure(&self, host: &str) {
+        let now = std::time::Instant::now();
+        let mut failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        if failed.len() >= MAX_NEGATIVE_HOSTS && !failed.contains_key(host) {
+            failed.retain(|_, until| *until > now);
+            if failed.len() >= MAX_NEGATIVE_HOSTS {
+                if let Some(oldest) = failed
+                    .iter()
+                    .min_by_key(|(_, u)| **u)
+                    .map(|(h, _)| h.clone())
+                {
+                    failed.remove(&oldest);
+                }
+            }
+        }
+        failed.insert(host.to_string(), now + self.negative_ttl);
+    }
+
+    fn recently_failed(&self, host: &str) -> bool {
+        let failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        failed
+            .get(host)
+            .is_some_and(|until| *until > std::time::Instant::now())
+    }
+
+    async fn resolve(
+        self: &std::sync::Arc<Self>,
+        name: &str,
+        port: u16,
+        purpose: LookupPurpose,
+    ) -> Result<Vec<SocketAddr>, PolicyError> {
+        let host = name.to_ascii_lowercase();
+        if self.recently_failed(&host) {
+            return Err(PolicyError::Resolve);
+        }
+        let mut rx = {
+            let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+            match flights.get(&host) {
+                Some(rx) => rx.clone(),
+                None => {
+                    let abandoned = self.abandoned.load(std::sync::atomic::Ordering::SeqCst);
+                    if purpose == LookupPurpose::Untrusted && abandoned >= self.max_abandoned {
+                        return Err(PolicyError::Resolve);
+                    }
+                    let permit = self
+                        .pools
+                        .slots(purpose)
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|_| PolicyError::Resolve)?;
+                    let (tx, rx) = tokio::sync::watch::channel(None);
+                    flights.insert(host.clone(), rx.clone());
+                    let (this, key) = (self.clone(), host.clone());
+                    tokio::spawn(async move {
+                        let _guard = FlightGuard {
+                            resolver: this.clone(),
+                            host: key.clone(),
+                        };
+                        let mut inner = tokio::spawn((this.lookup)(key.clone()));
+                        let answer = match tokio::time::timeout(this.limit, &mut inner).await {
+                            Ok(Ok(Ok(addrs))) if !addrs.is_empty() => Ok(addrs),
+                            Ok(_) => Err(PolicyError::Resolve),
+                            Err(_) => {
+                                // The blocking call cannot be cancelled; count it until it returns.
+                                let count = this.abandoned.clone();
+                                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                tokio::spawn(async move {
+                                    let _ = inner.await;
+                                    count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                                });
+                                Err(PolicyError::Resolve)
+                            }
+                        };
+                        if answer.is_err() {
+                            this.remember_failure(&key);
+                        }
+                        drop(_guard);
+                        drop(permit);
+                        let _ = tx.send(Some(answer));
+                    });
+                    rx
+                }
+            }
+        };
+        let answer = rx
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| PolicyError::Resolve)?
+            .clone()
+            .ok_or(PolicyError::Resolve)??;
+        Ok(answer
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, port))
+            .collect())
+    }
+}
+
+async fn resolve_host(
+    name: &str,
+    port: u16,
+    purpose: LookupPurpose,
+) -> Result<Vec<SocketAddr>, PolicyError> {
+    static RESOLVER: std::sync::OnceLock<std::sync::Arc<Resolver>> = std::sync::OnceLock::new();
+    let resolver = RESOLVER.get_or_init(|| {
+        std::sync::Arc::new(Resolver::new(
+            LookupPools::new(MAX_CRITICAL_LOOKUPS, MAX_UNTRUSTED_LOOKUPS),
+            std::sync::Arc::new(|name: String| {
+                Box::pin(async move {
+                    Ok(tokio::net::lookup_host((name.as_str(), 0))
+                        .await?
+                        .map(|a| a.ip())
+                        .collect())
+                })
+            }),
+            DNS_LOOKUP_TIMEOUT,
+            NEGATIVE_TTL,
+        ))
+    });
+    resolver.resolve(name, port, purpose).await
+}
 
 /// HTTP client for requests to other nodes, which follows no redirects and uses no proxy so a
 /// signed request never reaches a host other than the one named: a peer that accepts the connection but never answers
@@ -38,6 +258,31 @@ pub fn peer_client() -> reqwest::Client {
         .expect("static reqwest client configuration is valid")
 }
 
+/// Whether `err` is a refusal only `AVALON_ALLOW_PRIVATE_PEERS` would lift.
+fn lifted_by_private_peers(policy: OutboundPolicy, err: &PolicyError) -> bool {
+    matches!(err, PolicyError::Forbidden(ip)
+        if !policy.allow_private && !always_forbidden(*ip) && is_private(*ip))
+}
+
+/// Warns at most once per `target` per interval when the policy refused a private address that
+/// `AVALON_ALLOW_PRIVATE_PEERS=true` would allow, so private deployments are not silent.
+pub(crate) fn note_refusal(policy: OutboundPolicy, target: &str, err: &PolicyError) {
+    static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> = std::sync::OnceLock::new();
+    if !lifted_by_private_peers(policy, err) {
+        return;
+    }
+    let log = LOG.get_or_init(|| crate::log_throttle::LogThrottle::new(Duration::from_secs(300)));
+    if let Some(held_back) = log.permit(target, std::time::Instant::now()) {
+        tracing::warn!(
+            event = "private_peer_refused",
+            target = %target,
+            held_back,
+            "outbound request to a private address refused; set AVALON_ALLOW_PRIVATE_PEERS=true \
+             if this node's peers are on a private network",
+        );
+    }
+}
+
 /// Resolver that refuses a host when any address it resolves to fails the policy, so the check
 /// runs on the answer the connection actually uses.
 struct GuardedResolver(OutboundPolicy);
@@ -46,9 +291,11 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let policy = self.0;
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> =
-                tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            let addrs = check_answer(policy, addrs)?;
+            let addrs = check_answer(
+                policy,
+                resolve_host(name.as_str(), 0, LookupPurpose::Critical).await?,
+            )
+            .inspect_err(|e| note_refusal(policy, name.as_str(), e))?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -304,6 +551,16 @@ impl OutboundPolicy {
     /// Resolves the URL's host, requires every resolved address to pass the
     /// policy, and returns the target pinned to the first one.
     pub async fn check_base_url(&self, base_url: &str) -> Result<CheckedTarget, PolicyError> {
+        self.check_base_url_for(base_url, LookupPurpose::Untrusted)
+            .await
+    }
+
+    /// [`Self::check_base_url`] with its lookup in the pool for `purpose`.
+    pub async fn check_base_url_for(
+        &self,
+        base_url: &str,
+        purpose: LookupPurpose,
+    ) -> Result<CheckedTarget, PolicyError> {
         let url = Self::parse_base_url(base_url)?;
         let port = url.port_or_known_default().ok_or(PolicyError::InvalidUrl)?;
         let base = url.as_str().trim_end_matches('/').to_string();
@@ -311,10 +568,7 @@ impl OutboundPolicy {
             Host::Ipv4(ip) => self.literal(base, IpAddr::V4(ip), port),
             Host::Ipv6(ip) => self.literal(base, IpAddr::V6(ip), port),
             Host::Domain(name) => {
-                let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name, port))
-                    .await
-                    .map_err(|_| PolicyError::Resolve)?
-                    .collect();
+                let addrs = resolve_host(name, port, purpose).await?;
                 for a in &addrs {
                     self.check_ip(a.ip())?;
                 }
@@ -332,6 +586,15 @@ impl OutboundPolicy {
     /// Like [`Self::check_base_url`], but also accepts a `p2p://<peer id>` node URL, which is
     /// reached over a libp2p stream and so has no address to check.
     pub async fn check_node_url(&self, url: &str) -> Result<NodeTarget, PolicyError> {
+        self.check_node_url_for(url, LookupPurpose::Untrusted).await
+    }
+
+    /// [`Self::check_node_url`] with its lookup in the pool for `purpose`.
+    pub async fn check_node_url_for(
+        &self,
+        url: &str,
+        purpose: LookupPurpose,
+    ) -> Result<NodeTarget, PolicyError> {
         if let Some(peer) = crate::node_http::parse_p2p_base(url) {
             return Ok(NodeTarget {
                 base_url: crate::node_http::p2p_base_url(&peer),
@@ -339,7 +602,7 @@ impl OutboundPolicy {
                 policy: *self,
             });
         }
-        Ok(self.check_base_url(url).await?.into())
+        Ok(self.check_base_url_for(url, purpose).await?.into())
     }
 
     fn literal(
@@ -364,6 +627,204 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A resolver over a fake lookup: `slow.test` answers after 80 ms, `dead.test` fails,
+    /// `hang.test` never answers, anything else answers at once. Counts lookups per name.
+    fn fake_resolver(
+        pools: LookupPools,
+        limit: Duration,
+        ttl: Duration,
+    ) -> (Arc<Resolver>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let lookup: LookupFn = Arc::new(move |name: String| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                match name.as_str() {
+                    "slow.test" => {
+                        tokio::time::sleep(Duration::from_millis(80)).await;
+                        Ok(vec![ip("93.184.216.34")])
+                    }
+                    "dead.test" => Err(std::io::Error::other("no such host")),
+                    n if n.starts_with("hang.test") => std::future::pending().await,
+                    _ => Ok(vec![ip("93.184.216.35")]),
+                }
+            })
+        });
+        (Arc::new(Resolver::new(pools, lookup, limit, ttl)), calls)
+    }
+
+    const LONG: Duration = Duration::from_secs(30);
+
+    #[tokio::test]
+    async fn concurrent_lookups_of_one_host_share_one_lookup_and_one_slot() {
+        let (r, calls) = fake_resolver(LookupPools::new(4, 1), LONG, LONG);
+        let got = futures_util::future::join_all(
+            (0..6).map(|_| r.resolve("slow.test", 80, LookupPurpose::Untrusted)),
+        )
+        .await;
+        assert!(got.iter().all(|g| g.as_ref().is_ok_and(|a| a.len() == 1)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one lookup per host");
+    }
+
+    #[tokio::test]
+    async fn a_failed_host_is_refused_without_a_new_lookup_until_the_ttl_ends() {
+        let (r, calls) = fake_resolver(LookupPools::new(4, 4), LONG, Duration::from_millis(150));
+        for _ in 0..5 {
+            assert_eq!(
+                r.resolve("dead.test", 80, LookupPurpose::Critical).await,
+                Err(PolicyError::Resolve)
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "retries cost no lookup");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = r.resolve("dead.test", 80, LookupPurpose::Critical).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "tried again after the ttl");
+    }
+
+    #[tokio::test]
+    async fn the_failed_host_memory_is_bounded() {
+        let (r, _) = fake_resolver(LookupPools::new(1, 1), LONG, LONG);
+        for i in 0..MAX_NEGATIVE_HOSTS + 20 {
+            r.remember_failure(&format!("h{i}.test"));
+        }
+        assert!(r.failed.lock().unwrap().len() <= MAX_NEGATIVE_HOSTS);
+    }
+
+    #[tokio::test]
+    async fn a_lookup_that_never_answers_frees_its_slot_at_the_deadline() {
+        let (r, _) = fake_resolver(
+            LookupPools::new(1, 1),
+            Duration::from_millis(60),
+            Duration::from_millis(1),
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            r.resolve("hang.test", 80, LookupPurpose::Untrusted).await,
+            Err(PolicyError::Resolve)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            r.resolve("other.test", 80, LookupPurpose::Untrusted)
+                .await
+                .is_ok(),
+            "the slot came back with the deadline"
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_lookups_are_capped_for_untrusted_names_only() {
+        let (r, calls) = fake_resolver(
+            LookupPools::new(8, 8),
+            Duration::from_millis(30),
+            Duration::from_secs(60),
+        );
+        let r = Arc::new(Resolver {
+            max_abandoned: 2,
+            ..Arc::try_unwrap(r).ok().unwrap()
+        });
+        for i in 0..2 {
+            let host = format!("hang.test{i}");
+            let _ = r.resolve(&host, 80, LookupPurpose::Untrusted).await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(r.abandoned.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            r.resolve("fresh.test", 80, LookupPurpose::Untrusted).await,
+            Err(PolicyError::Resolve)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "no lookup past the cap");
+        assert!(!r.recently_failed("fresh.test"), "a refusal is not cached");
+        assert!(r
+            .resolve("fresh.test", 80, LookupPurpose::Critical)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn caller_supplied_lookups_cannot_starve_the_nodes_own() {
+        let (r, _) = fake_resolver(LookupPools::new(2, 1), LONG, LONG);
+        let held = tokio::spawn({
+            let r = r.clone();
+            async move { r.resolve("slow.test", 80, LookupPurpose::Untrusted).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            r.resolve("a.test", 80, LookupPurpose::Untrusted).await,
+            Err(PolicyError::Resolve),
+            "the untrusted pool is full"
+        );
+        assert!(r
+            .resolve("b.test", 80, LookupPurpose::Critical)
+            .await
+            .is_ok());
+        assert!(held.await.unwrap().is_ok());
+    }
+    /// Modules that fetch from peer-supplied addresses must build their clients through
+    /// `NodeClient::guarded`; any other constructor in their non-test code is a bypass.
+    #[test]
+    fn peer_fetching_modules_build_only_guarded_clients() {
+        let modules = [
+            ("replication", include_str!("replication.rs")),
+            ("cross_shard", include_str!("cross_shard.rs")),
+            ("cross_shard_fetch", include_str!("cross_shard_fetch.rs")),
+            ("mirror_watcher", include_str!("mirror_watcher.rs")),
+            ("mirror_push", include_str!("mirror_push.rs")),
+            ("chat_replication", include_str!("chat_replication.rs")),
+            ("equivocation", include_str!("equivocation.rs")),
+            ("nodes", include_str!("nodes.rs")),
+        ];
+        let bypasses = [
+            "NodeClient::new(",
+            "NodeClient::peer(",
+            "NodeClient::from(",
+            "reqwest::Client::new(",
+            "reqwest::Client::builder(",
+            "peer_client(",
+        ];
+        for (name, source) in modules {
+            let production = source.split("#[cfg(test)]\nmod ").next().unwrap();
+            assert!(
+                production.contains("NodeClient::guarded"),
+                "{name} no longer builds a guarded client"
+            );
+            for bypass in bypasses {
+                assert!(
+                    !production.contains(bypass),
+                    "{name} builds an unguarded client with {bypass}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_private_address_refusal_is_reported_as_liftable() {
+        let strict = OutboundPolicy::new(false);
+        let lax = OutboundPolicy::new(true);
+        let refused = |a: &str| PolicyError::Forbidden(ip(a));
+        assert!(lifted_by_private_peers(strict, &refused("10.0.0.1")));
+        assert!(lifted_by_private_peers(strict, &refused("127.0.0.1")));
+        assert!(!lifted_by_private_peers(
+            strict,
+            &refused("169.254.169.254")
+        ));
+        assert!(!lifted_by_private_peers(lax, &refused("10.0.0.1")));
+        assert!(!lifted_by_private_peers(strict, &PolicyError::Resolve));
+    }
+
+    #[test]
+    fn junk_targets_cannot_silence_the_private_peers_hint_for_good() {
+        let log = crate::log_throttle::LogThrottle::new(Duration::from_secs(300));
+        let now = std::time::Instant::now();
+        for i in 0..5000 {
+            log.permit(&format!("junk{i}"), now);
+        }
+        assert!(log.permit("http://seed.lan", now).is_some());
     }
 
     #[test]

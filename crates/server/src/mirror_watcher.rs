@@ -727,7 +727,7 @@ pub async fn run_worker(
     let directory_max = crate::witness_refresh::max_per_tick_from_env();
     let own_witness_key = witness.as_ref().map(|w| w.key_id().to_string());
     let policy = crate::outbound_policy::OutboundPolicy::from_env();
-    let client = crate::node_http::NodeClient::peer();
+    let client = crate::node_http::NodeClient::guarded();
 
     if config.peers.is_empty() {
         tracing::info!(

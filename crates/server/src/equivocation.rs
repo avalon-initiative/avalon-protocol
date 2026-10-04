@@ -84,14 +84,26 @@ impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
     }
 }
 
+/// `source` as a base URL fit to fetch from: a `p2p://` peer or a plain http(s) URL of bounded
+/// length. Its address is checked by the guarded client when the connection is made.
+fn fetchable_source(source: &str) -> Result<String, String> {
+    if let Some(peer) = crate::node_http::parse_p2p_base(source) {
+        return Ok(crate::node_http::p2p_base_url(&peer));
+    }
+    crate::peer_admission::admission()
+        .check_shape(source)
+        .map_err(|e| format!("conflict source is not a usable base URL: {e:?}"))
+}
+
 /// Fetches full cosignature detail for `shard_id` at `tree_size` directly
-/// from `base_url` — the fetch-on-demand half of head-summary gossip.
+/// from `source` — the fetch-on-demand half of head-summary gossip.
 async fn fetch_cosigned_head(
     client: &crate::node_http::NodeClient,
-    base_url: &str,
+    source: &str,
     shard_id: &str,
     tree_size: i64,
 ) -> Result<CosignedTreeHead, String> {
+    let base_url = fetchable_source(source)?;
     let dto: FetchedSthWithWitnesses = client
         .get(format!("{base_url}/ledger/sth/{tree_size}"))
         .query(&[("shard_id", shard_id), ("witnesses", "1")])
@@ -173,6 +185,138 @@ fn confirm_author_equivocation(
     })
 }
 
+/// Most confirmations running at once on this node.
+const MAX_CONFIRMATIONS_IN_FLIGHT: usize = 4;
+
+/// Whether a conflict was reported by an established peer; only such conflicts may use the slot
+/// held back from the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Standing(bool);
+
+impl Standing {
+    pub fn of(established: bool) -> Self {
+        Self(established)
+    }
+}
+
+/// Bounds running confirmations: one per `(shard, tree size)`, one per reporting peer, and a fixed
+/// number overall, with one slot kept for conflicts of good standing.
+struct ConfirmGate {
+    running: std::sync::Mutex<std::collections::HashMap<(String, i64), String>>,
+    limit: usize,
+}
+
+struct ConfirmSlot<'a> {
+    gate: &'a ConfirmGate,
+    key: (String, i64),
+}
+
+impl ConfirmGate {
+    fn new(limit: usize) -> Self {
+        Self {
+            running: Default::default(),
+            limit,
+        }
+    }
+
+    fn try_enter(
+        &self,
+        shard_id: &str,
+        tree_size: i64,
+        standing: Standing,
+        reporter: &str,
+    ) -> Option<ConfirmSlot<'_>> {
+        let key = (shard_id.to_string(), tree_size);
+        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let limit = if standing.0 {
+            self.limit
+        } else {
+            self.limit.saturating_sub(1)
+        };
+        if running.len() >= limit
+            || running.contains_key(&key)
+            || running.values().any(|r| r == reporter)
+        {
+            return None;
+        }
+        running.insert(key.clone(), reporter.to_string());
+        Some(ConfirmSlot { gate: self, key })
+    }
+}
+
+impl Drop for ConfirmSlot<'_> {
+    fn drop(&mut self) {
+        self.gate
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
+}
+
+fn confirm_gate() -> &'static ConfirmGate {
+    static GATE: std::sync::OnceLock<ConfirmGate> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| ConfirmGate::new(MAX_CONFIRMATIONS_IN_FLIGHT))
+}
+
+/// Shard ids [`spawn_confirmation`] was asked about, for tests of what a path must not start.
+#[cfg(test)]
+pub(crate) fn attempted() -> &'static std::sync::Mutex<Vec<(String, Standing, String)>> {
+    static ATTEMPTED: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Standing, String)>>> =
+        std::sync::OnceLock::new();
+    ATTEMPTED.get_or_init(Default::default)
+}
+
+/// Runs [`confirm_and_record`] in the background unless this conflict's shard and size is already
+/// being confirmed or the node-wide limit is reached; a dropped conflict resurfaces on the next
+/// gossip round.
+pub fn spawn_confirmation(
+    chain: &PostgresSettlementProvider,
+    head_gossip: &HeadGossipTracker,
+    peers: &PeerTable,
+    known_list: &KnownListHandle,
+    standing: Standing,
+    reporter: &str,
+    conflict: HeadConflict,
+) {
+    #[cfg(test)]
+    attempted()
+        .lock()
+        .unwrap()
+        .push((conflict.shard_id.clone(), standing, reporter.to_string()));
+    let gate = confirm_gate();
+    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size, standing, reporter)
+    else {
+        static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> =
+            std::sync::OnceLock::new();
+        let log = LOG.get_or_init(|| {
+            crate::log_throttle::LogThrottle::new(std::time::Duration::from_secs(60))
+        });
+        let key = format!("{}:{}", conflict.shard_id, conflict.tree_size);
+        if let Some(held_back) = log.permit(&key, std::time::Instant::now()) {
+            tracing::warn!(
+                event = "equivocation_confirmation_skipped",
+                shard_id = %conflict.shard_id,
+                tree_size = conflict.tree_size,
+                held_back,
+                "a confirmation for this head is running or the node-wide limit is reached",
+            );
+        }
+        return;
+    };
+    // The slot borrows the static gate; moved into the task so it is held until the end.
+    let (chain, head_gossip, peers, known_list) = (
+        chain.clone(),
+        head_gossip.clone(),
+        peers.clone(),
+        known_list.clone(),
+    );
+    tokio::spawn(async move {
+        let _slot = slot;
+        confirm_and_record(&chain, &head_gossip, &peers, &known_list, conflict).await;
+    });
+}
+
 /// Fetches, confirms, and (on success) durably records the equivocation
 /// `conflict` signals — spawned from `crate::nodes::announce` and
 /// `crate::nodes::run_worker` whenever [`crate::nodes::HeadGossipTracker::merge`]
@@ -195,7 +339,7 @@ pub async fn confirm_and_record(
         return;
     }
 
-    let client = crate::node_http::NodeClient::peer();
+    let client = crate::node_http::NodeClient::guarded();
     let (head_a, head_b) = tokio::join!(
         fetch_cosigned_head(
             &client,
@@ -358,6 +502,52 @@ mod tests {
         let key = SigningKey::generate(&mut rand::rng());
         let key_id = hex::encode(key.verifying_key().to_bytes());
         (key, key_id)
+    }
+
+    #[test]
+    fn the_confirm_gate_admits_one_run_per_head_and_keeps_a_slot_for_good_standing() {
+        let (known, unknown) = (Standing(true), Standing(false));
+        let gate = ConfirmGate::new(3);
+        let a = gate.try_enter("core", 5, unknown, "r1").expect("first run");
+        assert!(
+            gate.try_enter("core", 5, known, "r2").is_none(),
+            "same head twice"
+        );
+        let _b = gate
+            .try_enter("core", 6, unknown, "r2")
+            .expect("another size");
+        assert!(
+            gate.try_enter("junk", 1, unknown, "r3").is_none(),
+            "reserved slot"
+        );
+        let _c = gate
+            .try_enter("known", 1, known, "r3")
+            .expect("reserved slot is usable");
+        assert!(
+            gate.try_enter("known", 2, known, "r4").is_none(),
+            "over the limit"
+        );
+        drop(a);
+        assert!(
+            gate.try_enter("known", 2, known, "r4").is_some(),
+            "a freed slot is reusable"
+        );
+    }
+
+    #[test]
+    fn one_reporter_holds_at_most_one_confirmation_slot() {
+        let gate = ConfirmGate::new(4);
+        let first = gate
+            .try_enter("a", 1, Standing(false), "attacker")
+            .expect("first");
+        assert!(gate
+            .try_enter("b", 1, Standing(false), "attacker")
+            .is_none());
+        assert!(gate.try_enter("b", 1, Standing(false), "honest").is_some());
+        drop(first);
+        assert!(gate
+            .try_enter("c", 1, Standing(false), "attacker")
+            .is_some());
     }
 
     /// The end-to-end scenario the ticket asks for: a log shows two

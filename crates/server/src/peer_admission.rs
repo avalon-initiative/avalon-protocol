@@ -38,8 +38,13 @@ pub struct AdmissionConfig {
     /// `AVALON_ANNOUNCE_VERIFY_REACHABILITY`: fetch `/nodes/status` of a new
     /// announcer before admitting it.
     pub verify_reachability: bool,
-    /// `AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS`: concurrent admission checks.
+    /// `AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS`: concurrent admission checks, never above the
+    /// untrusted lookup pool.
     pub max_concurrent_checks: usize,
+    /// Total time one gossip exchange may spend resolving unseen shard URLs.
+    pub shard_exchange_budget: Duration,
+    /// Failed resolutions after which the rest of an exchange's unseen shard URLs are refused.
+    pub max_failed_lookups: usize,
 }
 
 impl Default for AdmissionConfig {
@@ -51,7 +56,9 @@ impl Default for AdmissionConfig {
             max_new_per_exchange: 20,
             max_new_shard_urls_per_exchange: 256,
             verify_reachability: true,
-            max_concurrent_checks: 16,
+            max_concurrent_checks: crate::outbound_policy::MAX_UNTRUSTED_LOOKUPS,
+            shard_exchange_budget: Duration::from_secs(10),
+            max_failed_lookups: 8,
         }
     }
 }
@@ -108,6 +115,8 @@ impl AdmissionConfig {
                 "AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS",
                 d.max_concurrent_checks,
             ),
+            shard_exchange_budget: d.shard_exchange_budget,
+            max_failed_lookups: d.max_failed_lookups,
         }
     }
 }
@@ -178,6 +187,12 @@ pub struct PeerAdmission {
     pub policy: OutboundPolicy,
     source: IpRateLimiter,
     checks: InFlightGate,
+    /// Where the next shard exchange starts, so dead entries at the head of one list cannot
+    /// keep the rest from ever being examined.
+    pub shard_cursor: std::sync::atomic::AtomicUsize,
+    /// Address resolutions started, for tests of what runs before them.
+    #[cfg(test)]
+    pub lookups: std::sync::atomic::AtomicUsize,
 }
 
 /// Process-wide admission rules, read from the environment once.
@@ -191,7 +206,13 @@ impl PeerAdmission {
     pub fn new(cfg: AdmissionConfig, policy: OutboundPolicy) -> Self {
         Self {
             source: IpRateLimiter::new(cfg.new_urls_per_source, SOURCE_WINDOW),
-            checks: InFlightGate::new(cfg.max_concurrent_checks),
+            checks: InFlightGate::new(
+                cfg.max_concurrent_checks
+                    .min(crate::outbound_policy::MAX_UNTRUSTED_LOOKUPS),
+            ),
+            shard_cursor: Default::default(),
+            #[cfg(test)]
+            lookups: Default::default(),
             cfg,
             policy,
         }
@@ -208,6 +229,9 @@ impl PeerAdmission {
 
     /// Resolves the host and applies the outbound address policy.
     pub async fn check_address(&self, base_url: &str) -> Result<CheckedTarget, AdmitError> {
+        #[cfg(test)]
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.policy.check_base_url(base_url).await?)
     }
 
@@ -349,6 +373,17 @@ fn addr_acceptable(addr: &Multiaddr, peer_id: &PeerId, policy: &OutboundPolicy) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_in_flight_limit_never_exceeds_the_untrusted_lookup_pool() {
+        let cfg = AdmissionConfig {
+            max_concurrent_checks: 1000,
+            ..Default::default()
+        };
+        let adm = PeerAdmission::new(cfg, OutboundPolicy::new(true));
+        let held: Vec<_> = (0..1000).map_while(|_| adm.enter_check().ok()).collect();
+        assert_eq!(held.len(), crate::outbound_policy::MAX_UNTRUSTED_LOOKUPS);
+    }
+
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

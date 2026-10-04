@@ -651,7 +651,10 @@ impl NodeRequestBuilder {
         if let Some(hit) = stats.cached_vet(peer, base, policy.allow_private, now) {
             return hit;
         }
-        let vetted = bounded_check(policy.check_base_url(base)).await;
+        let vetted = bounded_check(
+            policy.check_base_url_for(base, crate::outbound_policy::LookupPurpose::Critical),
+        )
+        .await;
         stats.store_vet(peer, base, policy.allow_private, vetted.clone(), now);
         vetted
     }
@@ -720,9 +723,14 @@ impl NodeRequestBuilder {
                     _ => {
                         let url = route.http.as_deref().unwrap_or(&self.url);
                         if let Some(policy) = self.client.policy.filter(|_| self.client.guarded) {
-                            policy
-                                .check_url_literal(url)
-                                .map_err(|e| NodeHttpError::Invalid(e.to_string()))?;
+                            policy.check_url_literal(url).map_err(|e| {
+                                crate::outbound_policy::note_refusal(
+                                    policy,
+                                    &loggable_url(url),
+                                    &e,
+                                );
+                                NodeHttpError::Invalid(e.to_string())
+                            })?;
                         }
                         let rb = self.http_builder_with(&self.client.http, url, false);
                         self.sign_http(rb, route, url)?
