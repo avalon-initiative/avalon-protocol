@@ -405,3 +405,25 @@ async fn cold_start_reaches_a_served_majority_within_one_interval() {
         &[&w1, &w2, &w3]
     ));
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_known_witness_holding_the_author_key_is_not_asked() {
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let mut same = witness(None).await;
+    same.key = SigningKey::from_bytes(&SETTLEMENT_SEED);
+    same.id = hex::encode(same.key.verifying_key().to_bytes());
+    let other = witness(None).await;
+    let mut state = AuthorGatherState::default();
+    let n = a
+        .gather(OutboundPolicy::new(true), &[&same, &other], &mut state)
+        .await;
+    assert_eq!(n, 1);
+    assert_eq!(same.asked.load(Ordering::SeqCst), 0);
+    assert!(reaches_majority(
+        &sth,
+        a.stored(sth.tree_size).await,
+        &[&same, &other]
+    ));
+}

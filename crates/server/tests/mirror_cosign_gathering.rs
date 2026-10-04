@@ -249,3 +249,130 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
     );
     drop(servers);
 }
+
+/// A freshly started mirror: empty database, empty known list (nothing past probation), the
+/// witnesses visible only in the peer directory. The head must reach a stored majority through the
+/// directory pass alone; the elapsed time is printed. Run against a fresh database: heads of other
+/// networks left on shard `core` are refreshed first and can delay this one.
+#[tokio::test]
+#[ignore = "needs live Postgres"]
+async fn a_new_mirror_with_an_empty_known_list_reaches_a_majority_from_the_directory() {
+    avalon_devenv::load();
+    std::env::set_var("AVALON_ALLOW_PRIVATE_PEERS", "true");
+    let pool = PgPoolOptions::new()
+        .connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"))
+        .await
+        .expect("Postgres must be reachable");
+
+    let network_id = format!("cosign-cold-{}", Uuid::new_v4());
+    let author = SigningKey::generate(&mut rand::rng());
+    let heads: Heads = Arc::new(Mutex::new(HashMap::new()));
+    let author_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ledger/sth/latest"))
+        .respond_with(AuthorLatest(heads.clone()))
+        .mount(&author_server)
+        .await;
+    let sth = sth::sign_tree_head(
+        &author,
+        "author-1",
+        10,
+        &hex::encode([1u8; 32]),
+        &network_id,
+        OffsetDateTime::now_utc().replace_nanosecond(0).unwrap(),
+    );
+    heads.lock().unwrap().insert(10, sth);
+
+    let now = OffsetDateTime::now_utc();
+    let peers = PeerTable::new();
+    let mut servers = Vec::new();
+    for _ in 0..3 {
+        let key = SigningKey::generate(&mut rand::rng());
+        let id = hex::encode(key.verifying_key().to_bytes());
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/ledger/sth/\d+$"))
+            .respond_with(WitnessAtSize {
+                heads: heads.clone(),
+                key,
+                id: id.clone(),
+            })
+            .mount(&server)
+            .await;
+        peers.upsert(PeerInfo {
+            identity_bound: false,
+            base_url: server.uri(),
+            roles: vec!["combined".to_string()],
+            protocol_version: avalon_server::version::PROTOCOL_VERSION.to_string(),
+            network_id: network_id.clone(),
+            last_announced_at: now,
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: Vec::new(),
+            connectivity: None,
+            witness: Some(WitnessAdvert {
+                key_id: id,
+                announced_at: now,
+                proof: String::new(),
+                direct: true,
+            }),
+        });
+        servers.push(server);
+    }
+    let known_list = KnownListHandle::load_or_new(KnownListConfig::from_env(), None);
+    assert!(known_list.confirmed_witness_key_ids().is_empty());
+
+    let own = SigningKey::generate(&mut rand::rng());
+    let own_id = hex::encode(own.verifying_key().to_bytes());
+    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let config = MirrorWatcherConfig {
+        peers: vec![("core".to_string(), author_server.uri())],
+        poll_interval: Duration::from_millis(300),
+        known_shard_ids: BTreeSet::from(["core".to_string()]),
+        auto_mirror_discovered: false,
+    };
+    let handles = MirrorWatcherHandles {
+        interest: avalon_server::interest::InterestRegistry::new().0,
+        shard_registry: ShardRegistry::new(),
+        own_base_url: None,
+        wake: Arc::new(tokio::sync::Notify::new()),
+        own_shard_id: "mirror-own-shard".to_string(),
+        known_list,
+        head_gossip: HeadGossipTracker::new(),
+        witness: Some(WitnessCosignConfig::new(own, own_id.clone())),
+        peers,
+        trust_anchors: vec![TrustAnchorEntry {
+            label: network_id.clone(),
+            network_id: network_id.clone(),
+            verify_key: hex::encode(author.verifying_key().to_bytes()),
+            signing_key_id: "author-1".to_string(),
+            server_url: None,
+            environment: NetworkEnvironment::LocalDev,
+            seed_nodes: Vec::new(),
+            notes: None,
+        }],
+    };
+    let started = std::time::Instant::now();
+    let worker = tokio::spawn(run_worker(
+        pool.clone(),
+        chain.clone(),
+        PostgresIndexer::new(pool.clone()),
+        config,
+        handles,
+    ));
+    let mut elapsed = None;
+    while started.elapsed() < Duration::from_secs(10) {
+        let stored = chain
+            .list_witness_cosignatures(&network_id, "core", 10)
+            .await
+            .unwrap();
+        if stored.iter().filter(|c| c.witness_key_id != own_id).count() >= 3 {
+            elapsed = Some(started.elapsed());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    worker.abort();
+    let elapsed = elapsed.expect("no majority stored from the directory");
+    eprintln!("cold mirror: majority stored after {elapsed:?}");
+    drop(servers);
+}

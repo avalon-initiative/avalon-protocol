@@ -75,7 +75,7 @@
 //! payload that is not flagged pruned is a real payload and is hashed as null.
 //! A pruned or unverified entry is never stored or projected.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
@@ -1489,6 +1489,35 @@ struct DirectoryRefresh<'a> {
     state: &'a mut crate::witness_refresh::RefreshState,
 }
 
+/// Most distinct roots refreshed for the served head when observations at its size disagree.
+const MAX_SERVED_HEAD_ROOTS: usize = 4;
+
+/// Observations of the head this node serves for `shard_id` (the one at its backfilled entry
+/// count) when that is older than `latest`, so a stalled backfill cannot age out its cosignatures.
+async fn served_head_observations(
+    pool: &PgPool,
+    shard_id: &str,
+    latest: &mirror::ObservedSth,
+) -> Vec<mirror::ObservedSth> {
+    let Ok(progress) = mirror::mirrored_progress(pool, &latest.network_id, shard_id, None).await
+    else {
+        return Vec::new();
+    };
+    if progress.verified_count <= 0 || progress.verified_count >= latest.tree_size {
+        return Vec::new();
+    }
+    let observed =
+        mirror::observations_at(pool, &latest.network_id, shard_id, progress.verified_count)
+            .await
+            .unwrap_or_default();
+    let mut roots = HashSet::new();
+    observed
+        .into_iter()
+        .filter(|o| roots.insert(o.root_hash.clone()))
+        .take(MAX_SERVED_HEAD_ROOTS)
+        .collect()
+}
+
 /// Asks every known-list witness, then a bounded selection of directory witnesses outside the
 /// list, for its own current cosignature over the latest head observed for `shard_id` and stores
 /// those that verify. Runs every tick independent of whether the head's source answered or the
@@ -1509,7 +1538,15 @@ async fn refresh_witness_cosignatures(
             return;
         }
     };
+    let mut targets = Vec::new();
     for obs in observed {
+        let served = served_head_observations(pool, shard_id, &obs).await;
+        targets.push((obs, true));
+        targets.extend(served.into_iter().map(|o| (o, false)));
+    }
+    // Only the latest head's outcome feeds backoff; an older served head a witness lacks must
+    // not delay the latest.
+    for (obs, is_latest) in targets {
         let network_id = obs.network_id.clone();
         let sth: SignedTreeHead = obs.into();
         let stored = chain
@@ -1565,7 +1602,9 @@ async fn refresh_witness_cosignatures(
             for (key_id, outcome) in &extra_results {
                 let attempt = crate::witness_refresh::attempt_for(outcome, now);
                 extra.state.asked(key_id, shard_id, now);
-                extra.state.backoff.record(key_id, shard_id, attempt, now);
+                if is_latest {
+                    extra.state.backoff.record(key_id, shard_id, attempt, now);
+                }
                 if attempt == crate::witness_refresh::Attempt::Ok {
                     extra.state.delivered(key_id, shard_id, deliver_cap);
                 }
@@ -3387,6 +3426,119 @@ mod tests {
                     "tick {tick}: stored copy must be the witness's own current one"
                 );
             }
+        }
+    }
+
+    /// With backfill stalled behind newer observed heads, the cosignatures of the head the node
+    /// actually serves (at its mirrored entry count) are refreshed too.
+    #[tokio::test]
+    #[ignore]
+    async fn refresh_covers_the_served_head_when_backfill_lags_the_latest() {
+        use avalon_protocol::sth::sign_tree_head;
+        use avalon_protocol::witness::sign_witness_cosignature;
+        use ed25519_dalek::SigningKey;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let pool = live_test_pool().await;
+        let network_id = format!("avalon-test-served-{}", Uuid::new_v4());
+        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let author = SigningKey::from_bytes(&[9u8; 32]);
+        let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        let mut prev = avalon_chain::GENESIS_HASH.to_string();
+        for seq in 1..=3i64 {
+            let mut e = mirror::MirroredEntry {
+                source_url: "http://127.0.0.1:1".into(),
+                network_id: network_id.clone(),
+                shard_id: "core".into(),
+                seq,
+                event_id: Uuid::new_v4(),
+                kind: "test.noop".into(),
+                issuer: "i".into(),
+                subject: "s".into(),
+                payload: Some(serde_json::json!({ "n": seq })),
+                event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+                version: 1,
+                prev_hash: prev.clone(),
+                entry_hash: String::new(),
+                batch_id: Uuid::new_v4(),
+                verified_tree_size: seq,
+            };
+            e.entry_hash = e.recomputed_hash().unwrap();
+            prev = e.entry_hash.clone();
+            mirror::insert_mirrored_entry(&pool, &e).await.unwrap();
+        }
+        let heads: Vec<SignedTreeHead> = [(3i64, 1u8), (5, 2)]
+            .iter()
+            .map(|(size, r)| {
+                sign_tree_head(
+                    &author,
+                    "op",
+                    *size,
+                    &hex::encode([*r; 32]),
+                    &network_id,
+                    created_at,
+                )
+            })
+            .collect();
+        for h in &heads {
+            mirror::insert_observation(
+                &pool,
+                &ObservedSth::from_sth("http://127.0.0.1:1", "core", h, created_at),
+            )
+            .await
+            .unwrap();
+        }
+
+        let wk = SigningKey::from_bytes(&[1u8; 32]);
+        let wid = hex::encode(wk.verifying_key().to_bytes());
+        let server = MockServer::start().await;
+        for h in &heads {
+            let cosig = sign_witness_cosignature(
+                &wk,
+                &wid,
+                h.tree_size,
+                &h.root_hash,
+                &network_id,
+                created_at,
+                OffsetDateTime::now_utc(),
+            );
+            Mock::given(method("GET"))
+                .and(path_regex(format!(r"^/ledger/sth/{}$", h.tree_size)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "tree_size": h.tree_size, "root_hash": h.root_hash, "network_id": network_id,
+                    "signing_key_id": h.signing_key_id, "signature": h.signature,
+                    "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+                    "cosignatures": [WitnessCosignatureDto::from_witness_cosignature(&cosig)],
+                })))
+                .mount(&server)
+                .await;
+        }
+        let known_list = vec![(wid.clone(), wk.verifying_key())];
+        let sources = vec![cosign_gather::WitnessSource {
+            key_id: wid.clone(),
+            base_url: server.uri(),
+        }];
+        let majority = MajorityContext {
+            known_list: &known_list,
+            sources: &sources,
+            policy: crate::outbound_policy::OutboundPolicy::new(true),
+            self_certifying: &crate::self_certifying_keys::MirrorBounds::default(),
+        };
+        let mut state = crate::witness_refresh::RefreshState::default();
+        let mut extra = DirectoryRefresh {
+            witnesses: &[],
+            max_per_tick: 0,
+            state: &mut state,
+        };
+        let mut log = GatherLog::new();
+        refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, "core", &mut log).await;
+        for size in [3i64, 5] {
+            let stored = chain
+                .list_witness_cosignatures(&network_id, "core", size)
+                .await
+                .unwrap();
+            assert_eq!(stored.len(), 1, "size {size}");
         }
     }
 
