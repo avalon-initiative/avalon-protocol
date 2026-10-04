@@ -202,6 +202,16 @@ impl NeighborTable {
             .collect()
     }
 
+    /// How many round trips this node has completed with `peer` itself.
+    pub fn successful_round_trips(&self, peer: &str) -> u64 {
+        self.inner
+            .read()
+            .expect("neighbor table lock poisoned")
+            .stats
+            .get(peer)
+            .map_or(0, |s| s.samples)
+    }
+
     /// Records a successful round trip over HTTP, which is always a direct path; ignored for
     /// peers outside the active set.
     pub fn record_success(&self, peer: &str, rtt: std::time::Duration) {

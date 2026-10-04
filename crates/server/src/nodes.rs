@@ -307,6 +307,10 @@ pub struct PeerTable {
     transport: crate::transport_stats::TransportStats,
 }
 
+/// Round trips this node must have completed with a peer before its word counts for the
+/// reserved confirmation slot.
+const ESTABLISHED_ROUND_TRIPS: u64 = 5;
+
 /// Bound entries claiming libp2p id `id`.
 fn bound_holders(peers: &HashMap<String, PeerInfo>, id: &str) -> usize {
     peers
@@ -318,6 +322,19 @@ fn bound_holders(peers: &HashMap<String, PeerInfo>, id: &str) -> usize {
 impl PeerTable {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether `base_url` is a bound entry this node has itself completed at least
+    /// [`ESTABLISHED_ROUND_TRIPS`] announce round trips with. Completing a handshake or being
+    /// admitted never counts: both cost a fresh libp2p id nothing.
+    pub fn established(&self, base_url: &str) -> bool {
+        let bound = self
+            .peers
+            .read()
+            .expect("peer table lock poisoned")
+            .get(base_url)
+            .is_some_and(|p| p.identity_bound);
+        bound && self.neighbors.successful_round_trips(base_url) >= ESTABLISHED_ROUND_TRIPS
     }
 
     /// The kind of libp2p connection held to each peer, written by the DHT worker.
@@ -1094,14 +1111,24 @@ impl HeadGossipTracker {
                     .write()
                     .expect("head gossip tracker lock poisoned");
                 Self::evict_if_full(&mut seen, &key);
-                seen.insert(
-                    key,
-                    TrackedHeadSummary {
-                        summary: summary.clone(),
-                        reported_by: from_peer.to_string(),
-                        last_seen_at: now,
-                    },
-                );
+                // The first reporter stays: a later sender repeating a root must not become the
+                // source a conflict is fetched from.
+                match seen.get_mut(&key) {
+                    Some(tracked) => {
+                        tracked.summary = summary.clone();
+                        tracked.last_seen_at = now;
+                    }
+                    None => {
+                        seen.insert(
+                            key,
+                            TrackedHeadSummary {
+                                summary: summary.clone(),
+                                reported_by: from_peer.to_string(),
+                                last_seen_at: now,
+                            },
+                        );
+                    }
+                }
 
                 if !already_equivocating {
                     for ((other_shard, other_size, other_root), tracked) in seen.iter() {
@@ -1334,7 +1361,6 @@ async fn announce_under(
         return Ok(Json(announce_response(&state, &caller_base_url)));
     }
     let source_ip = client_ip(source, &headers);
-    let p2p_authenticated = matches!(p2p, P2pAnnounce::Authenticated(_));
     // `listed`: the announcer is in the table on its own merit; `proven`: it showed who it is.
     let (announcer, listed, proven) = if let P2pAnnounce::Authenticated(id) = p2p {
         info.base_url = crate::node_http::p2p_base_url(&id);
@@ -1433,7 +1459,8 @@ async fn announce_under(
             &state.head_gossip,
             &state.peers,
             &state.known_list,
-            crate::equivocation::Standing::of(&state.shard_registry, p2p_authenticated, &conflict),
+            crate::equivocation::Standing::of(state.peers.established(&announcer)),
+            &announcer,
             conflict,
         );
     }
@@ -2734,11 +2761,8 @@ pub async fn run_worker(
                                 &head_gossip,
                                 &peers,
                                 &known_list,
-                                crate::equivocation::Standing::of(
-                                    &shard_registry,
-                                    false,
-                                    &conflict,
-                                ),
+                                crate::equivocation::Standing::of(peers.established(peer)),
+                                peer,
                                 conflict,
                             );
                         }
@@ -5609,7 +5633,7 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .filter(|s| s.as_str() == shard)
+            .filter(|(s, _, _)| s.as_str() == shard)
             .count()
     }
 
@@ -5711,6 +5735,71 @@ mod tests {
         assert_eq!(entry.roles, vec!["combined".to_string()]);
         assert_eq!(entry.last_announced_at, before, "no liveness refresh");
         assert_eq!(entry.witness.map(|w| w.key_id), Some(id));
+    }
+
+    #[tokio::test]
+    async fn a_fresh_authenticated_id_gets_no_standing_until_established() {
+        let state = lazy_state();
+        let id = fresh_libp2p();
+        let url = crate::node_http::p2p_base_url(&id);
+        let announce = |shard: &'static str| {
+            let mut body = request(
+                &url,
+                crate::version::PROTOCOL_VERSION,
+                vec![],
+                conflicting_heads(shard),
+            );
+            body.libp2p_peer_id = Some(id.to_string());
+            send(admission(), &state, body, Some(id))
+        };
+        announce("u1207-fresh").await.map(|_| ()).unwrap();
+        let standing_of = |shard: &str| {
+            crate::equivocation::attempted()
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(s, _, _)| s == shard)
+                .map(|(_, st, who)| (*st, who.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            standing_of("u1207-fresh"),
+            vec![(crate::equivocation::Standing::of(false), url.clone())],
+            "handshake and admission alone are not standing"
+        );
+
+        let neighbors = state.peers.neighbors();
+        neighbors.set_active(std::slice::from_ref(&url), &[]);
+        for _ in 0..ESTABLISHED_ROUND_TRIPS {
+            neighbors.record_success(&url, Duration::from_millis(5));
+        }
+        announce("u1207-established").await.map(|_| ()).unwrap();
+        assert_eq!(
+            standing_of("u1207-established"),
+            vec![(crate::equivocation::Standing::of(true), url)],
+            "a peer this node completed round trips with has standing"
+        );
+    }
+
+    #[test]
+    fn a_repeated_root_keeps_its_first_reporter() {
+        let tracker = HeadGossipTracker::new();
+        let now = OffsetDateTime::now_utc();
+        tracker.merge("honest-a", &[head_summary("u1207-src", 5, 1)], now);
+        let (_, conflicts, _) = tracker.merge("honest-b", &[head_summary("u1207-src", 5, 2)], now);
+        assert_eq!(conflicts[0].source_b, "honest-a");
+        let (_, again, _) = tracker.merge("attacker", &[head_summary("u1207-src", 5, 1)], now);
+        let sources: Vec<String> = tracker
+            .seen
+            .read()
+            .unwrap()
+            .values()
+            .map(|t| t.reported_by.clone())
+            .collect();
+        assert!(!sources.iter().any(|s| s == "attacker"), "{sources:?}");
+        assert!(again.iter().all(|c| c.source_a == "attacker"));
+        let (_, conflicts, _) = tracker.merge("honest-b", &[head_summary("u1207-src", 5, 2)], now);
+        assert_eq!(conflicts[0].source_b, "honest-a", "the honest source stays");
     }
 
     #[tokio::test]

@@ -188,30 +188,21 @@ fn confirm_author_equivocation(
 /// Most confirmations running at once on this node.
 const MAX_CONFIRMATIONS_IN_FLIGHT: usize = 4;
 
-/// Whether a conflict comes from a shard this node knows or an authenticated source; such
-/// conflicts may use the slot held back from the rest.
+/// Whether a conflict was reported by an established peer; only such conflicts may use the slot
+/// held back from the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Standing(bool);
 
 impl Standing {
-    pub fn of(
-        shard_registry: &crate::nodes::ShardRegistry,
-        authenticated: bool,
-        conflict: &HeadConflict,
-    ) -> Self {
-        Self(
-            authenticated
-                || shard_registry
-                    .known_shard_ids()
-                    .contains(&conflict.shard_id),
-        )
+    pub fn of(established: bool) -> Self {
+        Self(established)
     }
 }
 
-/// Bounds running confirmations: one per `(shard, tree size)` and a fixed number overall, with
-/// one slot kept for conflicts of good standing.
+/// Bounds running confirmations: one per `(shard, tree size)`, one per reporting peer, and a fixed
+/// number overall, with one slot kept for conflicts of good standing.
 struct ConfirmGate {
-    running: std::sync::Mutex<std::collections::HashSet<(String, i64)>>,
+    running: std::sync::Mutex<std::collections::HashMap<(String, i64), String>>,
     limit: usize,
 }
 
@@ -233,6 +224,7 @@ impl ConfirmGate {
         shard_id: &str,
         tree_size: i64,
         standing: Standing,
+        reporter: &str,
     ) -> Option<ConfirmSlot<'_>> {
         let key = (shard_id.to_string(), tree_size);
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
@@ -241,9 +233,13 @@ impl ConfirmGate {
         } else {
             self.limit.saturating_sub(1)
         };
-        if running.len() >= limit || !running.insert(key.clone()) {
+        if running.len() >= limit
+            || running.contains_key(&key)
+            || running.values().any(|r| r == reporter)
+        {
             return None;
         }
+        running.insert(key.clone(), reporter.to_string());
         Some(ConfirmSlot { gate: self, key })
     }
 }
@@ -265,8 +261,8 @@ fn confirm_gate() -> &'static ConfirmGate {
 
 /// Shard ids [`spawn_confirmation`] was asked about, for tests of what a path must not start.
 #[cfg(test)]
-pub(crate) fn attempted() -> &'static std::sync::Mutex<Vec<String>> {
-    static ATTEMPTED: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> =
+pub(crate) fn attempted() -> &'static std::sync::Mutex<Vec<(String, Standing, String)>> {
+    static ATTEMPTED: std::sync::OnceLock<std::sync::Mutex<Vec<(String, Standing, String)>>> =
         std::sync::OnceLock::new();
     ATTEMPTED.get_or_init(Default::default)
 }
@@ -280,12 +276,17 @@ pub fn spawn_confirmation(
     peers: &PeerTable,
     known_list: &KnownListHandle,
     standing: Standing,
+    reporter: &str,
     conflict: HeadConflict,
 ) {
     #[cfg(test)]
-    attempted().lock().unwrap().push(conflict.shard_id.clone());
+    attempted()
+        .lock()
+        .unwrap()
+        .push((conflict.shard_id.clone(), standing, reporter.to_string()));
     let gate = confirm_gate();
-    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size, standing) else {
+    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size, standing, reporter)
+    else {
         static LOG: std::sync::OnceLock<crate::log_throttle::LogThrottle> =
             std::sync::OnceLock::new();
         let log = LOG.get_or_init(|| {
@@ -507,28 +508,46 @@ mod tests {
     fn the_confirm_gate_admits_one_run_per_head_and_keeps_a_slot_for_good_standing() {
         let (known, unknown) = (Standing(true), Standing(false));
         let gate = ConfirmGate::new(3);
-        let a = gate.try_enter("core", 5, unknown).expect("first run");
+        let a = gate.try_enter("core", 5, unknown, "r1").expect("first run");
         assert!(
-            gate.try_enter("core", 5, known).is_none(),
+            gate.try_enter("core", 5, known, "r2").is_none(),
             "same head twice"
         );
-        let _b = gate.try_enter("core", 6, unknown).expect("another size");
+        let _b = gate
+            .try_enter("core", 6, unknown, "r2")
+            .expect("another size");
         assert!(
-            gate.try_enter("junk", 1, unknown).is_none(),
+            gate.try_enter("junk", 1, unknown, "r3").is_none(),
             "reserved slot"
         );
         let _c = gate
-            .try_enter("known", 1, known)
+            .try_enter("known", 1, known, "r3")
             .expect("reserved slot is usable");
         assert!(
-            gate.try_enter("known", 2, known).is_none(),
+            gate.try_enter("known", 2, known, "r4").is_none(),
             "over the limit"
         );
         drop(a);
         assert!(
-            gate.try_enter("known", 2, known).is_some(),
+            gate.try_enter("known", 2, known, "r4").is_some(),
             "a freed slot is reusable"
         );
+    }
+
+    #[test]
+    fn one_reporter_holds_at_most_one_confirmation_slot() {
+        let gate = ConfirmGate::new(4);
+        let first = gate
+            .try_enter("a", 1, Standing(false), "attacker")
+            .expect("first");
+        assert!(gate
+            .try_enter("b", 1, Standing(false), "attacker")
+            .is_none());
+        assert!(gate.try_enter("b", 1, Standing(false), "honest").is_some());
+        drop(first);
+        assert!(gate
+            .try_enter("c", 1, Standing(false), "attacker")
+            .is_some());
     }
 
     /// The end-to-end scenario the ticket asks for: a log shows two
