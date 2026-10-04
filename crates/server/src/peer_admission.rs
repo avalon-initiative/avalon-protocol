@@ -40,6 +40,10 @@ pub struct AdmissionConfig {
     pub verify_reachability: bool,
     /// `AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS`: concurrent admission checks.
     pub max_concurrent_checks: usize,
+    /// Total time one gossip exchange may spend resolving unseen shard URLs.
+    pub shard_exchange_budget: Duration,
+    /// Failed resolutions after which the rest of an exchange's unseen shard URLs are refused.
+    pub max_failed_lookups: usize,
 }
 
 impl Default for AdmissionConfig {
@@ -52,6 +56,8 @@ impl Default for AdmissionConfig {
             max_new_shard_urls_per_exchange: 256,
             verify_reachability: true,
             max_concurrent_checks: 16,
+            shard_exchange_budget: Duration::from_secs(10),
+            max_failed_lookups: 8,
         }
     }
 }
@@ -108,6 +114,8 @@ impl AdmissionConfig {
                 "AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS",
                 d.max_concurrent_checks,
             ),
+            shard_exchange_budget: d.shard_exchange_budget,
+            max_failed_lookups: d.max_failed_lookups,
         }
     }
 }
@@ -178,6 +186,9 @@ pub struct PeerAdmission {
     pub policy: OutboundPolicy,
     source: IpRateLimiter,
     checks: InFlightGate,
+    /// Address resolutions started, for tests of what runs before them.
+    #[cfg(test)]
+    pub lookups: std::sync::atomic::AtomicUsize,
 }
 
 /// Process-wide admission rules, read from the environment once.
@@ -192,6 +203,8 @@ impl PeerAdmission {
         Self {
             source: IpRateLimiter::new(cfg.new_urls_per_source, SOURCE_WINDOW),
             checks: InFlightGate::new(cfg.max_concurrent_checks),
+            #[cfg(test)]
+            lookups: Default::default(),
             cfg,
             policy,
         }
@@ -208,6 +221,9 @@ impl PeerAdmission {
 
     /// Resolves the host and applies the outbound address policy.
     pub async fn check_address(&self, base_url: &str) -> Result<CheckedTarget, AdmitError> {
+        #[cfg(test)]
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.policy.check_base_url(base_url).await?)
     }
 

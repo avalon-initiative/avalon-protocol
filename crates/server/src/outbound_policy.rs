@@ -27,20 +27,47 @@ pub(crate) const PEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest a hostname lookup may take before the host counts as unresolvable.
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `lookup` bounded by `limit`; a lookup that never answers is [`PolicyError::Resolve`].
-async fn bounded_lookup<F>(lookup: F, limit: Duration) -> Result<Vec<SocketAddr>, PolicyError>
+/// Most hostname lookups running at once, counting ones that timed out but have not returned.
+const MAX_LOOKUPS_RUNNING: usize = 32;
+
+/// Runs `lookup` on its own task holding one of `slots` until it truly finishes, and gives up
+/// waiting after `limit`; with no slot free, or on timeout, the host is [`PolicyError::Resolve`].
+async fn slotted_lookup<F>(
+    slots: &std::sync::Arc<tokio::sync::Semaphore>,
+    lookup: F,
+    limit: Duration,
+) -> Result<Vec<SocketAddr>, PolicyError>
 where
-    F: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>>,
+    F: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>> + Send + 'static,
 {
-    match tokio::time::timeout(limit, lookup).await {
-        Ok(Ok(addrs)) => Ok(addrs),
+    let permit = slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| PolicyError::Resolve)?;
+    let task = tokio::spawn(async move {
+        let answer = lookup.await;
+        drop(permit);
+        answer
+    });
+    match tokio::time::timeout(limit, task).await {
+        Ok(Ok(Ok(addrs))) => Ok(addrs),
         _ => Err(PolicyError::Resolve),
     }
 }
 
 async fn resolve_host(name: &str, port: u16) -> Result<Vec<SocketAddr>, PolicyError> {
-    bounded_lookup(
-        async { Ok(tokio::net::lookup_host((name, port)).await?.collect()) },
+    static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    let slots =
+        SLOTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_LOOKUPS_RUNNING)));
+    let name = name.to_string();
+    slotted_lookup(
+        slots,
+        async move {
+            Ok(tokio::net::lookup_host((name.as_str(), port))
+                .await?
+                .collect())
+        },
         DNS_LOOKUP_TIMEOUT,
     )
     .await
@@ -59,6 +86,38 @@ pub fn peer_client() -> reqwest::Client {
         .expect("static reqwest client configuration is valid")
 }
 
+/// Most distinct targets a private-address refusal is logged for.
+const MAX_REFUSAL_WARNINGS: usize = 256;
+
+/// Whether `err` is a refusal only `AVALON_ALLOW_PRIVATE_PEERS` would lift.
+fn lifted_by_private_peers(policy: OutboundPolicy, err: &PolicyError) -> bool {
+    matches!(err, PolicyError::Forbidden(ip)
+        if !policy.allow_private && !always_forbidden(*ip) && is_private(*ip))
+}
+
+/// True the first time `target` is seen, and never once `MAX_REFUSAL_WARNINGS` are held.
+fn first_refusal(seen: &std::sync::Mutex<std::collections::HashSet<String>>, target: &str) -> bool {
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    seen.len() < MAX_REFUSAL_WARNINGS && seen.insert(target.to_string())
+}
+
+/// Warns once per `target` when the policy refused a private address that
+/// `AVALON_ALLOW_PRIVATE_PEERS=true` would allow, so private deployments are not silent.
+pub(crate) fn note_refusal(policy: OutboundPolicy, target: &str, err: &PolicyError) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    if lifted_by_private_peers(policy, err)
+        && first_refusal(SEEN.get_or_init(Default::default), target)
+    {
+        tracing::warn!(
+            event = "private_peer_refused",
+            target = %target,
+            "outbound request to a private address refused; set AVALON_ALLOW_PRIVATE_PEERS=true \
+             if this node's peers are on a private network",
+        );
+    }
+}
+
 /// Resolver that refuses a host when any address it resolves to fails the policy, so the check
 /// runs on the answer the connection actually uses.
 struct GuardedResolver(OutboundPolicy);
@@ -67,7 +126,8 @@ impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let policy = self.0;
         Box::pin(async move {
-            let addrs = check_answer(policy, resolve_host(name.as_str(), 0).await?)?;
+            let addrs = check_answer(policy, resolve_host(name.as_str(), 0).await?)
+                .inspect_err(|e| note_refusal(policy, name.as_str(), e))?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -382,11 +442,16 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn slots(n: usize) -> std::sync::Arc<tokio::sync::Semaphore> {
+        std::sync::Arc::new(tokio::sync::Semaphore::new(n))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_lookup_that_never_answers_gives_up_as_unresolvable() {
         let never = std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
         let outer = Duration::from_secs(60);
-        let got = tokio::time::timeout(outer, bounded_lookup(never, DNS_LOOKUP_TIMEOUT)).await;
+        let got =
+            tokio::time::timeout(outer, slotted_lookup(&slots(2), never, DNS_LOOKUP_TIMEOUT)).await;
         assert_eq!(
             got.expect("the lookup bound must fire"),
             Err(PolicyError::Resolve)
@@ -396,8 +461,62 @@ mod tests {
     #[tokio::test]
     async fn a_lookup_that_answers_in_time_passes_through() {
         let addr = SocketAddr::new(ip("93.184.216.34"), 80);
-        let got = bounded_lookup(async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
+        let got =
+            slotted_lookup(&slots(1), async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
         assert_eq!(got, Ok(vec![addr]));
+        let again =
+            slotted_lookup(&slots(1), async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
+        assert_eq!(again, Ok(vec![addr]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_abandoned_lookup_keeps_its_slot_until_it_returns() {
+        let slots = slots(1);
+        let never = std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
+        let first = slotted_lookup(&slots, never, DNS_LOOKUP_TIMEOUT).await;
+        assert_eq!(first, Err(PolicyError::Resolve));
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        let second = slotted_lookup(
+            &slots,
+            async move {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![])
+            },
+            DNS_LOOKUP_TIMEOUT,
+        )
+        .await;
+        assert_eq!(second, Err(PolicyError::Resolve));
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "no slot, no lookup"
+        );
+    }
+
+    #[test]
+    fn only_a_private_address_refusal_is_reported_as_liftable() {
+        let strict = OutboundPolicy::new(false);
+        let lax = OutboundPolicy::new(true);
+        let refused = |a: &str| PolicyError::Forbidden(ip(a));
+        assert!(lifted_by_private_peers(strict, &refused("10.0.0.1")));
+        assert!(lifted_by_private_peers(strict, &refused("127.0.0.1")));
+        assert!(!lifted_by_private_peers(
+            strict,
+            &refused("169.254.169.254")
+        ));
+        assert!(!lifted_by_private_peers(lax, &refused("10.0.0.1")));
+        assert!(!lifted_by_private_peers(strict, &PolicyError::Resolve));
+    }
+
+    #[test]
+    fn a_refusal_is_reported_once_per_target_and_the_set_is_bounded() {
+        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+        assert!(first_refusal(&seen, "http://a.test"));
+        assert!(!first_refusal(&seen, "http://a.test"));
+        for i in 0..MAX_REFUSAL_WARNINGS {
+            first_refusal(&seen, &format!("t{i}"));
+        }
+        assert!(!first_refusal(&seen, "one-more"));
     }
 
     #[test]

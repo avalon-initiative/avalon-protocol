@@ -185,6 +185,86 @@ fn confirm_author_equivocation(
     })
 }
 
+/// Most confirmations running at once on this node.
+const MAX_CONFIRMATIONS_IN_FLIGHT: usize = 4;
+
+/// Bounds running confirmations: one per `(shard, tree size)` and a fixed number overall.
+struct ConfirmGate {
+    running: std::sync::Mutex<std::collections::HashSet<(String, i64)>>,
+    limit: usize,
+}
+
+struct ConfirmSlot<'a> {
+    gate: &'a ConfirmGate,
+    key: (String, i64),
+}
+
+impl ConfirmGate {
+    fn new(limit: usize) -> Self {
+        Self {
+            running: Default::default(),
+            limit,
+        }
+    }
+
+    fn try_enter(&self, shard_id: &str, tree_size: i64) -> Option<ConfirmSlot<'_>> {
+        let key = (shard_id.to_string(), tree_size);
+        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        if running.len() >= self.limit || !running.insert(key.clone()) {
+            return None;
+        }
+        Some(ConfirmSlot { gate: self, key })
+    }
+}
+
+impl Drop for ConfirmSlot<'_> {
+    fn drop(&mut self) {
+        self.gate
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
+}
+
+fn confirm_gate() -> &'static ConfirmGate {
+    static GATE: std::sync::OnceLock<ConfirmGate> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| ConfirmGate::new(MAX_CONFIRMATIONS_IN_FLIGHT))
+}
+
+/// Runs [`confirm_and_record`] in the background unless this conflict's shard and size is already
+/// being confirmed or the node-wide limit is reached; a dropped conflict resurfaces on the next
+/// gossip round.
+pub fn spawn_confirmation(
+    chain: &PostgresSettlementProvider,
+    head_gossip: &HeadGossipTracker,
+    peers: &PeerTable,
+    known_list: &KnownListHandle,
+    conflict: HeadConflict,
+) {
+    let gate = confirm_gate();
+    let Some(slot) = gate.try_enter(&conflict.shard_id, conflict.tree_size) else {
+        tracing::debug!(
+            event = "equivocation_confirmation_skipped",
+            shard_id = %conflict.shard_id,
+            tree_size = conflict.tree_size,
+            "a confirmation for this head is running or the node-wide limit is reached",
+        );
+        return;
+    };
+    // The slot borrows the static gate; moved into the task so it is held until the end.
+    let (chain, head_gossip, peers, known_list) = (
+        chain.clone(),
+        head_gossip.clone(),
+        peers.clone(),
+        known_list.clone(),
+    );
+    tokio::spawn(async move {
+        let _slot = slot;
+        confirm_and_record(&chain, &head_gossip, &peers, &known_list, conflict).await;
+    });
+}
+
 /// Fetches, confirms, and (on success) durably records the equivocation
 /// `conflict` signals — spawned from `crate::nodes::announce` and
 /// `crate::nodes::run_worker` whenever [`crate::nodes::HeadGossipTracker::merge`]
@@ -378,6 +458,20 @@ mod tests {
     /// mirrors `cosigned_sth::conflicting_majority_cosigned_heads_share_a_witness`,
     /// exercised through this module's fetch-independent confirmation path
     /// instead of calling `find_equivocating_witnesses` directly.
+    #[test]
+    fn the_confirm_gate_admits_one_run_per_head_and_a_bounded_number_overall() {
+        let gate = ConfirmGate::new(2);
+        let a = gate.try_enter("core", 5).expect("first run");
+        assert!(gate.try_enter("core", 5).is_none(), "same head twice");
+        let _b = gate.try_enter("core", 6).expect("another size");
+        assert!(gate.try_enter("other", 1).is_none(), "over the limit");
+        drop(a);
+        assert!(
+            gate.try_enter("other", 1).is_some(),
+            "a freed slot is reusable"
+        );
+    }
+
     #[test]
     fn confirms_an_equivocation_shown_to_disjoint_witness_groups() {
         let author_key = SigningKey::generate(&mut rand::rng());
