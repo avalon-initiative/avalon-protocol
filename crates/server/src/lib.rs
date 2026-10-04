@@ -17,6 +17,7 @@ pub mod achievements;
 pub mod admin;
 pub mod attestations;
 pub mod auth;
+pub mod author_cosign_gather;
 pub mod authz;
 pub mod backing_services;
 pub mod blocks;

@@ -20,6 +20,10 @@ pub const MAX_PER_TICK_CEILING: usize = 64;
 /// per-tick limit.
 pub const ROW_CAP_FACTOR: usize = 2;
 const BACKOFF_BASE: Duration = Duration::seconds(30);
+/// Retry delay for a witness that has not yet mirrored a young head; flat, never grows.
+const LAGGING_RETRY: Duration = Duration::seconds(5);
+/// A head younger than this is expected to still be spreading to witnesses.
+const YOUNG_HEAD: Duration = Duration::seconds(60);
 const BACKOFF_CAP: Duration = Duration::minutes(30);
 const MAX_BACKOFF_ENTRIES: usize = 1024;
 
@@ -81,7 +85,7 @@ pub fn directory_witnesses(
         let candidate = DirectoryWitness {
             key_id: advert.key_id.clone(),
             key,
-            base_url: peer.base_url.clone(),
+            base_url: crate::node_http::NodeClient::url_for(peer),
             announced_at: advert.announced_at,
         };
         match by_key.get(&advert.key_id) {
@@ -105,6 +109,27 @@ pub enum Attempt {
     /// The witness answered but has nothing usable for this shard's head (lagging, does not
     /// cosign this shard, out-of-range timestamp): a short retry for this shard only.
     NotAvailable,
+    /// The witness has not got this young head yet: a short flat retry for this shard only.
+    Lagging,
+}
+
+/// A stored cosignature this old is asked for again; witnesses re-attest every third of the
+/// freshness window, so this follows their cadence.
+pub fn refresh_after() -> Duration {
+    Duration::seconds((crate::cosign_verify::COSIGNATURE_FRESHNESS_WINDOW.as_secs() / 3) as i64)
+}
+
+/// [`Attempt::Lagging`] instead of [`Attempt::NotAvailable`] while the head is young.
+pub fn lagging_if_young(
+    attempt: Attempt,
+    head_created_at: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Attempt {
+    if attempt == Attempt::NotAvailable && now - head_created_at < YOUNG_HEAD {
+        Attempt::Lagging
+    } else {
+        attempt
+    }
 }
 
 /// Failure backoff, in memory only. Transport failures are per witness and double from 30 s up
@@ -141,11 +166,14 @@ impl Backoff {
                     (BACKOFF_BASE * 2i32.pow(failures.saturating_sub(1).min(6))).min(BACKOFF_CAP);
                 self.entries.insert(slot, (failures, now + wait));
             }
-            Attempt::NotAvailable => {
-                self.entries.insert(
-                    (key_id.to_string(), shard_id.to_string()),
-                    (1, now + BACKOFF_BASE),
-                );
+            Attempt::NotAvailable | Attempt::Lagging => {
+                let wait = if attempt == Attempt::Lagging {
+                    LAGGING_RETRY
+                } else {
+                    BACKOFF_BASE
+                };
+                self.entries
+                    .insert((key_id.to_string(), shard_id.to_string()), (1, now + wait));
             }
         }
     }
@@ -159,6 +187,14 @@ impl Backoff {
     }
 }
 
+/// A cached Merkle root with the entry count and last entry hash it was computed for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRoot {
+    pub count: i64,
+    pub last_hash: String,
+    pub root: String,
+}
+
 /// Per-node memory that shapes selection: backoff, when each (witness, shard) was last asked, and
 /// which witnesses last delivered a cosignature for each shard.
 #[derive(Debug, Default)]
@@ -167,9 +203,18 @@ pub struct RefreshState {
     last_asked: HashMap<(String, String), OffsetDateTime>,
     previous: HashMap<String, HashSet<String>>,
     salt: std::collections::hash_map::RandomState,
+    /// Merkle root of a shard's backfilled entries, keyed by (network, shard), valid while the
+    /// count and the last entry's hash (which commits to every earlier entry) are unchanged.
+    pub served_roots: HashMap<(String, String), ServedRoot>,
 }
 
 impl RefreshState {
+    pub fn last_asked(&self, key_id: &str, shard_id: &str) -> Option<OffsetDateTime> {
+        self.last_asked
+            .get(&(key_id.to_string(), shard_id.to_string()))
+            .copied()
+    }
+
     pub fn asked(&mut self, key_id: &str, shard_id: &str, now: OffsetDateTime) {
         if self.last_asked.len() >= MAX_BACKOFF_ENTRIES {
             self.last_asked.clear();
@@ -190,6 +235,9 @@ impl RefreshState {
         self.backoff.retain_live(live);
         self.last_asked
             .retain(|(k, _), _| live.contains(k.as_str()));
+        if self.served_roots.len() > MAX_BACKOFF_ENTRIES {
+            self.served_roots.clear();
+        }
         for set in self.previous.values_mut() {
             set.retain(|k| live.contains(k.as_str()));
         }
@@ -261,9 +309,11 @@ pub fn attempt_for(outcome: &crate::cosign_gather::GatherOutcome, now: OffsetDat
     use crate::cosign_gather::GatherOutcome as G;
     match outcome {
         G::Fetched(c) if observed_at_in_range(c.observed_at, now) => Attempt::Ok,
-        G::Fetched(_) | G::HeadMismatch | G::NoOwnCosignature | G::InvalidSignature => {
-            Attempt::NotAvailable
-        }
+        G::Fetched(_)
+        | G::HeadMismatch
+        | G::NoOwnCosignature
+        | G::InvalidSignature
+        | G::BadStatus(404) => Attempt::NotAvailable,
         G::NoSource | G::Blocked | G::Unreachable(_) | G::BadStatus(_) | G::Malformed => {
             Attempt::Transport
         }
@@ -559,5 +609,68 @@ mod tests {
         assert!(observed_at_in_range(n + Duration::seconds(59), n));
         assert!(!observed_at_in_range(n + Duration::seconds(61), n));
         assert!(!observed_at_in_range(n + Duration::days(3650), n));
+    }
+
+    #[test]
+    fn a_404_is_a_short_wait_not_a_transport_failure() {
+        use crate::cosign_gather::GatherOutcome as G;
+        assert_eq!(
+            attempt_for(&G::BadStatus(404), now()),
+            Attempt::NotAvailable
+        );
+        assert_eq!(attempt_for(&G::BadStatus(500), now()), Attempt::Transport);
+    }
+
+    #[test]
+    fn a_young_head_retries_after_five_seconds_and_never_grows() {
+        let t = now();
+        let (id, _) = key(1);
+        let mut b = Backoff::default();
+        let attempt = lagging_if_young(Attempt::NotAvailable, t - Duration::seconds(10), t);
+        assert_eq!(attempt, Attempt::Lagging);
+        for i in 0..5 {
+            b.record(&id, "core", attempt, t + Duration::seconds(i * 6));
+        }
+        assert!(!b.ready(&id, "core", t + Duration::seconds(24 + 4)));
+        assert!(b.ready(&id, "core", t + Duration::seconds(24 + 6)));
+    }
+
+    #[test]
+    fn an_old_head_falls_back_to_the_flat_thirty_seconds() {
+        let t = now();
+        let attempt = lagging_if_young(Attempt::NotAvailable, t - Duration::minutes(5), t);
+        assert_eq!(attempt, Attempt::NotAvailable);
+        let (id, _) = key(1);
+        let mut b = Backoff::default();
+        b.record(&id, "core", attempt, t);
+        assert!(!b.ready(&id, "core", t + Duration::seconds(20)));
+        assert!(b.ready(&id, "core", t + Duration::seconds(31)));
+    }
+
+    #[test]
+    fn transport_failures_are_never_turned_into_lagging() {
+        let t = now();
+        assert_eq!(
+            lagging_if_young(Attempt::Transport, t, t),
+            Attempt::Transport
+        );
+    }
+
+    #[test]
+    fn directory_sources_use_the_same_url_choice_as_known_list_sources() {
+        let t = now();
+        let (id, _) = key(1);
+        let mut p = peer("http://a.test", &id, true, t);
+        p.identity_bound = true;
+        p.libp2p_peer_id = Some(
+            libp2p::identity::Keypair::generate_ed25519()
+                .public()
+                .to_peer_id()
+                .to_string(),
+        );
+        p.connectivity = Some(avalon_protocol::connectivity::Connectivity::Relayed);
+        let got = directory_witnesses(&[p.clone()], &[], None, t);
+        assert_eq!(got[0].base_url, crate::node_http::NodeClient::url_for(&p));
+        assert!(got[0].base_url.starts_with("p2p://"));
     }
 }
