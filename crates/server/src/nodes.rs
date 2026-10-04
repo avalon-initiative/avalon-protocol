@@ -343,6 +343,18 @@ impl PeerTable {
         peers.insert(info.base_url.clone(), info);
     }
 
+    /// [`Self::upsert`] for an entry relayed by a neighbor: the stored `last_announced_at` is kept,
+    /// since a relayed time is older than a direct contact and would age a live peer out.
+    pub fn upsert_relayed(&self, mut info: PeerInfo) {
+        let mut peers = self.peers.write().expect("peer table lock poisoned");
+        if let Some(stored) = peers.get(&info.base_url) {
+            info.last_announced_at = stored.last_announced_at;
+        }
+        carry_witness(peers.get(&info.base_url), &mut info);
+        carry_identity(peers.get(&info.base_url), &mut info);
+        peers.insert(info.base_url.clone(), info);
+    }
+
     /// Records a verified witness advert on an existing entry (main table or
     /// unverified pool) under the replacement rule; a no-op for an unknown
     /// peer.
@@ -1858,7 +1870,7 @@ async fn merge_gossip(
         if peers.contains(&info.base_url) {
             // Only the peer's own announce may change a `p2p://` entry.
             if !is_p2p {
-                peers.upsert(info.clone());
+                peers.upsert_relayed(info.clone());
             }
             admitted.push(info);
             continue;
@@ -3870,6 +3882,29 @@ mod tests {
         assert_eq!(table.unverified_len(), 3);
         assert_eq!(admitted.len(), 4);
         assert_eq!(skipped.over_limit, 7);
+    }
+
+    #[tokio::test]
+    async fn gossip_about_a_known_peer_never_ages_its_entry() {
+        let table = PeerTable::new();
+        let adm = admission_for_tests(true, |_| {});
+        let now = OffsetDateTime::now_utc();
+        let url = "http://127.0.0.1:9000";
+        table.upsert(supported(url, now));
+        let stale = now - time::Duration::minutes(5);
+        merge_gossip(
+            &table,
+            &adm,
+            "avalon-dev-local",
+            vec![supported(url, stale)],
+        )
+        .await;
+        assert_eq!(table.list_all()[0].last_announced_at, now);
+        table.prune_older_than(now - time::Duration::seconds(30));
+        assert!(
+            table.contains(url),
+            "a live peer must survive a stale relay"
+        );
     }
 
     #[tokio::test]
