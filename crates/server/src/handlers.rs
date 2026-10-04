@@ -694,22 +694,25 @@ pub async fn session_finish(
         }
     }
 
-    let passkey_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM identity_keys WHERE credential_id = $1 AND identity_id = $2",
+    let mut tx = state.pool.begin().await?;
+    let passkey_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM identity_keys WHERE credential_id = $1 AND identity_id = $2 FOR SHARE",
     )
     .bind(auth_result.cred_id().as_ref() as &[u8])
     .bind(identity_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::WebauthnFailed)?;
     let session = crate::sessions::mint(
-        &state.pool,
+        &mut *tx,
         identity_id,
         crate::sessions::SessionOrigin {
-            passkey_id,
+            passkey_id: Some(passkey_id),
             signing_key_id: None,
         },
     )
     .await?;
+    tx.commit().await?;
 
     Ok(Json(SessionFinishResponse {
         token: session.token,

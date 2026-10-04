@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::auth::generate_session_token;
 use crate::error::AppError;
 use crate::handlers::authenticate;
-use crate::sessions::{hash_token, mint, SessionOrigin};
+use crate::sessions::{hash_token, mint, signing_key_usable, SessionOrigin};
 use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
 use avalon_protocol::ids::IdentityId;
@@ -245,6 +245,12 @@ pub async fn poll_pairing(
                 return Ok(Json(pending_status("expired")));
             };
             let signing_key_id: Option<Uuid> = consumed.try_get("approved_by_signing_key_id")?;
+            let Some(key_id) = signing_key_id else {
+                return Ok(Json(pending_status("expired")));
+            };
+            if !signing_key_usable(&mut tx, identity_id, key_id, true).await? {
+                return Ok(Json(pending_status("expired")));
+            }
             let session = mint(
                 &mut *tx,
                 identity_id,

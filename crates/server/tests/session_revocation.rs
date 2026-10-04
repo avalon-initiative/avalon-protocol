@@ -713,3 +713,250 @@ async fn an_approved_pairing_cannot_be_collected_after_it_expires() {
     assert!(polled["token"].is_null());
     assert_eq!(session_count(&pool, identity_id).await, 1);
 }
+
+async fn start_and_approve_pairing(
+    http: &reqwest::Client,
+    base: &str,
+    pool: &PgPool,
+    identity_id: Identity,
+    approver_session: &str,
+    key_id: Uuid,
+    signer: &SigningKey,
+) -> String {
+    let _ = pool;
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/device/start"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_code = start["user_code"].as_str().unwrap().to_string();
+    let signature = sign_action(
+        signer,
+        "device_pairing.approve",
+        &[&identity_id.to_string(), &user_code],
+    );
+    http.post(format!("{base}/auth/device/approve"))
+        .bearer_auth(approver_session)
+        .json(&serde_json::json!({
+            "user_code": user_code,
+            "signing_key_id": key_id,
+            "signature": signature,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    start["device_code"].as_str().unwrap().to_string()
+}
+
+async fn poll_pairing(http: &reqwest::Client, base: &str, device_code: &str) -> serde_json::Value {
+    http.post(format!("{base}/auth/device/poll"))
+        .bearer_auth(device_code)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let identity_id = seed_identity(&pool).await;
+    let approver = plain_session(&pool, identity_id).await;
+    let (stolen_key, stolen_signer) = seed_signing_key(&pool, identity_id).await;
+    let (keep_key, keep_signer) = seed_signing_key(&pool, identity_id).await;
+    let device_code = start_and_approve_pairing(
+        &http,
+        &base,
+        &pool,
+        identity_id,
+        &approver,
+        stolen_key,
+        &stolen_signer,
+    )
+    .await;
+
+    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+        &identity_id,
+        stolen_key,
+        keep_key,
+    );
+    http.post(format!("{base}/me/devices/{stolen_key}/revoke"))
+        .bearer_auth(&approver)
+        .json(&serde_json::json!({
+            "revoked_by_signing_key_id": keep_key,
+            "signature": BASE64.encode(keep_signer.sign(&bytes).to_bytes()),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let polled = poll_pairing(&http, &base, &device_code).await;
+    assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(session_count(&pool, identity_id).await, 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_poll_waits_for_an_in_flight_revocation_of_the_approving_key() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let identity_id = seed_identity(&pool).await;
+    let approver = plain_session(&pool, identity_id).await;
+    let (key, signer) = seed_signing_key(&pool, identity_id).await;
+    let device_code =
+        start_and_approve_pairing(&http, &base, &pool, identity_id, &approver, key, &signer).await;
+
+    // Hold the key row the way a revocation does, start the poll, then revoke and commit.
+    let mut revoking = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM identity_signing_keys WHERE id = $1 FOR UPDATE")
+        .bind(key)
+        .fetch_one(&mut *revoking)
+        .await
+        .unwrap();
+    let poller = {
+        let (http, base, code) = (http.clone(), base.clone(), device_code.clone());
+        tokio::spawn(async move { poll_pairing(&http, &base, &code).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    sqlx::query("UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1")
+        .bind(key)
+        .execute(&mut *revoking)
+        .await
+        .unwrap();
+    revoking.commit().await.unwrap();
+
+    let polled = poller.await.unwrap();
+    assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(session_count(&pool, identity_id).await, 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn two_concurrent_polls_of_one_approved_pairing_yield_exactly_one_token() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let identity_id = seed_identity(&pool).await;
+    let approver = plain_session(&pool, identity_id).await;
+    let (key, signer) = seed_signing_key(&pool, identity_id).await;
+    let device_code =
+        start_and_approve_pairing(&http, &base, &pool, identity_id, &approver, key, &signer).await;
+
+    let (a, b) = tokio::join!(
+        poll_pairing(&http, &base, &device_code),
+        poll_pairing(&http, &base, &device_code)
+    );
+    let tokens = [a, b].iter().filter(|r| r["token"].is_string()).count();
+    assert_eq!(tokens, 1);
+    assert_eq!(session_count(&pool, identity_id).await, 2);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_login_whose_passkey_is_revoked_mid_ceremony_mints_nothing() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, mut client) = create_identity_with_one_passkey(&http, &base, 2).await;
+    let passkey: Uuid = sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1")
+        .bind(identity_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let start: serde_json::Value = http
+        .post(format!("{base}/sessions/start"))
+        .json(&serde_json::json!({ "identity_id": identity_id }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let request_options: CredentialRequestOptions =
+        serde_json::from_value(start["challenge"].clone()).unwrap();
+    let assertion = client
+        .authenticate(
+            Origin::from(&rp_origin()),
+            request_options,
+            DefaultClientData,
+        )
+        .await
+        .unwrap();
+
+    let mut revoking = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM identity_keys WHERE id = $1 FOR UPDATE")
+        .bind(passkey)
+        .fetch_one(&mut *revoking)
+        .await
+        .unwrap();
+    let finisher = {
+        let (http, base) = (http.clone(), server_url());
+        let body = serde_json::json!({ "ticket_id": start["ticket_id"], "credential": assertion });
+        tokio::spawn(async move {
+            http.post(format!("{base}/sessions/finish"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    sqlx::query("DELETE FROM identity_keys WHERE id = $1")
+        .bind(passkey)
+        .execute(&mut *revoking)
+        .await
+        .unwrap();
+    revoking.commit().await.unwrap();
+
+    assert!(finisher.await.unwrap() >= 400);
+    assert_eq!(session_count(&pool, identity_id).await, 0);
+}
+
+#[tokio::test]
+#[ignore]
+async fn no_session_is_minted_without_an_origin_credential() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let identity_id = seed_identity(&pool).await;
+
+    let direct = avalon_server::sessions::mint(
+        &pool,
+        identity_id,
+        avalon_server::sessions::SessionOrigin::default(),
+    )
+    .await;
+    assert!(direct.is_err());
+
+    // An approved pairing that somehow lacks its approving key fails closed at the poll.
+    let device_code = format!("orphan-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO device_pairings (device_code_hash, user_code, status, identity_id, expires_at) \
+         VALUES (encode(sha256(convert_to($1::text, 'UTF8')), 'hex'), $2, 'approved', $3, now() + interval '1 hour')",
+    )
+    .bind(&device_code)
+    .bind(format!("O{}", &Uuid::new_v4().simple().to_string()[..7]))
+    .bind(identity_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let polled = poll_pairing(&http, &base, &device_code).await;
+    assert!(polled["token"].is_null(), "{polled}");
+    assert_eq!(session_count(&pool, identity_id).await, 0);
+}

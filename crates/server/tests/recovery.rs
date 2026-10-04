@@ -353,6 +353,25 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     };
     assert_eq!(me_status(owner_token.clone()).await, 200);
 
+    // A pre-recovery passkey with a session it created, and an approved pairing nobody collected.
+    let old_passkey: Uuid = sqlx::query_scalar(
+        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) \
+         VALUES ($1, decode(md5(random()::text), 'hex'), '{}'::jsonb) RETURNING id",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO device_pairings (device_code_hash, user_code, status, identity_id, approved_by_signing_key_id, expires_at) \
+         VALUES (encode(sha256(convert_to('stale-pairing-code', 'UTF8')), 'hex'), $2, 'approved', $1, gen_random_uuid(), now() + interval '1 hour')",
+    )
+    .bind(owner_id)
+    .bind(format!("T{}", &Uuid::new_v4().simple().to_string()[..7]))
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let finalized = http
         .post(format!("{base}/recovery/requests/{request_id}/finalize"))
         .send()
@@ -368,6 +387,31 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     // Completing recovery ends every session the identity held before it, and only those.
     assert_eq!(me_status(owner_token.clone()).await, 401);
     assert_eq!(me_status(g1_token.clone()).await, 200);
+
+    // Old credentials are gone and revoked durably; the stale approved pairing cannot be collected.
+    let old_still_there: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM identity_keys WHERE id = $1")
+            .bind(old_passkey)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(old_still_there, 0);
+    let revoked_durably: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM indexer_identity_passkey_revocations WHERE identity_id = $1 AND passkey_id = $2",
+    )
+    .bind(owner_id)
+    .bind(old_passkey)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revoked_durably, 1);
+    let poll = http
+        .post(format!("{base}/auth/device/poll"))
+        .bearer_auth("stale-pairing-code")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(poll.status().as_u16(), 401);
 
     // The new device's passkey is now a real, ordinary login credential.
     let passkey_count: i64 =

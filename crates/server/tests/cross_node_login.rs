@@ -247,6 +247,10 @@ async fn same_device_submit_returns_a_real_session_directly() {
         .await
         .unwrap();
     assert_eq!(me["identity_id"], identity_id.to_string());
+    assert_eq!(
+        session_origin_signing_key(token).await,
+        Some(signing_key_id)
+    );
 }
 
 /// The cross-device path: start on one "client", submit the grant (as if
@@ -329,6 +333,10 @@ async fn cross_device_start_submit_poll_round_trip_delivers_a_session_exactly_on
         .await
         .unwrap();
     assert_eq!(me["identity_id"], identity_id.to_string());
+    assert_eq!(
+        session_origin_signing_key(token).await,
+        Some(signing_key_id)
+    );
 
     // Single-use: a second poll of the same request_code never returns the
     // token again.
@@ -718,4 +726,19 @@ async fn lookup_of_an_unknown_user_code_is_not_found() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+async fn session_origin_signing_key(token: &str) -> Option<uuid::Uuid> {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(&url)
+        .await
+        .unwrap();
+    sqlx::query_scalar(
+        "SELECT origin_signing_key_id FROM sessions WHERE token_hash = sha256(convert_to($1::text, 'UTF8'))",
+    )
+    .bind(token)
+    .fetch_one(&pool)
+    .await
+    .unwrap()
 }

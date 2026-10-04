@@ -48,6 +48,9 @@ pub async fn mint<'e>(
     identity_id: IdentityId,
     origin: SessionOrigin,
 ) -> Result<MintedSession, AppError> {
+    if origin.passkey_id.is_none() && origin.signing_key_id.is_none() {
+        return Err(AppError::Unauthorized);
+    }
     let token = generate_session_token();
     let expires_at = OffsetDateTime::now_utc() + time::Duration::days(SESSION_LIFETIME_DAYS);
     sqlx::query(
@@ -116,15 +119,58 @@ pub async fn end_for_signing_key<'e>(
     Ok(ended.rows_affected())
 }
 
-pub async fn end_all_for_identity<'e>(
-    executor: impl PgExecutor<'e>,
+/// Ends every session of the identity and drops its pending or approved pairing and cross-node
+/// login requests, which would otherwise mint a fresh session on their next poll.
+pub async fn end_all_for_identity(
+    tx: &mut sqlx::PgConnection,
     identity_id: IdentityId,
 ) -> Result<u64, AppError> {
+    sqlx::query("DELETE FROM device_pairings WHERE identity_id = $1")
+        .bind(identity_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM cross_node_login_requests WHERE identity_id = $1")
+        .bind(identity_id)
+        .execute(&mut *tx)
+        .await?;
     let ended = sqlx::query("DELETE FROM sessions WHERE identity_id = $1")
         .bind(identity_id)
-        .execute(executor)
+        .execute(&mut *tx)
         .await?;
     Ok(ended.rows_affected())
+}
+
+/// Whether `signing_key_id` may still back a new session, checked inside the minting
+/// transaction. A local key row is share-locked so a concurrent revocation serialises with the
+/// mint; a key with no local row (approved on another node) is accepted only when
+/// `require_local` is false and no mirrored revocation names it.
+pub async fn signing_key_usable(
+    tx: &mut sqlx::PgConnection,
+    identity_id: IdentityId,
+    signing_key_id: Uuid,
+    require_local: bool,
+) -> Result<bool, AppError> {
+    let local: Option<Option<OffsetDateTime>> = sqlx::query_scalar(
+        "SELECT revoked_at FROM identity_signing_keys WHERE id = $1 AND identity_id = $2 FOR SHARE",
+    )
+    .bind(signing_key_id)
+    .bind(identity_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match local {
+        Some(Some(_)) => return Ok(false),
+        None if require_local => return Ok(false),
+        _ => {}
+    }
+    let revoked: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_key_revocations \
+         WHERE identity_id = $1 AND signing_key_id = $2)",
+    )
+    .bind(identity_id)
+    .bind(signing_key_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(!revoked)
 }
 
 /// Deletes at most one batch of expired sessions, and of long-finished pairing and cross-node
