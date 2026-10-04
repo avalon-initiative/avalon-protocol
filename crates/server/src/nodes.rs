@@ -1859,6 +1859,9 @@ async fn merge_gossip(
     let cap = adm.cfg.max_new_per_exchange;
     let examine_limit = cap.saturating_mul(4);
     let (mut examined, mut accepted) = (0usize, 0usize);
+    let mut slot = None;
+    let deadline = std::time::Instant::now() + adm.cfg.shard_exchange_budget;
+    let mut failed_lookups = 0usize;
     let mut admitted = Vec::new();
     let mut skipped = GossipSkipped::default();
     for mut info in incoming {
@@ -1908,9 +1911,24 @@ async fn merge_gossip(
         }
         examined += 1;
         // A p2p:// entry has no address to check; a libp2p contact promotes and binds it.
-        if !is_p2p && adm.check_address(&info.base_url).await.is_err() {
-            skipped.rejected += 1;
-            continue;
+        if !is_p2p {
+            if failed_lookups >= adm.cfg.max_failed_lookups || std::time::Instant::now() >= deadline
+            {
+                skipped.rejected += 1;
+                continue;
+            }
+            if slot.is_none() {
+                slot = adm.enter_check().ok();
+            }
+            if slot.is_none() {
+                skipped.rejected += 1;
+                continue;
+            }
+            if adm.check_address(&info.base_url).await.is_err() {
+                failed_lookups += 1;
+                skipped.rejected += 1;
+                continue;
+            }
         }
         peers.insert_unverified(info.clone());
         accepted += 1;
@@ -5979,6 +5997,38 @@ mod tests {
         let adm = cfg(8, Duration::ZERO);
         validated_shards(&adm, &ShardRegistry::new(), &hostname_shards(6), None).await;
         assert_eq!(lookups(&adm), 0);
+    }
+
+    fn hostname_peers(n: u8) -> Vec<PeerInfo> {
+        let now = OffsetDateTime::now_utc();
+        (0..n)
+            .map(|i| supported(&format!("http://g{i}.invalid"), now))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn gossiped_hostnames_need_a_free_slot_and_stop_after_failures_or_the_deadline() {
+        let cfg = |max_failed_lookups, shard_exchange_budget| {
+            PeerAdmission::new(
+                crate::peer_admission::AdmissionConfig {
+                    max_failed_lookups,
+                    shard_exchange_budget,
+                    ..Default::default()
+                },
+                crate::outbound_policy::OutboundPolicy::new(false),
+            )
+        };
+        let table = PeerTable::new();
+        let adm = cfg(2, Duration::from_secs(60));
+        merge_gossip(&table, &adm, "avalon-dev-local", hostname_peers(6)).await;
+        assert_eq!(lookups(&adm), 2, "failed lookups end the exchange");
+        let adm = cfg(8, Duration::ZERO);
+        merge_gossip(&table, &adm, "avalon-dev-local", hostname_peers(6)).await;
+        assert_eq!(lookups(&adm), 0, "the deadline ends it");
+        let adm = strict_admission(100, 1);
+        let _busy = adm.enter_check().unwrap();
+        merge_gossip(&table, &adm, "avalon-dev-local", hostname_peers(6)).await;
+        assert_eq!(lookups(&adm), 0, "no slot, no lookup");
     }
 
     #[tokio::test]

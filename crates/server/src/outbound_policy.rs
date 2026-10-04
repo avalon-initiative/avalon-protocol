@@ -63,28 +63,126 @@ impl LookupPools {
     }
 }
 
-/// Runs `lookup` on its own task holding one of `slots` until it truly finishes, and gives up
-/// waiting after `limit`; with no slot free, or on timeout, the host is [`PolicyError::Resolve`].
-async fn slotted_lookup<F>(
-    slots: &std::sync::Arc<tokio::sync::Semaphore>,
-    lookup: F,
+/// How long a host that failed to resolve is refused without a new lookup.
+const NEGATIVE_TTL: Duration = Duration::from_secs(45);
+/// Most failed hosts remembered at once.
+const MAX_NEGATIVE_HOSTS: usize = 512;
+
+type LookupAnswer = Result<Vec<IpAddr>, PolicyError>;
+type LookupFn = std::sync::Arc<
+    dyn Fn(String) -> futures_util::future::BoxFuture<'static, std::io::Result<Vec<IpAddr>>>
+        + Send
+        + Sync,
+>;
+
+/// Hostname lookups with bounded slot pools. One lookup runs per host at a time and later
+/// callers wait on it; a host that failed is refused for [`NEGATIVE_TTL`] without a lookup, so
+/// one bad name cannot take a fresh slot per retry. A lookup's slot is freed at its deadline.
+struct Resolver {
+    pools: LookupPools,
+    flights: std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::watch::Receiver<Option<LookupAnswer>>>,
+    >,
+    failed: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    lookup: LookupFn,
     limit: Duration,
-) -> Result<Vec<SocketAddr>, PolicyError>
-where
-    F: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>> + Send + 'static,
-{
-    let permit = slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| PolicyError::Resolve)?;
-    let task = tokio::spawn(async move {
-        let answer = lookup.await;
-        drop(permit);
-        answer
-    });
-    match tokio::time::timeout(limit, task).await {
-        Ok(Ok(Ok(addrs))) => Ok(addrs),
-        _ => Err(PolicyError::Resolve),
+    negative_ttl: Duration,
+}
+
+impl Resolver {
+    fn new(pools: LookupPools, lookup: LookupFn, limit: Duration, negative_ttl: Duration) -> Self {
+        Self {
+            pools,
+            flights: Default::default(),
+            failed: Default::default(),
+            lookup,
+            limit,
+            negative_ttl,
+        }
+    }
+
+    fn remember_failure(&self, host: &str) {
+        let now = std::time::Instant::now();
+        let mut failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        if failed.len() >= MAX_NEGATIVE_HOSTS && !failed.contains_key(host) {
+            failed.retain(|_, until| *until > now);
+            if failed.len() >= MAX_NEGATIVE_HOSTS {
+                if let Some(oldest) = failed
+                    .iter()
+                    .min_by_key(|(_, u)| **u)
+                    .map(|(h, _)| h.clone())
+                {
+                    failed.remove(&oldest);
+                }
+            }
+        }
+        failed.insert(host.to_string(), now + self.negative_ttl);
+    }
+
+    fn recently_failed(&self, host: &str) -> bool {
+        let failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        failed
+            .get(host)
+            .is_some_and(|until| *until > std::time::Instant::now())
+    }
+
+    async fn resolve(
+        self: &std::sync::Arc<Self>,
+        name: &str,
+        port: u16,
+        purpose: LookupPurpose,
+    ) -> Result<Vec<SocketAddr>, PolicyError> {
+        let host = name.to_ascii_lowercase();
+        if self.recently_failed(&host) {
+            return Err(PolicyError::Resolve);
+        }
+        let mut rx =
+            {
+                let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+                match flights.get(&host) {
+                    Some(rx) => rx.clone(),
+                    None => {
+                        let permit = self
+                            .pools
+                            .slots(purpose)
+                            .clone()
+                            .try_acquire_owned()
+                            .map_err(|_| PolicyError::Resolve)?;
+                        let (tx, rx) = tokio::sync::watch::channel(None);
+                        flights.insert(host.clone(), rx.clone());
+                        let (this, key) = (self.clone(), host.clone());
+                        tokio::spawn(async move {
+                            let answer =
+                                match tokio::time::timeout(this.limit, (this.lookup)(key.clone()))
+                                    .await
+                                {
+                                    Ok(Ok(addrs)) if !addrs.is_empty() => Ok(addrs),
+                                    _ => Err(PolicyError::Resolve),
+                                };
+                            if answer.is_err() {
+                                this.remember_failure(&key);
+                            }
+                            this.flights
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .remove(&key);
+                            drop(permit);
+                            let _ = tx.send(Some(answer));
+                        });
+                        rx
+                    }
+                }
+            };
+        let answer = rx
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| PolicyError::Resolve)?
+            .clone()
+            .ok_or(PolicyError::Resolve)??;
+        Ok(answer
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, port))
+            .collect())
     }
 }
 
@@ -93,19 +191,23 @@ async fn resolve_host(
     port: u16,
     purpose: LookupPurpose,
 ) -> Result<Vec<SocketAddr>, PolicyError> {
-    static POOLS: std::sync::OnceLock<LookupPools> = std::sync::OnceLock::new();
-    let pools = POOLS.get_or_init(|| LookupPools::new(MAX_CRITICAL_LOOKUPS, MAX_UNTRUSTED_LOOKUPS));
-    let name = name.to_string();
-    slotted_lookup(
-        pools.slots(purpose),
-        async move {
-            Ok(tokio::net::lookup_host((name.as_str(), port))
-                .await?
-                .collect())
-        },
-        DNS_LOOKUP_TIMEOUT,
-    )
-    .await
+    static RESOLVER: std::sync::OnceLock<std::sync::Arc<Resolver>> = std::sync::OnceLock::new();
+    let resolver = RESOLVER.get_or_init(|| {
+        std::sync::Arc::new(Resolver::new(
+            LookupPools::new(MAX_CRITICAL_LOOKUPS, MAX_UNTRUSTED_LOOKUPS),
+            std::sync::Arc::new(|name: String| {
+                Box::pin(async move {
+                    Ok(tokio::net::lookup_host((name.as_str(), 0))
+                        .await?
+                        .map(|a| a.ip())
+                        .collect())
+                })
+            }),
+            DNS_LOOKUP_TIMEOUT,
+            NEGATIVE_TTL,
+        ))
+    });
+    resolver.resolve(name, port, purpose).await
 }
 
 /// HTTP client for requests to other nodes, which follows no redirects and uses no proxy so a
@@ -492,57 +594,113 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn slots(n: usize) -> std::sync::Arc<tokio::sync::Semaphore> {
-        std::sync::Arc::new(tokio::sync::Semaphore::new(n))
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A resolver over a fake lookup: `slow.test` answers after 80 ms, `dead.test` fails,
+    /// `hang.test` never answers, anything else answers at once. Counts lookups per name.
+    fn fake_resolver(
+        pools: LookupPools,
+        limit: Duration,
+        ttl: Duration,
+    ) -> (Arc<Resolver>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let lookup: LookupFn = Arc::new(move |name: String| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                match name.as_str() {
+                    "slow.test" => {
+                        tokio::time::sleep(Duration::from_millis(80)).await;
+                        Ok(vec![ip("93.184.216.34")])
+                    }
+                    "dead.test" => Err(std::io::Error::other("no such host")),
+                    "hang.test" => std::future::pending().await,
+                    _ => Ok(vec![ip("93.184.216.35")]),
+                }
+            })
+        });
+        (Arc::new(Resolver::new(pools, lookup, limit, ttl)), calls)
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_lookup_that_never_answers_gives_up_as_unresolvable() {
-        let never = std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
-        let outer = Duration::from_secs(60);
-        let got =
-            tokio::time::timeout(outer, slotted_lookup(&slots(2), never, DNS_LOOKUP_TIMEOUT)).await;
+    const LONG: Duration = Duration::from_secs(30);
+
+    #[tokio::test]
+    async fn concurrent_lookups_of_one_host_share_one_lookup_and_one_slot() {
+        let (r, calls) = fake_resolver(LookupPools::new(4, 1), LONG, LONG);
+        let got = futures_util::future::join_all(
+            (0..6).map(|_| r.resolve("slow.test", 80, LookupPurpose::Untrusted)),
+        )
+        .await;
+        assert!(got.iter().all(|g| g.as_ref().is_ok_and(|a| a.len() == 1)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one lookup per host");
+    }
+
+    #[tokio::test]
+    async fn a_failed_host_is_refused_without_a_new_lookup_until_the_ttl_ends() {
+        let (r, calls) = fake_resolver(LookupPools::new(4, 4), LONG, Duration::from_millis(150));
+        for _ in 0..5 {
+            assert_eq!(
+                r.resolve("dead.test", 80, LookupPurpose::Critical).await,
+                Err(PolicyError::Resolve)
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "retries cost no lookup");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = r.resolve("dead.test", 80, LookupPurpose::Critical).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "tried again after the ttl");
+    }
+
+    #[tokio::test]
+    async fn the_failed_host_memory_is_bounded() {
+        let (r, _) = fake_resolver(LookupPools::new(1, 1), LONG, LONG);
+        for i in 0..MAX_NEGATIVE_HOSTS + 20 {
+            r.remember_failure(&format!("h{i}.test"));
+        }
+        assert!(r.failed.lock().unwrap().len() <= MAX_NEGATIVE_HOSTS);
+    }
+
+    #[tokio::test]
+    async fn a_lookup_that_never_answers_frees_its_slot_at_the_deadline() {
+        let (r, _) = fake_resolver(
+            LookupPools::new(1, 1),
+            Duration::from_millis(60),
+            Duration::from_millis(1),
+        );
+        let started = std::time::Instant::now();
         assert_eq!(
-            got.expect("the lookup bound must fire"),
+            r.resolve("hang.test", 80, LookupPurpose::Untrusted).await,
             Err(PolicyError::Resolve)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            r.resolve("other.test", 80, LookupPurpose::Untrusted)
+                .await
+                .is_ok(),
+            "the slot came back with the deadline"
         );
     }
 
     #[tokio::test]
-    async fn a_lookup_that_answers_in_time_passes_through() {
-        let addr = SocketAddr::new(ip("93.184.216.34"), 80);
-        let got =
-            slotted_lookup(&slots(1), async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
-        assert_eq!(got, Ok(vec![addr]));
-        let again =
-            slotted_lookup(&slots(1), async move { Ok(vec![addr]) }, DNS_LOOKUP_TIMEOUT).await;
-        assert_eq!(again, Ok(vec![addr]));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_abandoned_lookup_keeps_its_slot_until_it_returns() {
-        let slots = slots(1);
-        let never = std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
-        let first = slotted_lookup(&slots, never, DNS_LOOKUP_TIMEOUT).await;
-        assert_eq!(first, Err(PolicyError::Resolve));
-        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = ran.clone();
-        let second = slotted_lookup(
-            &slots,
-            async move {
-                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                Ok(vec![])
-            },
-            DNS_LOOKUP_TIMEOUT,
-        )
-        .await;
-        assert_eq!(second, Err(PolicyError::Resolve));
-        assert!(
-            !ran.load(std::sync::atomic::Ordering::SeqCst),
-            "no slot, no lookup"
+    async fn caller_supplied_lookups_cannot_starve_the_nodes_own() {
+        let (r, _) = fake_resolver(LookupPools::new(2, 1), LONG, LONG);
+        let held = tokio::spawn({
+            let r = r.clone();
+            async move { r.resolve("slow.test", 80, LookupPurpose::Untrusted).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            r.resolve("a.test", 80, LookupPurpose::Untrusted).await,
+            Err(PolicyError::Resolve),
+            "the untrusted pool is full"
         );
+        assert!(r
+            .resolve("b.test", 80, LookupPurpose::Critical)
+            .await
+            .is_ok());
+        assert!(held.await.unwrap().is_ok());
     }
-
     #[test]
     fn only_a_private_address_refusal_is_reported_as_liftable() {
         let strict = OutboundPolicy::new(false);
@@ -556,38 +714,6 @@ mod tests {
         ));
         assert!(!lifted_by_private_peers(lax, &refused("10.0.0.1")));
         assert!(!lifted_by_private_peers(strict, &PolicyError::Resolve));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn caller_supplied_lookups_cannot_starve_the_nodes_own() {
-        let pools = LookupPools::new(2, 1);
-        let never = || std::future::pending::<std::io::Result<Vec<SocketAddr>>>();
-        let addr = SocketAddr::new(ip("93.184.216.34"), 80);
-        let abandoned = slotted_lookup(
-            pools.slots(LookupPurpose::Untrusted),
-            never(),
-            DNS_LOOKUP_TIMEOUT,
-        )
-        .await;
-        assert_eq!(abandoned, Err(PolicyError::Resolve));
-        let blocked = slotted_lookup(
-            pools.slots(LookupPurpose::Untrusted),
-            async move { Ok(vec![addr]) },
-            DNS_LOOKUP_TIMEOUT,
-        )
-        .await;
-        assert_eq!(
-            blocked,
-            Err(PolicyError::Resolve),
-            "the untrusted pool is full"
-        );
-        let critical = slotted_lookup(
-            pools.slots(LookupPurpose::Critical),
-            async move { Ok(vec![addr]) },
-            DNS_LOOKUP_TIMEOUT,
-        )
-        .await;
-        assert_eq!(critical, Ok(vec![addr]));
     }
 
     #[test]
