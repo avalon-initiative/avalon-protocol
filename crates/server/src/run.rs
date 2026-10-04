@@ -742,7 +742,8 @@ pub async fn run_with_tracing(
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
             chain.clone(),
-            avalon_indexer::postgres::PostgresIndexer::new(pool.clone()),
+            avalon_indexer::postgres::PostgresIndexer::new(pool.clone())
+                .with_local_origin(&network_id, &own_shard_id),
             mirror_config,
             mirror_watcher::MirrorWatcherHandles {
                 interest: state.interest.clone(),

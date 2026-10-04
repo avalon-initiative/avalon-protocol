@@ -27,8 +27,16 @@ fn core() -> EventOrigin {
     EventOrigin::mirrored(TEST_NETWORK_ID, TEST_SHARD_ID)
 }
 
+/// The shard the test identities were created on.
 fn game() -> EventOrigin {
-    EventOrigin::mirrored(TEST_NETWORK_ID, "game:slug/1")
+    EventOrigin::mirrored(TEST_NETWORK_ID, HOME)
+}
+
+const HOME: &str = "game:slug/1";
+
+/// A shard no test identity was created on.
+fn evil() -> EventOrigin {
+    EventOrigin::mirrored(TEST_NETWORK_ID, "game:evil/1")
 }
 
 async fn apply(
@@ -38,6 +46,7 @@ async fn apply(
 ) -> Result<(), IndexError> {
     let mut tx = pool.begin().await.unwrap();
     let result = PostgresIndexer::new(pool.clone())
+        .with_local_origin(TEST_NETWORK_ID, TEST_SHARD_ID)
         .apply_in_tx_from(&mut tx, event, origin)
         .await;
     // Commits even after a refusal: the refused event must have left nothing in the transaction.
@@ -187,15 +196,11 @@ async fn profile_name(pool: &PgPool, who: &TestIdentity) -> Option<String> {
         .unwrap()
 }
 
-/// Creates `who` (valid, from core) and its inception key; returns the inception key id.
+/// Creates `who` (valid, on the home shard) and its inception key; returns the inception key id.
 async fn register(pool: &PgPool, who: &TestIdentity) -> Uuid {
-    apply(
-        pool,
-        &created(who, TEST_SHARD_ID, &unique_name("reg")),
-        &core(),
-    )
-    .await
-    .unwrap();
+    apply(pool, &created(who, HOME, &unique_name("reg")), &game())
+        .await
+        .unwrap();
     let key_id = Uuid::new_v4();
     apply(pool, &inception(who, key_id), &game()).await.unwrap();
     key_id
@@ -505,43 +510,68 @@ async fn unproven_identity_state_is_accepted_only_from_core_or_the_local_shard()
 
 #[tokio::test]
 #[ignore]
-async fn a_contested_name_resolves_the_same_in_either_arrival_order() {
+async fn a_contested_name_stays_with_its_first_holder_and_the_newcomer_is_suffixed() {
     let pool = pool().await;
     let (x, y) = (TestIdentity::new(), TestIdentity::new());
     let name = unique_name("contested");
-    let (cx, cy) = (
-        created(&x, "game:slug/1", &name),
-        created(&y, "core", &name),
-    );
-    let (low, high) = if x.id < y.id { (&x, &y) } else { (&y, &x) };
+    apply(&pool, &created(&x, HOME, &name), &game())
+        .await
+        .unwrap();
+    apply(&pool, &created(&y, "core", &name), &core())
+        .await
+        .unwrap();
+    assert_eq!(profile_name(&pool, &x).await, Some(name.clone()));
+    let suffixed = profile_name(&pool, &y).await.unwrap();
+    assert_eq!(suffixed, format!("{name}~{}", &y.id.to_string()[..12]));
+}
 
-    let mut outcomes = Vec::new();
-    for reversed in [false, true] {
-        let mut order = [(&cx, game()), (&cy, core())];
-        if reversed {
-            order.reverse();
-        }
-        for (event, origin) in &order {
-            apply(&pool, event, origin).await.unwrap();
-        }
-        outcomes.push((
-            profile_name(&pool, low).await.unwrap(),
-            profile_name(&pool, high).await.unwrap(),
-        ));
-        sqlx::query("DELETE FROM identities WHERE id = ANY($1)")
-            .bind(vec![x.id, y.id])
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM indexer_applied_events WHERE event_id = ANY($1)")
-            .bind(vec![cx.id, cy.id])
-            .execute(&pool)
-            .await
-            .unwrap();
+#[tokio::test]
+#[ignore]
+async fn a_mirrored_creation_never_displaces_a_local_holder_whatever_its_id() {
+    let pool = pool().await;
+    let local_holder = TestIdentity::new();
+    let name = unique_name("local-holder");
+    let local = EventOrigin::local(TEST_NETWORK_ID, TEST_SHARD_ID);
+    apply(&pool, &created(&local_holder, TEST_SHARD_ID, &name), &local)
+        .await
+        .unwrap();
+    // An identity with a smaller id than the holder's (ids are cheap to grind).
+    let mut grinder = TestIdentity::new();
+    while grinder.id >= local_holder.id {
+        grinder = TestIdentity::new();
     }
-    assert_eq!(outcomes[0], outcomes[1]);
-    assert_eq!(outcomes[0].0, name, "the smaller id keeps the name");
-    assert!(outcomes[0].1.starts_with(&name) && outcomes[0].1.contains('~'));
+    apply(&pool, &created(&grinder, HOME, &name), &game())
+        .await
+        .unwrap();
+    assert_eq!(profile_name(&pool, &local_holder).await, Some(name.clone()));
+    assert_ne!(profile_name(&pool, &grinder).await, Some(name));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_taken_suffixed_name_moves_on_to_a_longer_prefix() {
+    let pool = pool().await;
+    let (holder, squatter, newcomer) = (
+        TestIdentity::new(),
+        TestIdentity::new(),
+        TestIdentity::new(),
+    );
+    let name = unique_name("suffix");
+    apply(&pool, &created(&holder, HOME, &name), &game())
+        .await
+        .unwrap();
+    // Someone claims exactly the name the newcomer would be given.
+    let taken = format!("{name}~{}", &newcomer.id.to_string()[..12]);
+    apply(&pool, &created(&squatter, HOME, &taken), &game())
+        .await
+        .unwrap();
+    apply(&pool, &created(&newcomer, HOME, &name), &game())
+        .await
+        .unwrap();
+    assert_eq!(
+        profile_name(&pool, &newcomer).await,
+        Some(format!("{name}~{}", &newcomer.id.to_string()[..16]))
+    );
 }
 
 #[tokio::test]
@@ -560,4 +590,303 @@ async fn a_local_name_clash_is_refused_and_leaves_no_identity_row() {
         Err(IndexError::DisplayNameTaken)
     ));
     nothing_left(&pool, &newcomer, &clash).await;
+}
+
+async fn chain_rows(pool: &PgPool, who: &TestIdentity) -> i64 {
+    count(
+        pool,
+        "SELECT count(*) FROM identity_chain_events WHERE identity_id = $1",
+        who.id,
+    )
+    .await
+}
+
+fn at_position(
+    mut e: ProtocolEvent,
+    seq: u64,
+    prev: Option<&ProtocolEvent>,
+    secs: i64,
+) -> ProtocolEvent {
+    use avalon_protocol::events::IdentityChainPosition;
+    e.timestamp = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs);
+    e.identity_chain = Some(IdentityChainPosition {
+        seq,
+        prev_hash: prev
+            .map(|p| hex::encode(avalon_protocol::identity_chain_wire::event_hash(p).unwrap())),
+    });
+    e
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_replay_from_a_foreign_shard_cannot_fork_the_chain() {
+    let pool = pool().await;
+    let (victim, device) = (TestIdentity::new(), TestIdentity::new());
+    let inception_id = register(&pool, &victim).await;
+    let signed = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let genuine = at_position(signed.clone(), 1, None, 100);
+    apply(&pool, &genuine, &game()).await.unwrap();
+    let rows = chain_rows(&pool, &victim).await;
+    assert_eq!(rows, 1);
+
+    // The same signed grant, republished with another timestamp, chain position and key id.
+    let mut replay = at_position(signed, 1, None, 200);
+    replay.id = Uuid::new_v4();
+    replay.payload["signing_key_id"] = serde_json::json!(Uuid::new_v4());
+    assert!(matches!(
+        apply(&pool, &replay, &evil()).await,
+        Err(IndexError::Rejected(_))
+    ));
+    assert_eq!(chain_rows(&pool, &victim).await, rows);
+    let forked = avalon_indexer::identity_chain_store::is_forked(&pool, victim.id)
+        .await
+        .unwrap();
+    assert!(!forked);
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_alias_published_first_by_a_foreign_shard_does_not_block_the_real_key_or_its_revocation()
+{
+    let pool = pool().await;
+    let (victim, device) = (TestIdentity::new(), TestIdentity::new());
+    let inception_id = register(&pool, &victim).await;
+    let real_key = Uuid::new_v4();
+    let real = grant(&victim, &victim, inception_id, &device, real_key);
+
+    let mut alias = real.clone();
+    alias.id = Uuid::new_v4();
+    alias.payload["signing_key_id"] = serde_json::json!(Uuid::new_v4());
+    assert!(apply(&pool, &alias, &evil()).await.is_err());
+
+    apply(&pool, &real, &game()).await.unwrap();
+    assert!(active(&pool, &victim, real_key).await);
+    apply(
+        &pool,
+        &revoke(&victim, &victim, inception_id, real_key),
+        &game(),
+    )
+    .await
+    .unwrap();
+    assert!(!active(&pool, &victim, real_key).await);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM indexer_identity_signing_keys \
+             WHERE identity_id = $1 AND revoked_at IS NULL",
+            victim.id
+        )
+        .await,
+        1,
+        "only the inception key stays active"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn the_home_shard_is_recorded_from_the_verified_creation_only() {
+    let pool = pool().await;
+    let (victim, other) = (TestIdentity::new(), TestIdentity::new());
+    let inception_id = register(&pool, &victim).await;
+    // A creation signed for the evil shard by another identity makes that shard no home of the victim.
+    apply(
+        &pool,
+        &created(&other, "game:evil/1", &unique_name("o")),
+        &evil(),
+    )
+    .await
+    .unwrap();
+    let device = TestIdentity::new();
+    let from_evil = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    assert!(apply(&pool, &from_evil, &evil()).await.is_err());
+    // A forged creation of the victim on the evil shard records nothing either.
+    let mut forged = created(&victim, "game:evil/1", &unique_name("f"));
+    forged.payload["signature"] = created(&other, "game:evil/1", "x").payload["signature"].clone();
+    assert!(apply(&pool, &forged, &evil()).await.is_err());
+    assert!(apply(&pool, &from_evil, &evil()).await.is_err());
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_grant_or_revocation_ahead_of_its_signing_key_is_deferred_then_applies() {
+    let pool = pool().await;
+    let (victim, device, second) = (
+        TestIdentity::new(),
+        TestIdentity::new(),
+        TestIdentity::new(),
+    );
+    apply(
+        &pool,
+        &created(&victim, HOME, &unique_name("late")),
+        &game(),
+    )
+    .await
+    .unwrap();
+    // The approving key arrives later (another shard's ordering).
+    let approver_key = Uuid::new_v4();
+    let device_key = Uuid::new_v4();
+    let early_grant = grant(&victim, &victim, approver_key, &device, device_key);
+    let err = apply(&pool, &early_grant, &game()).await.unwrap_err();
+    assert!(err.is_deferred() && !err.is_transient(), "{err:?}");
+    apply(&pool, &inception(&victim, approver_key), &game())
+        .await
+        .unwrap();
+    apply(&pool, &early_grant, &game()).await.unwrap();
+    assert!(active(&pool, &victim, device_key).await);
+
+    // A revocation naming a key that is not projected yet is deferred the same way.
+    let later_key = Uuid::new_v4();
+    let early_revoke = revoke(&victim, &second, later_key, device_key);
+    assert!(apply(&pool, &early_revoke, &game())
+        .await
+        .unwrap_err()
+        .is_deferred());
+    // Once it is known but revoked, it is refused for good.
+    apply(
+        &pool,
+        &grant(&victim, &victim, approver_key, &second, later_key),
+        &game(),
+    )
+    .await
+    .unwrap();
+    apply(
+        &pool,
+        &revoke(&victim, &victim, approver_key, later_key),
+        &game(),
+    )
+    .await
+    .unwrap();
+    let err = apply(&pool, &early_revoke, &game()).await.unwrap_err();
+    assert!(matches!(err, IndexError::Rejected(_)), "{err:?}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_child_event_for_an_unknown_identity_is_deferred_not_refused() {
+    let pool = pool().await;
+    let ghost = TestIdentity::new();
+    let passkey = event(
+        &ghost,
+        "identity.passkey_registered",
+        1,
+        serde_json::json!({
+            "passkey_id": Uuid::new_v4(), "identity_id": ghost.id,
+            "credential_id": b64(Uuid::new_v4().as_bytes()),
+            "passkey_data": {"k": 1}, "label": null,
+        }),
+    );
+    let err = apply(&pool, &passkey, &core()).await.unwrap_err();
+    assert!(err.is_deferred() && !err.is_transient(), "{err:?}");
+    apply(
+        &pool,
+        &created(&ghost, TEST_SHARD_ID, &unique_name("g")),
+        &core(),
+    )
+    .await
+    .unwrap();
+    apply(&pool, &passkey, &core()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn database_rule_violations_are_classified_not_parked_as_storage_faults() {
+    let pool = pool().await;
+    let (who, device) = (TestIdentity::new(), TestIdentity::new());
+    let inception_id = register(&pool, &who).await;
+    let key = Uuid::new_v4();
+    apply(
+        &pool,
+        &grant(&who, &who, inception_id, &device, key),
+        &game(),
+    )
+    .await
+    .unwrap();
+    // The same public key under another id, bypassing the pre-check.
+    let duplicate = sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(who.id)
+    .bind(device.public_key().to_vec())
+    .execute(&pool)
+    .await
+    .unwrap_err();
+    let err = IndexError::from(duplicate);
+    assert!(matches!(err, IndexError::Rejected(_)), "{err:?}");
+    assert!(!err.is_transient() && !err.is_deferred());
+    // A row for an identity that does not exist waits for it.
+    let orphan = sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(TestIdentity::new().id)
+    .bind(device.public_key().to_vec())
+    .execute(&pool)
+    .await
+    .unwrap_err();
+    assert!(IndexError::from(orphan).is_deferred());
+}
+
+#[tokio::test]
+#[ignore]
+async fn another_networks_core_shard_is_not_authoritative() {
+    let pool = pool().await;
+    let who = TestIdentity::new();
+    register(&pool, &who).await;
+    let passkey = event(
+        &who,
+        "identity.passkey_registered",
+        1,
+        serde_json::json!({
+            "passkey_id": Uuid::new_v4(), "identity_id": who.id,
+            "credential_id": b64(Uuid::new_v4().as_bytes()),
+            "passkey_data": {"k": 1}, "label": null,
+        }),
+    );
+    let foreign_core = EventOrigin::mirrored("another-network", "core");
+    assert!(matches!(
+        apply(&pool, &passkey, &foreign_core).await,
+        Err(IndexError::Rejected(_))
+    ));
+    apply(&pool, &passkey, &core()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn one_shards_copy_of_an_event_id_does_not_suppress_another_shards() {
+    let pool = pool().await;
+    let who = TestIdentity::new();
+    register(&pool, &who).await;
+    let update = event(
+        &who,
+        "profile.updated",
+        1,
+        serde_json::json!({ "bio": "first" }),
+    );
+    let local_game = EventOrigin::local(TEST_NETWORK_ID, "game:slug/1");
+    apply(&pool, &update, &local_game).await.unwrap();
+    // The same event id arriving from core is still applied (and idempotently so).
+    apply(&pool, &update, &core()).await.unwrap();
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM indexer_applied_events WHERE event_id::text = $1",
+            update.id
+        )
+        .await,
+        2
+    );
+    // The same shard's redelivery is a no-op.
+    apply(&pool, &update, &core()).await.unwrap();
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM indexer_applied_events WHERE event_id::text = $1",
+            update.id
+        )
+        .await,
+        2
+    );
 }

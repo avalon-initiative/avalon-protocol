@@ -189,28 +189,30 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
 }
 
 /// The name `identity_id` is stored under when another identity holds `name`: `name` cut to
-/// leave room for `~` and the first 12 hex characters of the id.
-pub fn disambiguated_display_name(name: &str, identity_id: &IdentityId) -> String {
-    let suffix = format!("~{}", &identity_id.to_string()[..12]);
+/// leave room for `~` and the first `hex_len` hex characters of the id.
+pub fn disambiguated_display_name(name: &str, identity_id: &IdentityId, hex_len: usize) -> String {
+    let suffix = format!("~{}", &identity_id.to_string()[..hex_len]);
     let keep = avalon_protocol::identity_id::MAX_DISPLAY_NAME_CHARS - suffix.chars().count();
     let base: String = name.trim().chars().take(keep).collect();
     format!("{}{suffix}", base.trim_end())
 }
 
-/// Creates the identity row and its profile from a verified `identity.created`.
+/// Creates the identity row, records the shard as one of its homes, and creates its profile from
+/// a verified `identity.created`.
 ///
-/// The row, the profile and (for an id that already has a profile) the refusal are one unit: the
-/// caller's savepoint rolls all of it back. An existing profile is never overwritten; a second
-/// creation with the same name is a no-op and one with another name is refused.
+/// All of it is one unit: the caller's savepoint rolls everything back on a refusal. An existing
+/// profile is never overwritten; a second creation with the same name is a no-op and one with
+/// another name is refused.
 ///
-/// A name held by another identity is a conflict. A local creation is refused (first come on this
-/// node's own shard). A mirrored one is resolved without regard to apply order: the identity with
-/// the smaller id keeps the name and the other is stored under [`disambiguated_display_name`].
+/// A name held by another identity is never taken from its holder. A local creation is refused
+/// (first come on this node's own shard); a mirrored one is stored as `name~<id prefix>`, with a
+/// longer prefix when that is taken too. Names are display only: which holder a name resolves to
+/// can differ between nodes that saw the creations in a different order.
 pub async fn apply_created(
     tx: &mut Transaction<'_, Postgres>,
     created_at: OffsetDateTime,
     created: &crate::identity_proof::VerifiedCreation,
-    mirrored: bool,
+    origin: &crate::identity_proof::EventOrigin,
 ) -> Result<(), IndexError> {
     let identity_id = created.identity_id;
     let name = created.display_name.as_str();
@@ -221,6 +223,15 @@ pub async fn apply_created(
     .bind(identity_id)
     .bind(created_at)
     .bind(created.inception_key.as_slice())
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO indexer_identity_homes (identity_id, network_id, shard_id) \
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(identity_id)
+    .bind(&origin.network_id)
+    .bind(&origin.shard_id)
     .execute(&mut **tx)
     .await?;
 
@@ -239,31 +250,32 @@ pub async fn apply_created(
         };
     }
 
-    let holder: Option<IdentityId> = sqlx::query_scalar(
-        "SELECT identity_id FROM profiles WHERE lower(display_name) = lower($1)",
-    )
-    .bind(name)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let stored = match holder {
-        None => name.to_string(),
-        Some(_) if !mirrored => return Err(IndexError::DisplayNameTaken),
-        Some(holder) if identity_id < holder => {
-            sqlx::query("UPDATE profiles SET display_name = $2 WHERE identity_id = $1")
-                .bind(holder)
-                .bind(disambiguated_display_name(name, &holder))
-                .execute(&mut **tx)
-                .await?;
-            name.to_string()
-        }
-        Some(_) => disambiguated_display_name(name, &identity_id),
-    };
-    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
+    // The unique index decides; a taken name is a rule outcome, never a storage error.
+    let mut candidates = vec![name.to_string()];
+    if !origin.local {
+        candidates.extend(
+            (12..=64)
+                .step_by(4)
+                .map(|len| disambiguated_display_name(name, &identity_id, len)),
+        );
+    }
+    for candidate in candidates {
+        let inserted = sqlx::query(
+            "INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
         .bind(identity_id)
-        .bind(stored)
+        .bind(candidate)
         .execute(&mut **tx)
         .await?;
-    Ok(())
+        if inserted.rows_affected() == 1 {
+            return Ok(());
+        }
+    }
+    Err(if origin.local {
+        IndexError::DisplayNameTaken
+    } else {
+        IndexError::Rejected("no free display name for this identity".to_string())
+    })
 }
 
 /// A write that clears every optional field `write` sets, leaving
@@ -612,9 +624,10 @@ mod tests {
         let id = IdentityId::random_for_tests();
         let long = "n".repeat(avalon_protocol::identity_id::MAX_DISPLAY_NAME_CHARS);
         for name in ["nova", long.as_str()] {
-            let got = disambiguated_display_name(name, &id);
-            assert_eq!(got, disambiguated_display_name(name, &id));
+            let got = disambiguated_display_name(name, &id, 12);
+            assert_eq!(got, disambiguated_display_name(name, &id, 12));
             assert!(got.ends_with(&format!("~{}", &id.to_string()[..12])));
+            assert_ne!(got, disambiguated_display_name(name, &id, 16));
             assert!(avalon_protocol::identity_id::display_name_permitted(&got));
         }
     }

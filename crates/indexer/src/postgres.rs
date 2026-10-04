@@ -55,9 +55,18 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
     "indexer_identity_passkey_revocations",
+    "indexer_identity_homes",
     "identity_chain_events",
     "identity_chain_state",
 ];
+
+/// How a rebuild went: events applied (including deliberate no-ops) and events refused or whose
+/// dependencies never arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildOutcome {
+    pub applied: usize,
+    pub refused: usize,
+}
 
 #[derive(Clone)]
 pub struct PostgresIndexer {
@@ -98,13 +107,13 @@ impl PostgresIndexer {
     /// database missing whatever hadn't been replayed yet when a later
     /// event failed to decode/apply, rather than leaving the pre-rebuild
     /// state untouched for an operator to investigate. Returns how many
-    /// events were actually applied (an event whose kind no projection
+    /// events were applied or refused (an event whose kind no projection
     /// recognizes still counts — [`PostgresIndexer::apply_in_tx`] treats
     /// that as a deliberate no-op, not a skip worth distinguishing here).
     pub async fn rebuild_from_scratch(
         &self,
         events: &[ProtocolEvent],
-    ) -> Result<usize, IndexError> {
+    ) -> Result<RebuildOutcome, IndexError> {
         let mut tx = self.pool.begin().await?;
         for table in PROJECTION_TABLES {
             // `table` always comes from the fixed `PROJECTION_TABLES`
@@ -116,33 +125,59 @@ impl PostgresIndexer {
                 .await?;
         }
 
-        for event in events {
-            // Each event applies in its own savepoint so a refused one rolls back completely.
-            let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
-            match self
-                .apply_verified(&mut savepoint, event, self.local_origin.as_ref())
-                .await
-            {
-                Ok(()) => savepoint.commit().await?,
-                // Refused by a validity rule, not a storage fault: the same event is refused on
-                // every replay, so it must not abort the whole rebuild.
-                Err(
-                    IndexError::DisplayNameNotPermitted
-                    | IndexError::DisplayNameTaken
-                    | IndexError::Rejected(_),
-                ) => {
-                    eprintln!(
-                        "indexer: skipping refused event {} ({})",
-                        event.id, event.kind
-                    );
-                    savepoint.rollback().await?;
+        // An event waiting on state later in the history is retried until a pass makes no progress.
+        let mut pending: Vec<&ProtocolEvent> = events.iter().collect();
+        let mut refused = 0usize;
+        loop {
+            let mut deferred = Vec::new();
+            for event in &pending {
+                // Each event applies in its own savepoint so a refused one rolls back completely.
+                let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+                match self
+                    .apply_verified(&mut savepoint, event, self.local_origin.as_ref())
+                    .await
+                {
+                    Ok(()) => savepoint.commit().await?,
+                    Err(IndexError::Deferred(_)) => {
+                        savepoint.rollback().await?;
+                        deferred.push(*event);
+                    }
+                    // Refused by a validity rule, not a storage fault: the same event is refused
+                    // on every replay, so it must not abort the whole rebuild.
+                    Err(
+                        IndexError::DisplayNameNotPermitted
+                        | IndexError::DisplayNameTaken
+                        | IndexError::Rejected(_),
+                    ) => {
+                        eprintln!(
+                            "indexer: skipping refused event {} ({})",
+                            event.id, event.kind
+                        );
+                        savepoint.rollback().await?;
+                        refused += 1;
+                    }
+                    Err(other) => return Err(other),
                 }
-                Err(other) => return Err(other),
+            }
+            let progressed = deferred.len() < pending.len();
+            pending = deferred;
+            if pending.is_empty() || !progressed {
+                break;
             }
         }
+        for event in &pending {
+            eprintln!(
+                "indexer: skipping event {} ({}) whose dependencies never arrived",
+                event.id, event.kind
+            );
+        }
+        refused += pending.len();
 
         tx.commit().await?;
-        Ok(events.len())
+        Ok(RebuildOutcome {
+            applied: events.len() - refused,
+            refused,
+        })
     }
 
     /// Applies an event this node authored itself, verified against the origin set by
@@ -199,10 +234,11 @@ impl PostgresIndexer {
         origin: Option<&EventOrigin>,
     ) -> Result<(), IndexError> {
         let claimed = sqlx::query(
-            "INSERT INTO indexer_applied_events (event_id) VALUES ($1) \
+            "INSERT INTO indexer_applied_events (event_id, shard_id) VALUES ($1, $2) \
              ON CONFLICT DO NOTHING RETURNING event_id",
         )
         .bind(event.id)
+        .bind(origin.map_or("", |o| o.shard_id.as_str()))
         .fetch_optional(&mut **tx)
         .await?;
 
@@ -211,7 +247,8 @@ impl PostgresIndexer {
         }
 
         // Proof comes before the identity chain: a refused event must not reach it either.
-        let verified = identity_proof::verify(tx, event, origin).await?;
+        let local_network = self.local_origin.as_ref().map(|o| o.network_id.as_str());
+        let verified = identity_proof::verify(tx, event, origin, local_network).await?;
 
         // Chained events are recorded and resolved first; only `profile.updated`
         // is projected through the resolved chain (see `apply_profile_chained`).
@@ -244,9 +281,8 @@ impl PostgresIndexer {
 
         match event.kind.as_str() {
             "identity.created" => {
-                if let Verified::Creation(created) = &verified {
-                    let mirrored = origin.is_none_or(|o| !o.local);
-                    profiles::apply_created(tx, event.timestamp, created, mirrored).await?;
+                if let (Verified::Creation(created), Some(origin)) = (&verified, origin) {
+                    profiles::apply_created(tx, event.timestamp, created, origin).await?;
                 }
             }
             "profile.updated" => {

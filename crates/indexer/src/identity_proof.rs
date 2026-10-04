@@ -54,10 +54,10 @@ impl EventOrigin {
     }
 
     /// Whether this origin may author identity-state events that carry no proof: this node's own
-    /// stream, or the network's pinned core shard. Every other shard is limited to events that
-    /// prove themselves.
-    pub fn is_authoritative(&self) -> bool {
-        self.local || self.shard_id == CORE_SHARD_ID
+    /// stream, or the core shard of this node's own network (`local_network`). Every other
+    /// shard is limited to events that prove themselves.
+    pub fn is_authoritative(&self, local_network: Option<&str>) -> bool {
+        self.local || (self.shard_id == CORE_SHARD_ID && local_network == Some(&self.network_id))
     }
 }
 
@@ -166,28 +166,92 @@ pub fn verify_created(
     })
 }
 
-/// The public key of `identity_id`'s signing key `signing_key_id`, if it is active.
-async fn active_key(
+/// A key of an identity as the projection knows it.
+enum KeyState {
+    Active([u8; 32]),
+    Revoked,
+    Unknown,
+}
+
+async fn key_state(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
     signing_key_id: Uuid,
-) -> Result<Option<[u8; 32]>, IndexError> {
+) -> Result<KeyState, IndexError> {
     let row = sqlx::query(
-        "SELECT public_key FROM indexer_identity_signing_keys \
-         WHERE identity_id = $1 AND signing_key_id = $2 AND revoked_at IS NULL",
+        "SELECT public_key, revoked_at IS NOT NULL AS revoked FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 AND signing_key_id = $2",
     )
     .bind(identity_id)
     .bind(signing_key_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some(row) = row else { return Ok(None) };
+    let Some(row) = row else {
+        return Ok(KeyState::Unknown);
+    };
+    if row.try_get::<bool, _>("revoked")? {
+        return Ok(KeyState::Revoked);
+    }
     let raw: Vec<u8> = row.try_get("public_key")?;
-    Ok(<[u8; 32]>::try_from(raw).ok())
+    Ok(<[u8; 32]>::try_from(raw).map_or(KeyState::Revoked, KeyState::Active))
+}
+
+/// The active key a proof names. A key not projected yet defers the event (it may still arrive,
+/// possibly from another shard); a revoked one refuses it.
+async fn signer_key(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+    signing_key_id: Uuid,
+    role: &str,
+) -> Result<[u8; 32], IndexError> {
+    match key_state(tx, identity_id, signing_key_id).await? {
+        KeyState::Active(key) => Ok(key),
+        KeyState::Revoked => Err(reject(format!("{role} key is revoked"))),
+        KeyState::Unknown => Err(IndexError::Deferred(format!(
+            "{role} key is not projected for this identity yet"
+        ))),
+    }
+}
+
+/// Key events change what authenticates as the identity, and their chain position and key id are
+/// not signed, so only a shard the identity itself created on, the core shard or this node's own
+/// shard may deliver them.
+async fn require_key_authority(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+    origin: Option<&EventOrigin>,
+    local_network: Option<&str>,
+) -> Result<(), IndexError> {
+    let Some(origin) = origin else {
+        return Err(reject("no origin to authorize a key event"));
+    };
+    if origin.is_authoritative(local_network) {
+        return Ok(());
+    }
+    let home: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM indexer_identity_homes \
+         WHERE identity_id = $1 AND network_id = $2 AND shard_id = $3)",
+    )
+    .bind(identity_id)
+    .bind(&origin.network_id)
+    .bind(&origin.shard_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if home {
+        Ok(())
+    } else {
+        Err(reject(format!(
+            "shard {} is not a shard this identity was created on",
+            origin.shard_id
+        )))
+    }
 }
 
 async fn verify_key_added(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
+    origin: Option<&EventOrigin>,
+    local_network: Option<&str>,
 ) -> Result<(), IndexError> {
     if event.version != 2 {
         return Err(reject("identity.signing_key_added must be version 2"));
@@ -195,6 +259,7 @@ async fn verify_key_added(
     let added: IdentitySigningKeyAddedPayload = serde_json::from_value(event.payload.clone())
         .map_err(|_| reject("identity.signing_key_added payload is malformed"))?;
     require_issuer_is(event, added.identity_id)?;
+    require_key_authority(tx, added.identity_id, origin, local_network).await?;
     let key = decode_key(&added.public_key)?;
     match added.kind.as_str() {
         SIGNING_KEY_KIND_INCEPTION => {
@@ -208,9 +273,13 @@ async fn verify_key_added(
                 return Err(reject("device grant carries no approval signature"));
             };
             let signature = decode_signature(signature)?;
-            let approver = active_key(tx, added.identity_id, added.approved_by_signing_key_id)
-                .await?
-                .ok_or_else(|| reject("approving key is not an active key of this identity"))?;
+            let approver = signer_key(
+                tx,
+                added.identity_id,
+                added.approved_by_signing_key_id,
+                "approving",
+            )
+            .await?;
             let bytes = device_grant_approval_signing_bytes_v2(grant_id, &added.identity_id, &key);
             if !verify_with_key(&approver, &bytes, &signature) {
                 return Err(reject(
@@ -230,6 +299,8 @@ async fn verify_key_added(
 async fn verify_key_revoked(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
+    origin: Option<&EventOrigin>,
+    local_network: Option<&str>,
 ) -> Result<(), IndexError> {
     if event.version != 2 {
         return Err(reject("identity.signing_key_revoked must be version 2"));
@@ -238,10 +309,15 @@ async fn verify_key_revoked(
         serde_json::from_value(event.payload.clone())
             .map_err(|_| reject("identity.signing_key_revoked payload is malformed"))?;
     require_issuer_is(event, revoked.identity_id)?;
+    require_key_authority(tx, revoked.identity_id, origin, local_network).await?;
     let signature = decode_signature(&revoked.signature)?;
-    let revoker = active_key(tx, revoked.identity_id, revoked.revoked_by_signing_key_id)
-        .await?
-        .ok_or_else(|| reject("revoking key is not an active key of this identity"))?;
+    let revoker = signer_key(
+        tx,
+        revoked.identity_id,
+        revoked.revoked_by_signing_key_id,
+        "revoking",
+    )
+    .await?;
     let bytes = signing_key_revoked_signing_bytes_v2(
         &revoked.identity_id,
         revoked.signing_key_id,
@@ -273,18 +349,21 @@ pub async fn verify(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
     origin: Option<&EventOrigin>,
+    local_network: Option<&str>,
 ) -> Result<Verified, IndexError> {
     match event.kind.as_str() {
         "identity.created" => {
             let origin = origin.ok_or_else(|| reject("no origin to verify identity.created"))?;
             verify_created(event, origin).map(Verified::Creation)
         }
-        "identity.signing_key_added" => verify_key_added(tx, event).await.map(|()| Verified::Other),
-        "identity.signing_key_revoked" => verify_key_revoked(tx, event)
+        "identity.signing_key_added" => verify_key_added(tx, event, origin, local_network)
+            .await
+            .map(|()| Verified::Other),
+        "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin, local_network)
             .await
             .map(|()| Verified::Other),
         kind if is_unproven_identity_state(kind) => {
-            if origin.is_some_and(EventOrigin::is_authoritative) {
+            if origin.is_some_and(|o| o.is_authoritative(local_network)) {
                 Ok(Verified::Other)
             } else {
                 Err(reject(format!(
@@ -392,10 +471,14 @@ mod tests {
 
     #[test]
     fn only_core_and_the_local_shard_are_authoritative() {
-        assert!(EventOrigin::mirrored("n", "core").is_authoritative());
-        assert!(EventOrigin::local("n", "game:slug/1").is_authoritative());
-        assert!(!EventOrigin::mirrored("n", "game:slug/1").is_authoritative());
-        assert!(!EventOrigin::mirrored("n", "service:x").is_authoritative());
+        let net = Some("n");
+        assert!(EventOrigin::mirrored("n", "core").is_authoritative(net));
+        assert!(EventOrigin::local("n", "game:slug/1").is_authoritative(net));
+        assert!(!EventOrigin::mirrored("n", "game:slug/1").is_authoritative(net));
+        assert!(!EventOrigin::mirrored("n", "service:x").is_authoritative(net));
+        // Another network's core shard, or no local network at all, is not authoritative.
+        assert!(!EventOrigin::mirrored("other", "core").is_authoritative(net));
+        assert!(!EventOrigin::mirrored("n", "core").is_authoritative(None));
     }
 
     #[test]

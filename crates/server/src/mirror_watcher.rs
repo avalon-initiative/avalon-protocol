@@ -2410,6 +2410,8 @@ enum ProjectionOutcome {
     Skipped,
     Permanent(String),
     Transient(String),
+    /// Waiting on state that may still arrive (an identity or key from this or another shard).
+    Deferred(String),
 }
 
 /// Entries that failed permanently this process; later passes skip them so
@@ -2464,6 +2466,39 @@ fn mark_scan_clean(network_id: &str, shard_id: &str) {
         .insert((network_id.to_string(), shard_id.to_string()));
 }
 
+/// How many passes an entry waiting on missing state is retried before it is refused.
+const MAX_DEFER_ATTEMPTS: u32 = 10;
+
+/// Entries waiting on missing state this process, with their attempt counts.
+static DEFERRED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Uuid, u32>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Counts one more deferral of `event_id`; `true` while it may still be retried.
+fn note_deferral(event_id: Uuid) -> bool {
+    let mut deferred = DEFERRED.lock().unwrap_or_else(|e| e.into_inner());
+    let attempts = deferred.entry(event_id).or_insert(0);
+    *attempts += 1;
+    if *attempts > MAX_DEFER_ATTEMPTS {
+        deferred.remove(&event_id);
+        return false;
+    }
+    true
+}
+
+/// Key or identity state changed: entries waiting on it may apply now, so every shard with
+/// waiting entries is scanned again.
+fn redrive_deferred(applied: &Uuid, kind: &str) {
+    let mut deferred = DEFERRED.lock().unwrap_or_else(|e| e.into_inner());
+    deferred.remove(applied);
+    let changes_keys = kind == "identity.created" || kind.starts_with("identity.signing_key_");
+    if changes_keys && !deferred.is_empty() {
+        CLEAN_SCANS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+}
+
 fn mark_projection_failed(network_id: &str, shard_id: &str) {
     CLEAN_SCANS
         .lock()
@@ -2499,6 +2534,9 @@ async fn store_and_project(
                     *projection_blocked = true;
                     mark_projection_failed(&entry.network_id, &entry.shard_id);
                 }
+                ProjectionOutcome::Deferred(_) => {
+                    mark_projection_failed(&entry.network_id, &entry.shard_id);
+                }
             }
         }
     }
@@ -2531,6 +2569,7 @@ async fn project_mirrored_entry(
         Ok(()) => {
             savepoint.commit().await.map_err(storage)?;
             set_projection_rejection(tx, entry, None).await?;
+            redrive_deferred(&entry.event_id, &entry.kind);
             Ok(ProjectionOutcome::Applied)
         }
         Err(err) => {
@@ -2542,6 +2581,9 @@ async fn project_mirrored_entry(
                     entry.network_id, entry.event_id, entry.seq
                 );
                 return Ok(ProjectionOutcome::Transient(reason));
+            }
+            if err.is_deferred() && note_deferral(entry.event_id) {
+                return Ok(ProjectionOutcome::Deferred(reason));
             }
             set_projection_rejection(tx, entry, Some(&reason)).await?;
             let key = format!("projection-rejected:{}:{}", entry.shard_id, entry.kind);
@@ -2590,6 +2632,8 @@ struct ReprojectReport {
     parked: usize,
     /// A transient failure stopped the pass; later entries were left unapplied.
     blocked: bool,
+    /// Entries waiting on state that has not arrived; they are retried on later passes.
+    deferred: usize,
 }
 
 /// Re-drives projection for stored entries of `shard_id` that the indexer
@@ -2643,7 +2687,9 @@ where
              WHERE m.network_id = $1 AND m.shard_id = $2 AND m.seq > $3 \
                AND m.payload IS NOT NULL \
                AND NOT EXISTS ( \
-                   SELECT 1 FROM indexer_applied_events a WHERE a.event_id = m.event_id) \
+                   SELECT 1 FROM indexer_applied_events a \
+                   WHERE a.event_id = m.event_id AND a.shard_id = m.shard_id) \
+               AND m.projection_rejection IS NULL \
              ORDER BY m.seq LIMIT $4",
         )
         .bind(network_id)
@@ -2680,6 +2726,10 @@ where
                     report.blocked = true;
                     mark_projection_failed(network_id, shard_id);
                     return Ok(report);
+                }
+                ProjectionOutcome::Deferred(_) => {
+                    report.deferred += 1;
+                    mark_projection_failed(network_id, shard_id);
                 }
             }
         }

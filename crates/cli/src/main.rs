@@ -516,7 +516,10 @@ async fn rebuild_index() {
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
     let chain = PostgresSettlementProvider::new(pool.clone(), network_id);
-    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
+    let configured_shard = std::env::var("AVALON_OWN_SHARD_ID").ok();
+    let own_shard_id = configured_shard
+        .clone()
+        .unwrap_or_else(|| "core".to_string());
 
     let started = std::time::Instant::now();
     let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, &own_shard_id)
@@ -525,9 +528,21 @@ async fn rebuild_index() {
     let elapsed = started.elapsed();
 
     println!(
-        "rebuilt index from {} ledger entries ({} events applied, {} skipped as undecodable) in {:.2?}",
-        report.entries_read, report.events_applied, report.entries_skipped_undecodable, elapsed
+        "rebuilt index from {} ledger entries ({} events applied, {} refused, {} skipped as undecodable) in {:.2?}",
+        report.entries_read,
+        report.events_applied,
+        report.events_refused,
+        report.entries_skipped_undecodable,
+        elapsed
     );
+    if report.events_refused > 0 && configured_shard.is_none() {
+        eprintln!(
+            "error: {} events were refused while AVALON_OWN_SHARD_ID is unset (assumed `core`). \
+             On a node that authors another shard, set AVALON_OWN_SHARD_ID to it and rebuild again.",
+            report.events_refused
+        );
+        std::process::exit(1);
+    }
 }
 
 /// `avalon migrate-network --target-database-url <url> --target-network-id <id>`

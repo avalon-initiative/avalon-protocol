@@ -32,6 +32,8 @@ use sqlx::PgPool;
 pub struct RebuildReport {
     pub entries_read: usize,
     pub events_applied: usize,
+    /// Events the indexer refused, or whose dependencies never arrived.
+    pub events_refused: usize,
     pub entries_skipped_undecodable: usize,
 }
 
@@ -59,14 +61,15 @@ pub async fn rebuild_index_from_ledger(
 
     let indexer = PostgresIndexer::new(index_pool.clone())
         .with_local_origin(chain.network_id(), own_shard_id);
-    let events_applied = indexer
+    let outcome = indexer
         .rebuild_from_scratch(&events)
         .await
         .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
 
     Ok(RebuildReport {
         entries_read,
-        events_applied,
+        events_applied: outcome.applied,
+        events_refused: outcome.refused,
         entries_skipped_undecodable: skipped,
     })
 }
