@@ -285,3 +285,16 @@ pub async fn revoke_session(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_hash_is_the_sha256_of_the_token_bytes() {
+        assert_eq!(
+            hex::encode(hash_token("abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}
