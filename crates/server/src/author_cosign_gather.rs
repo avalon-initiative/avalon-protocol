@@ -13,18 +13,12 @@ use crate::cosign_gather::{self, GatherOutcome};
 use crate::cosign_verify::COSIGNATURE_FRESHNESS_WINDOW;
 use crate::nodes::PeerInfo;
 use crate::outbound_policy::OutboundPolicy;
-use crate::witness_refresh::{self, Attempt, RefreshState};
+use crate::witness_refresh::{self, refresh_after, Attempt, RefreshState};
 
 /// How often the worker looks at its own newest head.
 pub const AUTHOR_GATHER_INTERVAL: Duration = Duration::from_secs(5);
 /// Witnesses asked per tick.
 pub const MAX_ASKED_PER_TICK: usize = 16;
-
-/// A stored cosignature this old is asked for again; witnesses re-attest every third of the
-/// window, so this follows their cadence.
-fn refresh_after() -> time::Duration {
-    time::Duration::seconds((COSIGNATURE_FRESHNESS_WINDOW.as_secs() / 3) as i64)
-}
 
 /// In-memory backoff and last logged outcome per witness.
 #[derive(Debug, Default)]
@@ -55,14 +49,6 @@ pub fn select_wanted(
         .take(MAX_ASKED_PER_TICK)
         .cloned()
         .collect()
-}
-
-/// A witness that has not mirrored the head yet is a short wait, not a transport failure.
-fn attempt_for(outcome: &GatherOutcome, now: OffsetDateTime) -> Attempt {
-    match outcome {
-        GatherOutcome::BadStatus(404) => Attempt::NotAvailable,
-        other => witness_refresh::attempt_for(other, now),
-    }
 }
 
 /// One pass: fetches and stores cosignatures for this node's newest head. Returns how many were
@@ -146,10 +132,11 @@ pub async fn gather_once(
     }
     let results =
         cosign_gather::gather_own_cosignatures(policy, &wanted, &sources, &sth, own_shard_id).await;
-    let mut written = 0;
-    let mut gained: HashMap<String, OffsetDateTime> = HashMap::new();
+    // Phase 1: store what verified and is newer than what is held.
+    let mut staged: Vec<(String, Attempt, String, Option<(OffsetDateTime, String)>)> = Vec::new();
     for (key_id, outcome) in results {
-        let mut attempt = attempt_for(&outcome, now);
+        let mut attempt = witness_refresh::attempt_for(&outcome, now);
+        let mut applied = None;
         let label = match &outcome {
             GatherOutcome::Fetched(cosig) if attempt == Attempt::Ok => {
                 if held.get(&key_id).is_some_and(|at| *at >= cosig.observed_at) {
@@ -158,8 +145,7 @@ pub async fn gather_once(
                 } else {
                     match chain.store_witness_cosignature(own_shard_id, cosig).await {
                         Ok(()) => {
-                            written += 1;
-                            gained.insert(key_id.clone(), cosig.observed_at);
+                            applied = Some(cosig.clone());
                             "stored".to_string()
                         }
                         Err(err) => {
@@ -169,8 +155,46 @@ pub async fn gather_once(
                     }
                 }
             }
+            GatherOutcome::Fetched(_) => "observed_at out of range".to_string(),
             other => other.label(),
         };
+        if matches!(
+            outcome,
+            GatherOutcome::BadStatus(404) | GatherOutcome::HeadMismatch
+        ) {
+            attempt = witness_refresh::lagging_if_young(attempt, sth.created_at, now);
+        }
+        staged.push((
+            key_id,
+            attempt,
+            label,
+            applied.map(|c| (c.observed_at, c.signature)),
+        ));
+    }
+    // A store that returns Ok can still leave an older row in place (a different author
+    // timestamp), so only what reads back as written counts.
+    let now_stored = chain
+        .list_witness_cosignatures(chain.network_id(), own_shard_id, sth.tree_size)
+        .await
+        .unwrap_or_default();
+    let mut written = 0;
+    let mut gained: HashMap<String, OffsetDateTime> = HashMap::new();
+    for (key_id, mut attempt, mut label, applied) in staged {
+        if let Some((at, signature)) = applied {
+            let in_place = now_stored.iter().any(|c| {
+                c.witness_key_id == key_id
+                    && c.root_hash == sth.root_hash
+                    && c.author_created_at == sth.created_at
+                    && c.signature == signature
+            });
+            if in_place {
+                written += 1;
+                gained.insert(key_id.clone(), at);
+            } else {
+                attempt = Attempt::NotAvailable;
+                label = "not applied".to_string();
+            }
+        }
         state
             .refresh
             .backoff
@@ -374,18 +398,5 @@ mod tests {
                 "never-held witness must be asked first"
             );
         }
-    }
-
-    #[test]
-    fn a_lagging_witness_is_a_short_wait_not_a_transport_failure() {
-        let now = OffsetDateTime::now_utc();
-        assert_eq!(
-            attempt_for(&GatherOutcome::BadStatus(404), now),
-            Attempt::NotAvailable
-        );
-        assert_eq!(
-            attempt_for(&GatherOutcome::BadStatus(500), now),
-            Attempt::Transport
-        );
     }
 }

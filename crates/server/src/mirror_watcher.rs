@@ -75,7 +75,7 @@
 //! payload that is not flagged pruned is a real payload and is hashed as null.
 //! A pruned or unverified entry is never stored or projected.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
@@ -1489,33 +1489,43 @@ struct DirectoryRefresh<'a> {
     state: &'a mut crate::witness_refresh::RefreshState,
 }
 
-/// Most distinct roots refreshed for the served head when observations at its size disagree.
-const MAX_SERVED_HEAD_ROOTS: usize = 4;
-
-/// Observations of the head this node serves for `shard_id` (the one at its backfilled entry
-/// count) when that is older than `latest`, so a stalled backfill cannot age out its cosignatures.
-async fn served_head_observations(
+/// The observation of the head this node serves for `shard_id`: the one whose root equals the
+/// Merkle root of its backfilled entries, as `GET /ledger/sth/latest` recomputes it. `None` when
+/// that is the latest head itself, nothing is backfilled, or no observation matches.
+async fn served_head_observation(
     pool: &PgPool,
+    state: &mut crate::witness_refresh::RefreshState,
     shard_id: &str,
     latest: &mirror::ObservedSth,
-) -> Vec<mirror::ObservedSth> {
-    let Ok(progress) = mirror::mirrored_progress(pool, &latest.network_id, shard_id, None).await
-    else {
-        return Vec::new();
-    };
-    if progress.verified_count <= 0 || progress.verified_count >= latest.tree_size {
-        return Vec::new();
+) -> Option<mirror::ObservedSth> {
+    let network_id = &latest.network_id;
+    let count = mirror::mirrored_progress(pool, network_id, shard_id, None)
+        .await
+        .ok()?
+        .verified_count;
+    if count <= 0 || count >= latest.tree_size {
+        return None;
     }
-    let observed =
-        mirror::observations_at(pool, &latest.network_id, shard_id, progress.verified_count)
-            .await
-            .unwrap_or_default();
-    let mut roots = HashSet::new();
-    observed
-        .into_iter()
-        .filter(|o| roots.insert(o.root_hash.clone()))
-        .take(MAX_SERVED_HEAD_ROOTS)
-        .collect()
+    let key = (network_id.clone(), shard_id.to_string());
+    let root = match state.served_roots.get(&key) {
+        Some((at, root)) if *at == count => root.clone(),
+        _ => {
+            let hashes =
+                mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, count, None)
+                    .await
+                    .ok()?;
+            if (hashes.len() as i64) < count {
+                return None;
+            }
+            let root = hex::encode(merkle::mth_of_hex_hashes(&hashes).ok()?);
+            state.served_roots.insert(key, (count, root.clone()));
+            root
+        }
+    };
+    mirror::observed_sth_matching_root(pool, network_id, shard_id, count, &root, None)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Asks every known-list witness, then a bounded selection of directory witnesses outside the
@@ -1540,12 +1550,12 @@ async fn refresh_witness_cosignatures(
     };
     let mut targets = Vec::new();
     for obs in observed {
-        let served = served_head_observations(pool, shard_id, &obs).await;
+        let served = served_head_observation(pool, extra.state, shard_id, &obs).await;
         targets.push((obs, true));
-        targets.extend(served.into_iter().map(|o| (o, false)));
+        targets.extend(served.map(|o| (o, false)));
     }
-    // Only the latest head's outcome feeds backoff; an older served head a witness lacks must
-    // not delay the latest.
+    // The served head, when older than the latest, is only topped up: witnesses with a fresh
+    // stored copy are skipped, and its backoff and rotation live apart from the latest head's.
     for (obs, is_latest) in targets {
         let network_id = obs.network_id.clone();
         let sth: SignedTreeHead = obs.into();
@@ -1553,20 +1563,45 @@ async fn refresh_witness_cosignatures(
             .list_witness_cosignatures(&network_id, shard_id, sth.tree_size)
             .await
             .unwrap_or_default();
-        let mut results = cosign_gather::gather_own_cosignatures(
-            majority.policy,
-            majority.known_list,
-            majority.sources,
-            &sth,
-            shard_id,
-        )
-        .await;
         let now = OffsetDateTime::now_utc();
         let held: HashMap<String, OffsetDateTime> = stored
             .iter()
             .filter(|c| c.root_hash == sth.root_hash)
             .map(|c| (c.witness_key_id.clone(), c.observed_at))
             .collect();
+        let scope = if is_latest {
+            shard_id.to_string()
+        } else {
+            format!("{shard_id}#served")
+        };
+        let needs_refresh = |id: &str| {
+            is_latest
+                || held
+                    .get(id)
+                    .is_none_or(|at| now - *at >= crate::witness_refresh::refresh_after())
+        };
+        let known: Vec<(String, VerifyingKey)> = majority
+            .known_list
+            .iter()
+            .filter(|(id, _)| {
+                needs_refresh(id) && (is_latest || extra.state.backoff.ready(id, &scope, now))
+            })
+            .cloned()
+            .collect();
+        let mut results = cosign_gather::gather_own_cosignatures(
+            majority.policy,
+            &known,
+            majority.sources,
+            &sth,
+            shard_id,
+        )
+        .await;
+        if !is_latest {
+            for (key_id, outcome) in &results {
+                let attempt = crate::witness_refresh::attempt_for(outcome, now);
+                extra.state.backoff.record(key_id, &scope, attempt, now);
+            }
+        }
         let outside_known_list = stored
             .iter()
             .filter(|c| {
@@ -1576,9 +1611,15 @@ async fn refresh_witness_cosignatures(
                     .any(|(id, _)| *id == c.witness_key_id)
             })
             .count();
+        let candidates: Vec<crate::witness_refresh::DirectoryWitness> = extra
+            .witnesses
+            .iter()
+            .filter(|w| needs_refresh(&w.key_id))
+            .cloned()
+            .collect();
         let selected = crate::witness_refresh::select(
-            extra.witnesses,
-            shard_id,
+            &candidates,
+            &scope,
             &held,
             outside_known_list,
             extra.state,
@@ -1601,12 +1642,12 @@ async fn refresh_witness_cosignatures(
             let deliver_cap = extra.max_per_tick * crate::witness_refresh::ROW_CAP_FACTOR;
             for (key_id, outcome) in &extra_results {
                 let attempt = crate::witness_refresh::attempt_for(outcome, now);
-                extra.state.asked(key_id, shard_id, now);
+                extra.state.backoff.record(key_id, &scope, attempt, now);
                 if is_latest {
-                    extra.state.backoff.record(key_id, shard_id, attempt, now);
-                }
-                if attempt == crate::witness_refresh::Attempt::Ok {
-                    extra.state.delivered(key_id, shard_id, deliver_cap);
+                    extra.state.asked(key_id, shard_id, now);
+                    if attempt == crate::witness_refresh::Attempt::Ok {
+                        extra.state.delivered(key_id, shard_id, deliver_cap);
+                    }
                 }
             }
             results.extend(extra_results);
@@ -1625,7 +1666,7 @@ async fn refresh_witness_cosignatures(
                         .get(&witness_key_id)
                         .is_some_and(|at| *at >= cosig.observed_at)
                     {
-                        ("stored".to_string(), Some(age))
+                        ("not newer".to_string(), Some(age))
                     } else {
                         match chain.store_witness_cosignature(shard_id, cosig).await {
                             Ok(()) => ("stored".to_string(), Some(age)),
@@ -3446,6 +3487,7 @@ mod tests {
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let mut prev = avalon_chain::GENESIS_HASH.to_string();
+        let mut hashes = Vec::new();
         for seq in 1..=3i64 {
             let mut e = mirror::MirroredEntry {
                 source_url: "http://127.0.0.1:1".into(),
@@ -3466,21 +3508,36 @@ mod tests {
             };
             e.entry_hash = e.recomputed_hash().unwrap();
             prev = e.entry_hash.clone();
+            hashes.push(e.entry_hash.clone());
             mirror::insert_mirrored_entry(&pool, &e).await.unwrap();
         }
-        let heads: Vec<SignedTreeHead> = [(3i64, 1u8), (5, 2)]
+        let served_root = hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let heads: Vec<SignedTreeHead> = [(3i64, served_root), (5, hex::encode([2u8; 32]))]
             .iter()
-            .map(|(size, r)| {
-                sign_tree_head(
-                    &author,
-                    "op",
-                    *size,
-                    &hex::encode([*r; 32]),
-                    &network_id,
-                    created_at,
-                )
-            })
+            .map(|(size, root)| sign_tree_head(&author, "op", *size, root, &network_id, created_at))
             .collect();
+        // Five other sources report different roots at the served size.
+        for i in 0..5u8 {
+            let decoy = sign_tree_head(
+                &author,
+                "op",
+                3,
+                &hex::encode([0x40 + i; 32]),
+                &network_id,
+                created_at,
+            );
+            mirror::insert_observation(
+                &pool,
+                &ObservedSth::from_sth(
+                    &format!("http://127.0.0.1:{}", 2 + i),
+                    "core",
+                    &decoy,
+                    created_at,
+                ),
+            )
+            .await
+            .unwrap();
+        }
         for h in &heads {
             mirror::insert_observation(
                 &pool,
@@ -3532,7 +3589,15 @@ mod tests {
             state: &mut state,
         };
         let mut log = GatherLog::new();
-        refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, "core", &mut log).await;
+        for _ in 0..2 {
+            refresh_witness_cosignatures(&pool, &chain, &majority, &mut extra, "core", &mut log)
+                .await;
+        }
+        let requests = server.received_requests().await.unwrap();
+        let asked = |p: &str| requests.iter().filter(|r| r.url.path() == p).count();
+        // Only the observation matching the served root is asked, and not again while fresh.
+        assert_eq!(asked("/ledger/sth/3"), 1);
+        assert_eq!(asked("/ledger/sth/5"), 2);
         for size in [3i64, 5] {
             let stored = chain
                 .list_witness_cosignatures(&network_id, "core", size)

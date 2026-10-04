@@ -33,16 +33,30 @@ struct Witness {
     asked: Arc<AtomicUsize>,
 }
 
+#[derive(Clone, Default)]
+struct Opts {
+    root_override: Option<String>,
+    /// Answers 404 to this many first requests.
+    fail_first: usize,
+    /// Cosignature `observed_at` relative to now.
+    observed_offset: Option<time::Duration>,
+    /// Signs with a key other than the witness's own.
+    bad_signature: bool,
+}
+
 struct Cosigning {
     key: SigningKey,
     id: String,
     asked: Arc<AtomicUsize>,
-    root_override: Option<String>,
+    opts: Opts,
 }
 
 impl Respond for Cosigning {
     fn respond(&self, request: &Request) -> ResponseTemplate {
-        self.asked.fetch_add(1, Ordering::SeqCst);
+        let n = self.asked.fetch_add(1, Ordering::SeqCst);
+        if n < self.opts.fail_first {
+            return ResponseTemplate::new(404);
+        }
         let size: i64 = request
             .url
             .path()
@@ -54,15 +68,25 @@ impl Respond for Cosigning {
         let Some(sth) = head else {
             return ResponseTemplate::new(404);
         };
-        let root = self.root_override.clone().unwrap_or(sth.root_hash.clone());
+        let root = self
+            .opts
+            .root_override
+            .clone()
+            .unwrap_or(sth.root_hash.clone());
+        let signer = if self.opts.bad_signature {
+            SigningKey::from_bytes(&[3u8; 32])
+        } else {
+            self.key.clone()
+        };
+        let observed = OffsetDateTime::now_utc() + self.opts.observed_offset.unwrap_or_default();
         let cosig = sign_witness_cosignature(
-            &self.key,
+            &signer,
             &self.id,
             sth.tree_size,
             &root,
             &sth.network_id,
             sth.created_at,
-            OffsetDateTime::now_utc(),
+            observed,
         );
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "tree_size": sth.tree_size,
@@ -80,6 +104,14 @@ impl Respond for Cosigning {
 static HEAD: std::sync::Mutex<Option<SignedTreeHead>> = std::sync::Mutex::new(None);
 
 async fn witness(root_override: Option<String>) -> Witness {
+    witness_with(Opts {
+        root_override,
+        ..Opts::default()
+    })
+    .await
+}
+
+async fn witness_with(opts: Opts) -> Witness {
     let key = SigningKey::generate(&mut rand::rng());
     let id = hex::encode(key.verifying_key().to_bytes());
     let asked = Arc::new(AtomicUsize::new(0));
@@ -90,7 +122,7 @@ async fn witness(root_override: Option<String>) -> Witness {
             key: key.clone(),
             id: id.clone(),
             asked: asked.clone(),
-            root_override,
+            opts,
         })
         .mount(&server)
         .await;
@@ -179,21 +211,23 @@ impl Author {
         list: &[&Witness],
         state: &mut AuthorGatherState,
     ) -> usize {
+        self.gather_at(policy, list, state, OffsetDateTime::now_utc())
+            .await
+    }
+
+    async fn gather_at(
+        &self,
+        policy: OutboundPolicy,
+        list: &[&Witness],
+        state: &mut AuthorGatherState,
+        now: OffsetDateTime,
+    ) -> usize {
         let pairs: Vec<(String, VerifyingKey)> = list
             .iter()
             .map(|w| (w.id.clone(), w.key.verifying_key()))
             .collect();
         let peers: Vec<PeerInfo> = list.iter().map(|w| peer_for(w)).collect();
-        gather_once(
-            &self.chain,
-            policy,
-            &pairs,
-            &peers,
-            &self.shard,
-            state,
-            OffsetDateTime::now_utc(),
-        )
-        .await
+        gather_once(&self.chain, policy, &pairs, &peers, &self.shard, state, now).await
     }
 
     async fn stored(&self, size: i64) -> Vec<avalon_protocol::witness::WitnessCosignature> {
@@ -426,4 +460,124 @@ async fn a_known_witness_holding_the_author_key_is_not_asked() {
         a.stored(sth.tree_size).await,
         &[&same, &other]
     ));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_witness_that_404s_on_a_young_head_is_picked_up_within_seconds() {
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let w = witness_with(Opts {
+        fail_first: 1,
+        ..Opts::default()
+    })
+    .await;
+    let mut state = AuthorGatherState::default();
+    let allow = OutboundPolicy::new(true);
+    let t0 = OffsetDateTime::now_utc();
+    assert_eq!(a.gather_at(allow, &[&w], &mut state, t0).await, 0);
+    // Still inside the retry delay.
+    assert_eq!(
+        a.gather_at(allow, &[&w], &mut state, t0 + time::Duration::seconds(2))
+            .await,
+        0
+    );
+    assert_eq!(w.asked.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        a.gather_at(allow, &[&w], &mut state, t0 + time::Duration::seconds(6))
+            .await,
+        1
+    );
+    assert_eq!(a.stored(sth.tree_size).await.len(), 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn out_of_range_observed_at_is_not_stored() {
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let old = witness_with(Opts {
+        observed_offset: Some(-time::Duration::hours(1)),
+        ..Opts::default()
+    })
+    .await;
+    let future = witness_with(Opts {
+        observed_offset: Some(time::Duration::minutes(10)),
+        ..Opts::default()
+    })
+    .await;
+    let mut state = AuthorGatherState::default();
+    let n = a
+        .gather(OutboundPolicy::new(true), &[&old, &future], &mut state)
+        .await;
+    assert_eq!(n, 0);
+    assert!(a.stored(sth.tree_size).await.is_empty());
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_known_list_witness_with_a_bad_signature_is_not_stored() {
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let w = witness_with(Opts {
+        bad_signature: true,
+        ..Opts::default()
+    })
+    .await;
+    let mut state = AuthorGatherState::default();
+    assert_eq!(
+        a.gather(OutboundPolicy::new(true), &[&w], &mut state).await,
+        0
+    );
+    assert!(a.stored(sth.tree_size).await.is_empty());
+}
+
+#[tokio::test]
+#[ignore]
+async fn the_per_tick_cap_limits_how_many_witnesses_are_asked() {
+    use avalon_server::author_cosign_gather::MAX_ASKED_PER_TICK;
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let mut ws = Vec::new();
+    for _ in 0..MAX_ASKED_PER_TICK + 4 {
+        ws.push(witness(None).await);
+    }
+    let list: Vec<&Witness> = ws.iter().collect();
+    let mut state = AuthorGatherState::default();
+    let allow = OutboundPolicy::new(true);
+    assert_eq!(a.gather(allow, &list, &mut state).await, MAX_ASKED_PER_TICK);
+    let asked: usize = ws.iter().map(|w| w.asked.load(Ordering::SeqCst)).sum();
+    assert_eq!(asked, MAX_ASKED_PER_TICK);
+    assert_eq!(a.gather(allow, &list, &mut state).await, 4);
+    assert_eq!(a.stored(sth.tree_size).await.len(), MAX_ASKED_PER_TICK + 4);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_row_the_store_leaves_untouched_is_not_counted_as_written() {
+    let a = Author::new().await;
+    let sth = a.commit_and_publish().await;
+    let w = witness(None).await;
+    // Same root, different author timestamp, older: the store accepts the call but keeps this row.
+    let other = sign_witness_cosignature(
+        &w.key,
+        &w.id,
+        sth.tree_size,
+        &sth.root_hash,
+        &sth.network_id,
+        sth.created_at - time::Duration::seconds(1),
+        OffsetDateTime::now_utc() - time::Duration::seconds(300),
+    );
+    a.chain
+        .store_witness_cosignature(&a.shard, &other)
+        .await
+        .unwrap();
+    let mut state = AuthorGatherState::default();
+    assert_eq!(
+        a.gather(OutboundPolicy::new(true), &[&w], &mut state).await,
+        0
+    );
+    let stored = a.stored(sth.tree_size).await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].author_created_at, other.author_created_at);
 }
