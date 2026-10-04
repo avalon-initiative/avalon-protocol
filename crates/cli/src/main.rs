@@ -521,6 +521,21 @@ async fn rebuild_index() {
         .clone()
         .unwrap_or_else(|| "core".to_string());
 
+    if configured_shard.is_none() {
+        let unverifiable =
+            avalon_server::rebuild::count_unverifiable_creations(&chain, &own_shard_id)
+                .await
+                .expect("failed to read the ledger");
+        if unverifiable > 0 {
+            eprintln!(
+                "error: AVALON_OWN_SHARD_ID is unset (assumed `core`) and {unverifiable} identity \
+                 creations in the ledger were not made on `core`. Set AVALON_OWN_SHARD_ID to this \
+                 node's shard and run again; nothing was changed."
+            );
+            std::process::exit(1);
+        }
+    }
+
     let started = std::time::Instant::now();
     let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, &own_shard_id)
         .await
@@ -535,14 +550,6 @@ async fn rebuild_index() {
         report.entries_skipped_undecodable,
         elapsed
     );
-    if report.failed_without_own_shard(configured_shard.is_some()) {
-        eprintln!(
-            "error: {} events were refused while AVALON_OWN_SHARD_ID is unset (assumed `core`). \
-             On a node that authors another shard, set AVALON_OWN_SHARD_ID to it and rebuild again.",
-            report.events_refused
-        );
-        std::process::exit(1);
-    }
 }
 
 /// `avalon migrate-network --target-database-url <url> --target-network-id <id>`

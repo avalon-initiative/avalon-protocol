@@ -138,7 +138,7 @@ impl PostgresIndexer {
                     .await
                 {
                     Ok(()) => savepoint.commit().await?,
-                    Err(IndexError::Deferred(_)) => {
+                    Err(IndexError::Deferred(_) | IndexError::AwaitingKey(_)) => {
                         savepoint.rollback().await?;
                         deferred.push(*event);
                     }

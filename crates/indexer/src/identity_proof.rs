@@ -207,7 +207,7 @@ async fn signer_key(
     match key_state(tx, identity_id, signing_key_id).await? {
         KeyState::Active(key) => Ok(key),
         KeyState::Revoked => Err(reject(format!("{role} key is revoked"))),
-        KeyState::Unknown => Err(IndexError::Deferred(format!(
+        KeyState::Unknown => Err(IndexError::AwaitingKey(format!(
             "{role} key is not projected for this identity yet"
         ))),
     }

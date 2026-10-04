@@ -43,10 +43,14 @@ pub enum IndexError {
     /// signing key to another identity or key); it is refused, not applied.
     #[error("event rejected: {0}")]
     Rejected(String),
-    /// The event depends on state that has not arrived yet (its identity, or the key that signed
-    /// it); the same event may apply once that state is projected, so it is retried, not parked.
+    /// The event references a parent row (an identity) that is not projected yet. Later events of
+    /// the same shard must wait behind it, so the shard's order is kept.
     #[error("event deferred: {0}")]
     Deferred(String),
+    /// The key that signed the event is not projected yet (it may arrive from another shard).
+    /// Retried when it does, without holding up the shard's other events.
+    #[error("event awaiting a key: {0}")]
+    AwaitingKey(String),
     /// The display name is an identity-id lookalike or carries hidden characters.
     #[error("display_name is not permitted")]
     DisplayNameNotPermitted,
@@ -81,6 +85,11 @@ impl IndexError {
 
     /// Whether the event is waiting on state that may still arrive.
     pub fn is_deferred(&self) -> bool {
+        matches!(self, Self::Deferred(_) | Self::AwaitingKey(_))
+    }
+
+    /// Whether later events of the same shard must wait behind this one.
+    pub fn blocks_shard_order(&self) -> bool {
         matches!(self, Self::Deferred(_))
     }
 }

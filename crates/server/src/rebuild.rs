@@ -19,7 +19,9 @@
 //! `avalon-docs/architecture/disaster-recovery.md`.
 
 use avalon_chain::PostgresSettlementProvider;
+use avalon_indexer::identity_proof::{verify_created, EventOrigin};
 use avalon_indexer::postgres::PostgresIndexer;
+use avalon_protocol::events::ProtocolEvent;
 use sqlx::PgPool;
 
 /// `entries_skipped_undecodable` counts a ledger entry whose payload was
@@ -37,12 +39,38 @@ pub struct RebuildReport {
     pub entries_skipped_undecodable: usize,
 }
 
-impl RebuildReport {
-    /// Whether the rebuild must be reported as failed: events were refused while the node's own
-    /// shard was not configured, so a non-core node would have lost its own history silently.
-    pub fn failed_without_own_shard(&self, own_shard_configured: bool) -> bool {
-        !own_shard_configured && self.events_refused > 0
-    }
+/// How many `identity.created` events in `events` do not verify as created on
+/// (`network_id`, `own_shard_id`). A rebuild that assumes the wrong own shard would refuse them.
+pub fn unverifiable_creations(
+    events: &[ProtocolEvent],
+    network_id: &str,
+    own_shard_id: &str,
+) -> usize {
+    let origin = EventOrigin::local(network_id, own_shard_id);
+    events
+        .iter()
+        .filter(|e| e.kind == "identity.created")
+        .filter(|e| verify_created(e, &origin).is_err())
+        .count()
+}
+
+/// Reads the ledger and counts creations that do not verify for `own_shard_id`; run before
+/// [`rebuild_index_from_ledger`] touches anything.
+pub async fn count_unverifiable_creations(
+    chain: &PostgresSettlementProvider,
+    own_shard_id: &str,
+) -> Result<usize, avalon_chain::SettlementError> {
+    let events: Vec<ProtocolEvent> = chain
+        .list_entries()
+        .await?
+        .iter()
+        .filter_map(|entry| entry.to_protocol_event())
+        .collect();
+    Ok(unverifiable_creations(
+        &events,
+        chain.network_id(),
+        own_shard_id,
+    ))
 }
 
 /// Truncates every projection table and replays `ledger_entries` back
@@ -85,20 +113,40 @@ pub async fn rebuild_index_from_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avalon_protocol::identity_id::TestIdentity;
+    use avalon_protocol::ids::GlobalId;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
 
-    fn report(refused: usize) -> RebuildReport {
-        RebuildReport {
-            entries_read: 10,
-            events_applied: 10 - refused,
-            events_refused: refused,
-            entries_skipped_undecodable: 0,
+    fn created_on(who: &TestIdentity, network: &str, shard: &str) -> ProtocolEvent {
+        let gid = GlobalId::new("identity", &who.id.to_string(), "self", "created");
+        ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: gid.clone(),
+            subject: gid,
+            payload: serde_json::to_value(who.created_payload_for(
+                network,
+                shard,
+                Uuid::new_v4(),
+                "Ada",
+            ))
+            .unwrap(),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 2,
+            identity_chain: None,
         }
     }
 
     #[test]
-    fn refusals_without_a_configured_own_shard_fail_the_rebuild() {
-        assert!(report(2).failed_without_own_shard(false));
-        assert!(!report(0).failed_without_own_shard(false));
-        assert!(!report(2).failed_without_own_shard(true));
+    fn creations_for_another_shard_are_counted_before_a_rebuild() {
+        let (a, b) = (TestIdentity::new(), TestIdentity::new());
+        let events = vec![
+            created_on(&a, "net", "core"),
+            created_on(&b, "net", "game:slug/1"),
+        ];
+        assert_eq!(unverifiable_creations(&events, "net", "core"), 1);
+        assert_eq!(unverifiable_creations(&events, "net", "game:slug/1"), 1);
+        assert_eq!(unverifiable_creations(&events, "other", "core"), 2);
     }
 }

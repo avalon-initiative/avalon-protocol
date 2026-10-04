@@ -206,7 +206,8 @@ pub fn disambiguated_display_name(name: &str, identity_id: &IdentityId, hex_len:
 ///
 /// A name held by another identity is never taken from its holder. A local creation is refused
 /// (first come on this node's own shard); a mirrored one is stored as `name~<id prefix>`, with a
-/// longer prefix when that is taken too. Names are display only: which holder a name resolves to
+/// longer prefix when that is taken too, and finally under the id itself. Names are display
+/// only: which holder a name resolves to
 /// can differ between nodes that saw the creations in a different order.
 pub async fn apply_created(
     tx: &mut Transaction<'_, Postgres>,
@@ -254,10 +255,13 @@ pub async fn apply_created(
     let mut candidates = vec![name.to_string()];
     if !origin.local {
         candidates.extend(
-            (12..=64)
+            (12..=60)
                 .step_by(4)
                 .map(|len| disambiguated_display_name(name, &identity_id, len)),
         );
+        // The identity's own id: no ordinary name can claim it (id lookalikes are not permitted),
+        // so a creation can never be left without a name by pre-claimed candidates.
+        candidates.push(identity_id.to_string());
     }
     for candidate in candidates {
         let inserted = sqlx::query(

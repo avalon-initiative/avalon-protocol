@@ -890,3 +890,45 @@ async fn one_shards_copy_of_an_event_id_does_not_suppress_another_shards() {
         2
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn pre_claiming_every_candidate_name_cannot_keep_an_identity_out() {
+    let pool = pool().await;
+    let (holder, newcomer) = (TestIdentity::new(), TestIdentity::new());
+    let name = unique_name("squat");
+    apply(&pool, &created(&holder, HOME, &name), &game())
+        .await
+        .unwrap();
+    // Every name the newcomer could be given, claimed ahead of its creation.
+    let mut taken = Vec::new();
+    for len in (12..=60).step_by(4) {
+        taken.push(
+            avalon_indexer::projections::profiles::disambiguated_display_name(
+                &name,
+                &newcomer.id,
+                len,
+            ),
+        );
+    }
+    for candidate in &taken {
+        apply(
+            &pool,
+            &created(&TestIdentity::new(), HOME, candidate),
+            &game(),
+        )
+        .await
+        .unwrap();
+    }
+    apply(&pool, &created(&newcomer, HOME, &name), &game())
+        .await
+        .unwrap();
+    assert_eq!(
+        profile_name(&pool, &newcomer).await,
+        Some(newcomer.id.to_string())
+    );
+    // Ordinary users cannot claim an id-shaped name, so the fallback stays free.
+    assert!(!avalon_protocol::identity_id::display_name_permitted(
+        &newcomer.id.to_string()
+    ));
+}

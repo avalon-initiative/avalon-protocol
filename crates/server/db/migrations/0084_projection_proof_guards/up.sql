@@ -1,18 +1,27 @@
--- A signing key is registered once per identity: the same public key cannot reappear under a
--- new key id (which would resurrect a revoked key). Rows that already break this are collapsed
--- first, keeping a revoked one if any, else the earliest.
-DELETE FROM indexer_identity_signing_keys k
-USING (
-    SELECT ctid AS row_id FROM (
-        SELECT ctid, row_number() OVER (
-            PARTITION BY identity_id, public_key
-            ORDER BY (revoked_at IS NULL), added_at, signing_key_id
-        ) AS rank
-        FROM indexer_identity_signing_keys
-    ) ranked WHERE rank > 1
-) doomed
-WHERE k.ctid = doomed.row_id;
+-- Refuses to run over projected data: dedup claims become per shard and identity homes are
+-- recorded when a creation is projected, so a populated projection would re-apply mirrored
+-- history and refuse later key events. No backward compatibility: reset the dev database.
+SET LOCAL lock_timeout = '10s';
 
+DO $guard$
+DECLARE
+    t text;
+    found boolean;
+BEGIN
+    IF coalesce(current_setting('avalon.allow_projection_reset', true), '') = 'on' THEN
+        RETURN;
+    END IF;
+    FOREACH t IN ARRAY ARRAY['indexer_applied_events', 'mirrored_entries'] LOOP
+        EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', t) INTO found;
+        IF found THEN
+            RAISE EXCEPTION 'migration 0084 changes how projected events are claimed and where identities are homed (% is not empty). On a dev database run `make db-reset`. On any other database back it up first, then re-run with PGOPTIONS="-c avalon.allow_projection_reset=on" and rebuild the index.', t;
+        END IF;
+    END LOOP;
+END
+$guard$;
+
+-- A signing key is registered once per identity: the same public key cannot reappear under a
+-- new key id (which would resurrect a revoked key).
 CREATE UNIQUE INDEX indexer_identity_signing_keys_identity_public_key_idx
     ON indexer_identity_signing_keys (identity_id, public_key);
 
