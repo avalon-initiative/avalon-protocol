@@ -4183,6 +4183,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// An indexer for a node on `network_id` whose own shard is core.
+    fn indexer_for(pool: &PgPool, network_id: &str) -> PostgresIndexer {
+        PostgresIndexer::new(pool.clone()).with_local_origin(network_id, "core")
+    }
+
     fn mk_entry(
         network_id: &str,
         seq: i64,
@@ -4373,8 +4378,9 @@ mod tests {
     #[ignore]
     async fn replaying_children_ahead_of_identity_created_projects_completely() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
-        let entries = full_history(&fresh_network("replay"), 3);
+        let network_id = fresh_network("replay");
+        let indexer = indexer_for(&pool, &network_id);
+        let entries = full_history(&network_id, 3);
         let mut blocked = false;
         for entry in &entries {
             store_and_project(&pool, &indexer, entry, &mut blocked)
@@ -4390,8 +4396,8 @@ mod tests {
     #[ignore]
     async fn unapplied_mirrored_entries_are_reprojected() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("reproject");
+        let indexer = indexer_for(&pool, &network_id);
         let entries = full_history(&network_id, 2);
         store_entries(&pool, &entries).await;
         assert_eq!(projected_counts(&pool, &entries).await, (0, 0, 0));
@@ -4442,8 +4448,8 @@ mod tests {
     #[ignore]
     async fn a_permanently_failing_entry_is_parked_without_blocking_later_entries() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("poison");
+        let indexer = indexer_for(&pool, &network_id);
         let entries = poison_history(&network_id);
         store_entries(&pool, &entries).await;
 
@@ -4467,26 +4473,125 @@ mod tests {
         );
     }
 
-    /// A restart empties the parked set, so previously parked entries are retried.
+    /// A refused entry carries its reason in the database, so neither a restart nor a full parked
+    /// set makes a later scan pick it up again.
     #[tokio::test]
     #[ignore]
-    async fn parked_entries_are_retried_after_a_restart() {
+    async fn refused_entries_are_not_rescanned_after_a_restart_or_when_the_parked_set_is_full() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("restart");
+        let indexer = indexer_for(&pool, &network_id);
         let entries = poison_history(&network_id);
         store_entries(&pool, &entries).await;
         reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
             .unwrap();
 
+        // A restart empties the parked set; the full set case never parks at all.
         PARKED.lock().unwrap().remove(&entries[1].event_id);
         mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
-        let after_restart =
-            reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
-                .await
-                .unwrap();
-        assert_eq!(after_restart.parked, 1, "the entry must be attempted again");
+        let mut seen = Vec::new();
+        reproject_with(&pool, &network_id, mirror::CORE_SHARD_ID, |entry| {
+            seen.push(entry.event_id);
+            async { Ok(ProjectionOutcome::Applied) }
+        })
+        .await
+        .unwrap();
+        assert!(!seen.contains(&entries[1].event_id), "{seen:?}");
+    }
+
+    /// An entry waiting on state that has not arrived is retried, applies once it does, and is
+    /// refused for good after the retry bound.
+    #[tokio::test]
+    #[ignore]
+    async fn a_deferred_entry_is_retried_applies_when_its_key_arrives_and_is_bounded() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("defer");
+        let indexer = indexer_for(&pool, &network_id);
+        let who = TestIdentity::new();
+        let device = TestIdentity::new();
+        let approver = Uuid::new_v4();
+        let b64k = |k: [u8; 32]| b64(&k);
+        let grant_id = Uuid::new_v4();
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+            grant_id,
+            &who.id,
+            &device.public_key(),
+        );
+        let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
+        let created = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            who.id,
+            Some(created_payload(&who, &network_id, "defer-user")),
+        );
+        let grant = mk_entry(
+            &network_id,
+            2,
+            "identity.signing_key_added",
+            who.id,
+            Some(serde_json::json!({
+                "signing_key_id": Uuid::new_v4(), "public_key": b64k(device.public_key()),
+                "device_label": null, "approved_by_signing_key_id": approver,
+                "identity_id": who.id, "kind": "device_grant",
+                "grant_id": grant_id, "approval_signature": b64(&signature),
+            })),
+        );
+        let inception = mk_entry(
+            &network_id,
+            3,
+            "identity.signing_key_added",
+            who.id,
+            Some(serde_json::json!({
+                "signing_key_id": approver, "public_key": b64k(who.public_key()),
+                "device_label": null, "approved_by_signing_key_id": approver,
+                "identity_id": who.id, "kind": "inception",
+            })),
+        );
+        for e in [&created, &grant, &inception] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
+        }
+        for e in [&created, &grant] {
+            let mut tx = pool.begin().await.unwrap();
+            project_mirrored_entry(&mut tx, &indexer, e).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        assert_eq!(claimed(&pool, &[&grant]).await, 0);
+        assert!(
+            !is_parked(&grant.event_id),
+            "a deferred entry is not parked"
+        );
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1",
+        )
+        .bind(grant.event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason, None, "a deferred entry is not recorded as refused");
+
+        // The approving key arrives: the waiting entry is scanned again and applies.
+        mark_scan_clean(&network_id, mirror::CORE_SHARD_ID);
+        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
+        let mut tx = pool.begin().await.unwrap();
+        project_mirrored_entry(&mut tx, &indexer, &inception)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(scan_due(&network_id, mirror::CORE_SHARD_ID));
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(report.projected, 1);
+        assert_eq!(claimed(&pool, &[&grant]).await, 1);
+
+        // Without it the entry is retried up to the bound and then refused for good.
+        let never = Uuid::new_v4();
+        for _ in 0..MAX_DEFER_ATTEMPTS {
+            assert!(note_deferral(never));
+        }
+        assert!(!note_deferral(never));
     }
 
     /// A pruned-payload entry is never projected or parked, and storing one is refused.
@@ -4494,8 +4599,8 @@ mod tests {
     #[ignore]
     async fn undecodable_entries_are_skipped_not_parked() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("skipped");
+        let indexer = indexer_for(&pool, &network_id);
         let pruned = mk_entry(
             &network_id,
             1,
@@ -4532,8 +4637,8 @@ mod tests {
     #[ignore]
     async fn a_forged_creation_fails_permanently_and_leaves_the_entry_unclaimed() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("dupname");
+        let indexer = indexer_for(&pool, &network_id);
         let name = format!("dup-{}", Uuid::new_v4());
         let (a, b) = (TestIdentity::new(), TestIdentity::new());
         let first = mk_entry(
@@ -4603,7 +4708,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             (report.projected, report.parked, report.blocked),
-            (1, 1, false)
+            (1, 0, false),
+            "the refused entry is excluded from the scan"
         );
         assert_eq!(claimed(&pool, &[&after]).await, 1);
     }
@@ -4613,8 +4719,8 @@ mod tests {
     #[ignore]
     async fn an_unproven_entry_from_a_game_shard_is_stored_but_not_projected() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("gameshard");
+        let indexer = indexer_for(&pool, &network_id);
         let who = TestIdentity::new();
         let created = mk_entry(
             &network_id,
@@ -4682,8 +4788,8 @@ mod tests {
     #[ignore]
     async fn reproject_skips_self_certifying_shards() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("selfcert");
+        let indexer = indexer_for(&pool, &network_id);
         let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
         let shard =
             avalon_protocol::shard_identity::derive_self_certifying_id(&key.verifying_key());
@@ -4704,8 +4810,8 @@ mod tests {
     #[ignore]
     async fn reproject_skips_pruned_payload_entries() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("pruned");
+        let indexer = indexer_for(&pool, &network_id);
         let pruned = mk_entry(
             &network_id,
             1,
@@ -4727,8 +4833,8 @@ mod tests {
     #[ignore]
     async fn a_blocked_projection_keeps_later_entries_unapplied_so_a_revoke_stays_ordered() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let network_id = fresh_network("revoke");
+        let indexer = indexer_for(&pool, &network_id);
         let (who, passkey_id) = (TestIdentity::new(), Uuid::new_v4());
         let id = who.id;
         let created = mk_entry(
@@ -4816,9 +4922,9 @@ mod tests {
     #[ignore]
     async fn backfill_network_reprojects_only_after_the_equivocation_gate() {
         let pool = live_test_pool().await;
-        let indexer = PostgresIndexer::new(pool.clone());
         let client = crate::node_http::NodeClient::new();
         let network_id = fresh_network("wiring");
+        let indexer = indexer_for(&pool, &network_id);
         let entries = full_history(&network_id, 1);
         store_entries(&pool, &entries).await;
         let refs: Vec<&mirror::MirroredEntry> = entries.iter().collect();
