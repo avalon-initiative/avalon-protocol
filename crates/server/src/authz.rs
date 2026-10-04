@@ -452,7 +452,7 @@ mod live_tests {
             .expect("failed to seed profile");
 
         let token = format!("test-token-{}", Uuid::new_v4());
-        sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
             .bind(&token)
             .bind(identity_id)
             .bind(OffsetDateTime::now_utc() + time::Duration::hours(1))

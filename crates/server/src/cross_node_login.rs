@@ -48,6 +48,7 @@ use uuid::Uuid;
 
 use crate::auth::{generate_session_token, verify_event_signature};
 use crate::error::AppError;
+use crate::sessions::{hash_token, mint, signing_key_usable, SessionOrigin};
 use crate::state::AppState;
 use utoipa::ToSchema;
 
@@ -62,9 +63,6 @@ use utoipa::ToSchema;
 const IDENTITY_SIGNING_KEY_SHARD_ID: &str = "core";
 
 const REQUEST_TTL_MINUTES: i64 = 10;
-/// Same lifetime `device_pairing::approve_pairing` mints — a session minted
-/// through cross-node login is an ordinary session in every respect.
-const SESSION_LIFETIME_DAYS: i64 = 30;
 const POLL_MIN_INTERVAL_SECONDS: i64 = 5;
 /// Same unambiguous-glyph alphabet `device_pairing::USER_CODE_ALPHABET` uses.
 const USER_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -127,17 +125,18 @@ pub async fn start(
 
     for _ in 0..MAX_ATTEMPTS {
         let request_code = generate_session_token();
+        let request_code_hash = hex::encode(hash_token(&request_code));
         let user_code = generate_user_code();
 
         let inserted = sqlx::query(
             r#"
             INSERT INTO cross_node_login_requests
-                (request_code, user_code, status, requesting_base_url, expires_at)
+                (request_code_hash, user_code, status, requesting_base_url, expires_at)
             VALUES ($1, $2, 'pending', $3, $4)
             ON CONFLICT DO NOTHING
             "#,
         )
-        .bind(&request_code)
+        .bind(&request_code_hash)
         .bind(&user_code)
         .bind(&base_url)
         .bind(expires_at)
@@ -365,11 +364,12 @@ pub async fn poll(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<PollCrossNodeLoginResponse>, AppError> {
-    let request_code = bearer_token(&headers)?;
+    let request_code = hex::encode(hash_token(bearer_token(&headers)?));
+    let request_code = request_code.as_str();
     let now = OffsetDateTime::now_utc();
 
     let row = sqlx::query(
-        "SELECT status, expires_at, last_polled_at FROM cross_node_login_requests WHERE request_code = $1",
+        "SELECT status, expires_at, last_polled_at FROM cross_node_login_requests WHERE request_code_hash = $1",
     )
     .bind(request_code)
     .fetch_optional(&state.pool)
@@ -382,7 +382,7 @@ pub async fn poll(
 
     if status == "pending" && expires_at < now {
         sqlx::query(
-            "UPDATE cross_node_login_requests SET status = 'expired' WHERE request_code = $1 AND status = 'pending'",
+            "UPDATE cross_node_login_requests SET status = 'expired' WHERE request_code_hash = $1 AND status = 'pending'",
         )
         .bind(request_code)
         .execute(&state.pool)
@@ -395,7 +395,7 @@ pub async fn poll(
         "denied" => Ok(Json(pending_status("denied"))),
         "pending" => {
             sqlx::query(
-                "UPDATE cross_node_login_requests SET last_polled_at = $2 WHERE request_code = $1",
+                "UPDATE cross_node_login_requests SET last_polled_at = $2 WHERE request_code_hash = $1",
             )
             .bind(request_code)
             .bind(now)
@@ -409,39 +409,60 @@ pub async fn poll(
             Ok(Json(pending_status("pending")))
         }
         "approved" => {
+            if expires_at < now {
+                sqlx::query(
+                    "UPDATE cross_node_login_requests SET status = 'expired' WHERE request_code_hash = $1 AND status = 'approved'",
+                )
+                .bind(request_code)
+                .execute(&state.pool)
+                .await?;
+                return Ok(Json(pending_status("expired")));
+            }
+            let mut tx = state.pool.begin().await?;
             let consumed = sqlx::query(
                 r#"
                 UPDATE cross_node_login_requests
                 SET status = 'expired'
-                WHERE request_code = $1 AND status = 'approved'
-                RETURNING session_token
+                WHERE request_code_hash = $1 AND status = 'approved'
+                RETURNING identity_id, approved_by_signing_key_id
                 "#,
             )
             .bind(request_code)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *tx)
             .await?;
 
             let Some(consumed) = consumed else {
                 return Ok(Json(pending_status("expired")));
             };
-            let session_token: Option<String> = consumed.try_get("session_token")?;
-            let Some(session_token) = session_token else {
+            let identity_id: Option<IdentityId> = consumed.try_get("identity_id")?;
+            let Some(identity_id) = identity_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
-
-            let session_row = sqlx::query("SELECT expires_at FROM sessions WHERE token = $1")
-                .bind(&session_token)
-                .fetch_optional(&state.pool)
-                .await?;
-            let Some(session_row) = session_row else {
+            let signing_key_id: Option<Uuid> = consumed.try_get("approved_by_signing_key_id")?;
+            let Some(key_id) = signing_key_id else {
+                tx.commit().await?;
                 return Ok(Json(pending_status("expired")));
             };
-            let session_expires_at: OffsetDateTime = session_row.try_get("expires_at")?;
+            if !signing_key_usable(&mut tx, identity_id, key_id, false).await? {
+                tx.commit().await?;
+                return Ok(Json(pending_status("expired")));
+            }
+            let session = mint(
+                &mut *tx,
+                identity_id,
+                SessionOrigin {
+                    passkey_id: None,
+                    signing_key_id,
+                },
+            )
+            .await?;
+            tx.commit().await?;
 
             Ok(Json(PollCrossNodeLoginResponse {
                 status: "approved".to_string(),
-                token: Some(session_token),
-                expires_at: Some(session_expires_at),
+                token: Some(session.token),
+                expires_at: Some(session.expires_at),
             }))
         }
         other => {
@@ -827,45 +848,40 @@ pub async fn submit(
 ) -> Result<Json<SubmitGrantResponse>, AppError> {
     let identity_id = verify_grant(&state, &body.grant).await?;
 
-    let token = generate_session_token();
-    let session_expires_at = OffsetDateTime::now_utc() + Duration::days(SESSION_LIFETIME_DAYS);
-
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(&token)
-        .bind(identity_id)
-        .bind(session_expires_at)
-        .execute(&mut *tx)
-        .await?;
+    let origin = SessionOrigin {
+        passkey_id: None,
+        signing_key_id: Some(body.grant.signing_key_id),
+    };
 
     let Some(user_code) = body.user_code else {
+        let mut tx = state.pool.begin().await?;
+        if !signing_key_usable(&mut tx, identity_id, body.grant.signing_key_id, false).await? {
+            return Err(AppError::Unauthorized);
+        }
+        let session = mint(&mut *tx, identity_id, origin).await?;
         tx.commit().await?;
         return Ok(Json(SubmitGrantResponse {
-            token: Some(token),
-            expires_at: Some(session_expires_at),
+            token: Some(session.token),
+            expires_at: Some(session.expires_at),
         }));
     };
 
     let resolved = sqlx::query(
         r#"
         UPDATE cross_node_login_requests
-        SET status = 'approved', identity_id = $2, session_token = $3
+        SET status = 'approved', identity_id = $2, approved_by_signing_key_id = $3
         WHERE user_code = $1 AND status = 'pending' AND expires_at > now()
         "#,
     )
     .bind(&user_code)
     .bind(identity_id)
-    .bind(&token)
-    .execute(&mut *tx)
+    .bind(body.grant.signing_key_id)
+    .execute(&state.pool)
     .await?;
     if resolved.rows_affected() == 0 {
-        // Resolved (approved/denied/expired) by a concurrent request, or
-        // the code never matched a pending row at all — either way this
-        // freshly-minted session must not be left dangling unattached.
         return Err(AppError::CrossNodeLoginRequestNotFound);
     }
 
-    tx.commit().await?;
     Ok(Json(SubmitGrantResponse {
         token: None,
         expires_at: None,

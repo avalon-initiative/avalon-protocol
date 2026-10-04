@@ -9,8 +9,9 @@ use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_protocol::event_payloads::{
-    IdentityRecoveredPayload, IdentityRecoveryApprovedPayload, IdentityRecoveryCancelledPayload,
-    IdentityRecoveryConfiguredPayload, IdentityRecoveryRequestedPayload,
+    IdentityPasskeyRevokedPayload, IdentityRecoveredPayload, IdentityRecoveryApprovedPayload,
+    IdentityRecoveryCancelledPayload, IdentityRecoveryConfiguredPayload,
+    IdentityRecoveryRequestedPayload,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
@@ -1104,6 +1105,42 @@ pub async fn finalize_request(
     let locked_delay_ends_at: Option<OffsetDateTime> = locked.try_get("delay_ends_at")?;
     guard_can_finalize(&locked_status, locked_delay_ends_at, now)?;
 
+    // Recovery replaces the passkeys: every pre-existing one is revoked, durably, like
+    // `passkeys::revoke_passkey` does.
+    let old_passkeys: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id FOR UPDATE",
+    )
+    .bind(request.identity_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM identity_keys WHERE identity_id = $1")
+        .bind(request.identity_id)
+        .execute(&mut *tx)
+        .await?;
+    let mut revoked_events = Vec::with_capacity(old_passkeys.len());
+    for passkey_id in old_passkeys {
+        let mut event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: ProtocolEventKindVariant::IdentityPasskeyRevoked
+                .as_str()
+                .to_string(),
+            issuer: identity_ref(request.identity_id, "passkey_revoked"),
+            subject: identity_ref(request.identity_id, "passkey_revoked"),
+            payload: serde_json::to_value(IdentityPasskeyRevokedPayload {
+                passkey_id,
+                identity_id: request.identity_id,
+            })
+            .expect("IdentityPasskeyRevokedPayload should serialize"),
+            timestamp: now,
+            version: 1,
+            identity_chain: None,
+        };
+        crate::identity_chain::assign(&mut tx, &mut event).await?;
+        outbox::enqueue(&mut tx, &event).await?;
+        state.indexer.apply_in_tx(&mut tx, &event).await?;
+        revoked_events.push(event);
+    }
+
     sqlx::query(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data, label) VALUES ($1, $2, $3, $4)",
     )
@@ -1113,6 +1150,9 @@ pub async fn finalize_request(
     .bind(&pending_device_label)
     .execute(&mut *tx)
     .await?;
+
+    // Whoever held a session before recovery is exactly who recovery is meant to lock out.
+    crate::sessions::end_all_for_identity(&mut tx, request.identity_id).await?;
 
     let completed_at = now;
     sqlx::query(
@@ -1143,6 +1183,9 @@ pub async fn finalize_request(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    for event in &revoked_events {
+        state.indexer.apply_after_commit(event).await?;
+    }
 
     let approvals = approvals_count(&state, request_id).await?;
     Ok(Json(RecoveryRequestResponse {

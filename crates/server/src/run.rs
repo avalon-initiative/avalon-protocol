@@ -703,6 +703,8 @@ pub async fn run_with_tracing(
         None
     };
 
+    tokio::spawn(crate::sessions::run_prune_worker(state.clone()));
+
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs. Gateway-only:
     // guild chat archives only exist because a Gateway

@@ -32,7 +32,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
-        version = "0.11.0"
+        version = "0.12.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -140,6 +140,9 @@ use utoipa::OpenApi;
         crate::handlers::register_finish,
         crate::handlers::register_start,
         crate::handlers::session_finish,
+        crate::sessions::logout,
+        crate::sessions::list_sessions,
+        crate::sessions::revoke_session,
         crate::handlers::session_start,
         crate::handlers::update_profile,
         crate::identity_locator::get_locations,
@@ -334,6 +337,8 @@ use utoipa::OpenApi;
         crate::handlers::SessionFinishResponse,
         crate::handlers::SessionStartRequest,
         crate::handlers::SessionStartResponse,
+        crate::sessions::SessionSummary,
+        crate::sessions::ListSessionsResponse,
         crate::handlers::UpdateProfileRequest,
         crate::identity_locator::LocationsResponse,
         crate::integrator_data::DeleteInstanceRequest,

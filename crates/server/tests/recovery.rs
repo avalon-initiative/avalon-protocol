@@ -123,7 +123,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 
     let token = format!("test-token-{}", Uuid::new_v4());
     let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
-    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
         .bind(&token)
         .bind(identity_id)
         .bind(expires_at)
@@ -339,6 +339,41 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     .await
     .unwrap();
 
+    let me_status = |token: String| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            auth(http.get(format!("{base}/me")), &token)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+    assert_eq!(me_status(owner_token.clone()).await, 200);
+
+    let stale_code = format!("stale-pairing-code-{}", Uuid::new_v4());
+    // A pre-recovery passkey with a session it created, and an approved pairing nobody collected.
+    let old_passkey: Uuid = sqlx::query_scalar(
+        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) \
+         VALUES ($1, decode(md5(random()::text), 'hex'), '{}'::jsonb) RETURNING id",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO device_pairings (device_code_hash, user_code, status, identity_id, approved_by_signing_key_id, expires_at) \
+         VALUES (encode(sha256(convert_to($3::text, 'UTF8')), 'hex'), $2, 'approved', $1, gen_random_uuid(), now() + interval '1 hour')",
+    )
+    .bind(owner_id)
+    .bind(format!("T{}", &Uuid::new_v4().simple().to_string()[..7]))
+    .bind(&stale_code)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let finalized = http
         .post(format!("{base}/recovery/requests/{request_id}/finalize"))
         .send()
@@ -350,6 +385,35 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
         .await
         .unwrap();
     assert_eq!(finalized["status"], "completed");
+
+    // Completing recovery ends every session the identity held before it, and only those.
+    assert_eq!(me_status(owner_token.clone()).await, 401);
+    assert_eq!(me_status(g1_token.clone()).await, 200);
+
+    // Old credentials are gone and revoked durably; the stale approved pairing cannot be collected.
+    let old_still_there: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM identity_keys WHERE id = $1")
+            .bind(old_passkey)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(old_still_there, 0);
+    let revoked_durably: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM indexer_identity_passkey_revocations WHERE identity_id = $1 AND passkey_id = $2",
+    )
+    .bind(owner_id)
+    .bind(old_passkey)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revoked_durably, 1);
+    let poll = http
+        .post(format!("{base}/auth/device/poll"))
+        .bearer_auth(&stale_code)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(poll.status().as_u16(), 401);
 
     // The new device's passkey is now a real, ordinary login credential.
     let passkey_count: i64 =
@@ -985,4 +1049,172 @@ async fn a_guardian_can_resign_without_the_owners_cooperation() {
     // Threshold was 2 against 2 guardians; dropping to 1 guardian must clamp
     // the threshold down rather than leave an unsatisfiable 2-of-1 config.
     assert_eq!(settings["threshold"].as_i64().unwrap(), 1);
+}
+
+/// An owner with two seeded passkeys and a recovery request whose delay has elapsed.
+async fn recovery_ready_to_finalize(
+    pool: &PgPool,
+    http: &reqwest::Client,
+    base: &str,
+) -> (avalon_protocol::ids::IdentityId, String, String, Vec<Uuid>) {
+    let (owner_id, owner_token) = seed_identity_session(pool).await;
+    let (g1_id, g1_token) = seed_identity_session(pool).await;
+    let (g2_id, _g2_token) = seed_identity_session(pool).await;
+    let (g3_id, g3_token) = seed_identity_session(pool).await;
+    for guardian in [g1_id, g2_id, g3_id] {
+        seed_friendship(pool, owner_id, guardian).await;
+    }
+    configure_guardians(
+        http,
+        base,
+        pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id, g3_id],
+        2,
+    )
+    .await;
+    let mut old_passkeys = Vec::new();
+    for _ in 0..2 {
+        old_passkeys.push(
+            sqlx::query_scalar(
+                "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) \
+                 VALUES ($1, decode(md5(random()::text), 'hex'), '{}'::jsonb) RETURNING id",
+            )
+            .bind(owner_id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        );
+    }
+    let request = initiate_recovery(http, base, owner_id).await;
+    let request_id = request["id"].as_str().unwrap().to_string();
+    for token in [&g1_token, &g3_token] {
+        auth(
+            http.post(format!("{base}/recovery/requests/{request_id}/approve")),
+            token,
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    }
+    sqlx::query(
+        "UPDATE recovery_requests SET delay_ends_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(&request_id).unwrap())
+    .execute(pool)
+    .await
+    .unwrap();
+    (owner_id, owner_token, request_id, old_passkeys)
+}
+
+async fn passkey_revoked_event_count(
+    pool: &PgPool,
+    table_sql: &'static str,
+    owner_id: avalon_protocol::ids::IdentityId,
+    passkey_id: Uuid,
+) -> i64 {
+    sqlx::query_scalar(table_sql)
+        .bind(owner_id.to_string())
+        .bind(passkey_id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn finalize_emits_a_passkey_revoked_event_for_each_deleted_passkey() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (owner_id, _token, request_id, old_passkeys) =
+        recovery_ready_to_finalize(&pool, &http, &base).await;
+
+    http.post(format!("{base}/recovery/requests/{request_id}/finalize"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    for passkey_id in old_passkeys {
+        let chain = passkey_revoked_event_count(
+            &pool,
+            "SELECT COUNT(*) FROM identity_chain_events WHERE identity_id = $1 \
+             AND event->>'kind' = 'identity.passkey_revoked' AND event->'payload'->>'passkey_id' = $2",
+            owner_id,
+            passkey_id,
+        )
+        .await;
+        let outbox = passkey_revoked_event_count(
+            &pool,
+            "SELECT COUNT(*) FROM protocol_outbox WHERE event->>'kind' = 'identity.passkey_revoked' \
+             AND event->'payload'->>'identity_id' = $1 AND event->'payload'->>'passkey_id' = $2",
+            owner_id,
+            passkey_id,
+        )
+        .await;
+        assert_eq!((chain, outbox), (1, 1), "passkey {passkey_id}");
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_finalize_that_fails_after_the_passkey_delete_changes_nothing() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (owner_id, owner_token, request_id, old_passkeys) =
+        recovery_ready_to_finalize(&pool, &http, &base).await;
+
+    // Another identity already holds the credential id the recovered passkey would insert.
+    let (other_id, _) = seed_identity_session(&pool).await;
+    sqlx::query(
+        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) \
+         SELECT $1, pending_credential_id, '{}'::jsonb FROM recovery_requests WHERE id = $2",
+    )
+    .bind(other_id)
+    .bind(Uuid::parse_str(&request_id).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let finalize = http
+        .post(format!("{base}/recovery/requests/{request_id}/finalize"))
+        .send()
+        .await
+        .unwrap();
+    assert!(finalize.status().is_server_error() || finalize.status().is_client_error());
+
+    let remaining: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id")
+            .bind(owner_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let mut expected = old_passkeys.clone();
+    expected.sort();
+    assert_eq!(remaining, expected);
+    let status: String = sqlx::query_scalar("SELECT status FROM recovery_requests WHERE id = $1")
+        .bind(Uuid::parse_str(&request_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "delay");
+    let revocations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM indexer_identity_passkey_revocations WHERE identity_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revocations, 0);
+    let me = auth(http.get(format!("{base}/me")), &owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status().as_u16(), 200);
 }
