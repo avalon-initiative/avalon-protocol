@@ -4928,6 +4928,35 @@ mod tests {
         assert_eq!(claimed(&pool, &[&registered, &revoked]).await, 2);
     }
 
+    /// A scan stops after a shard's cap of waiting entries, so the newest are never touched.
+    #[tokio::test]
+    #[ignore]
+    async fn a_scan_stops_at_the_deferred_cap_and_leaves_the_newest_entries_untouched() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("cap");
+        let who = IdentityId::random_for_tests();
+        let total = MAX_DEFERRED_PER_SHARD + 5;
+        for seq in 1..=total as i64 {
+            let entry = mk_entry(
+                &network_id,
+                seq,
+                "friend.requested",
+                who,
+                Some(serde_json::json!({ "n": seq })),
+            );
+            mirror::insert_mirrored_entry(&pool, &entry).await.unwrap();
+        }
+        let mut seen = Vec::new();
+        let report = reproject_with(&pool, &network_id, mirror::CORE_SHARD_ID, |entry| {
+            seen.push(entry.seq);
+            async { Ok(ProjectionOutcome::Deferred("waiting".to_string())) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen.len(), MAX_DEFERRED_PER_SHARD, "{report:?}");
+        assert_eq!(*seen.last().unwrap(), MAX_DEFERRED_PER_SHARD as i64);
+    }
+
     /// Waiting state is per (event id, shard): a hostile copy shares nothing with the honest one.
     #[test]
     fn deferral_state_is_keyed_by_event_id_and_shard() {
