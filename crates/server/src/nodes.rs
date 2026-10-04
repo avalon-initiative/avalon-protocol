@@ -5501,6 +5501,7 @@ mod tests {
             vec![head_summary("core", 5, 1)],
         )
         .await
+        .map(|_| ())
         .unwrap();
         let sources: Vec<String> = state
             .head_gossip
