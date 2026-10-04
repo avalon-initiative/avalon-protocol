@@ -87,8 +87,8 @@ use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::sth::SignedTreeHead;
 use deferral::{
-    entry_applied, forget_waiting, holding, mark_projection_failed, mark_scan_clean, note_deferral,
-    scan_due, MAX_DEFERRED_PER_SHARD,
+    changes_keys, entry_applied, forget_waiting, holding, mark_projection_failed, mark_scan_clean,
+    note_deferral, prune_unseen, request_rescan, scan_due, MAX_DEFERRED_PER_SHARD,
 };
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
@@ -2444,6 +2444,13 @@ fn park_entry(event_id: Uuid) {
     }
 }
 
+fn unpark_entry(event_id: Uuid) {
+    PARKED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&event_id);
+}
+
 fn is_parked(event_id: &Uuid) -> bool {
     PARKED
         .lock()
@@ -2516,12 +2523,16 @@ async fn project_mirrored_entry(
         Ok(()) => {
             savepoint.commit().await.map_err(storage)?;
             set_projection_rejection(&mut **tx, entry, None).await?;
+            let identity = issuer_identity(&entry.issuer);
+            if let (true, Some(identity)) = (changes_keys(&entry.kind), identity.as_deref()) {
+                reopen_expired_waits(&mut **tx, &entry.network_id, identity).await?;
+            }
             entry_applied(
                 &entry.network_id,
                 &entry.shard_id,
                 entry.event_id,
                 &entry.kind,
-                issuer_identity(&entry.issuer).as_deref(),
+                identity.as_deref(),
             );
             Ok(ProjectionOutcome::Applied)
         }
@@ -2538,7 +2549,12 @@ async fn project_mirrored_entry(
             let mut reason = reason;
             if err.is_deferred() {
                 let ordered = err.blocks_shard_order();
-                if !(ordered && waited_too_long(&mut **tx, entry).await?) {
+                let limit = if ordered {
+                    ORDERED_EXPIRY
+                } else {
+                    KEY_WAIT_EXPIRY
+                };
+                if !waited_too_long(&mut **tx, entry, limit).await? {
                     note_deferral(
                         &entry.network_id,
                         &entry.shard_id,
@@ -2552,7 +2568,8 @@ async fn project_mirrored_entry(
                         ProjectionOutcome::Deferred(reason)
                     });
                 }
-                reason = format!("{reason}; its parent did not arrive within {ORDERED_EXPIRY:?}");
+                reason = format!("{reason}; {GAVE_UP}{limit:?}");
+                warn_gave_up(entry, &reason);
             }
             forget_waiting(&entry.network_id, &entry.shard_id, entry.event_id);
             set_projection_rejection(&mut **tx, entry, Some(&reason)).await?;
@@ -2596,12 +2613,55 @@ async fn set_projection_rejection(
 
 /// How long an entry waiting for its parent identity holds back its shard before it is refused.
 const ORDERED_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long an entry waiting for a signing key holds one of its shard's tracking slots before it
+/// is refused; longer, as the key may come from a slow shard.
+const KEY_WAIT_EXPIRY: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+/// Marks a refusal caused by a wait that ran out; such entries are reopened when the identity
+/// they concern is projected later.
+const GAVE_UP: &str = "gave up waiting after ";
 
-/// Whether the entry has been stored for longer than [`ORDERED_EXPIRY`]; measured from the row's
-/// own storage time, so it survives a restart and cannot be stretched by the entry's timestamp.
+fn warn_gave_up(entry: &mirror::MirroredEntry, reason: &str) {
+    tracing::warn!(
+        shard_id = %entry.shard_id,
+        kind = %entry.kind,
+        event_id = %entry.event_id,
+        seq = entry.seq,
+        "mirror-watcher: mirrored but not projected, a wait ran out: {reason}"
+    );
+}
+
+/// Reopens entries of the identity that were refused after a wait ran out, now that a key event
+/// of that identity is projected; they are scanned again and refused again if still unresolvable.
+async fn reopen_expired_waits(
+    exec: impl sqlx::PgExecutor<'_>,
+    network_id: &str,
+    identity: &str,
+) -> Result<(), MirrorWatcherError> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "UPDATE mirrored_entries SET projection_rejection = NULL \
+         WHERE network_id = $1 AND projection_rejection LIKE '%' || $3 || '%' \
+           AND (starts_with(issuer, $2) OR starts_with(subject, $2)) \
+         RETURNING event_id, shard_id",
+    )
+    .bind(network_id)
+    .bind(format!("identity:{identity}:"))
+    .bind(GAVE_UP)
+    .fetch_all(exec)
+    .await
+    .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    for (event_id, shard_id) in rows {
+        unpark_entry(event_id);
+        request_rescan(network_id, &shard_id);
+    }
+    Ok(())
+}
+
+/// Whether the entry has been stored for longer than `limit`; measured from the row's own storage
+/// time, so it survives a restart and cannot be stretched by the entry's timestamp.
 async fn waited_too_long(
     exec: impl sqlx::PgExecutor<'_>,
     entry: &mirror::MirroredEntry,
+    limit: Duration,
 ) -> Result<bool, MirrorWatcherError> {
     let expired: Option<bool> = sqlx::query_scalar(
         "SELECT mirrored_at < now() - make_interval(secs => $4) FROM mirrored_entries \
@@ -2610,7 +2670,7 @@ async fn waited_too_long(
     .bind(&entry.network_id)
     .bind(&entry.shard_id)
     .bind(entry.seq)
-    .bind(ORDERED_EXPIRY.as_secs_f64())
+    .bind(limit.as_secs_f64())
     .fetch_optional(exec)
     .await
     .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
@@ -2678,6 +2738,9 @@ where
     let storage = |e: sqlx::Error| avalon_chain::SettlementError::Storage(e.to_string());
     let mut cursor = 0i64;
     let mut waiting_seen = 0usize;
+    let scanned_from = std::time::Instant::now();
+    let mut tracked = std::collections::HashSet::new();
+    let mut complete = false;
     'pass: loop {
         let rows = sqlx::query(
             "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, \
@@ -2709,9 +2772,12 @@ where
             let event_id = entry.event_id;
             match holding(network_id, shard_id, event_id) {
                 Some(true) => {
-                    if waited_too_long(pool, &entry).await? {
-                        let reason = "its parent identity never arrived";
-                        set_projection_rejection(pool, &entry, Some(reason)).await?;
+                    if waited_too_long(pool, &entry, ORDERED_EXPIRY).await? {
+                        let reason = format!(
+                            "its parent identity never arrived; {GAVE_UP}{ORDERED_EXPIRY:?}"
+                        );
+                        warn_gave_up(&entry, &reason);
+                        set_projection_rejection(pool, &entry, Some(&reason)).await?;
                         forget_waiting(network_id, shard_id, event_id);
                         report.parked += 1;
                         continue;
@@ -2720,6 +2786,7 @@ where
                     return Ok(report);
                 }
                 Some(false) => {
+                    tracked.insert(event_id);
                     waiting_seen += 1;
                     if waiting_seen >= MAX_DEFERRED_PER_SHARD {
                         break 'pass;
@@ -2753,6 +2820,7 @@ where
                     return Ok(report);
                 }
                 ProjectionOutcome::Deferred(_) => {
+                    tracked.insert(event_id);
                     report.deferred += 1;
                     waiting_seen += 1;
                     if waiting_seen >= MAX_DEFERRED_PER_SHARD {
@@ -2762,8 +2830,13 @@ where
             }
         }
         if fetched < REPROJECT_BATCH {
+            complete = true;
             break;
         }
+    }
+    if complete {
+        // Waits whose stored row is gone (rolled back, pruned) would otherwise fire scans forever.
+        prune_unseen(network_id, shard_id, &tracked, scanned_from);
     }
     mark_scan_clean(network_id, shard_id);
     if report.projected > 0 {
@@ -4925,6 +4998,216 @@ mod tests {
             report.projected, 1,
             "the later entry is released: {report:?}"
         );
+    }
+
+    /// A grant waiting for its approving key, a creation, and optionally the approving key.
+    struct KeyWait {
+        created: mirror::MirroredEntry,
+        grant: mirror::MirroredEntry,
+        approver_key: mirror::MirroredEntry,
+    }
+
+    fn key_wait(network_id: &str) -> KeyWait {
+        let who = TestIdentity::new();
+        let device = TestIdentity::new();
+        let (approver, grant_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+            grant_id,
+            &who.id,
+            &device.public_key(),
+        );
+        let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
+        KeyWait {
+            created: mk_entry(
+                network_id,
+                1,
+                "identity.created",
+                who.id,
+                Some(created_payload(&who, network_id, "key-wait-user")),
+            ),
+            grant: mk_entry(
+                network_id,
+                2,
+                "identity.signing_key_added",
+                who.id,
+                Some(serde_json::json!({
+                    "signing_key_id": Uuid::new_v4(), "public_key": b64(&device.public_key()),
+                    "device_label": null, "approved_by_signing_key_id": approver,
+                    "identity_id": who.id, "kind": "device_grant",
+                    "grant_id": grant_id, "approval_signature": b64(&signature),
+                })),
+            ),
+            approver_key: mk_entry(
+                network_id,
+                3,
+                "identity.signing_key_added",
+                who.id,
+                Some(serde_json::json!({
+                    "signing_key_id": approver, "public_key": b64(&who.public_key()),
+                    "device_label": null, "approved_by_signing_key_id": approver,
+                    "identity_id": who.id, "kind": "inception",
+                })),
+            ),
+        }
+    }
+
+    async fn rejection_of(pool: &PgPool, entry: &mirror::MirroredEntry) -> Option<String> {
+        sqlx::query_scalar("SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1")
+            .bind(entry.event_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn age_entry(pool: &PgPool, entry: &mirror::MirroredEntry, hours: i32) {
+        sqlx::query(
+            "UPDATE mirrored_entries SET mirrored_at = now() - make_interval(hours => $2) \
+             WHERE event_id = $1",
+        )
+        .bind(entry.event_id)
+        .bind(hours)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// An entry stuck on a key that never arrives is refused after the key-wait expiry (not the
+    /// shorter parent one), so it cannot hold one of the shard's tracking slots forever.
+    #[tokio::test]
+    #[ignore]
+    async fn an_entry_waiting_for_a_key_is_refused_after_the_key_expiry_and_frees_its_slot() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("key-expiry");
+        let indexer = indexer_for(&pool, &network_id);
+        let w = key_wait(&network_id);
+        for e in [&w.created, &w.grant] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
+        }
+        project_entry(&pool, &indexer, &w.created).await;
+
+        // Older than the parent expiry but within the key one: still waiting.
+        age_entry(&pool, &w.grant, 25).await;
+        assert!(matches!(
+            project_entry(&pool, &indexer, &w.grant).await,
+            ProjectionOutcome::Deferred(_)
+        ));
+        assert_eq!(rejection_of(&pool, &w.grant).await, None);
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 1);
+
+        age_entry(&pool, &w.grant, 24 * 4).await;
+        assert!(matches!(
+            project_entry(&pool, &indexer, &w.grant).await,
+            ProjectionOutcome::Permanent(_)
+        ));
+        assert!(rejection_of(&pool, &w.grant)
+            .await
+            .is_some_and(|r| r.contains(GAVE_UP)));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
+    }
+
+    /// An entry refused after its wait ran out is reopened when a key event of its identity is
+    /// projected later, and then applies.
+    #[tokio::test]
+    #[ignore]
+    async fn an_entry_refused_after_its_wait_is_reopened_when_the_identity_projects_later() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("reopen");
+        let indexer = indexer_for(&pool, &network_id);
+        let w = key_wait(&network_id);
+        for e in [&w.created, &w.grant] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
+        }
+        project_entry(&pool, &indexer, &w.created).await;
+        age_entry(&pool, &w.grant, 24 * 4).await;
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(report.parked, 1, "{report:?}");
+        assert!(is_parked(&w.grant.event_id));
+        assert!(rejection_of(&pool, &w.grant).await.is_some());
+        mark_scan_clean(&network_id, mirror::CORE_SHARD_ID);
+        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
+
+        mirror::insert_mirrored_entry(&pool, &w.approver_key)
+            .await
+            .unwrap();
+        project_entry(&pool, &indexer, &w.approver_key).await;
+        assert_eq!(rejection_of(&pool, &w.grant).await, None);
+        assert!(!is_parked(&w.grant.event_id));
+        assert!(scan_due(&network_id, mirror::CORE_SHARD_ID));
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(report.projected, 1, "{report:?}");
+        assert_eq!(claimed(&pool, &[&w.grant]).await, 1);
+    }
+
+    /// A parent wait that is still tracked in memory but whose stored row is old enough is
+    /// refused by the scan itself, and stops holding the shard back.
+    #[tokio::test]
+    #[ignore]
+    async fn a_tracked_parent_wait_is_refused_by_the_scan_once_the_row_is_old_enough() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("tracked-expiry");
+        let indexer = indexer_for(&pool, &network_id);
+        let ghost = TestIdentity::new();
+        let stuck = mk_entry(
+            &network_id,
+            1,
+            "identity.passkey_registered",
+            ghost.id,
+            Some(passkey_payload(ghost.id, Uuid::new_v4())),
+        );
+        let mut blocked = false;
+        store_and_project(&pool, &indexer, &stuck, &mut blocked)
+            .await
+            .unwrap();
+        assert!(blocked);
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 1);
+        age_entry(&pool, &stuck, 25).await;
+        mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
+
+        // The wait is still tracked (its retry time is ahead), so only the scan's own check
+        // can end it.
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert!(!report.blocked && report.parked == 1, "{report:?}");
+        assert!(rejection_of(&pool, &stuck)
+            .await
+            .is_some_and(|r| r.contains(GAVE_UP)));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
+    }
+
+    /// A wait whose stored row disappears (rollback, pruning) is dropped by the next full scan
+    /// instead of firing scans forever.
+    #[tokio::test]
+    #[ignore]
+    async fn a_wait_whose_row_was_deleted_is_dropped_by_the_next_scan() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("orphan-wait");
+        let indexer = indexer_for(&pool, &network_id);
+        let w = key_wait(&network_id);
+        for e in [&w.created, &w.grant] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
+        }
+        project_entry(&pool, &indexer, &w.created).await;
+        assert!(matches!(
+            project_entry(&pool, &indexer, &w.grant).await,
+            ProjectionOutcome::Deferred(_)
+        ));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 1);
+        sqlx::query("DELETE FROM mirrored_entries WHERE event_id = $1")
+            .bind(w.grant.event_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
+        reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
+        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
     }
 
     /// An entry that ends permanently stops waiting: its slot is freed and scans stop firing.

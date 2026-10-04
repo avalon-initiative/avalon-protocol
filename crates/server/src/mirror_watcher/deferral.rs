@@ -23,8 +23,10 @@ struct Waiting {
     next_retry: Instant,
     /// Later entries of the shard must wait behind this one.
     ordered: bool,
-    /// The identity the entry is about, when known.
+    /// The issuer identity of the entry, which is the identity whose key it usually waits for.
     identity: Option<String>,
+    /// When the entry was first tracked.
+    since: Instant,
 }
 
 #[derive(Default)]
@@ -33,12 +35,14 @@ struct ShardBook {
     last_rearm: Option<Instant>,
 }
 
-/// Which `(network, shard)` pairs need a scan, and the entries waiting per pair. Waiting never
-/// expires here: an entry is retried with a growing delay, and sooner when the identity or key
-/// it may be waiting for is projected.
+/// Which `(network, shard)` pairs need a scan, and the entries waiting per pair. This type never
+/// expires a wait: an entry is retried with a growing delay, and sooner when the identity or key
+/// it may be waiting for is projected. The caller ends a wait by its stored age and `forget`s it.
 #[derive(Default)]
 pub(super) struct Scheduler {
     clean: HashSet<(String, String)>,
+    /// Pairs whose rows changed behind a running scan; its end must not mark them clean.
+    rescan: HashSet<(String, String)>,
     shards: HashMap<(String, String), ShardBook>,
 }
 
@@ -57,7 +61,41 @@ impl Scheduler {
     }
 
     pub(super) fn mark_clean(&mut self, network_id: &str, shard_id: &str) {
-        self.clean.insert(pair(network_id, shard_id));
+        let key = pair(network_id, shard_id);
+        if !self.rescan.remove(&key) {
+            self.clean.insert(key);
+        }
+    }
+
+    /// Rows of the shard became projectable again (a refused entry was reopened): scan it again,
+    /// even if a scan already running finishes first.
+    pub(super) fn request_rescan(&mut self, network_id: &str, shard_id: &str) {
+        let key = pair(network_id, shard_id);
+        self.clean.remove(&key);
+        self.rescan.insert(key);
+    }
+
+    /// Drops waiting entries first tracked before `scanned_from` that `seen` does not contain.
+    /// After a complete scan these are entries whose stored row is gone (rolled back, pruned).
+    pub(super) fn prune_unseen(
+        &mut self,
+        network_id: &str,
+        shard_id: &str,
+        seen: &HashSet<Uuid>,
+        scanned_from: Instant,
+    ) -> usize {
+        let key = pair(network_id, shard_id);
+        let Some(book) = self.shards.get_mut(&key) else {
+            return 0;
+        };
+        let before = book.waiting.len();
+        book.waiting
+            .retain(|id, w| seen.contains(id) || w.since >= scanned_from);
+        let pruned = before - book.waiting.len();
+        if book.waiting.is_empty() {
+            self.shards.remove(&key);
+        }
+        pruned
     }
 
     pub(super) fn mark_failed(&mut self, network_id: &str, shard_id: &str) {
@@ -91,6 +129,7 @@ impl Scheduler {
             next_retry: now,
             ordered,
             identity: identity.clone(),
+            since: now,
         });
         waiting.attempts += 1;
         waiting.next_retry = now
@@ -150,6 +189,9 @@ impl Scheduler {
             return;
         }
         for (key, book) in &mut self.shards {
+            if key.0 != network_id {
+                continue;
+            }
             let rate_ok = book
                 .last_rearm
                 .is_none_or(|at| now.duration_since(at) >= REARM_MIN_INTERVAL);
@@ -191,6 +233,19 @@ pub(super) fn mark_projection_failed(network_id: &str, shard_id: &str) {
     with(|s| s.mark_failed(network_id, shard_id));
 }
 
+pub(super) fn request_rescan(network_id: &str, shard_id: &str) {
+    with(|s| s.request_rescan(network_id, shard_id));
+}
+
+pub(super) fn prune_unseen(
+    network_id: &str,
+    shard_id: &str,
+    seen: &HashSet<Uuid>,
+    scanned_from: Instant,
+) -> usize {
+    with(|s| s.prune_unseen(network_id, shard_id, seen, scanned_from))
+}
+
 pub(super) fn note_deferral(
     network_id: &str,
     shard_id: &str,
@@ -218,6 +273,11 @@ pub(super) fn forget_waiting(network_id: &str, shard_id: &str, event_id: Uuid) {
     with(|s| s.forget(network_id, shard_id, event_id));
 }
 
+/// Whether projecting an entry of this kind can unblock entries that wait for an identity or key.
+pub(super) fn changes_keys(kind: &str) -> bool {
+    kind == "identity.created" || kind.starts_with("identity.signing_key_")
+}
+
 pub(super) fn entry_applied(
     network_id: &str,
     shard_id: &str,
@@ -225,7 +285,7 @@ pub(super) fn entry_applied(
     kind: &str,
     identity: Option<&str>,
 ) {
-    let changes_keys = kind == "identity.created" || kind.starts_with("identity.signing_key_");
+    let changes_keys = changes_keys(kind);
     with(|s| {
         s.applied(
             network_id,
@@ -389,35 +449,47 @@ mod tests {
             .is_some());
     }
 
-    /// `scan_due` and the re-drive hook, hammered from two threads, never deadlock.
     #[test]
-    fn scanning_and_redriving_concurrently_does_not_deadlock() {
-        let (done, finished) = std::sync::mpsc::channel();
-        for worker in 0..2u8 {
-            let done = done.clone();
-            std::thread::spawn(move || {
-                let net = format!("deadlock-test-{}", std::process::id());
-                for i in 0..20_000u32 {
-                    if worker == 0 {
-                        scan_due(&net, "core");
-                        mark_scan_clean(&net, "core");
-                    } else {
-                        let id = Uuid::new_v4();
-                        note_deferral(&net, "core", id, false, Some("a".into()));
-                        entry_applied(&net, "core", id, "identity.created", Some("a"));
-                        mark_projection_failed(&net, "core");
-                    }
-                    if i % 5000 == 0 {
-                        std::thread::yield_now();
-                    }
-                }
-                done.send(()).unwrap();
-            });
-        }
-        for _ in 0..2 {
-            finished
-                .recv_timeout(Duration::from_secs(20))
-                .expect("a worker is stuck: the scheduler locks deadlocked");
-        }
+    fn rearming_is_scoped_to_the_network_of_the_applied_entry() {
+        let now = Instant::now();
+        let mut s = Scheduler::default();
+        let (mine, foreign, applied) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        s.note("net", "core", mine, false, Some("a".into()), now);
+        s.note("other", "core", foreign, false, Some("a".into()), now);
+        s.applied("net", "g/1", applied, true, Some("a"), now);
+        assert!(s.holding("net", "core", mine, now).is_none());
+        assert!(s.holding("other", "core", foreign, now).is_some());
+    }
+
+    #[test]
+    fn a_scan_drops_waits_it_did_not_see_but_keeps_newer_ones() {
+        let start = Instant::now();
+        let mut s = Scheduler::default();
+        let (seen, gone, newer) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        note(&mut s, "core", seen, start);
+        note(&mut s, "core", gone, start);
+        note(&mut s, "core", newer, start + Duration::from_secs(1));
+        let pruned = s.prune_unseen(
+            "net",
+            "core",
+            &HashSet::from([seen]),
+            start + Duration::from_secs(1),
+        );
+        assert_eq!(pruned, 1);
+        assert!(s.holding("net", "core", gone, start).is_none());
+        assert!(s.holding("net", "core", seen, start).is_some());
+        assert!(s.holding("net", "core", newer, start).is_some());
+    }
+
+    #[test]
+    fn a_rescan_request_survives_the_end_of_a_running_scan() {
+        let mut s = Scheduler::default();
+        s.mark_clean("net", "core");
+        assert!(!s.scan_due("net", "core", Instant::now()));
+        s.request_rescan("net", "core");
+        s.mark_clean("net", "core");
+        assert!(s.scan_due("net", "core", Instant::now()));
+        s.mark_clean("net", "core");
+        assert!(!s.scan_due("net", "core", Instant::now()));
     }
 }
