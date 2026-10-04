@@ -54,23 +54,30 @@ pub fn unverifiable_creations(
         .count()
 }
 
-/// Reads the ledger and counts creations that do not verify for `own_shard_id`; run before
-/// [`rebuild_index_from_ledger`] touches anything.
-pub async fn count_unverifiable_creations(
+/// A ledger read once: its decodable events in `seq` order and how many entries were skipped.
+pub struct LedgerEvents {
+    pub entries_read: usize,
+    pub entries_skipped_undecodable: usize,
+    pub events: Vec<ProtocolEvent>,
+}
+
+pub async fn load_ledger_events(
     chain: &PostgresSettlementProvider,
-    own_shard_id: &str,
-) -> Result<usize, avalon_chain::SettlementError> {
-    let events: Vec<ProtocolEvent> = chain
-        .list_entries()
-        .await?
-        .iter()
-        .filter_map(|entry| entry.to_protocol_event())
-        .collect();
-    Ok(unverifiable_creations(
-        &events,
-        chain.network_id(),
-        own_shard_id,
-    ))
+) -> Result<LedgerEvents, avalon_chain::SettlementError> {
+    let entries = chain.list_entries().await?;
+    let mut events = Vec::with_capacity(entries.len());
+    let mut skipped = 0usize;
+    for entry in &entries {
+        match entry.to_protocol_event() {
+            Some(event) => events.push(event),
+            None => skipped += 1,
+        }
+    }
+    Ok(LedgerEvents {
+        entries_read: entries.len(),
+        entries_skipped_undecodable: skipped,
+        events,
+    })
 }
 
 /// Truncates every projection table and replays `ledger_entries` back
@@ -83,30 +90,29 @@ pub async fn rebuild_index_from_ledger(
     index_pool: &PgPool,
     own_shard_id: &str,
 ) -> Result<RebuildReport, avalon_chain::SettlementError> {
-    let entries = chain.list_entries().await?;
-    let entries_read = entries.len();
+    let ledger = load_ledger_events(chain).await?;
+    rebuild_index_from_events(chain.network_id(), index_pool, own_shard_id, ledger).await
+}
 
-    let mut events = Vec::with_capacity(entries_read);
-    let mut skipped = 0usize;
-    for entry in &entries {
-        match entry.to_protocol_event() {
-            Some(event) => events.push(event),
-            None => skipped += 1,
-        }
-    }
-
-    let indexer = PostgresIndexer::new(index_pool.clone())
-        .with_local_origin(chain.network_id(), own_shard_id);
+/// [`rebuild_index_from_ledger`] over a ledger already read.
+pub async fn rebuild_index_from_events(
+    network_id: &str,
+    index_pool: &PgPool,
+    own_shard_id: &str,
+    ledger: LedgerEvents,
+) -> Result<RebuildReport, avalon_chain::SettlementError> {
+    let indexer =
+        PostgresIndexer::new(index_pool.clone()).with_local_origin(network_id, own_shard_id);
     let outcome = indexer
-        .rebuild_from_scratch(&events)
+        .rebuild_from_scratch(&ledger.events)
         .await
         .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
 
     Ok(RebuildReport {
-        entries_read,
+        entries_read: ledger.entries_read,
         events_applied: outcome.applied,
         events_refused: outcome.refused,
-        entries_skipped_undecodable: skipped,
+        entries_skipped_undecodable: ledger.entries_skipped_undecodable,
     })
 }
 

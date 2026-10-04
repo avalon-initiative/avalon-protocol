@@ -8,13 +8,10 @@ DECLARE
     t text;
     found boolean;
 BEGIN
-    IF coalesce(current_setting('avalon.allow_projection_reset', true), '') = 'on' THEN
-        RETURN;
-    END IF;
     FOREACH t IN ARRAY ARRAY['indexer_applied_events', 'mirrored_entries'] LOOP
         EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', t) INTO found;
         IF found THEN
-            RAISE EXCEPTION 'migration 0084 changes how projected events are claimed and where identities are homed (% is not empty). On a dev database run `make db-reset`. On any other database back it up first, then re-run with PGOPTIONS="-c avalon.allow_projection_reset=on" and rebuild the index.', t;
+            RAISE EXCEPTION 'migration 0084 changes how projected events are claimed and where identities are homed (% is not empty). Reset the database (on a dev database run `make db-reset`) and start from a clean ledger.', t;
         END IF;
     END LOOP;
 END

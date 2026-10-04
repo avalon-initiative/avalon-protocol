@@ -78,7 +78,7 @@ async fn the_migration_refuses_a_database_with_projected_events() {
     .unwrap();
     assert_eq!(untouched, 0, "a refused migration changes nothing");
 
-    // Mirrored entries alone trigger it too, and the operator override lets it through.
+    // Mirrored entries alone trigger it too; there is no override.
     sqlx::query("DELETE FROM indexer_applied_events")
         .execute(&pool)
         .await
@@ -101,14 +101,6 @@ async fn the_migration_refuses_a_database_with_projected_events() {
         .unwrap_err()
         .to_string();
     assert!(refused.contains("mirrored_entries"), "{refused}");
-    let mut conn = pool.acquire().await.unwrap();
-    sqlx::query("SET avalon.allow_projection_reset = 'on'")
-        .execute(&mut *conn)
-        .await
-        .unwrap();
-    sqlx::raw_sql(up).execute(&mut *conn).await.unwrap();
-    drop(conn);
-
     pool.close().await;
     sqlx::query(AssertSqlSafe(format!("DROP SCHEMA {name} CASCADE")))
         .execute(&admin)

@@ -521,25 +521,38 @@ async fn rebuild_index() {
         .clone()
         .unwrap_or_else(|| "core".to_string());
 
-    if configured_shard.is_none() {
-        let unverifiable =
-            avalon_server::rebuild::count_unverifiable_creations(&chain, &own_shard_id)
-                .await
-                .expect("failed to read the ledger");
-        if unverifiable > 0 {
-            eprintln!(
-                "error: AVALON_OWN_SHARD_ID is unset (assumed `core`) and {unverifiable} identity \
-                 creations in the ledger were not made on `core`. Set AVALON_OWN_SHARD_ID to this \
-                 node's shard and run again; nothing was changed."
-            );
-            std::process::exit(1);
-        }
+    let ledger = avalon_server::rebuild::load_ledger_events(&chain)
+        .await
+        .expect("failed to read the ledger");
+    // Before anything is truncated: creations that do not verify for this shard would be
+    // refused, silently losing the node's own history.
+    let unverifiable = avalon_server::rebuild::unverifiable_creations(
+        &ledger.events,
+        chain.network_id(),
+        &own_shard_id,
+    );
+    if unverifiable > 0 {
+        let source = if configured_shard.is_some() {
+            "AVALON_OWN_SHARD_ID"
+        } else {
+            "AVALON_OWN_SHARD_ID is unset, so `core`"
+        };
+        eprintln!(
+            "error: {unverifiable} identity creations in the ledger were not made on `{own_shard_id}` \
+             ({source}). Set AVALON_OWN_SHARD_ID to this node's shard and run again; nothing was changed."
+        );
+        std::process::exit(1);
     }
 
     let started = std::time::Instant::now();
-    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, &own_shard_id)
-        .await
-        .expect("failed to rebuild index from ledger");
+    let report = avalon_server::rebuild::rebuild_index_from_events(
+        chain.network_id(),
+        &pool,
+        &own_shard_id,
+        ledger,
+    )
+    .await
+    .expect("failed to rebuild index from ledger");
     let elapsed = started.elapsed();
 
     println!(

@@ -86,6 +86,10 @@ use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::sth::SignedTreeHead;
+use deferral::{
+    entry_applied, forget_waiting, holding, mark_projection_failed, mark_scan_clean, note_deferral,
+    scan_due, MAX_DEFERRED_PER_SHARD,
+};
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sqlx::Acquire;
@@ -2447,152 +2451,6 @@ fn is_parked(event_id: &Uuid) -> bool {
         .contains(event_id)
 }
 
-/// `(network, shard)` pairs whose last full unapplied-entry scan was clean.
-/// A pair absent here (process start, or after any projection failure) gets a
-/// full anti-join scan; a present one does no scan work at all.
-static CLEAN_SCANS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
-> = std::sync::LazyLock::new(Default::default);
-
-fn scan_due(network_id: &str, shard_id: &str) -> bool {
-    !CLEAN_SCANS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .contains(&(network_id.to_string(), shard_id.to_string()))
-        || DEFERRALS.lock().unwrap_or_else(|e| e.into_inner()).due(
-            network_id,
-            shard_id,
-            std::time::Instant::now(),
-        )
-}
-
-fn mark_scan_clean(network_id: &str, shard_id: &str) {
-    CLEAN_SCANS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert((network_id.to_string(), shard_id.to_string()));
-}
-
-/// Most entries of one shard tracked as waiting on missing state. Entries past it are left
-/// untouched until older ones resolve, so a shard cannot make the scan costly.
-const MAX_DEFERRED_PER_SHARD: usize = 256;
-const DEFER_BACKOFF_START: Duration = Duration::from_secs(30);
-const DEFER_BACKOFF_MAX: Duration = Duration::from_secs(600);
-
-struct Waiting {
-    network_id: String,
-    attempts: u32,
-    next_retry: std::time::Instant,
-    /// Later entries of the shard must wait behind this one.
-    ordered: bool,
-}
-
-/// Entries waiting on state that has not arrived, keyed by `(event id, shard)` so one shard's
-/// copy of an event never shares another's retry state. Waiting never expires: an entry is
-/// retried with a growing delay, and at once when an identity or key is projected.
-#[derive(Default)]
-struct DeferralBook {
-    waiting: std::collections::HashMap<(Uuid, String), Waiting>,
-}
-
-impl DeferralBook {
-    fn shard_len(&self, network_id: &str, shard_id: &str) -> usize {
-        self.waiting
-            .iter()
-            .filter(|((_, s), w)| s == shard_id && w.network_id == network_id)
-            .count()
-    }
-
-    /// Records one more deferral; `false` when the shard is at its cap and the entry is left
-    /// untracked.
-    fn note(
-        &mut self,
-        event_id: Uuid,
-        network_id: &str,
-        shard_id: &str,
-        ordered: bool,
-        now: std::time::Instant,
-    ) -> bool {
-        let key = (event_id, shard_id.to_string());
-        if !self.waiting.contains_key(&key)
-            && self.shard_len(network_id, shard_id) >= MAX_DEFERRED_PER_SHARD
-        {
-            return false;
-        }
-        let waiting = self.waiting.entry(key).or_insert_with(|| Waiting {
-            network_id: network_id.to_string(),
-            attempts: 0,
-            next_retry: now,
-            ordered,
-        });
-        waiting.attempts += 1;
-        let delay = DEFER_BACKOFF_START
-            .saturating_mul(1u32 << (waiting.attempts - 1).min(10))
-            .min(DEFER_BACKOFF_MAX);
-        waiting.next_retry = now + delay;
-        waiting.ordered = ordered;
-        true
-    }
-
-    /// `Some(ordered)` while the entry waits for its retry time, `None` when it may be tried.
-    fn holding(&self, event_id: Uuid, shard_id: &str, now: std::time::Instant) -> Option<bool> {
-        let waiting = self.waiting.get(&(event_id, shard_id.to_string()))?;
-        (waiting.next_retry > now).then_some(waiting.ordered)
-    }
-
-    fn applied(&mut self, event_id: Uuid, shard_id: &str) -> bool {
-        self.waiting
-            .remove(&(event_id, shard_id.to_string()))
-            .is_some()
-    }
-
-    /// Makes every waiting entry retryable now; returns the shards that have any.
-    fn rearm(&mut self, now: std::time::Instant) -> Vec<(String, String)> {
-        let mut shards = Vec::new();
-        for ((_, shard), waiting) in &mut self.waiting {
-            waiting.next_retry = now;
-            let pair = (waiting.network_id.clone(), shard.clone());
-            if !shards.contains(&pair) {
-                shards.push(pair);
-            }
-        }
-        shards
-    }
-
-    fn due(&self, network_id: &str, shard_id: &str, now: std::time::Instant) -> bool {
-        self.waiting
-            .iter()
-            .any(|((_, s), w)| s == shard_id && w.network_id == network_id && w.next_retry <= now)
-    }
-}
-
-static DEFERRALS: std::sync::LazyLock<std::sync::Mutex<DeferralBook>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// An entry was projected. If it had been waiting, its shard is scanned again (entries past the
-/// cap may fit now); if it changed identity or key state, every waiting entry is retried now.
-fn redrive_deferred(entry: &mirror::MirroredEntry) {
-    let mut book = DEFERRALS.lock().unwrap_or_else(|e| e.into_inner());
-    let mut clean = CLEAN_SCANS.lock().unwrap_or_else(|e| e.into_inner());
-    if book.applied(entry.event_id, &entry.shard_id) {
-        clean.remove(&(entry.network_id.clone(), entry.shard_id.clone()));
-    }
-    let changes_keys =
-        entry.kind == "identity.created" || entry.kind.starts_with("identity.signing_key_");
-    if changes_keys {
-        for pair in book.rearm(std::time::Instant::now()) {
-            clean.remove(&pair);
-        }
-    }
-}
-
-fn mark_projection_failed(network_id: &str, shard_id: &str) {
-    CLEAN_SCANS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&(network_id.to_string(), shard_id.to_string()));
-}
-
 /// Stores a verified entry and, unless an earlier projection this tick is
 /// blocked, projects it in the same transaction. A blocked entry stays
 /// unapplied so the ordered re-projection applies it after its predecessors.
@@ -2646,6 +2504,7 @@ async fn project_mirrored_entry(
             "mirror-watcher: {}: event_id={} seq={} cannot be decoded (payload pruned or issuer/subject malformed) — mirrored, not applied to the local indexer",
             entry.network_id, entry.event_id, entry.seq
         );
+        forget_waiting(&entry.network_id, &entry.shard_id, entry.event_id);
         return Ok(ProjectionOutcome::Skipped);
     };
     let mut savepoint = tx.begin().await.map_err(storage)?;
@@ -2656,8 +2515,14 @@ async fn project_mirrored_entry(
     {
         Ok(()) => {
             savepoint.commit().await.map_err(storage)?;
-            set_projection_rejection(tx, entry, None).await?;
-            redrive_deferred(entry);
+            set_projection_rejection(&mut **tx, entry, None).await?;
+            entry_applied(
+                &entry.network_id,
+                &entry.shard_id,
+                entry.event_id,
+                &entry.kind,
+                issuer_identity(&entry.issuer).as_deref(),
+            );
             Ok(ProjectionOutcome::Applied)
         }
         Err(err) => {
@@ -2670,22 +2535,27 @@ async fn project_mirrored_entry(
                 );
                 return Ok(ProjectionOutcome::Transient(reason));
             }
+            let mut reason = reason;
             if err.is_deferred() {
                 let ordered = err.blocks_shard_order();
-                DEFERRALS.lock().unwrap_or_else(|e| e.into_inner()).note(
-                    entry.event_id,
-                    &entry.network_id,
-                    &entry.shard_id,
-                    ordered,
-                    std::time::Instant::now(),
-                );
-                return Ok(if ordered {
-                    ProjectionOutcome::Ordered(reason)
-                } else {
-                    ProjectionOutcome::Deferred(reason)
-                });
+                if !(ordered && waited_too_long(&mut **tx, entry).await?) {
+                    note_deferral(
+                        &entry.network_id,
+                        &entry.shard_id,
+                        entry.event_id,
+                        ordered,
+                        issuer_identity(&entry.issuer),
+                    );
+                    return Ok(if ordered {
+                        ProjectionOutcome::Ordered(reason)
+                    } else {
+                        ProjectionOutcome::Deferred(reason)
+                    });
+                }
+                reason = format!("{reason}; its parent did not arrive within {ORDERED_EXPIRY:?}");
             }
-            set_projection_rejection(tx, entry, Some(&reason)).await?;
+            forget_waiting(&entry.network_id, &entry.shard_id, entry.event_id);
+            set_projection_rejection(&mut **tx, entry, Some(&reason)).await?;
             let key = format!("projection-rejected:{}:{}", entry.shard_id, entry.kind);
             if let Some(held_back) = permit_log(&key) {
                 tracing::warn!(
@@ -2705,7 +2575,7 @@ async fn project_mirrored_entry(
 /// Records why an entry was not projected (`None` clears a previous reason), so an operator can
 /// list refused entries from `mirrored_entries`.
 async fn set_projection_rejection(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    exec: impl sqlx::PgExecutor<'_>,
     entry: &mirror::MirroredEntry,
     reason: Option<&str>,
 ) -> Result<(), MirrorWatcherError> {
@@ -2718,10 +2588,39 @@ async fn set_projection_rejection(
     .bind(&entry.shard_id)
     .bind(entry.seq)
     .bind(reason)
-    .execute(&mut **tx)
+    .execute(exec)
     .await
     .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
     Ok(())
+}
+
+/// How long an entry waiting for its parent identity holds back its shard before it is refused.
+const ORDERED_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether the entry has been stored for longer than [`ORDERED_EXPIRY`]; measured from the row's
+/// own storage time, so it survives a restart and cannot be stretched by the entry's timestamp.
+async fn waited_too_long(
+    exec: impl sqlx::PgExecutor<'_>,
+    entry: &mirror::MirroredEntry,
+) -> Result<bool, MirrorWatcherError> {
+    let expired: Option<bool> = sqlx::query_scalar(
+        "SELECT mirrored_at < now() - make_interval(secs => $4) FROM mirrored_entries \
+         WHERE network_id = $1 AND shard_id = $2 AND seq = $3",
+    )
+    .bind(&entry.network_id)
+    .bind(&entry.shard_id)
+    .bind(entry.seq)
+    .bind(ORDERED_EXPIRY.as_secs_f64())
+    .fetch_optional(exec)
+    .await
+    .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    Ok(expired.unwrap_or(false))
+}
+
+/// The identity id embedded in an `identity:<id>:...` global id string.
+fn issuer_identity(issuer: &str) -> Option<String> {
+    let mut parts = issuer.splitn(3, ':');
+    (parts.next()? == "identity").then(|| parts.next().map(str::to_string))?
 }
 
 const REPROJECT_BATCH: i64 = 500;
@@ -2808,13 +2707,15 @@ where
                 continue;
             }
             let event_id = entry.event_id;
-            let holding = DEFERRALS.lock().unwrap_or_else(|e| e.into_inner()).holding(
-                event_id,
-                shard_id,
-                std::time::Instant::now(),
-            );
-            match holding {
+            match holding(network_id, shard_id, event_id) {
                 Some(true) => {
+                    if waited_too_long(pool, &entry).await? {
+                        let reason = "its parent identity never arrived";
+                        set_projection_rejection(pool, &entry, Some(reason)).await?;
+                        forget_waiting(network_id, shard_id, event_id);
+                        report.parked += 1;
+                        continue;
+                    }
                     report.blocked = true;
                     return Ok(report);
                 }
@@ -2969,6 +2870,7 @@ async fn fetch_inclusion_proof(
 #[cfg(test)]
 mod p2p_source_tests;
 
+mod deferral;
 #[cfg(test)]
 mod entry_binding_tests;
 
@@ -4957,69 +4859,136 @@ mod tests {
         assert_eq!(*seen.last().unwrap(), MAX_DEFERRED_PER_SHARD as i64);
     }
 
-    /// Waiting state is per (event id, shard): a hostile copy shares nothing with the honest one.
-    #[test]
-    fn deferral_state_is_keyed_by_event_id_and_shard() {
-        let now = std::time::Instant::now();
-        let mut book = DeferralBook::default();
-        let id = Uuid::new_v4();
-        for _ in 0..8 {
-            assert!(book.note(id, "net", "game:evil/1", false, now));
-        }
-        // The honest copy starts from its own first attempt (30s), not the hostile one's backoff.
-        assert!(book.note(id, "net", "core", false, now));
-        let honest = book.waiting.get(&(id, "core".to_string())).unwrap();
-        assert_eq!(honest.attempts, 1);
-        assert_eq!(honest.next_retry, now + DEFER_BACKOFF_START);
-        // Projecting the honest copy leaves the hostile copy's wait in place.
-        assert!(book.applied(id, "core"));
-        assert!(book.holding(id, "game:evil/1", now).is_some());
-        assert!(!book.applied(id, "core"));
-    }
-
-    #[test]
-    fn deferral_waits_back_off_without_expiring_and_rearm_makes_them_due() {
-        let now = std::time::Instant::now();
-        let mut book = DeferralBook::default();
-        let id = Uuid::new_v4();
-        let mut last = Duration::ZERO;
-        for _ in 0..40 {
-            book.note(id, "net", "core", false, now);
-            let delay = book.waiting[&(id, "core".to_string())].next_retry - now;
-            assert!(delay >= last && delay <= DEFER_BACKOFF_MAX);
-            last = delay;
-        }
-        assert_eq!(last, DEFER_BACKOFF_MAX);
-        assert!(book.holding(id, "core", now).is_some());
-        assert!(!book.due("net", "core", now));
-        assert_eq!(
-            book.rearm(now),
-            vec![("net".to_string(), "core".to_string())]
+    /// An entry stuck on a missing parent identity is refused, with its reason recorded, after
+    /// the expiry, and then stops holding back its shard. The age comes from the stored row.
+    #[tokio::test]
+    #[ignore]
+    async fn an_entry_waiting_for_a_parent_is_refused_after_the_expiry_and_releases_the_shard() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("expiry");
+        let indexer = indexer_for(&pool, &network_id);
+        let ghost = TestIdentity::new();
+        let stuck = mk_entry(
+            &network_id,
+            1,
+            "identity.passkey_registered",
+            ghost.id,
+            Some(passkey_payload(ghost.id, Uuid::new_v4())),
         );
-        assert!(book.holding(id, "core", now).is_none());
-        assert!(book.due("net", "core", now));
+        let after = mk_entry(
+            &network_id,
+            2,
+            "identity.passkey_revoked",
+            ghost.id,
+            Some(serde_json::json!({ "passkey_id": Uuid::new_v4(), "identity_id": ghost.id })),
+        );
+        store_entries(&pool, &[stuck, after]).await;
+        let stuck_id: Uuid = sqlx::query_scalar(
+            "SELECT event_id FROM mirrored_entries WHERE network_id = $1 AND seq = 1",
+        )
+        .bind(&network_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Recent: it holds the shard back.
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert!(report.blocked, "{report:?}");
+
+        // Stored long ago (a restart forgets the in-memory wait; the row's age still counts).
+        sqlx::query(
+            "UPDATE mirrored_entries SET mirrored_at = now() - interval '25 hours' \
+             WHERE network_id = $1 AND seq = 1",
+        )
+        .bind(&network_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        forget_waiting(&network_id, mirror::CORE_SHARD_ID, stuck_id);
+        mark_projection_failed(&network_id, mirror::CORE_SHARD_ID);
+        let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
+            .await
+            .unwrap();
+        assert!(!report.blocked && report.parked >= 1, "{report:?}");
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1",
+        )
+        .bind(stuck_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(reason.is_some_and(|r| r.contains("parent")));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
+        assert_eq!(report.projected, 1, "the later entry is released: {report:?}");
     }
 
-    #[test]
-    fn a_shard_at_its_cap_leaves_its_newest_deferred_entries_untracked() {
-        let now = std::time::Instant::now();
-        let mut book = DeferralBook::default();
-        let ids: Vec<Uuid> = (0..=MAX_DEFERRED_PER_SHARD)
-            .map(|_| Uuid::new_v4())
-            .collect();
-        for id in &ids[..MAX_DEFERRED_PER_SHARD] {
-            assert!(book.note(*id, "net", "game:x/1", false, now));
+    /// An entry that ends permanently stops waiting: its slot is freed and scans stop firing.
+    #[tokio::test]
+    #[ignore]
+    async fn an_entry_that_ends_permanently_leaves_the_waiting_set() {
+        let pool = live_test_pool().await;
+        let network_id = fresh_network("leak");
+        let indexer = indexer_for(&pool, &network_id);
+        let who = TestIdentity::new();
+        let (inception, device_key) = (Uuid::new_v4(), Uuid::new_v4());
+        let device = TestIdentity::new();
+        let grant_id = Uuid::new_v4();
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+            grant_id,
+            &who.id,
+            &device.public_key(),
+        );
+        let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
+        let created = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            who.id,
+            Some(created_payload(&who, &network_id, "leak-user")),
+        );
+        let grant = mk_entry(
+            &network_id,
+            2,
+            "identity.signing_key_added",
+            who.id,
+            Some(serde_json::json!({
+                "signing_key_id": device_key, "public_key": b64(&device.public_key()),
+                "device_label": null, "approved_by_signing_key_id": inception,
+                "identity_id": who.id, "kind": "device_grant",
+                "grant_id": grant_id, "approval_signature": b64(&signature),
+            })),
+        );
+        for e in [&created, &grant] {
+            mirror::insert_mirrored_entry(&pool, e).await.unwrap();
         }
-        let newest = ids[MAX_DEFERRED_PER_SHARD];
-        assert!(!book.note(newest, "net", "game:x/1", false, now));
-        assert!(book.holding(newest, "game:x/1", now).is_none());
-        // Another shard has its own budget, and a tracked entry keeps its slot.
-        assert!(book.note(newest, "net", "core", false, now));
-        assert!(book.note(ids[0], "net", "game:x/1", false, now));
-        assert_eq!(book.shard_len("net", "game:x/1"), MAX_DEFERRED_PER_SHARD);
-        // A slot frees when an older entry applies.
-        assert!(book.applied(ids[1], "game:x/1"));
-        assert!(book.note(newest, "net", "game:x/1", false, now));
+        project_entry(&pool, &indexer, &created).await;
+        assert!(matches!(
+            project_entry(&pool, &indexer, &grant).await,
+            ProjectionOutcome::Deferred(_)
+        ));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 1);
+
+        // The approving key shows up already revoked: the entry is refused for good.
+        sqlx::query(
+            "INSERT INTO indexer_identity_signing_keys \
+             (signing_key_id, identity_id, public_key, added_at, revoked_at) \
+             VALUES ($1, $2, $3, now(), now())",
+        )
+        .bind(inception)
+        .bind(who.id)
+        .bind(who.public_key().to_vec())
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            project_entry(&pool, &indexer, &grant).await,
+            ProjectionOutcome::Permanent(_)
+        ));
+        assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
+        mark_scan_clean(&network_id, mirror::CORE_SHARD_ID);
+        assert!(!scan_due(&network_id, mirror::CORE_SHARD_ID));
     }
 
     /// A pruned-payload entry is never projected or parked, and storing one is refused.
