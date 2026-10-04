@@ -4528,6 +4528,25 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(claimed(&pool, &[&first]).await, 1);
         assert_eq!(claimed(&pool, &[&second]).await, 0);
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1",
+        )
+        .bind(second.event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            reason.is_some_and(|r| r.contains("signature")),
+            "the refusal reason is recorded"
+        );
+        let first_reason: Option<String> = sqlx::query_scalar(
+            "SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1",
+        )
+        .bind(first.event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(first_reason, None);
 
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
@@ -4537,6 +4556,47 @@ mod tests {
             (1, 1, false)
         );
         assert_eq!(claimed(&pool, &[&after]).await, 1);
+    }
+
+    /// An entry mirrored from a non-core shard that carries no proof is stored but not projected.
+    #[tokio::test]
+    #[ignore]
+    async fn an_unproven_entry_from_a_game_shard_is_stored_but_not_projected() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let network_id = fresh_network("gameshard");
+        let who = TestIdentity::new();
+        let created = mk_entry(
+            &network_id,
+            1,
+            "identity.created",
+            who.id,
+            Some(created_payload(&who, &network_id, "gameshard-user")),
+        );
+        let mut passkey = mk_entry(
+            &network_id,
+            2,
+            "identity.passkey_registered",
+            who.id,
+            Some(passkey_payload(who.id, Uuid::new_v4())),
+        );
+        passkey.shard_id = "game:slug/1".to_string();
+        let mut blocked = false;
+        for e in [&created, &passkey] {
+            store_and_project(&pool, &indexer, e, &mut blocked)
+                .await
+                .unwrap();
+        }
+        assert_eq!(claimed(&pool, &[&created]).await, 1);
+        assert_eq!(claimed(&pool, &[&passkey]).await, 0);
+        let reason: Option<String> = sqlx::query_scalar(
+            "SELECT projection_rejection FROM mirrored_entries WHERE event_id = $1",
+        )
+        .bind(passkey.event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(reason.is_some_and(|r| r.contains("carries no proof")));
     }
 
     /// A transient failure stops the pass at that entry and keeps the scan due.
