@@ -116,9 +116,9 @@ async fn the_signer_column_is_required_on_a_fresh_database() {
 #[ignore]
 async fn the_migration_applies_to_populated_replicas_and_leaves_old_rows_undeletable() {
     let s = Scratch::new("populated").await;
-    // The identity-id migration sits above the signer one; revert both, then replay the signer
-    // migration's own SQL against the populated tables.
-    for _ in 0..2 {
+    // The projection-guard and identity-id migrations sit above the signer one; revert all three,
+    // then replay the signer migration's own SQL against the populated tables.
+    for _ in 0..3 {
         migrate::migrate_down_one(&s.pool, MigrationSource::Embedded)
             .await
             .unwrap();

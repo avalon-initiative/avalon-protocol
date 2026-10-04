@@ -137,12 +137,9 @@ pub async fn apply(
             identity_id,
             revoked_at,
         } => {
-            // Every row holding the revoked key's public key is revoked with it.
             sqlx::query(
                 "UPDATE indexer_identity_signing_keys SET revoked_at = $3 \
-                 WHERE identity_id = $2 AND revoked_at IS NULL AND (signing_key_id = $1 OR \
-                       public_key = (SELECT public_key FROM indexer_identity_signing_keys \
-                                     WHERE identity_id = $2 AND signing_key_id = $1))",
+                 WHERE signing_key_id = $1 AND identity_id = $2 AND revoked_at IS NULL",
             )
             .bind(signing_key_id)
             .bind(identity_id)

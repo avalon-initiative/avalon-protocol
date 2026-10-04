@@ -491,7 +491,7 @@ async fn an_early_passkey_revocation_sticks_and_a_repeat_keeps_the_first_time() 
         .apply(&event(
             "identity.passkey_registered",
             serde_json::json!({
-                "passkey_id": passkey_id, "identity_id": a.id, "credential_id": "AAAA",
+                "passkey_id": passkey_id, "identity_id": a.id, "credential_id": b64(Uuid::new_v4().as_bytes()),
                 "passkey_data": {"k": 1}, "label": null,
             }),
             at(50),

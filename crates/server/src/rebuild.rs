@@ -43,6 +43,7 @@ pub struct RebuildReport {
 pub async fn rebuild_index_from_ledger(
     chain: &PostgresSettlementProvider,
     index_pool: &PgPool,
+    own_shard_id: &str,
 ) -> Result<RebuildReport, avalon_chain::SettlementError> {
     let entries = chain.list_entries().await?;
     let entries_read = entries.len();
@@ -56,7 +57,8 @@ pub async fn rebuild_index_from_ledger(
         }
     }
 
-    let indexer = PostgresIndexer::new(index_pool.clone());
+    let indexer = PostgresIndexer::new(index_pool.clone())
+        .with_local_origin(chain.network_id(), own_shard_id);
     let events_applied = indexer
         .rebuild_from_scratch(&events)
         .await

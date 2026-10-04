@@ -40,10 +40,8 @@ async fn apply(
     let result = PostgresIndexer::new(pool.clone())
         .apply_in_tx_from(&mut tx, event, origin)
         .await;
-    match &result {
-        Ok(()) => tx.commit().await.unwrap(),
-        Err(_) => tx.rollback().await.unwrap(),
-    }
+    // Commits even after a refusal: the refused event must have left nothing in the transaction.
+    tx.commit().await.unwrap();
     result
 }
 
@@ -303,6 +301,10 @@ async fn keys_are_added_only_with_proof_from_an_active_key_of_the_identity() {
         .unwrap()
         .remove("approval_signature");
     assert!(apply(&pool, &unsigned, &game()).await.is_err());
+    // The pre-v2 shape is refused outright.
+    let mut v1 = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    v1.version = 1;
+    assert!(apply(&pool, &v1, &game()).await.is_err());
     // A recovery-kind key carries no proof.
     let mut recovery = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
     recovery.payload["kind"] = serde_json::json!("recovery");

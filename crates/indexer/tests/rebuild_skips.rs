@@ -28,7 +28,8 @@ fn created(who: &TestIdentity, name: &str) -> ProtocolEvent {
 async fn a_taken_or_lookalike_name_is_skipped_and_leaves_no_orphan_identity() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new().connect(&url).await.unwrap();
-    let indexer = PostgresIndexer::new(pool.clone());
+    let indexer =
+        PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core");
     let (first, second, third) = (
         TestIdentity::new(),
         TestIdentity::new(),

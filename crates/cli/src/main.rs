@@ -516,9 +516,10 @@ async fn rebuild_index() {
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
     let chain = PostgresSettlementProvider::new(pool.clone(), network_id);
+    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
 
     let started = std::time::Instant::now();
-    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, &own_shard_id)
         .await
         .expect("failed to rebuild index from ledger");
     let elapsed = started.elapsed();

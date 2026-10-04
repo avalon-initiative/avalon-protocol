@@ -359,6 +359,29 @@ mod tests {
     }
 
     #[test]
+    fn a_creation_signed_by_a_key_that_does_not_derive_the_id_is_refused() {
+        use ed25519_dalek::Signer as _;
+        let victim = TestIdentity::new();
+        let attacker = TestIdentity::new();
+        // The attacker signs, with their own key, bytes that name the victim's id.
+        let ticket = Uuid::new_v4();
+        let bytes = identity_created_signing_bytes_v2(
+            TEST_NETWORK_ID,
+            TEST_SHARD_ID,
+            ticket,
+            &victim.id,
+            &attacker.public_key(),
+            "Ada",
+        );
+        let mut payload = victim.created_payload("Ada");
+        payload.ticket_id = ticket;
+        payload.public_key = BASE64.encode(attacker.public_key());
+        payload.signature = BASE64.encode(attacker.signing_key.sign(&bytes).to_bytes());
+        let err = verify_created(&created_event(&victim, payload), &origin()).unwrap_err();
+        assert!(err.to_string().contains("not derived"), "{err}");
+    }
+
+    #[test]
     fn a_creation_whose_envelope_names_another_identity_is_refused() {
         let who = TestIdentity::new();
         let victim = TestIdentity::new();
