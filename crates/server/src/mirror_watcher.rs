@@ -4921,7 +4921,10 @@ mod tests {
         .unwrap();
         assert!(reason.is_some_and(|r| r.contains("parent")));
         assert_eq!(deferral::waiting_len(&network_id, mirror::CORE_SHARD_ID), 0);
-        assert_eq!(report.projected, 1, "the later entry is released: {report:?}");
+        assert_eq!(
+            report.projected, 1,
+            "the later entry is released: {report:?}"
+        );
     }
 
     /// An entry that ends permanently stops waiting: its slot is freed and scans stop firing.
