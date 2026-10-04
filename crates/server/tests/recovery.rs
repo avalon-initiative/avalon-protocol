@@ -339,6 +339,20 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     .await
     .unwrap();
 
+    let me_status = |token: String| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            auth(http.get(format!("{base}/me")), &token)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+    assert_eq!(me_status(owner_token.clone()).await, 200);
+
     let finalized = http
         .post(format!("{base}/recovery/requests/{request_id}/finalize"))
         .send()
@@ -350,6 +364,10 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
         .await
         .unwrap();
     assert_eq!(finalized["status"], "completed");
+
+    // Completing recovery ends every session the identity held before it, and only those.
+    assert_eq!(me_status(owner_token.clone()).await, 401);
+    assert_eq!(me_status(g1_token.clone()).await, 200);
 
     // The new device's passkey is now a real, ordinary login credential.
     let passkey_count: i64 =
