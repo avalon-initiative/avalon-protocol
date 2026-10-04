@@ -13,7 +13,7 @@ use crate::cosign_gather::{self, GatherOutcome};
 use crate::cosign_verify::COSIGNATURE_FRESHNESS_WINDOW;
 use crate::nodes::PeerInfo;
 use crate::outbound_policy::OutboundPolicy;
-use crate::witness_refresh::{self, Attempt, Backoff};
+use crate::witness_refresh::{self, Attempt, RefreshState};
 
 /// How often the worker looks at its own newest head.
 pub const AUTHOR_GATHER_INTERVAL: Duration = Duration::from_secs(5);
@@ -29,7 +29,7 @@ fn refresh_after() -> time::Duration {
 /// In-memory backoff and last logged outcome per witness.
 #[derive(Debug, Default)]
 pub struct AuthorGatherState {
-    backoff: Backoff,
+    refresh: RefreshState,
     last_outcome: HashMap<String, String>,
 }
 
@@ -46,7 +46,7 @@ pub fn select_wanted(
     let mut wanted: Vec<&(String, VerifyingKey)> = known_list
         .iter()
         .filter(|(id, _)| sources.iter().any(|s| s.key_id == *id))
-        .filter(|(id, _)| state.backoff.ready(id, shard_id, now))
+        .filter(|(id, _)| state.refresh.backoff.ready(id, shard_id, now))
         .filter(|(id, _)| held.get(id).is_none_or(|at| now - *at >= refresh_after()))
         .collect();
     wanted.sort_by(|a, b| held.get(&a.0).cmp(&held.get(&b.0)).then(a.0.cmp(&b.0)));
@@ -105,14 +105,49 @@ pub async fn gather_once(
         .filter(|(_, key)| !avalon_protocol::sth::verify_tree_head(key, &sth))
         .cloned()
         .collect();
-    let sources = cosign_gather::witness_sources(&others, peers);
-    let wanted = select_wanted(&others, &sources, &held, state, own_shard_id, now);
+    let mut sources = cosign_gather::witness_sources(&others, peers);
+    let mut wanted = select_wanted(&others, &sources, &held, state, own_shard_id, now);
+    // Witnesses known from the peer directory but not yet in the confirmed known list (a new
+    // node's list stays short through probation) are asked too, within the mirror-side caps.
+    let max_extra = witness_refresh::max_per_tick_from_env();
+    let directory_cap = max_extra * witness_refresh::ROW_CAP_FACTOR;
+    let directory: Vec<_> = witness_refresh::directory_witnesses(peers, known_list, None, now)
+        .into_iter()
+        .filter(|w| !avalon_protocol::sth::verify_tree_head(&w.key, &sth))
+        .filter(|w| {
+            held.get(&w.key_id)
+                .is_none_or(|at| now - *at >= refresh_after())
+        })
+        .collect();
+    let outside_known_list = stored
+        .iter()
+        .filter(|c| !known_list.iter().any(|(id, _)| *id == c.witness_key_id))
+        .count();
+    let held_directory: HashMap<String, OffsetDateTime> = held
+        .iter()
+        .filter(|(id, _)| !known_list.iter().any(|(k, _)| k == *id))
+        .map(|(id, at)| (id.clone(), *at))
+        .collect();
+    for w in witness_refresh::select(
+        &directory,
+        own_shard_id,
+        &held_directory,
+        outside_known_list,
+        &state.refresh,
+        max_extra,
+        now,
+    ) {
+        wanted.push((w.key_id.clone(), w.key));
+        sources.push(w.source());
+    }
     if wanted.is_empty() {
+        report_shortfall(state, known_list, &sth, &held, &HashMap::new(), now);
         return 0;
     }
     let results =
         cosign_gather::gather_own_cosignatures(policy, &wanted, &sources, &sth, own_shard_id).await;
     let mut written = 0;
+    let mut gained: HashMap<String, OffsetDateTime> = HashMap::new();
     for (key_id, outcome) in results {
         let mut attempt = attempt_for(&outcome, now);
         let label = match &outcome {
@@ -124,6 +159,7 @@ pub async fn gather_once(
                     match chain.store_witness_cosignature(own_shard_id, cosig).await {
                         Ok(()) => {
                             written += 1;
+                            gained.insert(key_id.clone(), cosig.observed_at);
                             "stored".to_string()
                         }
                         Err(err) => {
@@ -135,7 +171,16 @@ pub async fn gather_once(
             }
             other => other.label(),
         };
-        state.backoff.record(&key_id, own_shard_id, attempt, now);
+        state
+            .refresh
+            .backoff
+            .record(&key_id, own_shard_id, attempt, now);
+        state.refresh.asked(&key_id, own_shard_id, now);
+        if attempt == Attempt::Ok {
+            state
+                .refresh
+                .delivered(&key_id, own_shard_id, directory_cap);
+        }
         if state.last_outcome.get(&key_id) != Some(&label) {
             tracing::info!(
                 shard_id = own_shard_id,
@@ -150,7 +195,54 @@ pub async fn gather_once(
             state.last_outcome.insert(key_id, label);
         }
     }
+    report_shortfall(state, known_list, &sth, &held, &gained, now);
     written
+}
+
+/// Logs (on change only) when the stored fresh cosignatures for the head fall short of a
+/// majority of the known list, so a node serving a short set is visible to its operator.
+fn report_shortfall(
+    state: &mut AuthorGatherState,
+    known_list: &[(String, VerifyingKey)],
+    sth: &avalon_protocol::sth::SignedTreeHead,
+    held: &HashMap<String, OffsetDateTime>,
+    gained: &HashMap<String, OffsetDateTime>,
+    now: OffsetDateTime,
+) {
+    if known_list.len() < 2 {
+        return;
+    }
+    let cutoff = now - time::Duration::seconds(COSIGNATURE_FRESHNESS_WINDOW.as_secs() as i64);
+    let have = known_list
+        .iter()
+        .filter(|(id, key)| {
+            avalon_protocol::sth::verify_tree_head(key, sth)
+                || gained
+                    .get(id)
+                    .or(held.get(id))
+                    .is_some_and(|at| *at >= cutoff)
+        })
+        .count();
+    let need = avalon_protocol::witness::majority_threshold(known_list.len());
+    let label = format!("{}", have < need);
+    if state.last_outcome.get("").map(String::as_str) == Some(label.as_str()) {
+        return;
+    }
+    if have < need {
+        tracing::warn!(
+            tree_size = sth.tree_size,
+            fresh = have,
+            needed = need,
+            known_list = known_list.len(),
+            "author-cosign-gather: own head is served with fewer fresh cosignatures than a majority",
+        );
+    } else {
+        tracing::info!(
+            tree_size = sth.tree_size,
+            "author-cosign-gather: own head has a fresh majority"
+        );
+    }
+    state.last_outcome.insert(String::new(), label);
 }
 
 /// Runs [`gather_once`] on a fixed interval, re-reading the known list and peer table every
@@ -170,7 +262,7 @@ pub async fn run_worker(
         let pairs = crate::cosign_verify::known_list_verifying_keys(&known_list);
         let live: std::collections::HashSet<&str> =
             pairs.iter().map(|(id, _)| id.as_str()).collect();
-        state.backoff.retain_live(&live);
+        state.refresh.retain_live(&live);
         gather_once(
             &chain,
             policy,
@@ -181,5 +273,119 @@ pub async fn run_worker(
             OffsetDateTime::now_utc(),
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+
+    fn witness(n: u8) -> (String, VerifyingKey) {
+        let key = SigningKey::from_bytes(&[n; 32]).verifying_key();
+        (hex::encode(key.to_bytes()), key)
+    }
+
+    fn source(id: &str) -> cosign_gather::WitnessSource {
+        cosign_gather::WitnessSource {
+            key_id: id.to_string(),
+            base_url: format!("http://{}", &id[..4]),
+        }
+    }
+
+    fn pick(
+        list: &[(String, VerifyingKey)],
+        held: &HashMap<String, OffsetDateTime>,
+        state: &AuthorGatherState,
+        now: OffsetDateTime,
+    ) -> Vec<String> {
+        let sources: Vec<_> = list.iter().map(|(id, _)| source(id)).collect();
+        select_wanted(list, &sources, held, state, "core", now)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    #[test]
+    fn a_missing_cosignature_is_asked_for_and_a_fresh_one_is_left_alone() {
+        let now = OffsetDateTime::now_utc();
+        let list = vec![witness(1), witness(2)];
+        let held = HashMap::from([(list[0].0.clone(), now - time::Duration::seconds(10))]);
+        let wanted = pick(&list, &held, &AuthorGatherState::default(), now);
+        assert_eq!(wanted, vec![list[1].0.clone()]);
+    }
+
+    #[test]
+    fn a_cosignature_older_than_a_third_of_the_window_is_asked_for_again() {
+        let now = OffsetDateTime::now_utc();
+        let list = vec![witness(1)];
+        let old = now - refresh_after() - time::Duration::seconds(1);
+        let held = HashMap::from([(list[0].0.clone(), old)]);
+        assert_eq!(
+            pick(&list, &held, &AuthorGatherState::default(), now).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_witness_without_a_source_is_not_asked() {
+        let now = OffsetDateTime::now_utc();
+        let list = vec![witness(1)];
+        let wanted = select_wanted(
+            &list,
+            &[],
+            &HashMap::new(),
+            &AuthorGatherState::default(),
+            "core",
+            now,
+        );
+        assert!(wanted.is_empty());
+    }
+
+    #[test]
+    fn a_witness_in_backoff_is_skipped_until_it_expires() {
+        let now = OffsetDateTime::now_utc();
+        let list = vec![witness(1)];
+        let mut state = AuthorGatherState::default();
+        state
+            .refresh
+            .backoff
+            .record(&list[0].0, "core", Attempt::Transport, now);
+        assert!(pick(&list, &HashMap::new(), &state, now).is_empty());
+        let later = now + time::Duration::minutes(5);
+        assert_eq!(pick(&list, &HashMap::new(), &state, later).len(), 1);
+    }
+
+    #[test]
+    fn the_per_tick_cap_keeps_the_never_held_and_stalest_first() {
+        let now = OffsetDateTime::now_utc();
+        let list: Vec<_> = (1..=(MAX_ASKED_PER_TICK as u8 + 4)).map(witness).collect();
+        let stale = now - refresh_after() - time::Duration::seconds(5);
+        let held: HashMap<_, _> = list
+            .iter()
+            .take(MAX_ASKED_PER_TICK)
+            .map(|(id, _)| (id.clone(), stale))
+            .collect();
+        let wanted = pick(&list, &held, &AuthorGatherState::default(), now);
+        assert_eq!(wanted.len(), MAX_ASKED_PER_TICK);
+        for (id, _) in list.iter().skip(MAX_ASKED_PER_TICK) {
+            assert!(
+                wanted.contains(id),
+                "never-held witness must be asked first"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lagging_witness_is_a_short_wait_not_a_transport_failure() {
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(
+            attempt_for(&GatherOutcome::BadStatus(404), now),
+            Attempt::NotAvailable
+        );
+        assert_eq!(
+            attempt_for(&GatherOutcome::BadStatus(500), now),
+            Attempt::Transport
+        );
     }
 }
