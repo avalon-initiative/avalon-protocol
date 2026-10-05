@@ -28,8 +28,13 @@ fn rp_origin() -> url::Url {
     url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 /// `expected_checks`: registration's `make_credential` and login's
 /// `get_assertion` each check user presence once — a client only ever
@@ -42,6 +47,7 @@ fn new_virtual_client(expected_checks: usize) -> VirtualClient {
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(expected_checks),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }

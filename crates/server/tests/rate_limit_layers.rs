@@ -69,6 +69,7 @@ async fn create_identity_and_log_in(http: &reqwest::Client, base: &str) -> Strin
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(2),
+        passkey_crypto::AvailableBackend,
     ))
     .allows_insecure_localhost(true);
     let origin = rp_origin();

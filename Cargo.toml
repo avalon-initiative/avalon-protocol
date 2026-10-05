@@ -62,9 +62,11 @@ avalon-devenv = { path = "crates/devenv" }
 webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core", "serde"] }
 url = { version = "2", features = ["serde"] }
-passkey-types = "0.5"
-passkey-client = "0.5"
-passkey-authenticator = { version = "0.5", features = ["testable"] }
+passkey-types = "0.6"
+passkey-client = "0.6"
+passkey-authenticator = { version = "0.6", features = ["testable"] }
+# The 4th `Authenticator::new` argument: the crypto backend (rust-crypto by default).
+passkey-crypto = "0.1"
 # A local mock HTTP server for the SDK's own retry/error-mapping tests —
 # these need to control exact response sequences (a 503 then a 200, a hung
 # connection for the timeout case) that no `--ignored` test against the real

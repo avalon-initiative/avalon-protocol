@@ -117,6 +117,7 @@ mod tests {
             Aaguid::new_empty(),
             MemoryStore::new(),
             MockUserValidationMethod::verified_user(2),
+            passkey_crypto::AvailableBackend,
         );
         let mut client = Client::new(authenticator).allows_insecure_localhost(true);
         let origin = url::Url::parse("http://localhost:8080").unwrap();

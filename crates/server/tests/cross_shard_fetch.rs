@@ -62,14 +62,20 @@ fn core_verify_keys() -> HashMap<String, ed25519_dalek::VerifyingKey> {
     HashMap::from([("core".to_string(), key)])
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 fn new_virtual_client() -> VirtualClient {
     let authenticator = Authenticator::new(
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(1),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }

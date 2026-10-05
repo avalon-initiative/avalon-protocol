@@ -74,6 +74,7 @@ passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
 public-suffix.workspace = true
+passkey-crypto.workspace = true
 # Issue #636: a mocked remote node for the cross-shard-fetch tamper-
 # detection test — already used the same way by `crates/sdk`.
 wiremock.workspace = true

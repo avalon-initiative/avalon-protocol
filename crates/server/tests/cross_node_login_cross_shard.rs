@@ -69,14 +69,20 @@ fn webauthn_origin() -> String {
     std::env::var("AVALON_WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 fn new_virtual_client() -> VirtualClient {
     let authenticator = Authenticator::new(
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(2),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }

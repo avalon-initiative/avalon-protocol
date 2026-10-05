@@ -148,7 +148,12 @@ pub(crate) async fn create_identity() {
     // real HTTP endpoints below.
     let store = MemoryStore::new();
     let user_mock = MockUserValidationMethod::verified_user(1);
-    let authenticator = Authenticator::new(Aaguid::new_empty(), store, user_mock);
+    let authenticator = Authenticator::new(
+        Aaguid::new_empty(),
+        store,
+        user_mock,
+        passkey_crypto::AvailableBackend,
+    );
     let mut client = Client::new(authenticator).allows_insecure_localhost(true);
     let origin_str = std::env::var("AVALON_WEBAUTHN_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:8080".to_string());
@@ -312,7 +317,12 @@ pub(crate) async fn login(identity_id: IdentityId) {
     let mut store = MemoryStore::new();
     store.insert(Vec::from(passkey.credential_id.clone()), passkey);
     let user_mock = MockUserValidationMethod::verified_user(1);
-    let authenticator = Authenticator::new(Aaguid::new_empty(), store, user_mock);
+    let authenticator = Authenticator::new(
+        Aaguid::new_empty(),
+        store,
+        user_mock,
+        passkey_crypto::AvailableBackend,
+    );
     let mut client = Client::new(authenticator).allows_insecure_localhost(true);
 
     let start: serde_json::Value = http
@@ -1170,7 +1180,7 @@ mod tests {
 
     #[test]
     fn stored_passkey_round_trips_every_field() {
-        let original = Passkey::mock("localhost".to_string())
+        let original = Passkey::mock("localhost".to_string(), passkey_crypto::AvailableBackend)
             .username("alice".to_string())
             .user_display_name("Alice".to_string())
             .user_handle(None)
@@ -1197,7 +1207,7 @@ mod tests {
 
     #[test]
     fn stored_passkey_round_trips_a_present_user_handle() {
-        let original = Passkey::mock("localhost".to_string())
+        let original = Passkey::mock("localhost".to_string(), passkey_crypto::AvailableBackend)
             .user_handle(Some(16))
             .build();
 

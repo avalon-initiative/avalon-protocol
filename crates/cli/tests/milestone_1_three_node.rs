@@ -86,7 +86,12 @@ mod hub_side {
 
         let store = MemoryStore::new();
         let user_mock = MockUserValidationMethod::verified_user(2);
-        let authenticator = Authenticator::new(Aaguid::new_empty(), store, user_mock);
+        let authenticator = Authenticator::new(
+            Aaguid::new_empty(),
+            store,
+            user_mock,
+            passkey_crypto::AvailableBackend,
+        );
         let mut client = Client::new(authenticator).allows_insecure_localhost(true);
 
         let start: serde_json::Value = http
