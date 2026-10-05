@@ -105,7 +105,7 @@ pub struct RedisFastPath {
 }
 
 impl RedisFastPath {
-    /// `None` when `AVALON_REDIS_URL` is unset — every caller here treats
+    /// `None` when `AVALON_REDIS_URL` is unset or unreachable at startup — every caller here treats
     /// that identically to "Redis didn't have the answer," so nothing
     /// downstream needs its own separate unconfigured-vs-empty branch.
     ///
@@ -132,11 +132,11 @@ impl RedisFastPath {
         let url = std::env::var("AVALON_REDIS_URL")
             .ok()
             .filter(|s| !s.is_empty())?;
-        let client =
-            redis::Client::open(url).expect("AVALON_REDIS_URL must be a valid redis:// URL");
-        let conn = redis::aio::ConnectionManager::new(client).await.expect(
-            "failed to connect to AVALON_REDIS_URL — check the Redis instance is reachable",
-        );
+        Self::connect(&url, network_id).await
+    }
+
+    pub(crate) async fn connect(url: &str, network_id: &str) -> Option<Self> {
+        let conn = crate::redis_limits::connect_or_degrade(url, "the interest fast path").await?;
         Some(Self {
             conn,
             network_id: network_id.to_string(),

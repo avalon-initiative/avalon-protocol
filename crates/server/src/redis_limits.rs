@@ -62,6 +62,34 @@ use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use uuid::Uuid;
 
+/// Bound on the startup connection attempt, so a black-holed address cannot stall boot.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Shared by every `AVALON_REDIS_URL` consumer. A malformed URL is a config error and panics;
+/// an unreachable instance logs a warning and returns `None` (in-process limits, no fast path).
+/// There is no runtime reconnect: the router layers are fixed at startup, so a restart picks Redis up.
+pub(crate) async fn connect_or_degrade(url: &str, purpose: &str) -> Option<ConnectionManager> {
+    let client = redis::Client::open(url).expect("AVALON_REDIS_URL must be a valid redis:// URL");
+    match tokio::time::timeout(CONNECT_TIMEOUT, ConnectionManager::new(client)).await {
+        Ok(Ok(conn)) => Some(conn),
+        Ok(Err(err)) => {
+            warn_unreachable(purpose, &err.to_string());
+            None
+        }
+        Err(_) => {
+            warn_unreachable(purpose, "connection timed out");
+            None
+        }
+    }
+}
+
+fn warn_unreachable(purpose: &str, reason: &str) {
+    tracing::warn!(
+        reason,
+        "AVALON_REDIS_URL is set but Redis is unreachable; starting without it for {purpose} (restart to pick it up)"
+    );
+}
+
 /// A live-in-flight request is presumed dead (its owning process crashed
 /// without releasing its slot) if it's been "in flight" longer than this —
 /// generous relative to any real request, so a slow-but-alive request is
@@ -83,7 +111,7 @@ pub struct RedisLimiterState {
 }
 
 impl RedisLimiterState {
-    /// `AVALON_REDIS_URL` unset (the default) returns `None`, leaving
+    /// `AVALON_REDIS_URL` unset (the default) or unreachable returns `None`, leaving
     /// `crate::router` on its existing in-process layers — see module doc
     /// comment. Reads `AVALON_RATE_LIMIT_PER_MINUTE`/
     /// `AVALON_MAX_CONCURRENT_REQUESTS` itself (same resolution
@@ -94,11 +122,7 @@ impl RedisLimiterState {
         let url = std::env::var("AVALON_REDIS_URL")
             .ok()
             .filter(|s| !s.is_empty())?;
-        let client =
-            redis::Client::open(url).expect("AVALON_REDIS_URL must be a valid redis:// URL");
-        let conn = ConnectionManager::new(client).await.expect(
-            "failed to connect to AVALON_REDIS_URL — check the Redis instance is reachable",
-        );
+        let conn = connect_or_degrade(&url, "rate limits and concurrency ceiling").await?;
         Some(Self {
             conn,
             rate_limit_per_minute: crate::rate_limit_per_minute_from_env(),
@@ -302,6 +326,28 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(rate_limit_key(&req, &Default::default()), "ip:127.0.0.1");
+    }
+
+    #[tokio::test]
+    async fn unreachable_redis_degrades_instead_of_panicking() {
+        assert!(connect_or_degrade("redis://127.0.0.1:1", "test")
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "must be a valid redis:// URL")]
+    async fn malformed_redis_url_stays_fatal() {
+        connect_or_degrade("not a redis url", "test").await;
+    }
+
+    #[tokio::test]
+    async fn fast_path_degrades_when_redis_is_unreachable() {
+        assert!(
+            crate::interest::RedisFastPath::connect("redis://127.0.0.1:1", "net")
+                .await
+                .is_none()
+        );
     }
 
     #[test]

@@ -223,9 +223,10 @@ applied.
   `make stack-up-no-redis-source`.
 - `docker-compose.redis.yml` — the Redis-backed rate limit/
   concurrency ceiling, applied as a Compose *override* file (not folded
-  into `docker-compose.yml` directly — `avalon-server` hard-fails at
-  startup if `AVALON_REDIS_URL` is set but unreachable, so it has to be
-  genuinely absent for `make stack-up-no-redis`, not just unused). `make
+  into `docker-compose.yml` directly, so `make stack-up-no-redis` leaves
+  `AVALON_REDIS_URL` unset and no Redis container behind; if the variable
+  is set but Redis is unreachable at startup, `avalon-server` logs a
+  warning and runs on the per-process limits until restarted). `make
   stack-up` layers it on automatically; `make stack-up-no-redis` doesn't.
 - `make stack-up`/`stack-up-no-redis`/`stack-down`/`stack-logs` (root
   `Makefile`) — the bring-up/teardown/logs commands described above.
