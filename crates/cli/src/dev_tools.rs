@@ -830,7 +830,7 @@ pub(crate) async fn issue_achievement(args: IssueAchievementArgs) {
                 "Issued '{}' (integrator: {}) to identity {}.",
                 args.achievement,
                 args.integrator,
-                session.identity().id.0
+                session.identity().id
             );
             println!("Attestation id: {attestation_id}");
         }
