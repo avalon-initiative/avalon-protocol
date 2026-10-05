@@ -3,14 +3,12 @@
   "description": "Signing-key revocation signing bytes (avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2): UTF-8 of 'avalon:identity.signing_key_revoked:v2:{identity_id}:{signing_key_id}:{revoked_by_signing_key_id}'. The signature is Ed25519 by the revoking (already-active) key over the bytes. Key ids are UUID text (lowercase hyphenated), so no ':' can appear in them and swapping the two ids changes the bytes.",
   "generation": "Deterministic: signingKeySeedHex is the Ed25519 seed of the revoking key.",
   "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
-  "notSupported": {
-    "csharp": "no identity-id implementation yet",
-    "typescript": "no identity-id implementation yet"
-  },
   "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
   "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
   "vectors": [
     {
