@@ -62,7 +62,7 @@ avalon-devenv = { path = "crates/devenv" }
 webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core", "serde"] }
 url = { version = "2", features = ["serde"] }
-passkey-types = "0.5"
+passkey-types = "0.6"
 passkey-client = "0.5"
 passkey-authenticator = { version = "0.5", features = ["testable"] }
 # A local mock HTTP server for the SDK's own retry/error-mapping tests —
