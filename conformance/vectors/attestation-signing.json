@@ -1,7 +1,11 @@
 {
   "$schema": "./SCHEMA.md#attestation-signing",
   "description": "Attestation issuance, bulk issuance, and revocation signing bytes (#31/#32/#85/#495, decoupled per #774). An issuer's Ed25519 key signs these exact bytes to authorize a claim about a subject; the verifying node rebuilds them independently and rejects anything that does not match. Every SDK reimplements this construction rather than sharing source with the server, so this file is the only thing keeping them in step. `claimKind` is \"achievement\" for game issuers and \"milestone\" for app/service issuers, and is folded into the signed bytes so a signature minted under one vocabulary can never be replayed as the other.",
-  "supportedIn": [],
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
   "signingKeySeedHex": "9a8b7c6d5e4f30211203344556677889aabbccddeeff00112233445566778899",
   "signingPublicKeyHex": "6b3b44ec451660762e9a0ff1c92bdba30294ee2115a3ebd6364fc37502230020",
   "vectors": [
@@ -133,10 +137,5 @@
         "signatureHex": "fc22c8366317043b2309d1afa3ee144c891694825025a20519e59c576f5227238a02caa5b3bec456aa8ee49944972d98ecf57ad413e4637a1026b5adb2836e01"
       }
     }
-  ],
-  "notSupported": {
-    "rust": "the SDK has not adopted self-certifying identity ids yet: its copy of this vector still carries a UUID identity id, so asserting it would diverge from the protocol until the SDK slice lands.",
-    "csharp": "the SDK has not adopted self-certifying identity ids yet: its copy of this vector still carries a UUID identity id, so asserting it would diverge from the protocol until the SDK slice lands.",
-    "typescript": "the SDK has not adopted self-certifying identity ids yet: its copy of this vector still carries a UUID identity id, so asserting it would diverge from the protocol until the SDK slice lands."
-  }
+  ]
 }

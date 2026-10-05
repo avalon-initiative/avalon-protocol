@@ -37,10 +37,6 @@
   ],
   "generation": "Generated and cross-checked with an independent Python implementation (cryptography Ed25519, hashlib): signingKeySeedHex is the Ed25519 seed, identityId derives from signingPublicKeyHex per identity-id.json; Ed25519 signatures are deterministic.",
   "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9",
-  "notSupported": {
-    "csharp": "no identity-id implementation yet",
-    "typescript": "no identity-id implementation yet"
-  },
   "replayVectors": [
     {
       "expected": {
@@ -98,7 +94,9 @@
   "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
   "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
   "vectors": [
     {

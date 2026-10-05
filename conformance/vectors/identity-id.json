@@ -4,12 +4,10 @@
   "domainTagHex": "6176616c6f6e2d6964656e746974792d69642d7631",
   "domainTagUtf8": "avalon-identity-id-v1",
   "generation": "Deterministic. Seeds are Ed25519 seeds (all bytes equal); publicKeyHex is the derived public key; preimageHex is domainTagHex followed by the key bytes.",
-  "notSupported": {
-    "csharp": "no identity-id implementation yet",
-    "typescript": "no identity-id implementation yet"
-  },
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
   "vectors": [
     {
