@@ -83,8 +83,13 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 /// Unlike `passkeys.rs`'s/`authenticate.rs`'s version of this helper, a
 /// virtual client here only ever drives one ceremony (`initiate_recovery`'s
@@ -96,6 +101,7 @@ fn new_virtual_client() -> VirtualClient {
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(1),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }

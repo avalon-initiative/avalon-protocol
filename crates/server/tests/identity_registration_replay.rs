@@ -90,6 +90,7 @@ async fn passkey(started: &Started) -> Value {
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(1),
+        passkey_crypto::AvailableBackend,
     ))
     .allows_insecure_localhost(true);
     let options: CredentialCreationOptions =

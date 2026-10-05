@@ -64,14 +64,20 @@ fn rp_origin() -> url::Url {
     url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 fn new_virtual_client() -> VirtualClient {
     let authenticator = Authenticator::new(
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(1),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }

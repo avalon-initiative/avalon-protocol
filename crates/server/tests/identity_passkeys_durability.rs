@@ -31,8 +31,13 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-type VirtualClient =
-    Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
+type VirtualClient = Client<
+    MemoryStore,
+    MockUserValidationMethod,
+    passkey_crypto::AvailableBackend,
+    public_suffix::PublicSuffixList,
+    (),
+>;
 
 /// `expected_ceremonies` must equal exactly how many WebAuthn ceremonies
 /// (registration and/or authentication) this client will go through over
@@ -43,6 +48,7 @@ fn new_virtual_client(expected_ceremonies: usize) -> VirtualClient {
         Aaguid::new_empty(),
         MemoryStore::new(),
         MockUserValidationMethod::verified_user(expected_ceremonies),
+        passkey_crypto::AvailableBackend,
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }
