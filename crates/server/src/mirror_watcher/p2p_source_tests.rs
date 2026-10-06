@@ -422,7 +422,7 @@ async fn two_sources_signing_different_roots_are_an_equivocation_on_either_trans
                 wrong_proof: false,
             }))
         };
-        let chain = PostgresSettlementProvider::new(pool.clone(), NETWORK.to_string());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), NETWORK.to_string());
         let mut heads = Vec::new();
         for served in [serve(&o, transport).await, serve(&fork, transport).await] {
             let (head, _) = head_for(&served, &pool, &shard, &bounds)
@@ -883,7 +883,7 @@ async fn a_smaller_or_repeated_head_is_not_a_new_head_nor_an_equivocation() {
         let o = origin(5);
         let shard = shard_id(&o);
         let s = serve(&o, transport).await;
-        let chain = PostgresSettlementProvider::new(pool.clone(), NETWORK.to_string());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), NETWORK.to_string());
         let observe = |head: CosignedTreeHead| {
             let (pool, chain, shard, source) =
                 (pool.clone(), chain.clone(), shard.clone(), s.source.clone());

@@ -74,7 +74,7 @@ fn sample_batch(event_count: usize) -> EventBatch {
 async fn commit_groups_events_under_one_batch() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -120,7 +120,7 @@ async fn commit_groups_events_under_one_batch() {
 async fn get_commitment_returns_committed_batch() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
 
     let batch = sample_batch(2);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -138,7 +138,7 @@ async fn get_commitment_returns_committed_batch() {
 async fn get_commitment_of_unknown_batch_is_not_found() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
 
     let result = chain.get_commitment(Uuid::new_v4()).await;
     assert!(matches!(result, Err(SettlementError::BatchNotFound)));
@@ -149,7 +149,7 @@ async fn get_commitment_of_unknown_batch_is_not_found() {
 async fn verify_accepts_an_untampered_batch() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -166,7 +166,7 @@ async fn verify_accepts_an_untampered_batch() {
 async fn verify_detects_tampered_batch_root() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -197,7 +197,7 @@ async fn verify_detects_tampered_batch_root() {
 async fn list_entries_reports_chain_intact_across_batch_boundaries() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
 
     let first_batch = sample_batch(2);
     chain
@@ -227,7 +227,7 @@ async fn list_entries_reports_chain_intact_across_batch_boundaries() {
 async fn commit_of_an_empty_batch_is_rejected() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
 
     let empty = EventBatch {
         id: Uuid::new_v4(),
@@ -245,7 +245,7 @@ async fn commit_of_an_empty_batch_is_rejected() {
 async fn commit_produces_real_merkle_root_not_placeholder() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -303,7 +303,7 @@ async fn commit_produces_real_merkle_root_not_placeholder() {
 async fn verify_detects_entry_tampering_via_merkle_recomputation() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let first_batch = sample_batch(2);
     chain
@@ -409,7 +409,7 @@ async fn isolated_genesis_pool(schema: &str) -> PgPool {
 async fn connect_creates_genesis_on_an_empty_table() {
     let pool = isolated_genesis_pool("test_genesis_create").await;
 
-    let chain = PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-alpha")
+    let chain = PostgresSettlementProvider::connect_core_shard(pool.clone(), "avalon-dev-alpha")
         .await
         .expect("first connect should create genesis");
     assert_eq!(chain.network_id(), "avalon-dev-alpha");
@@ -426,11 +426,11 @@ async fn connect_creates_genesis_on_an_empty_table() {
 async fn connect_succeeds_when_network_id_matches_existing_genesis() {
     let pool = isolated_genesis_pool("test_genesis_match").await;
 
-    PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-beta")
+    PostgresSettlementProvider::connect_core_shard(pool.clone(), "avalon-dev-beta")
         .await
         .expect("first connect should create genesis");
 
-    let second = PostgresSettlementProvider::connect(pool, "avalon-dev-beta")
+    let second = PostgresSettlementProvider::connect_core_shard(pool, "avalon-dev-beta")
         .await
         .expect("reconnecting with the same network_id should succeed");
     assert_eq!(second.network_id(), "avalon-dev-beta");
@@ -441,11 +441,11 @@ async fn connect_succeeds_when_network_id_matches_existing_genesis() {
 async fn connect_fails_fast_on_network_id_mismatch() {
     let pool = isolated_genesis_pool("test_genesis_mismatch").await;
 
-    PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-gamma")
+    PostgresSettlementProvider::connect_core_shard(pool.clone(), "avalon-dev-gamma")
         .await
         .expect("first connect should create genesis");
 
-    let result = PostgresSettlementProvider::connect(pool, "avalon-mainnet-1").await;
+    let result = PostgresSettlementProvider::connect_core_shard(pool, "avalon-mainnet-1").await;
     assert!(
         result.is_err(),
         "a mismatched network_id must never produce a usable provider"
@@ -472,7 +472,7 @@ async fn backdate_batch(pool: &PgPool, batch_id: Uuid, committed_at: OffsetDateT
 async fn prune_payloads_older_than_only_nulls_payload_of_entries_before_cutoff() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let old_batch = sample_batch(2);
     chain
@@ -540,7 +540,7 @@ async fn prune_payloads_older_than_only_nulls_payload_of_entries_before_cutoff()
 async fn prune_payloads_older_than_is_idempotent() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     chain.commit(&batch).await.expect("commit should succeed");
@@ -573,7 +573,7 @@ async fn prune_payloads_older_than_is_idempotent() {
 async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_pruned() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -620,7 +620,7 @@ async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_
 async fn verify_still_detects_tampering_in_a_batch_with_a_separately_pruned_entry() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(2);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -671,7 +671,7 @@ async fn verify_still_detects_tampering_in_a_batch_with_a_separately_pruned_entr
 async fn prunable_entry_count_matches_what_pruning_actually_prunes() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let batch = sample_batch(4);
     chain.commit(&batch).await.expect("commit should succeed");

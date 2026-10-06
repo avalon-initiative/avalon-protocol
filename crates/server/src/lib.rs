@@ -1108,7 +1108,10 @@ mod node_auth_wiring {
             auth::build_webauthn("localhost", "http://localhost:8080").expect("webauthn"),
         );
         AppState {
-            chain: avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test"),
+            chain: avalon_chain::PostgresSettlementProvider::new_core_shard(
+                pool.clone(),
+                "avalon-test",
+            ),
             indexer: state::IndexerHandle::Local(
                 avalon_indexer::postgres::PostgresIndexer::new(pool.clone())
                     .with_local_origin("avalon-test", "core"),

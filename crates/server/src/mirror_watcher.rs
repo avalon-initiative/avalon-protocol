@@ -3516,7 +3516,7 @@ mod tests {
 
         let pool = live_test_pool().await;
         let network_id = format!("avalon-test-refresh-{}", Uuid::new_v4());
-        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let root = hex::encode([1u8; 32]);
@@ -3622,7 +3622,7 @@ mod tests {
 
         let pool = live_test_pool().await;
         let network_id = format!("avalon-test-served-{}", Uuid::new_v4());
-        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let mut prev = avalon_chain::GENESIS_HASH.to_string();
@@ -3956,7 +3956,7 @@ mod tests {
 
         let pool = live_test_pool().await;
         let network_id = format!("avalon-test-directory-{}", Uuid::new_v4());
-        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let suffix = Uuid::new_v4();
@@ -4455,7 +4455,7 @@ mod tests {
     async fn insert_legacy_pruned_row(pool: &PgPool, e: &mirror::MirroredEntry) {
         sqlx::query(
             "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $10, $11, $12, $13, $14)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, repeat('0', 64), $9, $10, $11, $12, $13, $14)",
         )
         .bind(&e.source_url)
         .bind(&e.network_id)

@@ -8,7 +8,8 @@
 //! new field means a new version. Hashed JSON payloads are a different rule (#1308).
 //!
 //! The tag has no length prefix (like the existing witness and STH layouts), so
-//! registered tags must be prefix-free; [`tags`] tests that. A tag is never
+//! registered tags must be prefix-free; [`tags`] tests that. Exception: `avalon.ledger.entry` uses
+//! the version slot for the event's own `version`, so a changed field set there needs a new tag. A tag is never
 //! reused for another kind, and its version lives in the `u16`, not in the tag.
 //!
 //! # Migrating a layout (recipe for the follow-up slices)

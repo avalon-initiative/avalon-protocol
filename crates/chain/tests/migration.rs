@@ -146,7 +146,7 @@ async fn migrates_checkpoint_and_issuer_registrations_to_a_fresh_target() {
     let source = isolated_network_pool("test_migrate_source_a").await;
     let target = isolated_network_pool("test_migrate_target_a").await;
 
-    PostgresSettlementProvider::connect(source.clone(), "avalon-mainnet-1")
+    PostgresSettlementProvider::connect_core_shard(source.clone(), "avalon-mainnet-1")
         .await
         .expect("source connect should succeed");
     insert_sth(&source, 5, "avalon-mainnet-1").await;
@@ -199,7 +199,7 @@ async fn migration_is_idempotent_on_a_retried_run() {
     let source = isolated_network_pool("test_migrate_source_b").await;
     let target = isolated_network_pool("test_migrate_target_b").await;
 
-    PostgresSettlementProvider::connect(source.clone(), "avalon-mainnet-1")
+    PostgresSettlementProvider::connect_core_shard(source.clone(), "avalon-mainnet-1")
         .await
         .expect("source connect should succeed");
     insert_sth(&source, 3, "avalon-mainnet-1").await;
@@ -238,12 +238,12 @@ async fn migration_refuses_a_target_that_already_belongs_to_a_different_network(
     let source = isolated_network_pool("test_migrate_source_c").await;
     let target = isolated_network_pool("test_migrate_target_c").await;
 
-    PostgresSettlementProvider::connect(source.clone(), "avalon-mainnet-1")
+    PostgresSettlementProvider::connect_core_shard(source.clone(), "avalon-mainnet-1")
         .await
         .expect("source connect should succeed");
     insert_sth(&source, 1, "avalon-mainnet-1").await;
 
-    PostgresSettlementProvider::connect(target.clone(), "avalon-int-unrelated")
+    PostgresSettlementProvider::connect_core_shard(target.clone(), "avalon-int-unrelated")
         .await
         .expect("target's own unrelated genesis should establish fine");
 
@@ -257,7 +257,7 @@ async fn migration_handles_a_source_with_genesis_but_no_committed_entries() {
     let source = isolated_network_pool("test_migrate_source_d").await;
     let target = isolated_network_pool("test_migrate_target_d").await;
 
-    PostgresSettlementProvider::connect(source.clone(), "avalon-mainnet-1")
+    PostgresSettlementProvider::connect_core_shard(source.clone(), "avalon-mainnet-1")
         .await
         .expect("source connect should succeed");
     // Deliberately no `insert_sth` call — a genesis with zero commits.

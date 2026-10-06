@@ -280,7 +280,7 @@ async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert(
         r#"
         INSERT INTO ledger_entries
             (event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
-        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', '', now(), 1, 'deadbeef', $2, $3)
+        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', repeat('0', 64), now(), 1, 'deadbeef', $2, $3)
         RETURNING seq
         "#,
     )

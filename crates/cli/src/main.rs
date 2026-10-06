@@ -467,7 +467,7 @@ async fn prune_ledger(dry_run: bool) {
         .await
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
-    let chain = PostgresSettlementProvider::new(pool, network_id);
+    let chain = PostgresSettlementProvider::new_core_shard(pool, network_id);
 
     let prunable = chain
         .prunable_entry_count(cutoff)
@@ -519,8 +519,8 @@ async fn rebuild_index() {
     let own_shard_id = configured_shard
         .clone()
         .unwrap_or_else(|| "core".to_string());
-    let chain =
-        PostgresSettlementProvider::new(pool.clone(), network_id).with_shard_id(&own_shard_id);
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id)
+        .with_shard_id(&own_shard_id);
 
     let ledger = avalon_server::rebuild::load_ledger_events(&chain)
         .await
@@ -1302,7 +1302,8 @@ async fn inspect_ledger(full: bool) {
 
     // Entry hashes are rooted in the shard the ledger belongs to, as configured for the node.
     let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
-    let chain = PostgresSettlementProvider::new(pool, network_id).with_shard_id(own_shard_id);
+    let chain =
+        PostgresSettlementProvider::new_core_shard(pool, network_id).with_shard_id(own_shard_id);
     let entries = chain.list_entries().await.expect("failed to read ledger");
     let batches = chain.list_batches().await.expect("failed to read batches");
 

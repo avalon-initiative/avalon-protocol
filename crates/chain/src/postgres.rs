@@ -105,6 +105,24 @@ fn stored_payload(event: &ProtocolEvent) -> serde_json::Value {
     }
 }
 
+/// Rejects the first event in `batch` the entry layout cannot carry, before anything is written.
+fn check_batch(batch: &EventBatch) -> Result<(), SettlementError> {
+    for event in &batch.events {
+        ledger_entry::layout_version(event.version).map_err(|_| {
+            SettlementError::UnsupportedEntryVersion {
+                version: event.version,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// The event time as stored: whole microseconds, so what is hashed equals what is bound.
+fn stored_timestamp(event: &ProtocolEvent) -> Result<time::OffsetDateTime, SettlementError> {
+    ledger_entry::floor_to_micros(event.timestamp)
+        .map_err(|e| SettlementError::InvalidEntry(e.to_string()))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn hash_event(
     network_id: &str,
@@ -114,6 +132,7 @@ fn hash_event(
     event: &ProtocolEvent,
     payload_hash: &str,
 ) -> Result<String, SettlementError> {
+    let timestamp = stored_timestamp(event)?;
     hash_entry(
         network_id,
         shard_id,
@@ -125,7 +144,7 @@ fn hash_event(
             issuer: event.issuer.as_str(),
             subject: event.subject.as_str(),
             payload_hash,
-            timestamp: event.timestamp,
+            timestamp,
             version: i32::try_from(event.version).unwrap_or(i32::MAX),
         },
     )
@@ -260,9 +279,11 @@ impl PostgresSettlementProvider {
     /// about) the ledger's genesis network_id — tests against a throwaway
     /// database, and read-only CLI inspection paired with
     /// [`Self::read_genesis_network_id`]. Does **not** create or verify a
-    /// `chain_genesis` row; use [`Self::connect`] at real process startup,
+    /// `chain_genesis` row; use [`Self::connect_core_shard`] at real process startup,
     /// where that enforcement actually matters.
-    pub fn new(pool: PgPool, network_id: impl Into<String>) -> Self {
+    /// Binds the ledger to the `core` shard; a node authoring another shard must follow with
+    /// [`Self::with_shard_id`].
+    pub fn new_core_shard(pool: PgPool, network_id: impl Into<String>) -> Self {
         Self {
             pool,
             network_id: network_id.into(),
@@ -273,7 +294,7 @@ impl PostgresSettlementProvider {
 
     /// Reads the ledger's genesis `network_id` without creating one —
     /// `None` if this database has never been booted against by
-    /// [`Self::connect`]. For read-only diagnostics (`avalon inspect-ledger`)
+    /// [`Self::connect_core_shard`]. For read-only diagnostics (`avalon inspect-ledger`)
     /// that want to display which network they're pointed at without
     /// asserting anything about it.
     pub async fn read_genesis_network_id(pool: &PgPool) -> Result<Option<String>, SettlementError> {
@@ -290,7 +311,11 @@ impl PostgresSettlementProvider {
     /// `GenesisError::Mismatch` instead of a provider — the caller (see
     /// `avalon-server`'s `main.rs`) is expected to treat that as fatal and
     /// exit before binding a listener, never as a warning to log past.
-    pub async fn connect(pool: PgPool, expected_network_id: &str) -> Result<Self, GenesisError> {
+    /// Like [`Self::new_core_shard`] for the shard, plus the genesis check.
+    pub async fn connect_core_shard(
+        pool: PgPool,
+        expected_network_id: &str,
+    ) -> Result<Self, GenesisError> {
         let mut tx = pool
             .begin()
             .await
@@ -1303,6 +1328,7 @@ impl PostgresSettlementProvider {
             ));
         }
 
+        check_batch(batch)?;
         // One appender at a time: `seq` and `prev_hash` are read, hashed and written together.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext('avalon.ledger.append'))")
             .execute(&mut **tx)
@@ -1350,7 +1376,7 @@ impl PostgresSettlementProvider {
             .bind(event.subject.as_str())
             .bind(&payload)
             .bind(&payload_hash)
-            .bind(event.timestamp)
+            .bind(stored_timestamp(event)?)
             .bind(event.version as i32)
             .bind(&prev_hash)
             .bind(&entry_hash)
@@ -1508,6 +1534,7 @@ impl PostgresSettlementProvider {
             ));
         }
 
+        check_batch(batch)?;
         let mut prev_hash = self.tip_hash(&self.pool).await?;
         let mut seq = self.max_seq(&self.pool).await?;
         let mut entry_hashes = Vec::with_capacity(batch.events.len());
@@ -2108,6 +2135,40 @@ mod tests {
             avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
         assert_eq!(payload, event.payload);
         assert_eq!(position, event.identity_chain);
+    }
+
+    fn event_at(nanos: i128, version: u32) -> ProtocolEvent {
+        ProtocolEvent {
+            id: Uuid::nil(),
+            kind: "k".to_string(),
+            issuer: global_id_from_str("identity:x:self:k").unwrap(),
+            subject: global_id_from_str("identity:x:self:k").unwrap(),
+            payload: json!({}),
+            timestamp: time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap(),
+            version,
+            identity_chain: None,
+        }
+    }
+
+    #[test]
+    fn stored_timestamp_is_whole_microseconds_even_before_2000() {
+        for nanos in [-1_500i128, -946_684_800_000_000_500, 1_500] {
+            let t = stored_timestamp(&event_at(nanos, 1)).unwrap();
+            assert_eq!(t.unix_timestamp_nanos() % 1000, 0, "{nanos}");
+        }
+    }
+
+    #[test]
+    fn a_batch_with_an_unrepresentable_version_is_rejected_up_front() {
+        let batch = EventBatch {
+            id: Uuid::nil(),
+            events: vec![event_at(0, 1), event_at(0, 65536)],
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        assert!(matches!(
+            check_batch(&batch),
+            Err(SettlementError::UnsupportedEntryVersion { version: 65536 })
+        ));
     }
 
     fn chain_of(payloads: &[serde_json::Value]) -> Vec<String> {

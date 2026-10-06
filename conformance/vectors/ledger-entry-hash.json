@@ -516,6 +516,29 @@
       }
     },
     {
+      "name": "pre-2000 time with a sub-microsecond part floors",
+      "input": {
+        "networkId": "avalon-test-net",
+        "shardId": "core",
+        "seq": "1",
+        "prevHashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "eventId": "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        "kind": "identity.created",
+        "issuer": "identity:alice:self:created",
+        "subject": "identity:alice:self:created",
+        "eventTimestampRfc3339": "1969-12-31T23:59:59.9999995Z",
+        "timestampUnixMicros": "-1",
+        "version": 1,
+        "payloadJsonUtf8": "{\"n\":1}"
+      },
+      "expected": {
+        "payloadCanonicalUtf8": "{\"n\":1}",
+        "payloadHashHex": "2bfd14f43d17fc7cea24e0917a8879b4b2f880b8baeec1b9d90fbaad655e71bd",
+        "signingBytesHex": "6176616c6f6e2e6c65646765722e656e74727900010000000f6176616c6f6e2d746573742d6e657400000004636f7265000000000000000100000000000000000000000000000000000000000000000000000000000000000190a1b2c3d47e5f8a9b0c1d2e3f4a5b000000106964656e746974792e637265617465640000001b6964656e746974793a616c6963653a73656c663a637265617465640000001b6964656e746974793a616c6963653a73656c663a637265617465642bfd14f43d17fc7cea24e0917a8879b4b2f880b8baeec1b9d90fbaad655e71bdffffffffffffffff",
+        "entryHashHex": "beb87cd1dd522e34b7cfa7bc1086214edfdd1695582e79943a3f67e5bab52288"
+      }
+    },
+    {
       "name": "offset time is the same instant",
       "input": {
         "networkId": "avalon-test-net",

@@ -64,7 +64,7 @@ fn sample_batch(kind: &str) -> EventBatch {
 async fn prepare_then_finalize_with_a_valid_signature_commits_the_batch() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let integrator_key = SigningKey::generate(&mut rand::rng());
     let batch = sample_batch("test.managed_hosting_ok");
@@ -125,7 +125,7 @@ async fn prepare_then_finalize_with_a_valid_signature_commits_the_batch() {
 async fn finalize_with_an_invalid_signature_is_rejected_and_inserts_nothing() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let integrator_key = SigningKey::generate(&mut rand::rng());
     let wrong_key = SigningKey::generate(&mut rand::rng());
@@ -195,7 +195,7 @@ async fn finalize_with_an_invalid_signature_is_rejected_and_inserts_nothing() {
 async fn finalize_after_the_tip_moved_since_prepare_is_rejected() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let integrator_key = SigningKey::generate(&mut rand::rng());
     let batch = sample_batch("test.managed_hosting_stale");
@@ -242,7 +242,7 @@ async fn finalize_after_the_tip_moved_since_prepare_is_rejected() {
 async fn finalize_is_idempotent_on_a_replayed_batch_id() {
     let pool = test_pool().await;
     let _guard = ledger_test_lock().lock().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
     let integrator_key = SigningKey::generate(&mut rand::rng());
     let batch = sample_batch("test.managed_hosting_idempotent");

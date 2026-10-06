@@ -471,6 +471,9 @@ pub enum AppError {
     /// exact range, or a duplicate key); the caller can fix and resubmit.
     #[error("payload cannot be canonically encoded: {0}")]
     InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
+    /// An event version the ledger entry layout cannot carry (above 65535).
+    #[error("event version {0} is not supported (maximum 65535)")]
+    UnsupportedEntryVersion(u32),
     /// Deliberately hand-written rather than `#[from]`: an
     /// [`avalon_indexer::IndexError::RemoteUnreachable`] must map to
     /// [`Self::RemoteRoleUnreachable`] (a distinct 503, not a generic
@@ -483,6 +486,9 @@ impl From<avalon_chain::SettlementError> for AppError {
     fn from(e: avalon_chain::SettlementError) -> Self {
         match e {
             avalon_chain::SettlementError::InvalidPayload(inner) => AppError::InvalidPayload(inner),
+            avalon_chain::SettlementError::UnsupportedEntryVersion { version } => {
+                AppError::UnsupportedEntryVersion(version)
+            }
             other => AppError::Ledger(other),
         }
     }
@@ -495,11 +501,17 @@ impl From<sqlx::Error> for AppError {
                 AppError::ReplicaOnly
             }
             sqlx::Error::Decode(inner) => {
-                match inner
-                    .downcast_ref::<avalon_protocol::canonical_payload::CanonicalPayloadError>()
+                if let Some(payload_err) = inner
+                    .downcast_ref::<avalon_protocol::canonical_payload::CanonicalPayloadError>(
+                ) {
+                    AppError::InvalidPayload(payload_err.clone())
+                } else if let Some(avalon_chain::SettlementError::UnsupportedEntryVersion {
+                    version,
+                }) = inner.downcast_ref::<avalon_chain::SettlementError>()
                 {
-                    Some(payload_err) => AppError::InvalidPayload(payload_err.clone()),
-                    None => AppError::Database(err),
+                    AppError::UnsupportedEntryVersion(*version)
+                } else {
+                    AppError::Database(err)
                 }
             }
             _ => AppError::Database(err),
@@ -732,6 +744,7 @@ impl AppError {
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::InvalidPayload(..) => "INVALID_PAYLOAD",
+            AppError::UnsupportedEntryVersion(..) => "UNSUPPORTED_ENTRY_VERSION",
             AppError::Index(..) => "INDEX",
         }
     }
@@ -1006,6 +1019,7 @@ impl IntoResponse for AppError {
             AppError::ProofVerificationFailed => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
             AppError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
+            AppError::UnsupportedEntryVersion(_) => StatusCode::BAD_REQUEST,
             AppError::InvalidLogFilter => StatusCode::BAD_REQUEST,
             AppError::LogReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
             // 503, not 409/403: the request itself is fine and the

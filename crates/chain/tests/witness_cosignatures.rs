@@ -60,7 +60,7 @@ async fn insert_test_sth(pool: &PgPool, network_id: &str, tree_size: i64, root_h
 async fn store_then_read_back_assembles_a_verifiable_cosigned_head() {
     let pool = test_pool().await;
     let network_id = format!("avalon-witness-cosign-live-test-{}", Uuid::new_v4());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
 
     let tree_size = fresh_test_tree_size();
     let root_hash = "ab".repeat(32);
@@ -124,7 +124,7 @@ async fn store_then_read_back_assembles_a_verifiable_cosigned_head() {
 async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
     let pool = test_pool().await;
     let network_id = format!("avalon-witness-cosign-live-test-{}", Uuid::new_v4());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
 
     let tree_size = fresh_test_tree_size();
     let root_hash = "ab".repeat(32);
@@ -177,7 +177,7 @@ async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
 async fn a_relayed_reattestation_refreshes_in_place_instead_of_being_rejected() {
     let pool = test_pool().await;
     let network_id = format!("avalon-witness-cosign-live-test-{}", Uuid::new_v4());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
 
     let tree_size = fresh_test_tree_size();
     let root_hash = "ab".repeat(32);
@@ -230,7 +230,7 @@ async fn head_lookups_ignore_rows_under_other_network_ids() {
     let pool = test_pool().await;
     let own = format!("avalon-sth-scope-live-test-{}", Uuid::new_v4());
     let foreign = format!("avalon-sth-scope-live-test-{}", Uuid::new_v4());
-    let chain = PostgresSettlementProvider::new(pool.clone(), own.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), own.clone());
 
     let own_size = fresh_test_tree_size();
     let foreign_size = own_size + 1;

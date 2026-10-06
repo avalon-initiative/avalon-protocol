@@ -106,7 +106,7 @@ async fn entries_written_by_a_real_authority_mirror_completely() {
     let authority = Schema::new("auth").await;
     let mirror_db = Schema::new("mirror").await;
     let network_id = format!("avalon-test-real-{}", Uuid::new_v4());
-    let chain = PostgresSettlementProvider::connect(authority.pool.clone(), &network_id)
+    let chain = PostgresSettlementProvider::connect_core_shard(authority.pool.clone(), &network_id)
         .await
         .expect("genesis");
 

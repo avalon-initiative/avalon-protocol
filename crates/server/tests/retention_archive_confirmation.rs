@@ -82,7 +82,7 @@ async fn spawn_fake_peer(last_seq: i64) -> String {
 #[ignore]
 async fn pruning_is_blocked_until_confirmed_then_proceeds_once_it_is() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-retention-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-retention-test");
 
     // Commit a few real, throwaway entries — safe here because this
     // database is isolated (see this file's own module doc comment).

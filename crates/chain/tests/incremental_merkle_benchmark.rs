@@ -112,7 +112,7 @@ async fn inclusion_proof_cost_does_not_scale_linearly_with_ledger_size() {
     let pool = test_pool().await;
     let network_id =
         std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string());
-    let chain = PostgresSettlementProvider::new(pool, network_id);
+    let chain = PostgresSettlementProvider::new_core_shard(pool, network_id);
 
     let baseline = chain.entry_count().await.expect("entry_count should work");
 

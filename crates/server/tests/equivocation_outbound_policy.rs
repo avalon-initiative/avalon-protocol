@@ -12,7 +12,7 @@ async fn confirm(source: &str) {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://user:pass@127.0.0.1:1/none")
         .expect("a lazy pool never connects while it is built");
-    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
+    let chain = PostgresSettlementProvider::new_core_shard(pool, "avalon-test");
     let conflict = HeadConflict {
         shard_id: "core".into(),
         tree_size: 5,

@@ -121,7 +121,7 @@ fn batch(events: usize) -> EventBatch {
 
 /// Commits 3 batches (2, 3 and 1 events), returning the authority's provider.
 async fn build_authority(scratch: &Scratch, network_id: &str) -> PostgresSettlementProvider {
-    let chain = PostgresSettlementProvider::connect(scratch.pool.clone(), network_id)
+    let chain = PostgresSettlementProvider::connect_core_shard(scratch.pool.clone(), network_id)
         .await
         .expect("genesis");
     chain.commit(&batch(2)).await.expect("commit 1");
@@ -224,7 +224,7 @@ async fn promoted_target_reproduces_the_authority_and_can_extend_it() {
     assert_eq!(report.sths_missing, 0);
     assert!(report.genesis_written);
 
-    let promoted = PostgresSettlementProvider::connect(tgt.pool.clone(), &net)
+    let promoted = PostgresSettlementProvider::connect_core_shard(tgt.pool.clone(), &net)
         .await
         .expect("genesis matches");
 

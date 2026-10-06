@@ -50,6 +50,9 @@ pub enum SettlementError {
     /// An entry has a field the hash layout cannot represent, so it was not stored.
     #[error("entry cannot be hashed: {0}")]
     InvalidEntry(String),
+    /// An event version above `u16::MAX` cannot be carried by the entry hash layout.
+    #[error("event version {version} is not supported by the ledger entry layout (maximum 65535)")]
+    UnsupportedEntryVersion { version: u32 },
 }
 
 /// Anything capable of durably committing event batches and letting a caller

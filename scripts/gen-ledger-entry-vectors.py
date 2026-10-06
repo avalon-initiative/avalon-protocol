@@ -149,6 +149,12 @@ vectors = [
         timestampUnixMicros="-1",
     ),
     full(
+        "pre-2000 time with a sub-microsecond part floors",
+        '{"n":1}',
+        eventTimestampRfc3339="1969-12-31T23:59:59.9999995Z",
+        timestampUnixMicros="-1",
+    ),
+    full(
         "offset time is the same instant",
         '{"n":1}',
         eventTimestampRfc3339="2026-01-02T05:04:05.123456+02:00",

@@ -5,6 +5,9 @@
 //! subject `str`, payload hash (32 raw), event time as `i64` unix microseconds. The entry commits to
 //! the payload hash, not the payload, so a row with a pruned payload still verifies. A different
 //! field set is a new tag, since the version slot carries the event version.
+//!
+//! Exception to the signing-bytes rule "a new field means a new version": the version slot here is
+//! the event's own `version`, so it cannot version this layout. A changed field set gets a new tag.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -49,6 +52,18 @@ pub fn payload_hash(payload: &Value) -> Result<[u8; 32], CanonicalPayloadError> 
 /// Unix microseconds, the precision the ledger stores, truncated toward negative infinity.
 pub fn timestamp_micros(time: OffsetDateTime) -> Result<i64, EntryHashError> {
     i64::try_from(time.unix_timestamp_nanos().div_euclid(1000))
+        .map_err(|_| EntryHashError::OutOfRange("timestamp"))
+}
+
+/// The layout's `u16` version slot for an event version, rejecting anything above `u16::MAX`.
+pub fn layout_version(version: u32) -> Result<u16, EntryHashError> {
+    u16::try_from(version).map_err(|_| EntryHashError::OutOfRange("version"))
+}
+
+/// The instant floored to whole microseconds: the value that is both hashed and stored.
+pub fn floor_to_micros(time: OffsetDateTime) -> Result<OffsetDateTime, EntryHashError> {
+    let micros = i128::from(timestamp_micros(time)?);
+    OffsetDateTime::from_unix_timestamp_nanos(micros * 1000)
         .map_err(|_| EntryHashError::OutOfRange("timestamp"))
 }
 
@@ -183,6 +198,29 @@ mod tests {
         assert_ne!(t(1_000_000_000), t(1_000_001_000));
         assert_eq!(t(1_000_000_999), t(1_000_000_000));
         assert_eq!(t(-1), -1);
+    }
+
+    #[test]
+    fn floor_to_micros_floors_before_and_after_the_pg_epoch() {
+        for nanos in [
+            -1i128,
+            -1_500,
+            1_500,
+            -946_684_800_000_000_500,
+            946_684_799_999_999_999,
+        ] {
+            let t = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+            let f = floor_to_micros(t).unwrap();
+            assert_eq!(f.unix_timestamp_nanos() % 1000, 0);
+            assert_eq!(timestamp_micros(f).unwrap(), timestamp_micros(t).unwrap());
+            assert!(f <= t && t - f < time::Duration::microseconds(1));
+        }
+    }
+
+    #[test]
+    fn layout_version_rejects_above_u16() {
+        assert_eq!(layout_version(65535).unwrap(), 65535);
+        assert!(layout_version(65536).is_err());
     }
 
     #[test]

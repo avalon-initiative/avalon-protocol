@@ -551,7 +551,8 @@ async fn verify_target(
         .await
         .map_err(|e| e.to_string())?
         .ok_or("target has no genesis")?;
-    let chain = PostgresSettlementProvider::new(target.clone(), network_id).with_shard_id(shard_id);
+    let chain = PostgresSettlementProvider::new_core_shard(target.clone(), network_id)
+        .with_shard_id(shard_id);
     let entries = chain.list_entries().await.map_err(|e| e.to_string())?;
     if let Some(bad) = entries.iter().find(|e| !e.chain_intact) {
         return Err(format!("entry seq {} is not chain-intact", bad.seq));
