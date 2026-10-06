@@ -25,6 +25,20 @@
 //! required. Lower layout versions of a known tag stay verifiable: [`layout_versions`] is the
 //! per-tag table of supported versions, and a new field set is a new `layout_version`.
 //!
+//! Extension errors come in one order, from both [`Builder::finish`] and [`Reader::finish`]: per
+//! entry, its reserved flag bits (readers only) and then the running size against the cap; after
+//! the last entry, strict ascending order and duplicates (by position); then, last, critical
+//! extensions the tag does not understand.
+//!
+//! Deliberate choices. Hash width is 32 bytes in every layout version 1 (`hash`, `hash_algo`
+//! names SHA-256); another width means a new layout version. The tree head's signature algorithm is
+//! not named in its bytes: it is the node's own settlement key, identified by `signing_key_id` and
+//! the pinned trust anchor, and the STH layout holds no key or signature. When a second signature
+//! algorithm exists the exact change is a `signature_algo` field on the stored and served head
+//! (`SignedTreeHead`, the `signed_tree_heads`/`observed_sths` columns and the head DTOs) covered
+//! by STH layout version 2, written next to the signing key id with the same one-helper rule as
+//! [`Builder::key`].
+//!
 //! Nothing is self-describing beyond that: the layout of a `(tag, layout_version)` is the order of
 //! calls. Hashed JSON payloads are a different rule.
 //!
@@ -142,6 +156,9 @@ pub enum SigningBytesError {
     ExtensionReservedFlags(u8),
     #[error("extensions exceed the size bound")]
     ExtensionsTooLarge,
+    /// A wire or stored hex field is not lowercase hex of whole bytes.
+    #[error("not lowercase hex")]
+    InvalidHex,
 }
 
 impl SigningBytesError {
@@ -238,24 +255,25 @@ impl Extensions {
 
     /// Validates order, uniqueness and the size bound for `rules_version`.
     pub fn new(entries: Vec<Extension>, rules_version: u32) -> Result<Self, SigningBytesError> {
+        // Same order as the reader: size per entry first, then ascending order and duplicates.
         let max = caps_for(rules_version).max_extension_bytes;
         let mut total = 0usize;
-        for (i, e) in entries.iter().enumerate() {
+        for e in &entries {
             total = total.saturating_add(EXTENSION_ENTRY_HEADER.saturating_add(e.value.len()));
             if total > max {
                 return Err(SigningBytesError::ExtensionsTooLarge);
             }
-            if let Some(prev) = i.checked_sub(1).map(|j| &entries[j]) {
-                if prev.ext_type == e.ext_type {
-                    return Err(SigningBytesError::ExtensionDuplicate(e.ext_type));
-                }
-                if prev.ext_type > e.ext_type {
-                    return Err(SigningBytesError::ExtensionsUnsorted);
-                }
-            }
         }
         if entries.len() > usize::from(u16::MAX) {
             return Err(SigningBytesError::ExtensionsTooLarge);
+        }
+        for pair in entries.windows(2) {
+            if pair[0].ext_type == pair[1].ext_type {
+                return Err(SigningBytesError::ExtensionDuplicate(pair[1].ext_type));
+            }
+            if pair[0].ext_type > pair[1].ext_type {
+                return Err(SigningBytesError::ExtensionsUnsorted);
+            }
         }
         Ok(Self(entries))
     }
@@ -377,11 +395,20 @@ impl From<&Envelope> for EnvelopeWire {
     }
 }
 
+/// Decodes lowercase hex of whole bytes; uppercase, odd length and non-hex are [`SigningBytesError::InvalidHex`],
+/// so a wire field has exactly one spelling.
+pub fn decode_lower_hex(text: &str) -> Result<Vec<u8>, SigningBytesError> {
+    if text.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Err(SigningBytesError::InvalidHex);
+    }
+    hex::decode(text).map_err(|_| SigningBytesError::InvalidHex)
+}
+
 impl EnvelopeWire {
     /// Checks every part against this node's ranges; the typed "needs a newer version" result
     /// for anything above them.
     pub fn to_envelope(&self, tag: DomainTag) -> Result<Envelope, SigningBytesError> {
-        let extensions = hex::decode(&self.extensions).map_err(|_| SigningBytesError::Truncated)?;
+        let extensions = decode_lower_hex(&self.extensions)?;
         Envelope::from_parts(
             tag,
             self.layout_version,
@@ -402,6 +429,31 @@ pub fn layout_versions(tag: DomainTag) -> RangeInclusive<u16> {
     assert!(tags::ALL.contains(&tag), "unregistered tag");
     1..=1
 }
+
+/// The highest layout version each tag has a builder for (0 = no builder yet, the tag still
+/// builds legacy text). Raising a tag's range in [`layout_versions`] above 1 requires a builder that
+/// emits that version's field order, selected by `match layout_version`, and a bump here.
+pub const BUILT_LAYOUT_VERSIONS: &[(DomainTag, u16)] = &[
+    (tags::IDENTITY_CREATED, 1),
+    (tags::DEVICE_GRANT_APPROVED, 1),
+    (tags::IDENTITY_SIGNING_KEY_REVOKED, 1),
+    (tags::CROSS_NODE_LOGIN, 0),
+    (tags::SESSION_CONTINUATION, 0),
+    (tags::INTEREST_CLAIM, 0),
+    (tags::ATTESTATION_ISSUE, 0),
+    (tags::ATTESTATION_BULK_ISSUE, 0),
+    (tags::ATTESTATION_REVOKE, 0),
+    (tags::ISSUER_REGISTERED, 0),
+    (tags::SIGNATURE_GATE_ACTION, 0),
+    (tags::INTEGRATOR_NONCE_CHALLENGE, 0),
+    (tags::LEDGER_ENTRY, 1),
+    (tags::IDENTITY_CHAIN_EVENT, 1),
+    (tags::SETTLEMENT_STH, 1),
+    (tags::WITNESS_COSIGN, 1),
+    (tags::WITNESS_ANNOUNCE, 1),
+    // The conformance tag is built by the generic Builder at any layout version in its range.
+    (tags::CONFORMANCE, 2),
+];
 
 fn check_layout(tag: DomainTag, version: u16) -> Result<(), SigningBytesError> {
     let range = layout_versions(tag);
@@ -1222,5 +1274,84 @@ mod tests {
             )),
             Some((VersionKind::CriticalExtension, 4))
         );
+    }
+
+    #[test]
+    fn wire_hex_has_one_spelling_and_bad_hex_is_not_truncated() {
+        for bad in ["zz", "0", "00AB", "0X00", " 0000"] {
+            let wire = EnvelopeWire {
+                layout_version: 1,
+                rules_version: 1,
+                hash_algo: 1,
+                extensions: bad.to_string(),
+            };
+            assert_eq!(
+                wire.to_envelope(tags::CONFORMANCE).unwrap_err(),
+                SigningBytesError::InvalidHex,
+                "{bad:?}"
+            );
+        }
+        let ok = EnvelopeWire {
+            layout_version: 1,
+            rules_version: 1,
+            hash_algo: 1,
+            extensions: "0000".into(),
+        };
+        assert!(ok.to_envelope(tags::CONFORMANCE).is_ok());
+    }
+
+    #[test]
+    fn builder_and_reader_report_extension_errors_in_the_same_order() {
+        let big = vec![0u8; caps_for(1).max_extension_bytes];
+        let entries = |v: &[(u16, &[u8])]| {
+            v.iter()
+                .map(|(t, val)| Extension {
+                    ext_type: *t,
+                    critical: false,
+                    value: val.to_vec(),
+                })
+                .collect::<Vec<_>>()
+        };
+        // [9, 5, oversize]: the size is reported before the order, as the reader does.
+        let err = Extensions::new(entries(&[(9, b""), (5, b""), (6, &big)]), 1).unwrap_err();
+        assert_eq!(err, SigningBytesError::ExtensionsTooLarge);
+        let mut region = vec![0, 3];
+        for (t, v) in [(9u16, &b""[..]), (5, b""), (6, &big[..])] {
+            region.extend_from_slice(&t.to_be_bytes());
+            region.push(0);
+            region.extend_from_slice(&(v.len() as u32).to_be_bytes());
+            region.extend_from_slice(v);
+        }
+        assert_eq!(Extensions::decode(&region, 1).unwrap_err(), err);
+        // Duplicate before unsorted is by position, the same in both.
+        assert_eq!(
+            Extensions::new(entries(&[(5, b""), (5, b""), (1, b"")]), 1).unwrap_err(),
+            SigningBytesError::ExtensionDuplicate(5)
+        );
+    }
+
+    #[test]
+    fn unsupported_layout_dispatch_a_layout_range_never_outruns_its_builders() {
+        for tag in tags::ALL {
+            let built = BUILT_LAYOUT_VERSIONS
+                .iter()
+                .find(|(t, _)| t == tag)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} has no row in BUILT_LAYOUT_VERSIONS: add one (0 while it builds legacy text)",
+                        tag.as_str()
+                    )
+                })
+                .1;
+            let top = *layout_versions(*tag).end();
+            assert!(
+                top <= built.max(1),
+                "layout_versions({}) reaches {top} but its builder only emits version {built}: \
+                 a layout version above 1 needs a builder that emits that version's field order \
+                 (match on layout_version), then raise BUILT_LAYOUT_VERSIONS",
+                tag.as_str()
+            );
+        }
+        assert_eq!(BUILT_LAYOUT_VERSIONS.len(), tags::ALL.len());
     }
 }

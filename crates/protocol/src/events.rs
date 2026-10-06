@@ -346,14 +346,13 @@ impl IdentityChainPosition {
 
     /// The envelope this position records, or the typed "needs a newer version" result.
     pub fn envelope(&self) -> Result<Envelope, SigningBytesError> {
-        let extensions = hex::decode(&self.extensions).map_err(|_| SigningBytesError::Truncated)?;
-        Envelope::from_parts(
-            crate::signing_bytes::tags::IDENTITY_CHAIN_EVENT,
-            self.layout_version,
-            self.rules_version,
-            self.hash_algo,
-            &extensions,
-        )
+        crate::signing_bytes::EnvelopeWire {
+            layout_version: self.layout_version,
+            rules_version: self.rules_version,
+            hash_algo: self.hash_algo,
+            extensions: self.extensions.clone(),
+        }
+        .to_envelope(crate::signing_bytes::tags::IDENTITY_CHAIN_EVENT)
     }
 }
 

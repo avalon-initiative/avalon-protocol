@@ -33,8 +33,8 @@ impl EnvelopeRow {
             layout_version: i16::try_from(wire.layout_version).map_err(out_of_range)?,
             rules_version: i32::try_from(wire.rules_version).map_err(out_of_range)?,
             hash_algo: i16::from(wire.hash_algo),
-            extensions: hex::decode(&wire.extensions)
-                .map_err(|_| SettlementError::InvalidEntry("extensions are not hex".to_string()))?,
+            extensions: avalon_protocol::signing_bytes::decode_lower_hex(&wire.extensions)
+                .map_err(SettlementError::from_layout)?,
         })
     }
 
