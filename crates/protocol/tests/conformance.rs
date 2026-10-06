@@ -14,6 +14,7 @@
 //!
 //! Offline and dependency-free — no server, no database.
 
+mod common;
 use avalon_protocol::achievements::{
     attestation_signing_bytes, bulk_attestation_signing_bytes, revocation_signing_bytes,
 };
@@ -28,6 +29,7 @@ use avalon_protocol::interest_claim::{
 };
 use avalon_protocol::sth::{signing_message as sth_signing_message, SignedTreeHead};
 use avalon_protocol::witness::WitnessCosignature;
+use common::error_json;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -156,6 +158,10 @@ fn attestation_signing_matches_shared_vectors() {
 fn signed_tree_head_signing_matches_shared_vectors() {
     let doc = load("signed-tree-head.json");
     let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert!(
+        doc["vectors"].as_array().unwrap().len() >= 8,
+        "vectors look truncated"
+    );
 
     for vector in doc["vectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
@@ -193,21 +199,48 @@ fn signed_tree_head_rejects_root_hashes_that_are_not_32_byte_lowercase_hex() {
     for vector in rejected {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
         let input = &vector["input"];
-        assert!(
-            sth_signing_message(
-                tree_size(&input["treeSize"]),
-                input["rootHashHex"].as_str().unwrap(),
-                input["networkId"].as_str().unwrap(),
-                input["signingKeyId"].as_str().unwrap(),
-                parse_offset(input, "createdAtUnixSeconds"),
-                &avalon_protocol::signing_bytes::Envelope::current(
-                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
-                ),
-            )
-            .is_err(),
-            "[{name}] must not produce signing bytes"
+        let err = sth_signing_message(
+            tree_size(&input["treeSize"]),
+            input["rootHashHex"].as_str().unwrap(),
+            input["networkId"].as_str().unwrap(),
+            input["signingKeyId"].as_str().unwrap(),
+            parse_offset(input, "createdAtUnixSeconds"),
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
+        )
+        .expect_err(&format!("[{name}] must not produce signing bytes"));
+        assert_eq!(
+            err,
+            avalon_protocol::sth::SthSigningError::InvalidRootHash,
+            "[{name}]"
         );
+        assert_eq!(vector["expected"]["error"], "invalid_root_hash", "[{name}]");
     }
+}
+
+/// Messages this node cannot read give exactly the typed result and nothing verifies.
+fn assert_read_rejects(file: &str, min: usize) {
+    let doc = load(file);
+    let vectors = doc["readRejectVectors"].as_array().unwrap();
+    assert!(
+        vectors.len() >= min,
+        "{file}: read reject vectors look truncated"
+    );
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap();
+        let err = read_all(&vector["input"])
+            .err()
+            .unwrap_or_else(|| panic!("[{file} {name}] accepted"));
+        assert_eq!(error_json(&err), vector["expected"], "[{file} {name}]");
+    }
+}
+
+#[test]
+fn unreadable_tree_head_cosignature_and_announce_messages_give_the_typed_result() {
+    assert_read_rejects("signed-tree-head.json", 5);
+    assert_read_rejects("witness-cosigned-tree-head.json", 6);
+    assert_read_rejects("witness-announce.json", 4);
 }
 
 #[test]
@@ -329,11 +362,64 @@ fn cosignature_from_json(v: &Value, sth: &SignedTreeHead) -> WitnessCosignature 
     }
 }
 
+/// Where a vector carries a cosignature's signing bytes, the implementation must produce them.
+fn assert_cosignature_bytes(name: &str, input: &Value, doc: &Value) {
+    let network_id = doc["networkId"].as_str().unwrap();
+    let heads: Vec<&Value> = if input.get("sth").is_some() {
+        vec![input]
+    } else {
+        vec![&input["headA"], &input["headB"]]
+    };
+    for head in heads {
+        let sth = sth_from_json(&head["sth"], network_id);
+        for c in head["cosignatures"].as_array().into_iter().flatten() {
+            let Some(want) = c["signingBytesHex"].as_str() else {
+                continue;
+            };
+            let Some(cosig) = readable_cosignature(c, &sth) else {
+                continue;
+            };
+            let key = hex::decode(
+                doc["witnessVerifyingKeysHex"][c["witnessKeyId"].as_str().unwrap()]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            let got =
+                avalon_protocol::witness::witness_signing_message(&cosig, &key.try_into().unwrap())
+                    .unwrap();
+            assert_eq!(hex::encode(got), want, "[{name}] cosignature signing bytes");
+        }
+    }
+}
+
+/// The cosignature, or `None` when it carries an envelope this node cannot read (such a
+/// cosignature is dropped and never counted).
+fn readable_cosignature(v: &Value, sth: &SignedTreeHead) -> Option<WitnessCosignature> {
+    let mut cosig = cosignature_from_json(v, sth);
+    if let Some(e) = v.get("envelope") {
+        let wire = avalon_protocol::signing_bytes::EnvelopeWire {
+            layout_version: e["layoutVersion"].as_u64().unwrap().try_into().unwrap(),
+            rules_version: e["rulesVersion"].as_u64().unwrap().try_into().unwrap(),
+            hash_algo: e["hashAlgo"].as_u64().unwrap().try_into().unwrap(),
+            extensions: e["extensions"].as_str().unwrap().to_string(),
+        };
+        cosig.envelope = wire
+            .to_envelope(avalon_protocol::signing_bytes::tags::WITNESS_COSIGN)
+            .ok()?;
+    }
+    Some(cosig)
+}
+
 fn cosigned_head_from_json(v: &Value, network_id: &str) -> CosignedTreeHead {
     let sth = sth_from_json(&v["sth"], network_id);
     let cosignatures = v["cosignatures"]
         .as_array()
-        .map(|arr| arr.iter().map(|c| cosignature_from_json(c, &sth)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| readable_cosignature(c, &sth))
+                .collect()
+        })
         .unwrap_or_default();
     CosignedTreeHead { sth, cosignatures }
 }
@@ -372,9 +458,14 @@ fn witness_cosigned_tree_head_matches_shared_vectors() {
             .collect()
     };
 
+    assert!(
+        doc["vectors"].as_array().unwrap().len() >= 14,
+        "vectors look truncated"
+    );
     for vector in doc["vectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
         let input = &vector["input"];
+        assert_cosignature_bytes(name, input, &doc);
         let known_list = known_list_for(input["knownList"].as_array().unwrap());
         let freshness_cutoff = parse_offset(input, "freshnessCutoffUnixSeconds");
         let now = parse_offset(input, "nowUnixSeconds");
@@ -472,6 +563,11 @@ fn identity_chain_matches_shared_vectors() {
     let doc = load("identity-chain.json");
     let hash_from_hex = |s: &str| -> EventHash { hex::decode(s).unwrap().try_into().unwrap() };
 
+    assert!(
+        doc["hashVectors"].as_array().unwrap().len() >= 25,
+        "hash vectors look truncated"
+    );
+    assert!(!doc["resolutionCases"].as_array().unwrap().is_empty());
     for vector in doc["hashVectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let i = &vector["input"];
@@ -1193,34 +1289,6 @@ fn read_types<'a>(
     Ok(out)
 }
 
-fn error_json(e: &avalon_protocol::signing_bytes::SigningBytesError) -> Value {
-    use avalon_protocol::signing_bytes::{SigningBytesError as E, VersionKind};
-    let what = |k: &VersionKind| match k {
-        VersionKind::Layout => "layout",
-        VersionKind::Rules => "rules",
-        VersionKind::HashAlgo => "hash_algo",
-        VersionKind::SigAlgo => "sig_algo",
-        VersionKind::CriticalExtension => "critical_extension",
-    };
-    match e {
-        E::TagMismatch => serde_json::json!({"error": "tag_mismatch"}),
-        E::Truncated => serde_json::json!({"error": "truncated"}),
-        E::InvalidUtf8 => serde_json::json!({"error": "invalid_utf8"}),
-        E::TrailingBytes => serde_json::json!({"error": "trailing_bytes"}),
-        E::FieldTooLong => serde_json::json!({"error": "field_too_long"}),
-        E::NeedsNewerVersion { what: k, required } => {
-            serde_json::json!({"error": "needs_newer_version", "what": what(k), "required": required})
-        }
-        E::UnsupportedVersion { what: k, value } => {
-            serde_json::json!({"error": "unsupported_version", "what": what(k), "value": value})
-        }
-        E::ExtensionsUnsorted => serde_json::json!({"error": "extensions_unsorted"}),
-        E::ExtensionDuplicate(_) => serde_json::json!({"error": "extension_duplicate"}),
-        E::ExtensionReservedFlags(_) => serde_json::json!({"error": "extension_reserved_flags"}),
-        E::ExtensionsTooLarge => serde_json::json!({"error": "extensions_too_large"}),
-    }
-}
-
 type ReadAll = (
     u16,
     u32,
@@ -1241,6 +1309,10 @@ fn read_all(input: &Value) -> Result<ReadAll, avalon_protocol::signing_bytes::Si
 fn structured_signing_bytes_build_and_read_back_per_shared_vectors() {
     use avalon_protocol::signing_bytes::Reader;
     let doc = load("structured-signing-bytes.json");
+    assert!(
+        doc["vectors"].as_array().unwrap().len() >= 20,
+        "vectors look truncated"
+    );
     for vector in doc["vectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let input = &vector["input"];
@@ -1291,6 +1363,10 @@ fn structured_signing_bytes_reject_per_shared_vectors() {
 #[test]
 fn envelope_builds_per_shared_vectors() {
     let doc = load("envelope.json");
+    assert!(
+        doc["buildVectors"].as_array().unwrap().len() >= 9,
+        "build vectors look truncated"
+    );
     for vector in doc["buildVectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let message = build_from_vector(name, &vector["input"]);
@@ -1302,6 +1378,10 @@ fn envelope_builds_per_shared_vectors() {
 fn envelope_reads_preserve_and_rebuild_per_shared_vectors() {
     use avalon_protocol::signing_bytes::{Builder, Envelope, HashAlgo};
     let doc = load("envelope.json");
+    assert!(
+        doc["readVectors"].as_array().unwrap().len() >= 6,
+        "read vectors look truncated"
+    );
     for vector in doc["readVectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let (input, want) = (&vector["input"], &vector["expected"]);
@@ -1369,6 +1449,7 @@ fn envelope_rejects_per_shared_vectors() {
 #[test]
 fn envelope_caps_match_shared_vectors() {
     let doc = load("envelope.json");
+    assert!(!doc["capVectors"].as_array().unwrap().is_empty());
     for vector in doc["capVectors"].as_array().unwrap() {
         let caps = avalon_protocol::signing_bytes::caps_for(
             vector["input"]["rulesVersion"].as_u64().unwrap() as u32,

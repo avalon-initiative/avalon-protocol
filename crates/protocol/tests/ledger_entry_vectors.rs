@@ -6,7 +6,8 @@ use avalon_protocol::ledger_entry::{
     entry_hash, entry_signing_bytes, parse_hash, payload_hash, timestamp_micros, EntryHashError,
     EntryHashInput,
 };
-use avalon_protocol::signing_bytes::{tags, Envelope, Extension, Extensions, SigningBytesError};
+mod common;
+use avalon_protocol::signing_bytes::{tags, Envelope, Extension, Extensions};
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -75,19 +76,13 @@ fn payload_hash_of(json: &str) -> [u8; 32] {
     payload_hash(&parse_strict(json).unwrap()).unwrap()
 }
 
-fn layout_code(e: &SigningBytesError) -> &'static str {
-    match e {
-        SigningBytesError::NeedsNewerVersion { .. } => "needs_newer_version",
-        SigningBytesError::ExtensionsUnsorted => "extensions_unsorted",
-        SigningBytesError::ExtensionDuplicate(_) => "extension_duplicate",
-        SigningBytesError::ExtensionsTooLarge => "extensions_too_large",
-        other => panic!("unexpected layout error {other}"),
-    }
-}
-
 #[test]
 fn ledger_entry_hash_matches_shared_vectors() {
     let doc = load();
+    assert!(
+        doc["vectors"].as_array().unwrap().len() > 30,
+        "vectors look truncated"
+    );
     for v in doc["vectors"].as_array().unwrap() {
         let name = v["name"].as_str().unwrap();
         let (input, expected) = (&v["input"], &v["expected"]);
@@ -129,16 +124,17 @@ fn ledger_entry_hash_matches_shared_vectors() {
 #[test]
 fn ledger_entry_hash_rejects_per_shared_vectors() {
     let doc = load();
-    for v in doc["rejectVectors"].as_array().unwrap() {
+    let vectors = doc["rejectVectors"].as_array().unwrap();
+    assert!(vectors.len() > 15, "reject vectors look truncated");
+    for v in vectors {
         let name = v["name"].as_str().unwrap();
-        let want = v["expected"]["error"].as_str().unwrap();
         let got = match build(&v["input"]) {
-            Err(EntryHashError::InvalidHash(_)) => "invalid_hash",
-            Err(EntryHashError::OutOfRange(_)) => "out_of_range",
-            Err(EntryHashError::Layout(e)) => layout_code(&e),
+            Err(EntryHashError::InvalidHash(_)) => serde_json::json!({"error": "invalid_hash"}),
+            Err(EntryHashError::OutOfRange(_)) => serde_json::json!({"error": "out_of_range"}),
+            Err(EntryHashError::Layout(e)) => common::error_json(&e),
             Ok(_) => panic!("[{name}] accepted"),
         };
-        assert_eq!(got, want, "[{name}]");
+        assert_eq!(got, v["expected"], "[{name}]");
     }
 }
 

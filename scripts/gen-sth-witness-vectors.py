@@ -139,44 +139,70 @@ def s(text):
     return struct.pack(">I", len(raw)) + raw
 
 
-def sth_bytes(tree_size, root_hex, network_id, key_id, created):
+def sth_bytes(tree_size, root_hex, network_id, key_id, created, layout=1, rules=1, algo=1, ext=()):
     return (
-        env.header(TAG_STH)
+        env.header(TAG_STH, layout, rules)
         + struct.pack(">q", tree_size)
         + s(network_id)
         + s(key_id)
         + struct.pack(">q", created)
-        + env.hash_algo()
+        + env.hash_algo(algo)
         + bytes.fromhex(root_hex)
-        + env.extension_region()
+        + env.extension_region(ext)
     )
 
 
-def cosign_bytes(sth, author_sig, witness_key_id, observed, witness_public_key):
+def cosign_bytes(sth, author_sig, witness_key_id, observed, witness_public_key, layout=1, rules=1, algo=1,
+                 sig_alg=1, key_alg=1, ext=()):
     return (
-        env.header(TAG_COSIGN)
+        env.header(TAG_COSIGN, layout, rules)
         + struct.pack(">q", sth["treeSize"])
         + s(sth["networkId"])
         + struct.pack(">q", sth["createdAtUnixSeconds"])
         + s(sth["signingKeyId"])
-        + env.signature(author_sig)
+        + env.signature(author_sig, sig_alg)
         + s(witness_key_id)
-        + env.key(witness_public_key)
+        + env.key(witness_public_key, key_alg)
         + struct.pack(">q", observed)
-        + env.hash_algo()
+        + env.hash_algo(algo)
         + bytes.fromhex(sth["rootHashHex"])
-        + env.extension_region()
+        + env.extension_region(ext)
     )
 
 
-def announce_bytes(base_url, key_hex, announced):
+def announce_bytes(base_url, key_hex, announced, layout=1, rules=1, key_alg=1, ext=()):
     return (
-        env.header(TAG_ANNOUNCE)
+        env.header(TAG_ANNOUNCE, layout, rules)
         + s(base_url)
-        + env.key(bytes.fromhex(key_hex))
+        + env.key(bytes.fromhex(key_hex), key_alg)
         + struct.pack(">q", announced)
-        + env.extension_region()
+        + env.extension_region(ext)
     )
+
+
+NEEDS_NEWER = [
+    # (name suffix, kwargs for the builder, expected what, required)
+    ("a layout version above the supported range", dict(layout=2), "layout", 2),
+    ("a rules version above the supported range", dict(rules=2), "rules", 2),
+    ("an unknown critical extension", dict(ext=[(0x1234, True, b"")]), "critical_extension", 0x1234),
+]
+
+
+def read_rejects(tag, builder, read, extra):
+    """Messages this node cannot read, each with the typed result it must give.
+
+    extra: more (suffix, kwargs, what, required) rows specific to the layout."""
+    out = []
+    for suffix, kw, what, required in NEEDS_NEWER + extra:
+        msg = builder(**kw)
+        out.append(
+            {
+                "name": suffix[0].upper() + suffix[1:],
+                "input": {"tag": tag.decode(), "messageHex": msg.hex(), "read": read},
+                "expected": {"error": "needs_newer_version", "what": what, "required": required},
+            }
+        )
+    return out
 
 
 def unix(rfc3339):
@@ -246,13 +272,34 @@ def gen_signed_tree_head():
             inp["treeSize"] = str(inp["treeSize"])
     doc["vectors"] = vectors
     good = base["rootHashHex"]
+    bad = {"error": "invalid_root_hash"}
     doc["rejectedVectors"] = [
-        {"name": "root hash in uppercase hex", "input": dict(base, rootHashHex=good.upper(), signingKeyId="settlement-operator-1")},
-        {"name": "root hash one byte short", "input": dict(base, rootHashHex=good[:-2], signingKeyId="settlement-operator-1")},
-        {"name": "root hash one byte long", "input": dict(base, rootHashHex=good + "ab", signingKeyId="settlement-operator-1")},
-        {"name": "root hash is not hex", "input": dict(base, rootHashHex="zz" * 32, signingKeyId="settlement-operator-1")},
-        {"name": "root hash is empty", "input": dict(base, rootHashHex="", signingKeyId="settlement-operator-1")},
+        {"name": "root hash in uppercase hex", "input": dict(base, rootHashHex=good.upper(), signingKeyId="settlement-operator-1"), "expected": bad},
+        {"name": "root hash one byte short", "input": dict(base, rootHashHex=good[:-2], signingKeyId="settlement-operator-1"), "expected": bad},
+        {"name": "root hash one byte long", "input": dict(base, rootHashHex=good + "ab", signingKeyId="settlement-operator-1"), "expected": bad},
+        {"name": "root hash is not hex", "input": dict(base, rootHashHex="zz" * 32, signingKeyId="settlement-operator-1"), "expected": bad},
+        {"name": "root hash is empty", "input": dict(base, rootHashHex="", signingKeyId="settlement-operator-1"), "expected": bad},
     ]
+
+    def head_msg(**kw):
+        return sth_bytes(
+            int(base["treeSize"]), good, base["networkId"], "settlement-operator-1", base["createdAtUnixSeconds"], **kw
+        )
+
+    doc["readRejectVectors"] = read_rejects(
+        TAG_STH,
+        head_msg,
+        ["i64", "str", "str", "i64", "hash_algo", "hash"],
+        [
+            ("an unknown hash algorithm 9", dict(algo=9), "hash_algo", 9),
+            ("hash algorithm 0 is not a hash", dict(algo=0), "hash_algo", 0),
+        ],
+    )
+    doc["description"] += (
+        " readRejectVectors are messages this node cannot read: input.messageHex read as input.read "
+        "(field types in order) under input.tag must fail with exactly expected (error needs_newer_version, "
+        "what and required), and nothing is verified. rejectedVectors give expected.error invalid_root_hash."
+    )
     return dump(doc)
 
 
@@ -482,6 +529,7 @@ def gen_cosigned():
         full = dict(sth, networkId=network)
         for c in head.get("cosignatures", []):
             m = cosign_bytes(full, sig, c["witnessKeyId"], c["observedAtUnixSeconds"], public_key(seeds[c["witnessKeyId"]]))
+            c["signingBytesHex"] = m.hex()
             c["signatureHex"] = sign(seeds[c["witnessKeyId"]], m).hex()
 
     doc["vectors"] = doc["vectors"][:7]
@@ -508,6 +556,7 @@ def gen_cosigned():
         doc["vectors"].append({"name": name, "input": inp, "expected": {"accepted": False}})
 
     good = dict(first["cosignatures"][0])
+    good2 = dict(first["cosignatures"][1])
     # witness-2 signs the same tuple but over another author key id, or another author signature.
     other_id = dict(full, signingKeyId="rotated-operator-key")
     m = cosign_bytes(other_id, sig, "witness-2", 1790000600, public_key(seeds["witness-2"]))
@@ -520,6 +569,73 @@ def gen_cosigned():
     variant(
         "cosignature over another author signature on the same tuple does not count",
         [good, {"witnessKeyId": "witness-2", "observedAtUnixSeconds": 1790000600, "signatureHex": sign(seeds["witness-2"], m).hex()}],
+    )
+
+    def unreadable(witness, name_kw, label):
+        """A cosignature signed under an envelope this node cannot read."""
+        envelope = {"layoutVersion": 1, "rulesVersion": 1, "hashAlgo": 1, "extensions": "0000"}
+        kw = {}
+        if "rules" in name_kw:
+            envelope["rulesVersion"] = name_kw["rules"]
+            kw["rules"] = name_kw["rules"]
+        if "algo" in name_kw:
+            envelope["hashAlgo"] = name_kw["algo"]
+            kw["algo"] = name_kw["algo"]
+        if "ext" in name_kw:
+            envelope["extensions"] = env.extension_region(name_kw["ext"]).hex()
+            kw["ext"] = name_kw["ext"]
+        m = cosign_bytes(full, sig, witness, 1790000600, public_key(seeds[witness]), **kw)
+        return {
+            "witnessKeyId": witness,
+            "observedAtUnixSeconds": 1790000600,
+            "envelope": envelope,
+            "signingBytesHex": m.hex(),
+            "signatureHex": sign(seeds[witness], m).hex(),
+        }
+
+    def accepting(name, cosigs, accepted):
+        inp = {
+            "sth": dict(template_sth),
+            "cosignatures": cosigs,
+            "knownList": ["witness-1", "witness-2", "witness-3"],
+            "freshnessCutoffUnixSeconds": first["freshnessCutoffUnixSeconds"],
+            "nowUnixSeconds": first["nowUnixSeconds"],
+        }
+        doc["vectors"].append({"name": name, "input": inp, "expected": {"accepted": accepted}})
+
+    for label, kw in [
+        ("a rules version above the supported range", {"rules": 2}),
+        ("an unknown hash algorithm (a different one from the head's)", {"algo": 9}),
+        ("an unknown critical extension", {"ext": [(0x1234, True, b"")]}),
+    ]:
+        bad = unreadable("witness-3", kw, label)
+        accepting(
+            f"a cosignature with {label} is not counted and does not void a head the others carry",
+            [good, good2, bad],
+            True,
+        )
+        accepting(
+            f"a cosignature with {label} is not counted toward the majority",
+            [good, bad],
+            False,
+        )
+    doc["description"] += (
+        " A cosignature object may carry envelope {layoutVersion, rulesVersion, hashAlgo, extensions "
+        "(hex)}, the values it was signed under: one this node cannot read (a version above its range, a "
+        "hash algorithm other than the head's or unknown, a critical extension it does not understand) is "
+        "dropped and never counted, and does not void the head. Each cosignature also carries "
+        "signingBytesHex, the exact bytes it signs. readRejectVectors are cosignature messages this node "
+        "cannot read: input.messageHex read as input.read under input.tag must fail with exactly expected."
+    )
+    doc["readRejectVectors"] = read_rejects(
+        TAG_COSIGN,
+        lambda **kw: cosign_bytes(full, sig, "witness-1", 1790000600, public_key(seeds["witness-1"]), **kw),
+        ["i64", "str", "i64", "str", "signature", "str", "key", "i64", "hash_algo", "hash"],
+        [
+            ("an unknown hash algorithm 9", dict(algo=9), "hash_algo", 9),
+            ("an unknown author signature algorithm 2", dict(sig_alg=2), "sig_algo", 2),
+            ("an unknown witness key algorithm 2", dict(key_alg=2), "sig_algo", 2),
+        ],
     )
     return dump(doc)
 
@@ -594,6 +710,16 @@ def gen_announce():
     add("accepted: empty base url", {"baseUrl": ""}, True)
     add("rejected: key id in uppercase hex", {"witnessKeyId": k1.upper()}, False)
     doc["vectors"] = out
+    doc["readRejectVectors"] = read_rejects(
+        TAG_ANNOUNCE,
+        lambda **kw: announce_bytes(url, k1, unix("2026-09-25T11:59:00Z"), **kw),
+        ["str", "key", "i64"],
+        [("an unknown witness key algorithm 2", dict(key_alg=2), "sig_algo", 2)],
+    )
+    doc["description"] += (
+        " readRejectVectors are announce messages this node cannot read: input.messageHex read as "
+        "input.read under input.tag must fail with exactly expected (needs_newer_version, what, required)."
+    )
     return dump(doc)
 
 
