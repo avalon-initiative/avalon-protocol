@@ -51,6 +51,7 @@ pub mod permissions;
 pub mod revocation;
 pub mod shard;
 pub mod shard_identity;
+pub mod signing_bytes;
 pub mod social;
 pub mod sth;
 pub mod witness;
