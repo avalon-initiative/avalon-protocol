@@ -70,15 +70,8 @@ impl Respond for WitnessAtSize {
         let Some(sth) = heads.get(&size) else {
             return ResponseTemplate::new(404);
         };
-        let cosig = sign_witness_cosignature(
-            &self.key,
-            &self.id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
-            OffsetDateTime::now_utc(),
-        );
+        let cosig =
+            sign_witness_cosignature(&self.key, &self.id, &sth, OffsetDateTime::now_utc()).unwrap();
         ResponseTemplate::new(200).set_body_json(sth_json(
             sth,
             vec![WitnessCosignatureDto::from_witness_cosignature(&cosig)],

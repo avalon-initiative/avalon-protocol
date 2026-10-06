@@ -378,15 +378,7 @@ mod tests {
     }
 
     fn cosign(k: &SigningKey, id: &str, sth: &SignedTreeHead) -> WitnessCosignature {
-        sign_witness_cosignature(
-            k,
-            id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
-            OffsetDateTime::now_utc(),
-        )
+        sign_witness_cosignature(k, id, &sth, OffsetDateTime::now_utc()).unwrap()
     }
 
     fn body(sth: &SignedTreeHead, cosigs: &[WitnessCosignature]) -> serde_json::Value {
@@ -473,12 +465,10 @@ mod tests {
         let stale = sign_witness_cosignature(
             &w2.0,
             &w2.1,
-            h.sth.tree_size,
-            &h.sth.root_hash,
-            &h.sth.network_id,
-            h.sth.created_at,
+            &h.sth,
             OffsetDateTime::now_utc() - time::Duration::hours(1),
-        );
+        )
+        .unwrap();
         let (s1, s2) = (MockServer::start().await, MockServer::start().await);
         // The first witness holds its own fresh cosignature plus an old copy of the second's.
         serve(
@@ -510,12 +500,10 @@ mod tests {
         sign_witness_cosignature(
             k,
             id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
+            &sth,
             OffsetDateTime::now_utc() - time::Duration::hours(1),
         )
+        .unwrap()
     }
 
     #[test]

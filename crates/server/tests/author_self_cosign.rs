@@ -169,12 +169,10 @@ async fn the_authoring_node_cosigns_its_new_head_and_it_counts_toward_majority()
     let other_cosig = avalon_protocol::witness::sign_witness_cosignature(
         &other,
         &other_id,
-        sth.tree_size,
-        &sth.root_hash,
-        &sth.network_id,
-        sth.created_at,
+        &sth,
         OffsetDateTime::now_utc(),
-    );
+    )
+    .unwrap();
     let accepts = |cosignatures| {
         let head = CosignedTreeHead {
             sth: sth.clone(),

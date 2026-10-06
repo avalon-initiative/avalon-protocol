@@ -488,9 +488,8 @@ mod tests {
         let cosignatures = cosigners
             .iter()
             .map(|(key, key_id)| {
-                avalon_protocol::witness::sign_witness_cosignature(
-                    key, key_id, tree_size, root_hash, network_id, now, now,
-                )
+                avalon_protocol::witness::sign_witness_cosignature(key, key_id, &author_sth, now)
+                    .unwrap()
             })
             .collect();
         CosignedTreeHead {
@@ -764,17 +763,15 @@ mod tests {
             now,
             &[(&w1.0, w1.1.clone())],
         );
-        head_a
-            .cosignatures
-            .push(avalon_protocol::witness::sign_witness_cosignature(
+        head_a.cosignatures.push(
+            avalon_protocol::witness::sign_witness_cosignature(
                 &w1.0,
                 "not-hex-at-all",
-                1,
-                &root_hash_fixture(1),
-                "avalon-test",
+                &head_a.sth,
                 now,
-                now,
-            ));
+            )
+            .unwrap(),
+        );
         let head_b = head_a.clone();
 
         let list = known_list_from_cosignatures(&head_a, &head_b);

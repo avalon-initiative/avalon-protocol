@@ -79,15 +79,7 @@ impl Respond for Cosigning {
             self.key.clone()
         };
         let observed = OffsetDateTime::now_utc() + self.opts.observed_offset.unwrap_or_default();
-        let cosig = sign_witness_cosignature(
-            &signer,
-            &self.id,
-            sth.tree_size,
-            &root,
-            &sth.network_id,
-            sth.created_at,
-            observed,
-        );
+        let cosig = sign_witness_cosignature(&signer, &self.id, &sth, observed).unwrap();
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "tree_size": sth.tree_size,
             "root_hash": root,
@@ -295,12 +287,10 @@ async fn a_stale_stored_cosignature_is_refreshed() {
     let old = sign_witness_cosignature(
         &w.key,
         &w.id,
-        sth.tree_size,
-        &sth.root_hash,
-        &sth.network_id,
-        sth.created_at,
+        &sth,
         OffsetDateTime::now_utc() - time::Duration::seconds(300),
-    );
+    )
+    .unwrap();
     a.chain
         .store_witness_cosignature(&a.shard, &old)
         .await
@@ -562,12 +552,10 @@ async fn a_row_the_store_leaves_untouched_is_not_counted_as_written() {
     let other = sign_witness_cosignature(
         &w.key,
         &w.id,
-        sth.tree_size,
-        &sth.root_hash,
-        &sth.network_id,
-        sth.created_at - time::Duration::seconds(1),
+        &sth,
         OffsetDateTime::now_utc() - time::Duration::seconds(300),
-    );
+    )
+    .unwrap();
     a.chain
         .store_witness_cosignature(&a.shard, &other)
         .await

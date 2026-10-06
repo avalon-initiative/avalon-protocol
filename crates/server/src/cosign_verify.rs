@@ -162,15 +162,7 @@ mod tests {
         let cosignatures = cosigners
             .iter()
             .map(|(key, id, observed_at)| {
-                sign_witness_cosignature(
-                    key,
-                    id,
-                    tree_size,
-                    root_hash,
-                    network_id,
-                    created_at,
-                    *observed_at,
-                )
+                sign_witness_cosignature(key, id, &sth, *observed_at).unwrap()
             })
             .collect();
         CosignedTreeHead { sth, cosignatures }
@@ -483,8 +475,7 @@ mod tests {
         )
         .unwrap();
         let (witness_key, id) = witness();
-        let cosig =
-            sign_witness_cosignature(&witness_key, &id, 3, &root(4), "avalon-test", now, now);
+        let cosig = sign_witness_cosignature(&witness_key, &id, &sth, now).unwrap();
 
         let dto = WitnessCosignatureDto::from_witness_cosignature(&cosig);
         let rebuilt = dto.to_witness_cosignature(&sth);

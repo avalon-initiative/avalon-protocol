@@ -944,17 +944,7 @@ mod tests {
             .collect();
         let mut cosigs: Vec<_> = cfg_keys
             .iter()
-            .map(|c| {
-                sign_witness_cosignature(
-                    &c.signing_key,
-                    &c.witness_key_id,
-                    sth.tree_size,
-                    &sth.root_hash,
-                    &sth.network_id,
-                    sth.created_at,
-                    t0,
-                )
-            })
+            .map(|c| sign_witness_cosignature(&c.signing_key, &c.witness_key_id, &sth, t0).unwrap())
             .collect();
         let accepts = |cosigs: &[_], now: OffsetDateTime| {
             let head = CosignedTreeHead {
@@ -971,7 +961,7 @@ mod tests {
             cosigs = cfg_keys
                 .iter()
                 .zip(&cosigs)
-                .map(|(c, old)| reattested(c, old, now))
+                .map(|(c, old)| reattested(c, old, now).unwrap())
                 .collect();
             assert!(accepts(&cosigs, now));
         }
@@ -1000,17 +990,7 @@ mod tests {
         let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0).unwrap();
         let cosignatures = witnesses
             .iter()
-            .map(|(id, k)| {
-                sign_witness_cosignature(
-                    k,
-                    id,
-                    sth.tree_size,
-                    &sth.root_hash,
-                    &sth.network_id,
-                    sth.created_at,
-                    t0,
-                )
-            })
+            .map(|(id, k)| sign_witness_cosignature(k, id, &sth, t0).unwrap())
             .collect();
         let head = CosignedTreeHead { sth, cosignatures };
         let now = t0 + window * 2;
@@ -1083,17 +1063,7 @@ mod tests {
         ];
         let now = OffsetDateTime::now_utc();
         let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now).unwrap();
-        let cosign = |k: &SigningKey, id: &str| {
-            sign_witness_cosignature(
-                k,
-                id,
-                sth.tree_size,
-                &sth.root_hash,
-                &sth.network_id,
-                sth.created_at,
-                now,
-            )
-        };
+        let cosign = |k: &SigningKey, id: &str| sign_witness_cosignature(k, id, &sth, now).unwrap();
         let resolve = |cosignatures| {
             let head = CosignedTreeHead {
                 sth: sth.clone(),

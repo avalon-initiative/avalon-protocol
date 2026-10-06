@@ -470,15 +470,8 @@ mod tests {
         let sth =
             avalon_protocol::sth::sign_tree_head(&key, "k", 4, &"ab".repeat(32), "n", created)
                 .unwrap();
-        let cosig = avalon_protocol::witness::sign_witness_cosignature(
-            &key,
-            "w",
-            4,
-            &sth.root_hash,
-            "n",
-            created,
-            created,
-        );
+        let cosig =
+            avalon_protocol::witness::sign_witness_cosignature(&key, "w", &sth, created).unwrap();
         assert!(confirmed_stored(None, "w", &sth, &cosig.signature));
         assert!(!confirmed_stored(Some(&[]), "w", &sth, &cosig.signature));
         assert!(confirmed_stored(

@@ -3542,7 +3542,7 @@ mod tests {
             .map(|(k, id)| (id.clone(), k.verifying_key()))
             .collect();
         let cosign_at = |k: &SigningKey, id: &str, at: OffsetDateTime| {
-            sign_witness_cosignature(k, id, 5, &root, &network_id, created_at, at)
+            sign_witness_cosignature(k, id, &sth, at).unwrap()
         };
         let mut servers = Vec::new();
         let mut sources = Vec::new();
@@ -3696,15 +3696,7 @@ mod tests {
         let wid = hex::encode(wk.verifying_key().to_bytes());
         let server = MockServer::start().await;
         for h in &heads {
-            let cosig = sign_witness_cosignature(
-                &wk,
-                &wid,
-                h.tree_size,
-                &h.root_hash,
-                &network_id,
-                created_at,
-                OffsetDateTime::now_utc(),
-            );
+            let cosig = sign_witness_cosignature(&wk, &wid, &h, OffsetDateTime::now_utc()).unwrap();
             Mock::given(method("GET"))
                 .and(path_regex(format!(r"^/ledger/sth/{}$", h.tree_size)))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -3919,15 +3911,7 @@ mod tests {
         ) {
             let cosigs: Vec<_> = observed_at
                 .map(|at| {
-                    let c = sign_witness_cosignature(
-                        &w.sk,
-                        &w.id,
-                        sth.tree_size,
-                        &sth.root_hash,
-                        &sth.network_id,
-                        sth.created_at,
-                        at,
-                    );
+                    let c = sign_witness_cosignature(&w.sk, &w.id, &sth, at).unwrap();
                     WitnessCosignatureDto::from_witness_cosignature(&c)
                 })
                 .into_iter()
@@ -4104,15 +4088,7 @@ mod tests {
         // real rows and a new directory witness is not even asked.
         let fillers: Vec<Wit> = vec![wit(10).await, wit(11).await, wit(12).await, wit(13).await];
         for f in &fillers {
-            let c = sign_witness_cosignature(
-                &f.sk,
-                &f.id,
-                5,
-                &heads[&shard_c].root_hash,
-                &network_id,
-                created_at,
-                cur,
-            );
+            let c = sign_witness_cosignature(&f.sk, &f.id, &heads[&shard_c], cur).unwrap();
             chain.store_witness_cosignature(&shard_c, &c).await.unwrap();
         }
         let d4 = wit(4).await;
