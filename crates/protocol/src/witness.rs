@@ -311,7 +311,6 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .unwrap()
-        .unwrap()
     }
 
     fn cosign(witness: &SigningKey, head: &SignedTreeHead) -> WitnessCosignature {

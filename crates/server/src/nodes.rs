@@ -4061,10 +4061,15 @@ mod tests {
         forged.witness = Some(advert);
 
         let mut stale = supported("http://127.0.0.1:9604", now);
-        stale.witness = Some(signer.advert(
-            "http://127.0.0.1:9604",
-            now - avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW - time::Duration::minutes(1),
-        ));
+        stale.witness = Some(
+            signer
+                .advert(
+                    "http://127.0.0.1:9604",
+                    now - avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW
+                        - time::Duration::minutes(1),
+                )
+                .unwrap(),
+        );
 
         merge_gossip(
             &table,
@@ -4109,7 +4114,10 @@ mod tests {
         let mk = |direct: bool, at: OffsetDateTime| {
             let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
             let id = hex::encode(key.verifying_key().to_bytes());
-            let mut a = WitnessSigner::new(key, id).unwrap().advert(url, at);
+            let mut a = WitnessSigner::new(key, id)
+                .unwrap()
+                .advert(url, at)
+                .unwrap();
             a.direct = direct;
             a
         };
@@ -4142,7 +4150,7 @@ mod tests {
         let signer = WitnessSigner::new(key, id).unwrap();
         let body = serde_json::json!({
             "peers": [],
-            "witness": signer.advert(&url, now),
+            "witness": signer.advert(&url, now).unwrap(),
             "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
         });
         Mock::given(method("POST"))
@@ -4155,7 +4163,7 @@ mod tests {
         let silent = "http://127.0.0.1:9";
         for u in [url.as_str(), silent] {
             let mut p = supported(u, now);
-            p.witness = Some(signer.advert(u, now));
+            p.witness = Some(signer.advert(u, now).unwrap());
             table.upsert(p);
         }
         let targets = pick_vouch_targets(&table, &[], 0, VOUCH_CONTACTS_PER_TICK);
@@ -5740,7 +5748,8 @@ mod tests {
         let id = hex::encode(key.verifying_key().to_bytes());
         let advert = WitnessSigner::new(key, id.clone())
             .unwrap()
-            .advert(known, OffsetDateTime::now_utc());
+            .advert(known, OffsetDateTime::now_utc())
+            .unwrap();
         let mut body = request(
             " http://Known.invalid:8080/ ",
             crate::version::PROTOCOL_VERSION,
@@ -5814,7 +5823,8 @@ mod tests {
         let id = hex::encode(key.verifying_key().to_bytes());
         let mut advert = WitnessSigner::new(key, id.clone())
             .unwrap()
-            .advert("http://v.test", OffsetDateTime::now_utc());
+            .advert("http://v.test", OffsetDateTime::now_utc())
+            .unwrap();
         advert.direct = true;
         stored.witness = Some(advert);
         table.upsert(stored.clone());
@@ -5828,7 +5838,8 @@ mod tests {
             relayed.witness = Some(
                 WitnessSigner::new(rival, rival_id)
                     .unwrap()
-                    .advert("http://v.test", OffsetDateTime::now_utc()),
+                    .advert("http://v.test", OffsetDateTime::now_utc())
+                    .unwrap(),
             );
             table.upsert_relayed(relayed);
             let now = table.list_all().remove(0);

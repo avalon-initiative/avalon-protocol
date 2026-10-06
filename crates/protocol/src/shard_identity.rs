@@ -247,7 +247,6 @@ mod tests {
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
         )
-        .unwrap()
         .unwrap();
 
         assert!(verify_self_certifying_tree_head(&id, &verifying_key, &sth));
@@ -270,7 +269,6 @@ mod tests {
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
         )
-        .unwrap()
         .unwrap();
 
         assert!(!verify_self_certifying_tree_head(
@@ -296,7 +294,6 @@ mod tests {
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
         )
-        .unwrap()
         .unwrap();
 
         assert!(!verify_self_certifying_tree_head(

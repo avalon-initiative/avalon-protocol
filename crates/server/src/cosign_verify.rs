@@ -219,10 +219,11 @@ mod tests {
         {
             let (key, id) = witness();
             let signer = WitnessSigner::new(key.clone(), id.clone()).unwrap();
-            let advert = verified_advert(url, Some(signer.advert(url, now).unwrap()), now).map(|mut a| {
-                a.direct = true;
-                a
-            });
+            let advert =
+                verified_advert(url, Some(signer.advert(url, now).unwrap()), now).map(|mut a| {
+                    a.direct = true;
+                    a
+                });
             assert!(advert.is_some());
             table.upsert(PeerInfo {
                 identity_bound: false,
@@ -302,7 +303,12 @@ mod tests {
         let (key, id) = witness();
         let advert = verified_advert(
             url,
-            Some(WitnessSigner::new(key, id).unwrap().advert(url, now).unwrap()),
+            Some(
+                WitnessSigner::new(key, id)
+                    .unwrap()
+                    .advert(url, now)
+                    .unwrap(),
+            ),
             now,
         );
         assert!(advert.is_some());
