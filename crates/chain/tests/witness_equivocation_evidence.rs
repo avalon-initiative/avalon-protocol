@@ -55,11 +55,7 @@ fn head(
     .unwrap();
     let cosignatures = cosigners
         .iter()
-        .map(|(key, id)| {
-            sign_witness_cosignature(
-                key, id, tree_size, root_hash, network_id, created_at, created_at,
-            )
-        })
+        .map(|(key, id)| sign_witness_cosignature(key, id, &sth, created_at).unwrap())
         .collect();
     CosignedTreeHead { sth, cosignatures }
 }

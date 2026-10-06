@@ -11,6 +11,7 @@
 
 use avalon_chain::PostgresSettlementProvider;
 use avalon_protocol::cosigned_sth::verify_cosigned_tree_head;
+use avalon_protocol::sth::SignedTreeHead;
 use avalon_protocol::witness::{sign_witness_cosignature, WitnessCosignature};
 use ed25519_dalek::SigningKey;
 use rand::RngExt;
@@ -35,6 +36,18 @@ async fn test_pool() -> PgPool {
         .connect(&database_url)
         .await
         .expect("failed to connect to Postgres — is it reachable?")
+}
+
+/// The head `insert_test_sth` stores, as the cosignatures bind to it.
+fn fixture_head(network_id: &str, tree_size: i64, root_hash: &str) -> SignedTreeHead {
+    SignedTreeHead {
+        tree_size,
+        root_hash: root_hash.to_string(),
+        network_id: network_id.to_string(),
+        signing_key_id: "test-key".to_string(),
+        signature: "00".repeat(64),
+        created_at: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000),
+    }
 }
 
 async fn insert_test_sth(pool: &PgPool, network_id: &str, tree_size: i64, root_hash: &str) {
@@ -73,12 +86,10 @@ async fn store_then_read_back_assembles_a_verifiable_cosigned_head() {
     let cosig = sign_witness_cosignature(
         &witness_key,
         "witness-live-1",
-        tree_size,
-        &root_hash,
-        &network_id,
-        author_created_at,
+        &fixture_head(&network_id, tree_size, &root_hash),
         observed_at,
-    );
+    )
+    .unwrap();
     chain
         .store_witness_cosignature("core", &cosig)
         .await
@@ -137,12 +148,10 @@ async fn a_conflicting_cosignature_from_the_same_witness_is_rejected() {
     let first = sign_witness_cosignature(
         &witness_key,
         "witness-live-2",
-        tree_size,
-        &root_hash,
-        &network_id,
-        author_created_at,
+        &fixture_head(&network_id, tree_size, &root_hash),
         observed_at,
-    );
+    )
+    .unwrap();
     chain
         .store_witness_cosignature("core", &first)
         .await
@@ -190,12 +199,10 @@ async fn a_relayed_reattestation_refreshes_in_place_instead_of_being_rejected() 
     let first = sign_witness_cosignature(
         &witness_key,
         "witness-live-3",
-        tree_size,
-        &root_hash,
-        &network_id,
-        author_created_at,
+        &fixture_head(&network_id, tree_size, &root_hash),
         first_observed_at,
-    );
+    )
+    .unwrap();
     chain
         .store_witness_cosignature("core", &first)
         .await
@@ -206,12 +213,10 @@ async fn a_relayed_reattestation_refreshes_in_place_instead_of_being_rejected() 
     let refreshed = sign_witness_cosignature(
         &witness_key,
         "witness-live-3",
-        tree_size,
-        &root_hash,
-        &network_id,
-        author_created_at,
+        &fixture_head(&network_id, tree_size, &root_hash),
         first_observed_at + time::Duration::minutes(5),
-    );
+    )
+    .unwrap();
     chain
         .store_witness_cosignature("core", &refreshed)
         .await
