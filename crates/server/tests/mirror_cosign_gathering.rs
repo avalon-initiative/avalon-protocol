@@ -71,7 +71,7 @@ impl Respond for WitnessAtSize {
             return ResponseTemplate::new(404);
         };
         let cosig =
-            sign_witness_cosignature(&self.key, &self.id, &sth, OffsetDateTime::now_utc()).unwrap();
+            sign_witness_cosignature(&self.key, &self.id, sth, OffsetDateTime::now_utc()).unwrap();
         ResponseTemplate::new(200).set_body_json(sth_json(
             sth,
             vec![WitnessCosignatureDto::from_witness_cosignature(&cosig)],

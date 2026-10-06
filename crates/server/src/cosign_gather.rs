@@ -378,7 +378,7 @@ mod tests {
     }
 
     fn cosign(k: &SigningKey, id: &str, sth: &SignedTreeHead) -> WitnessCosignature {
-        sign_witness_cosignature(k, id, &sth, OffsetDateTime::now_utc()).unwrap()
+        sign_witness_cosignature(k, id, sth, OffsetDateTime::now_utc()).unwrap()
     }
 
     fn body(sth: &SignedTreeHead, cosigs: &[WitnessCosignature]) -> serde_json::Value {
@@ -500,7 +500,7 @@ mod tests {
         sign_witness_cosignature(
             k,
             id,
-            &sth,
+            sth,
             OffsetDateTime::now_utc() - time::Duration::hours(1),
         )
         .unwrap()

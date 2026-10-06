@@ -3696,7 +3696,7 @@ mod tests {
         let wid = hex::encode(wk.verifying_key().to_bytes());
         let server = MockServer::start().await;
         for h in &heads {
-            let cosig = sign_witness_cosignature(&wk, &wid, &h, OffsetDateTime::now_utc()).unwrap();
+            let cosig = sign_witness_cosignature(&wk, &wid, h, OffsetDateTime::now_utc()).unwrap();
             Mock::given(method("GET"))
                 .and(path_regex(format!(r"^/ledger/sth/{}$", h.tree_size)))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -3911,7 +3911,7 @@ mod tests {
         ) {
             let cosigs: Vec<_> = observed_at
                 .map(|at| {
-                    let c = sign_witness_cosignature(&w.sk, &w.id, &sth, at).unwrap();
+                    let c = sign_witness_cosignature(&w.sk, &w.id, sth, at).unwrap();
                     WitnessCosignatureDto::from_witness_cosignature(&c)
                 })
                 .into_iter()
