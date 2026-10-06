@@ -1082,9 +1082,9 @@ pub struct FinalizeBatchRequest {
     pub signing_key_id: String,
     /// Hex-encoded Ed25519 signature over
     /// `avalon_protocol::sth::signing_message(tree_size, root_hash,
-    /// network_id, created_at)` — the exact preview `prepare_batch`
-    /// returned, computed and signed by the integrator's own settlement
-    /// key.
+    /// network_id, signing_key_id, created_at)` — the exact preview `prepare_batch`
+    /// returned plus this request's own `signing_key_id`, computed and signed by the
+    /// integrator's own settlement key.
     pub signature: String,
 }
 

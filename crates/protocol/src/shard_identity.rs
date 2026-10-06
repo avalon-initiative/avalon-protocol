@@ -91,10 +91,11 @@ pub fn verify_self_certifying_tree_head(
 }
 
 /// The exact bytes a [`NameBindingClaim`] signature covers: `(id, key,
-/// name, created_at)`, length-prefixed exactly as `crate::sth::
-/// signing_message` and `crate::witness::witness_signing_message` are,
-/// with this claim's own domain tag. `key` is fixed-width (32 bytes) and
-/// needs no length prefix.
+/// name, created_at)` under the tag `avalon-name-binding-v1`, the id and name
+/// length-prefixed, `key` fixed-width (32 raw bytes) and `created_at` an `i64` of unix
+/// seconds. Intentionally not moved to `crate::signing_bytes`: it already has a distinct tag, a
+/// length prefix on every variable field, raw fixed-width key and integer, so no field can shift
+/// another's boundary, and no ledger, SDK or vector depends on its bytes yet.
 fn name_binding_signing_message(
     self_certifying_id: &str,
     key: &VerifyingKey,
