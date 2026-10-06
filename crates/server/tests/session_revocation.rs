@@ -179,7 +179,7 @@ async fn create_identity_with_one_passkey(
         )
         .await
         .unwrap();
-    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+    let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
         start["network_id"].as_str().unwrap(),
         start["shard_id"].as_str().unwrap(),
         ticket_id.parse().unwrap(),
@@ -467,16 +467,20 @@ async fn revoking_a_signing_key_ends_the_sessions_it_approved_and_no_others() {
     )
     .await;
 
-    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
         &identity_id,
         stolen_key,
         keep_key,
+        1,
+        None,
     );
     let revoke = http
         .post(format!("{base}/me/devices/{stolen_key}/revoke"))
         .bearer_auth(&kept_session)
         .json(&serde_json::json!({
             "revoked_by_signing_key_id": keep_key,
+            "seq": 1,
+            "prev_hash": null,
             "signature": BASE64.encode(keep_signer.sign(&bytes).to_bytes()),
         }))
         .send()
@@ -791,15 +795,19 @@ async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
     )
     .await;
 
-    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
+    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
         &identity_id,
         stolen_key,
         keep_key,
+        1,
+        None,
     );
     http.post(format!("{base}/me/devices/{stolen_key}/revoke"))
         .bearer_auth(&approver)
         .json(&serde_json::json!({
             "revoked_by_signing_key_id": keep_key,
+            "seq": 1,
+            "prev_hash": null,
             "signature": BASE64.encode(keep_signer.sign(&bytes).to_bytes()),
         }))
         .send()

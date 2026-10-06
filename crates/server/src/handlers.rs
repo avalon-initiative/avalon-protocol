@@ -25,7 +25,7 @@ use avalon_protocol::identity::{
     Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_LINKS, MAX_LINK_LEN, MAX_LOCATION_LEN,
     MAX_PRONOUNS_LEN, MAX_STATUS_LEN, MAX_TIMEZONE_LEN,
 };
-use avalon_protocol::identity_id::identity_created_signing_bytes_v2;
+use avalon_protocol::identity_id::identity_created_signing_bytes;
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -276,8 +276,9 @@ pub struct RegisterFinishRequest {
     #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
     /// Base64-encoded Ed25519 signature over
-    /// `avalon_protocol::identity_id::identity_created_signing_bytes_v2`, which covers this
-    /// ceremony's `ticket_id` and the `network_id` returned by `register/start`.
+    /// `avalon_protocol::identity_id::identity_created_signing_bytes`, which covers this
+    /// ceremony's `ticket_id` (also the id of the inception signing key) and the `network_id`
+    /// returned by `register/start`.
     pub event_signature: String,
     /// A user-chosen label for the device completing this ceremony (e.g.
     /// "Work laptop") — purely descriptive, never part of what's signed.
@@ -330,7 +331,7 @@ pub async fn register_finish(
     let signature_bytes = BASE64
         .decode(&body.event_signature)
         .map_err(|_| AppError::InvalidEventSignature)?;
-    let signing_bytes = identity_created_signing_bytes_v2(
+    let signing_bytes = identity_created_signing_bytes(
         state.chain.network_id(),
         &state.own_shard_id,
         body.ticket_id,
@@ -471,8 +472,9 @@ pub async fn register_finish(
     state.indexer.apply_in_tx(&mut tx, &passkey_event).await?;
 
     let signing_key_row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
+        "INSERT INTO identity_signing_keys (id, identity_id, public_key, label) VALUES ($1, $2, $3, $4) RETURNING id, added_at",
     )
+    .bind(body.ticket_id)
     .bind(ceremony.identity_id)
     .bind(public_key_bytes.as_slice())
     .bind(&body.device_label)

@@ -80,15 +80,14 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> avalon_protoco
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_bytes_for_creation =
-        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
-            start["network_id"].as_str().unwrap(),
-            start["shard_id"].as_str().unwrap(),
-            ticket_id.parse().unwrap(),
-            &identity_id,
-            &signing_key.verifying_key().to_bytes(),
-            &display_name,
-        );
+    let signing_bytes_for_creation = avalon_protocol::identity_id::identity_created_signing_bytes(
+        start["network_id"].as_str().unwrap(),
+        start["shard_id"].as_str().unwrap(),
+        ticket_id.parse().unwrap(),
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;

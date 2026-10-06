@@ -4282,6 +4282,22 @@ mod tests {
         outcome
     }
 
+    /// `payload` carrying the identity-chain position `seq` after the head `prev`.
+    fn chained(payload: serde_json::Value, seq: u64, prev: Option<[u8; 32]>) -> serde_json::Value {
+        avalon_protocol::identity_chain_wire::embed_position(
+            &payload,
+            &avalon_protocol::events::IdentityChainPosition {
+                seq,
+                prev_hash: prev.map(hex::encode),
+            },
+        )
+    }
+
+    fn chain_hash(entry: &mirror::MirroredEntry) -> [u8; 32] {
+        let event = protocol_event_from_mirrored(entry).unwrap();
+        avalon_protocol::identity_chain_wire::event_hash(&event).unwrap()
+    }
+
     fn mk_entry(
         network_id: &str,
         seq: i64,
@@ -4626,10 +4642,13 @@ mod tests {
         let approver = Uuid::new_v4();
         let b64k = |k: [u8; 32]| b64(&k);
         let grant_id = Uuid::new_v4();
-        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
             grant_id,
             &who.id,
+            approver,
             &device.public_key(),
+            1,
+            None,
         );
         let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
         let created = mk_entry(
@@ -4644,12 +4663,16 @@ mod tests {
             2,
             "identity.signing_key_added",
             who.id,
-            Some(serde_json::json!({
-                "signing_key_id": Uuid::new_v4(), "public_key": b64k(device.public_key()),
-                "device_label": null, "approved_by_signing_key_id": approver,
-                "identity_id": who.id, "kind": "device_grant",
-                "grant_id": grant_id, "approval_signature": b64(&signature),
-            })),
+            Some(chained(
+                serde_json::json!({
+                    "signing_key_id": grant_id, "public_key": b64k(device.public_key()),
+                    "device_label": null, "approved_by_signing_key_id": approver,
+                    "identity_id": who.id, "kind": "device_grant",
+                    "grant_id": grant_id, "approval_signature": b64(&signature),
+                }),
+                1,
+                None,
+            )),
         );
         let inception = mk_entry(
             &network_id,
@@ -4734,12 +4757,15 @@ mod tests {
             TestIdentity::new(),
         );
         let (inception, stolen_key, second_key) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let grant_for = |seq: i64, device: &TestIdentity, key_id: Uuid| {
-            let grant_id = Uuid::new_v4();
-            let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
-                grant_id,
+        let grant_for = |seq: i64, device: &TestIdentity, key_id: Uuid, prev: Option<[u8; 32]>| {
+            let chain_seq = seq as u64 - 2;
+            let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+                key_id,
                 &who.id,
+                inception,
                 &device.public_key(),
+                chain_seq,
+                prev.as_ref(),
             );
             let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
             mk_entry(
@@ -4747,19 +4773,43 @@ mod tests {
                 seq,
                 "identity.signing_key_added",
                 who.id,
-                Some(serde_json::json!({
-                    "signing_key_id": key_id, "public_key": b64(&device.public_key()),
-                    "device_label": null, "approved_by_signing_key_id": inception,
-                    "identity_id": who.id, "kind": "device_grant",
-                    "grant_id": grant_id, "approval_signature": b64(&signature),
-                })),
+                Some(chained(
+                    serde_json::json!({
+                        "signing_key_id": key_id, "public_key": b64(&device.public_key()),
+                        "device_label": null, "approved_by_signing_key_id": inception,
+                        "identity_id": who.id, "kind": "device_grant",
+                        "grant_id": key_id, "approval_signature": b64(&signature),
+                    }),
+                    chain_seq,
+                    prev,
+                )),
             )
         };
-        let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
-            &who.id, stolen_key, second_key,
+        let stolen_grant = grant_for(3, &stolen, stolen_key, None);
+        let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+            &who.id,
+            stolen_key,
+            second_key,
+            2,
+            Some(&chain_hash(&stolen_grant)),
         );
         let revoke_signature =
             ed25519_dalek::Signer::sign(&second.signing_key, &revoke_bytes).to_bytes();
+        let revocation = mk_entry(
+            &network_id,
+            4,
+            "identity.signing_key_revoked",
+            who.id,
+            Some(chained(
+                serde_json::json!({
+                    "identity_id": who.id, "signing_key_id": stolen_key,
+                    "revoked_by_signing_key_id": second_key, "signature": b64(&revoke_signature),
+                }),
+                2,
+                Some(chain_hash(&stolen_grant)),
+            )),
+        );
+        let second_grant = grant_for(5, &second, second_key, Some(chain_hash(&revocation)));
         let entries = vec![
             mk_entry(
                 &network_id,
@@ -4779,18 +4829,9 @@ mod tests {
                     "identity_id": who.id, "kind": "inception",
                 })),
             ),
-            grant_for(3, &stolen, stolen_key),
-            mk_entry(
-                &network_id,
-                4,
-                "identity.signing_key_revoked",
-                who.id,
-                Some(serde_json::json!({
-                    "identity_id": who.id, "signing_key_id": stolen_key,
-                    "revoked_by_signing_key_id": second_key, "signature": b64(&revoke_signature),
-                })),
-            ),
-            grant_for(5, &second, second_key),
+            stolen_grant,
+            revocation,
+            second_grant,
         ];
         store_entries(&pool, &entries).await;
         for e in entries.iter().take(4) {
@@ -5006,10 +5047,13 @@ mod tests {
         let who = TestIdentity::new();
         let device = TestIdentity::new();
         let (approver, grant_id) = (Uuid::new_v4(), Uuid::new_v4());
-        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
             grant_id,
             &who.id,
+            approver,
             &device.public_key(),
+            1,
+            None,
         );
         let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
         KeyWait {
@@ -5025,12 +5069,16 @@ mod tests {
                 2,
                 "identity.signing_key_added",
                 who.id,
-                Some(serde_json::json!({
-                    "signing_key_id": Uuid::new_v4(), "public_key": b64(&device.public_key()),
-                    "device_label": null, "approved_by_signing_key_id": approver,
-                    "identity_id": who.id, "kind": "device_grant",
-                    "grant_id": grant_id, "approval_signature": b64(&signature),
-                })),
+                Some(chained(
+                    serde_json::json!({
+                        "signing_key_id": grant_id, "public_key": b64(&device.public_key()),
+                        "device_label": null, "approved_by_signing_key_id": approver,
+                        "identity_id": who.id, "kind": "device_grant",
+                        "grant_id": grant_id, "approval_signature": b64(&signature),
+                    }),
+                    1,
+                    None,
+                )),
             ),
             approver_key: mk_entry(
                 network_id,
@@ -5275,11 +5323,13 @@ mod tests {
         let who = TestIdentity::new();
         let (inception, device_key) = (Uuid::new_v4(), Uuid::new_v4());
         let device = TestIdentity::new();
-        let grant_id = Uuid::new_v4();
-        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
-            grant_id,
+        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+            device_key,
             &who.id,
+            inception,
             &device.public_key(),
+            1,
+            None,
         );
         let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
         let created = mk_entry(
@@ -5294,12 +5344,16 @@ mod tests {
             2,
             "identity.signing_key_added",
             who.id,
-            Some(serde_json::json!({
-                "signing_key_id": device_key, "public_key": b64(&device.public_key()),
-                "device_label": null, "approved_by_signing_key_id": inception,
-                "identity_id": who.id, "kind": "device_grant",
-                "grant_id": grant_id, "approval_signature": b64(&signature),
-            })),
+            Some(chained(
+                serde_json::json!({
+                    "signing_key_id": device_key, "public_key": b64(&device.public_key()),
+                    "device_label": null, "approved_by_signing_key_id": inception,
+                    "identity_id": who.id, "kind": "device_grant",
+                    "grant_id": device_key, "approval_signature": b64(&signature),
+                }),
+                1,
+                None,
+            )),
         );
         for e in [&created, &grant] {
             mirror::insert_mirrored_entry(&pool, e).await.unwrap();

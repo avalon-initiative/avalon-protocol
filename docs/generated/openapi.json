@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -4632,6 +4632,19 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"
+          },
+          "409": {
+            "description": "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against) or IDENTITY_CHAIN_FORKED (generic error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainPositionStaleBody"
+                }
+              }
+            }
           }
         }
       }
@@ -4710,8 +4723,18 @@
           "200": {
             "description": "Signing key revoked"
           },
+          "400": {
+            "description": "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"
+          },
           "409": {
-            "description": "LAST_SIGNING_KEY: the last active signing key cannot be revoked"
+            "description": "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against), IDENTITY_CHAIN_FORKED or LAST_SIGNING_KEY (generic error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainPositionStaleBody"
+                }
+              }
+            }
           }
         }
       }
@@ -6066,6 +6089,7 @@
         "type": "object",
         "required": [
           "approver_signing_key_id",
+          "seq",
           "signature"
         ],
         "properties": {
@@ -6074,9 +6098,22 @@
             "format": "uuid",
             "description": "Which of the caller's own `identity_signing_keys` rows is approving\nthis grant — must belong to the caller's identity and not be\nrevoked."
           },
+          "prev_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lowercase hex event hash of the chain head the event extends; absent for a new chain."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Chain position the signature covers: the identity chain's head `seq` plus one (1 for a\nnew chain). A stale position is refused with `IDENTITY_CHAIN_POSITION_STALE`.",
+            "minimum": 0
+          },
           "signature": {
             "type": "string",
-            "description": "Base64-encoded Ed25519 signature over\n`device_grant_approval_signing_bytes_v2(grant_id, identity_id, requested_signing_public_key)`,\nproduced by `approver_signing_key_id`'s key."
+            "description": "Base64-encoded Ed25519 signature over `device_grant_approval_signing_bytes`\n(grant, identity, approver key id, requested key, `seq`, `prev_hash`), produced by\n`approver_signing_key_id`'s key. The new key's id is the grant id."
           }
         }
       },
@@ -6478,6 +6515,36 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ChainPositionStaleBody": {
+        "type": "object",
+        "description": "Body of a 409 `IDENTITY_CHAIN_POSITION_STALE`: the head a signer re-signs against\n(`head_seq` 0 and no `head_hash` for a chain with no events yet).",
+        "required": [
+          "error",
+          "code",
+          "head_seq"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Always `IDENTITY_CHAIN_POSITION_STALE`."
+          },
+          "error": {
+            "type": "string"
+          },
+          "head_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lowercase hex event hash of the chain head; null when the chain is empty."
+          },
+          "head_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -7191,7 +7258,7 @@
           },
           "requested_signing_public_key": {
             "type": "string",
-            "description": "Base64-encoded — the approving device needs this exact value to\nreconstruct `device_grant_approval_signing_bytes_v2` and sign it; the\nserver never trusts a client-supplied copy of its own request back,\nbut the *approver* is a different device that only ever learns this\nkey by reading it back off this response."
+            "description": "Base64-encoded — the approving device needs this exact value to\nreconstruct `device_grant_approval_signing_bytes` and sign it; the\nserver never trusts a client-supplied copy of its own request back,\nbut the *approver* is a different device that only ever learns this\nkey by reading it back off this response."
           },
           "status": {
             "type": "string"
@@ -9776,7 +9843,7 @@
           },
           "event_signature": {
             "type": "string",
-            "description": "Base64-encoded Ed25519 signature over\n`avalon_protocol::identity_id::identity_created_signing_bytes_v2`, which covers this\nceremony's `ticket_id` and the `network_id` returned by `register/start`."
+            "description": "Base64-encoded Ed25519 signature over\n`avalon_protocol::identity_id::identity_created_signing_bytes`, which covers this\nceremony's `ticket_id` (also the id of the inception signing key) and the `network_id`\nreturned by `register/start`."
           },
           "ticket_id": {
             "type": "string",
@@ -10063,17 +10130,31 @@
         "type": "object",
         "required": [
           "revoked_by_signing_key_id",
+          "seq",
           "signature"
         ],
         "properties": {
+          "prev_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lowercase hex event hash of the chain head the event extends; absent for a new chain."
+          },
           "revoked_by_signing_key_id": {
             "type": "string",
             "format": "uuid",
             "description": "The caller's own active signing key that signs the revocation (may be the key being revoked)."
           },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Chain position the signature covers: the identity chain's head `seq` plus one (1 for a\nnew chain). A stale position is refused with `IDENTITY_CHAIN_POSITION_STALE`.",
+            "minimum": 0
+          },
           "signature": {
             "type": "string",
-            "description": "Base64 Ed25519 signature by `revoked_by_signing_key_id` over\n`avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2`."
+            "description": "Base64 Ed25519 signature by `revoked_by_signing_key_id` over\n`avalon_protocol::identity_id::signing_key_revoked_signing_bytes`."
           }
         }
       },

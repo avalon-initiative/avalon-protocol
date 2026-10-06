@@ -3,6 +3,18 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+/// Body of a 409 `IDENTITY_CHAIN_POSITION_STALE`: the head a signer re-signs against
+/// (`head_seq` 0 and no `head_hash` for a chain with no events yet).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ChainPositionStaleBody {
+    pub error: String,
+    /// Always `IDENTITY_CHAIN_POSITION_STALE`.
+    pub code: String,
+    pub head_seq: u64,
+    /// Lowercase hex event hash of the chain head; null when the chain is empty.
+    pub head_hash: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("unauthorized")]
@@ -98,6 +110,13 @@ pub enum AppError {
         "this identity's event chain is forked; operations that depend on which key controls it are frozen until social recovery resolves it"
     )]
     IdentityChainForked,
+    #[error("the signed chain position is not the head of this identity's event chain; sign again at the returned head")]
+    IdentityChainPositionStale {
+        head_seq: u64,
+        head_hash: Option<String>,
+    },
+    #[error("chain position prev_hash must be 64 lowercase hex characters")]
+    InvalidChainPosition,
     #[error("no completed recovery exists for this identity")]
     RollbackNoCompletedRecovery,
     #[error(
@@ -586,6 +605,8 @@ impl AppError {
             AppError::PasskeyNotFound => "PASSKEY_NOT_FOUND",
             AppError::SessionNotFound => "SESSION_NOT_FOUND",
             AppError::IdentityChainForked => "IDENTITY_CHAIN_FORKED",
+            AppError::IdentityChainPositionStale { .. } => "IDENTITY_CHAIN_POSITION_STALE",
+            AppError::InvalidChainPosition => "INVALID_CHAIN_POSITION",
             AppError::RollbackNoCompletedRecovery => "ROLLBACK_NO_COMPLETED_RECOVERY",
             AppError::InvalidRollbackWindow => "INVALID_ROLLBACK_WINDOW",
             AppError::RollbackEventNotEligible => "ROLLBACK_EVENT_NOT_ELIGIBLE",
@@ -778,7 +799,9 @@ impl IntoResponse for AppError {
             AppError::PresenceActiveInMismatch => StatusCode::FORBIDDEN,
             AppError::AlreadyFriends
             | AppError::FriendRequestExists
-            | AppError::IdentityChainForked => StatusCode::CONFLICT,
+            | AppError::IdentityChainForked
+            | AppError::IdentityChainPositionStale { .. } => StatusCode::CONFLICT,
+            AppError::InvalidChainPosition => StatusCode::BAD_REQUEST,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
             AppError::DisplayNameTaken => StatusCode::CONFLICT,
@@ -1062,6 +1085,18 @@ impl IntoResponse for AppError {
         if let AppError::SignedTreeHeadNotFoundMirror { peers } = &self {
             body["is_mirror"] = json!(true);
             body["mirror_peers"] = json!(peers);
+        }
+        if let AppError::IdentityChainPositionStale {
+            head_seq,
+            head_hash,
+        } = &self
+        {
+            body = json!(ChainPositionStaleBody {
+                error: message.clone(),
+                code: self.code().to_string(),
+                head_seq: *head_seq,
+                head_hash: head_hash.clone(),
+            });
         }
         let mut response = (status, Json(body)).into_response();
         let retry_after_secs = match &self {

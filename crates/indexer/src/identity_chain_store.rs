@@ -81,6 +81,15 @@ pub async fn is_forked<'e>(
         .is_some_and(|s| s.forked_at_seq.is_some()))
 }
 
+/// Locks the identity's chain head for the transaction, so the position a signer covered cannot
+/// move before the event is assigned. Creates the (empty) head row for a new identity.
+pub async fn lock_head(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+) -> Result<ChainState, sqlx::Error> {
+    lock_state(tx, identity_id).await
+}
+
 async fn lock_state(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,

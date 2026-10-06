@@ -45,7 +45,7 @@ use crate::identity_id::IdentityId;
 // --- identity.* -----------------------------------------------------------
 
 /// `identity.created` v2: the inception key, the registration ticket and the self-signature over
-/// `identity_created_signing_bytes_v2` (which also covers the ledger's network id), so a mirror can
+/// `identity_created_signing_bytes` (which also covers the ledger's network id), so a mirror can
 /// verify the id offline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityCreatedPayload {
@@ -93,7 +93,7 @@ pub struct IdentitySigningKeyRevokedPayload {
     pub identity_id: IdentityId,
     pub signing_key_id: Uuid,
     pub revoked_by_signing_key_id: Uuid,
-    /// Signature over `signing_key_revoked_signing_bytes_v2`, standard base64.
+    /// Signature over `signing_key_revoked_signing_bytes`, standard base64.
     pub signature: String,
 }
 

@@ -125,15 +125,14 @@ async fn register_identity_on_owner(
         .await
         .expect("WebAuthn registration ceremony failed");
 
-    let signing_bytes_for_creation =
-        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
-            start["network_id"].as_str().unwrap(),
-            start["shard_id"].as_str().unwrap(),
-            ticket_id.parse().unwrap(),
-            &identity_id,
-            &signing_key.verifying_key().to_bytes(),
-            display_name,
-        );
+    let signing_bytes_for_creation = avalon_protocol::identity_id::identity_created_signing_bytes(
+        start["network_id"].as_str().unwrap(),
+        start["shard_id"].as_str().unwrap(),
+        ticket_id.parse().unwrap(),
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        display_name,
+    );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     http.post(format!("{base}/identities/register/finish"))
