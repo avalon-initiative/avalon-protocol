@@ -228,6 +228,37 @@ mod tests {
     }
 
     #[test]
+    fn hash_covers_event_id_version_position_and_payload_hash() {
+        let id = IdentityId::random_for_tests();
+        let a = event("profile.updated", id, 1, None);
+        let base = event_hash(&a).unwrap();
+        let mut b = a.clone();
+        b.id = Uuid::new_v4();
+        let mut c = a.clone();
+        c.version = 2;
+        let mut d = a.clone();
+        d.identity_chain.as_mut().unwrap().seq = 2;
+        let mut e = a.clone();
+        e.identity_chain.as_mut().unwrap().prev_hash = Some("00".repeat(32));
+        let mut f = a.clone();
+        f.timestamp += time::Duration::microseconds(1);
+        for (i, v) in [b, c, d, e, f].iter().enumerate() {
+            assert_ne!(event_hash(v).unwrap(), base, "variant {i}");
+        }
+    }
+
+    #[test]
+    fn hash_rejects_unchained_and_malformed_prev() {
+        let id = IdentityId::random_for_tests();
+        let mut a = event("profile.updated", id, 2, Some("zz".to_string()));
+        assert_eq!(event_hash(&a), Err(ChainEventError::MalformedPrevHash));
+        a.identity_chain = None;
+        assert_eq!(event_hash(&a), Err(ChainEventError::NotChained));
+        let b = event("achievement.issued", id, 1, None);
+        assert_eq!(event_hash(&b), Err(ChainEventError::NotChained));
+    }
+
+    #[test]
     fn owner_is_subject_for_guardian_recovery_events_else_issuer() {
         let id = IdentityId::random_for_tests();
         let guardian = IdentityId::random_for_tests();
