@@ -64,7 +64,6 @@ async fn malformed_ids_and_weak_keys_are_rejected() {
     let (public_key, id) = fresh_key();
     for bad_id in [
         id.to_uppercase(),
-        id[..63].to_string(),
         "00000000-0000-0000-0000-000000000000".to_string(),
     ] {
         let (status, body) = start(json!({
@@ -75,6 +74,21 @@ async fn malformed_ids_and_weak_keys_are_rejected() {
         .await;
         assert_eq!(status, 400, "{bad_id}: {body}");
         assert_eq!(body["code"], "INVALID_IDENTITY_ID");
+    }
+
+    for (bad_id, length) in [(id[..63].to_string(), 63), (format!("{id}0"), 65)] {
+        let (status, body) = start(json!({
+            "identity_id": bad_id,
+            "event_signing_public_key": BASE64.encode(public_key),
+            "display_name": "id-unknown-scheme",
+        }))
+        .await;
+        assert_eq!(status, 400, "{bad_id}: {body}");
+        assert_eq!(body["code"], "UNKNOWN_ID_SCHEME");
+        assert!(
+            body["error"].to_string().contains(&length.to_string()),
+            "{body}"
+        );
     }
 
     // The identity point is a small-order key: acceptable bytes, unacceptable key.
@@ -131,10 +145,13 @@ async fn a_display_name_shaped_like_an_identity_id_is_rejected() {
 #[ignore]
 async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
     let http = reqwest::Client::new();
-    for bad in [
-        "00000000-0000-0000-0000-000000000000",
-        "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-        "short",
+    for (bad, code) in [
+        ("00000000-0000-0000-0000-000000000000", "UNKNOWN_ID_SCHEME"),
+        (
+            "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+            "INVALID_IDENTITY_ID",
+        ),
+        ("short", "UNKNOWN_ID_SCHEME"),
     ] {
         let response = http
             .get(format!("{}/identities/{bad}/locations", server_url()))
@@ -143,7 +160,7 @@ async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
             .expect("request failed — is `make start` running?");
         assert_eq!(response.status().as_u16(), 400, "{bad}");
         let body: Value = response.json().await.unwrap();
-        assert_eq!(body["code"], "INVALID_IDENTITY_ID", "{bad}");
+        assert_eq!(body["code"], code, "{bad}");
     }
 
     // A valid identity id with a malformed non-identity part is a different error code.

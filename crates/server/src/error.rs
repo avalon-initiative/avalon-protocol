@@ -25,6 +25,8 @@ pub enum AppError {
     IdentityIdMismatch,
     #[error("malformed identity id or signing key")]
     InvalidIdentityId,
+    #[error("unknown identity id scheme: {length} characters; a newer version may be required")]
+    UnknownIdScheme { length: usize },
     #[error("malformed path parameter")]
     InvalidPathParameter,
     #[error("display name must not look like an identity id")]
@@ -566,6 +568,7 @@ impl AppError {
             AppError::IdentityIdTaken => "IDENTITY_ID_TAKEN",
             AppError::IdentityIdMismatch => "IDENTITY_ID_MISMATCH",
             AppError::InvalidIdentityId => "INVALID_IDENTITY_ID",
+            AppError::UnknownIdScheme { .. } => "UNKNOWN_ID_SCHEME",
             AppError::InvalidPathParameter => "INVALID_PATH_PARAMETER",
             AppError::InvalidDisplayName => "INVALID_DISPLAY_NAME",
             AppError::CeremonyNotFound => "CEREMONY_NOT_FOUND",
@@ -780,6 +783,7 @@ impl IntoResponse for AppError {
             | AppError::CeremonyExpired
             | AppError::IdentityIdMismatch
             | AppError::InvalidIdentityId
+            | AppError::UnknownIdScheme { .. }
             | AppError::InvalidPathParameter
             | AppError::InvalidDisplayName => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
@@ -1113,8 +1117,26 @@ impl IntoResponse for AppError {
     }
 }
 
-/// `Path` that reports a malformed path as JSON instead of axum's plain text: a bad identity id is
-/// `INVALID_IDENTITY_ID`, any other malformed part `INVALID_PATH_PARAMETER`.
+/// Start of `IdentityIdParseError::UnknownScheme`'s message, up to the length.
+const UNKNOWN_SCHEME_PREFIX: &str = "unknown identity id scheme: ";
+
+/// Recovers the typed identity-id error from a serde path-deserialisation message.
+fn identity_id_error_from_message(message: &str) -> Option<AppError> {
+    use avalon_protocol::identity_id::IdentityIdParseError as E;
+    if let Some(at) = message.find(UNKNOWN_SCHEME_PREFIX) {
+        let rest = &message[at + UNKNOWN_SCHEME_PREFIX.len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(length) = digits.parse() {
+            return Some(AppError::UnknownIdScheme { length });
+        }
+    }
+    message
+        .contains(&E::NotLowercaseHex.to_string())
+        .then_some(AppError::InvalidIdentityId)
+}
+
+/// `Path` that reports a malformed path as JSON instead of axum's plain text: a malformed identity id is
+/// `INVALID_IDENTITY_ID`, one of another length `UNKNOWN_ID_SCHEME`, any other malformed part `INVALID_PATH_PARAMETER`.
 pub struct IdPath<T>(pub T);
 
 impl<T, S> axum::extract::FromRequestParts<S> for IdPath<T>
@@ -1137,19 +1159,13 @@ where
             Err(PathRejection::FailedToDeserializePathParams(failure)) => {
                 let identity_failure = match failure.kind() {
                     ErrorKind::DeserializeError { message, .. } | ErrorKind::Message(message) => {
-                        use avalon_protocol::identity_id::IdentityIdParseError as E;
-                        [E::WrongLength, E::NotLowercaseHex]
-                            .iter()
-                            .any(|e| message.contains(&e.to_string()))
+                        identity_id_error_from_message(message)
                     }
-                    _ => false,
+                    _ => None,
                 };
-                Err(if identity_failure {
-                    AppError::InvalidIdentityId
-                } else {
-                    AppError::InvalidPathParameter
-                }
-                .into_response())
+                Err(identity_failure
+                    .unwrap_or(AppError::InvalidPathParameter)
+                    .into_response())
             }
             Err(other) => Err(other.into_response()),
         }
@@ -1166,6 +1182,21 @@ mod tests {
     /// — a distinct 503, not the generic 500 `AppError::Index` carries —
     /// never silently fall through the `#[from]`-style catch-all a plain
     /// derive would have given every other `IndexError` variant.
+    #[test]
+    fn path_messages_map_to_identity_id_errors() {
+        use avalon_protocol::identity_id::IdentityIdParseError as E;
+        let unknown = E::UnknownScheme { length: 63 }.to_string();
+        assert!(matches!(
+            identity_id_error_from_message(&unknown),
+            Some(AppError::UnknownIdScheme { length: 63 })
+        ));
+        assert!(matches!(
+            identity_id_error_from_message(&E::NotLowercaseHex.to_string()),
+            Some(AppError::InvalidIdentityId)
+        ));
+        assert!(identity_id_error_from_message("invalid digit").is_none());
+    }
+
     #[test]
     fn remote_unreachable_index_error_maps_to_remote_role_unreachable() {
         let err: AppError =

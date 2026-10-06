@@ -7,8 +7,10 @@
 //! distinct from a `node:` shard id derived from the same key. The id commits to
 //! the inception key only, so later key changes never change it.
 //!
-//! Parsing is strict and never normalises: uppercase, wrong length, UUID text and
-//! `id:`/`node:` prefixes are all rejected.
+//! Parsing is strict and never normalises: uppercase, UUID text and `id:`/`node:`
+//! prefixes are all rejected. A future id scheme must use a different length and its own
+//! domain tag, so any length other than 64 is an [`IdentityIdParseError::UnknownScheme`]
+//! ("newer version"), never a generic malformed id.
 //!
 //! **Encodings.** The signing bytes below use the structured layout of
 //! [`crate::signing_bytes`] (keys and ids as raw bytes); a public key is standard BASE64 on
@@ -43,8 +45,10 @@ const IDENTITY_ID_LEN: usize = 64;
 /// Why a string is not a canonical identity id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum IdentityIdParseError {
-    #[error("identity id must be exactly 64 characters")]
-    WrongLength,
+    /// Not 64 bytes long: possibly an id from a newer scheme this build cannot read.
+    #[error("unknown identity id scheme: {length} characters; this version only reads 64-character ids, a newer version may be required")]
+    UnknownScheme { length: usize },
+    /// 64 bytes long but not lowercase hex.
     #[error("identity id must be lowercase hex [0-9a-f]")]
     NotLowercaseHex,
 }
@@ -57,7 +61,7 @@ impl IdentityId {
     /// Strictly parses the canonical form; nothing is trimmed or lowercased.
     pub fn parse(text: &str) -> Result<Self, IdentityIdParseError> {
         if text.len() != IDENTITY_ID_LEN {
-            return Err(IdentityIdParseError::WrongLength);
+            return Err(IdentityIdParseError::UnknownScheme { length: text.len() });
         }
         if !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
             return Err(IdentityIdParseError::NotLowercaseHex);
@@ -454,6 +458,37 @@ mod tests {
         for b in bad {
             assert!(IdentityId::parse(&b).is_err(), "{b}");
         }
+    }
+
+    #[test]
+    fn length_other_than_64_is_an_unknown_scheme() {
+        let s = test_identity(7).1.to_string();
+        let unknown = |text: &str| IdentityId::parse(text);
+        assert_eq!(
+            unknown(&s[..63]),
+            Err(IdentityIdParseError::UnknownScheme { length: 63 })
+        );
+        assert_eq!(
+            unknown(&format!("{s}0")),
+            Err(IdentityIdParseError::UnknownScheme { length: 65 })
+        );
+        assert_eq!(
+            unknown(""),
+            Err(IdentityIdParseError::UnknownScheme { length: 0 })
+        );
+        assert_eq!(
+            unknown(&"z".repeat(4096)),
+            Err(IdentityIdParseError::UnknownScheme { length: 4096 })
+        );
+        assert_eq!(
+            unknown(&s.to_uppercase()),
+            Err(IdentityIdParseError::NotLowercaseHex)
+        );
+        assert_eq!(
+            unknown(&"g".repeat(64)),
+            Err(IdentityIdParseError::NotLowercaseHex)
+        );
+        assert!(unknown(&s[..63]).unwrap_err().to_string().contains("63"));
     }
 
     #[test]

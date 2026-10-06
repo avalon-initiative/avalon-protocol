@@ -856,7 +856,9 @@ fn identity_id_of(v: &Value, field: &str) -> avalon_protocol::identity_id::Ident
 #[test]
 fn identity_id_matches_shared_vectors() {
     use avalon_protocol::ed25519_key::parse_ed25519_public_key_hex;
-    use avalon_protocol::identity_id::{derive_identity_id, IdentityId, IDENTITY_ID_DOMAIN_TAG};
+    use avalon_protocol::identity_id::{
+        derive_identity_id, IdentityId, IdentityIdParseError, IDENTITY_ID_DOMAIN_TAG,
+    };
     use avalon_protocol::shard_identity::derive_self_certifying_id;
 
     let doc = load("identity-id.json");
@@ -896,6 +898,15 @@ fn identity_id_matches_shared_vectors() {
                     expected["valid"].as_bool().unwrap(),
                     "{name}"
                 );
+                let result = match parsed {
+                    Ok(_) => "valid".to_string(),
+                    Err(IdentityIdParseError::NotLowercaseHex) => "invalid_id".to_string(),
+                    Err(IdentityIdParseError::UnknownScheme { length }) => {
+                        assert_eq!(expected["length"].as_u64(), Some(length as u64), "{name}");
+                        "unknown_id_scheme".to_string()
+                    }
+                };
+                assert_eq!(result, expected["result"].as_str().unwrap(), "{name}");
             }
             "key_acceptability" => {
                 let key = parse_ed25519_public_key_hex(input["publicKeyHex"].as_str().unwrap());

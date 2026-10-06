@@ -167,7 +167,7 @@ pub struct RegisterStartResponse {
     request_body = RegisterStartRequest,
     responses(
         (status = 200, description = "The resulting register start", body = RegisterStartResponse),
-        (status = 400, description = "INVALID_IDENTITY_ID, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"),
+        (status = 400, description = "INVALID_IDENTITY_ID, UNKNOWN_ID_SCHEME, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"),
         (status = 409, description = "IDENTITY_ID_TAKEN or DISPLAY_NAME_TAKEN"),
     ),
 )]
@@ -176,8 +176,14 @@ pub async fn register_start(
     Json(body): Json<RegisterStartRequest>,
 ) -> Result<Json<RegisterStartResponse>, AppError> {
     crate::replica::require_authoring()?;
-    let identity_id =
-        IdentityId::parse(&body.identity_id).map_err(|_| AppError::InvalidIdentityId)?;
+    let identity_id = IdentityId::parse(&body.identity_id).map_err(|e| match e {
+        avalon_protocol::identity_id::IdentityIdParseError::UnknownScheme { length } => {
+            AppError::UnknownIdScheme { length }
+        }
+        avalon_protocol::identity_id::IdentityIdParseError::NotLowercaseHex => {
+            AppError::InvalidIdentityId
+        }
+    })?;
     let public_key = parse_inception_key(&body.event_signing_public_key)?;
     if !identity_id.matches_key(&public_key) {
         return Err(AppError::IdentityIdMismatch);
