@@ -502,16 +502,46 @@ mod tests {
         let (other_p, prev) = ([4u8; 32], [5u8; 32]);
         let base = compute_event_hash(&chain_input(&id, &p)).unwrap();
         let variants = [
-            ChainHashInput { identity_id: &other_id, ..chain_input(&id, &p) },
-            ChainHashInput { seq: 3, ..chain_input(&id, &p) },
-            ChainHashInput { prev_hash: Some(&prev), ..chain_input(&id, &p) },
-            ChainHashInput { event_id: Uuid::from_u128(8), ..chain_input(&id, &p) },
-            ChainHashInput { kind: "profile.x", ..chain_input(&id, &p) },
-            ChainHashInput { issuer: "i:2", ..chain_input(&id, &p) },
-            ChainHashInput { subject: "i:2", ..chain_input(&id, &p) },
-            ChainHashInput { event_version: 2, ..chain_input(&id, &p) },
-            ChainHashInput { timestamp_micros: 1_001, ..chain_input(&id, &p) },
-            ChainHashInput { payload_hash: &other_p, ..chain_input(&id, &p) },
+            ChainHashInput {
+                identity_id: &other_id,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                seq: 3,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                prev_hash: Some(&prev),
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                event_id: Uuid::from_u128(8),
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                kind: "profile.x",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                issuer: "i:2",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                subject: "i:2",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                event_version: 2,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                timestamp_micros: 1_001,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                payload_hash: &other_p,
+                ..chain_input(&id, &p)
+            },
         ];
         for (i, v) in variants.iter().enumerate() {
             assert_ne!(compute_event_hash(v).unwrap(), base, "variant {i}");
