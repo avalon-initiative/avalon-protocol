@@ -327,6 +327,55 @@ mod tests {
     }
 
     #[test]
+    fn the_envelope_is_covered_by_the_signature() {
+        use crate::signing_bytes::{Extension, Extensions};
+        let key = SigningKey::generate(&mut rand::rng());
+        let with_ext = Envelope {
+            extensions: Extensions::new(
+                vec![Extension {
+                    ext_type: 9,
+                    critical: false,
+                    value: vec![1, 2],
+                }],
+                1,
+            )
+            .unwrap(),
+            ..Envelope::current(tags::SETTLEMENT_STH)
+        };
+        let sth = sign_tree_head_with(
+            &key,
+            "k",
+            1,
+            &root_hash_fixture(),
+            "n",
+            OffsetDateTime::UNIX_EPOCH,
+            with_ext,
+        )
+        .unwrap();
+        assert!(verify_tree_head(&key.verifying_key(), &sth));
+        let mut stripped = sth.clone();
+        stripped.envelope = Envelope::current(tags::SETTLEMENT_STH);
+        assert!(!verify_tree_head(&key.verifying_key(), &stripped));
+    }
+
+    #[test]
+    fn a_head_carries_its_hash_algorithm_in_the_bytes_before_the_root() {
+        let bytes = signing_message(
+            1,
+            &root_hash_fixture(),
+            "n",
+            "k",
+            OffsetDateTime::UNIX_EPOCH,
+            &Envelope::current(tags::SETTLEMENT_STH),
+        )
+        .unwrap();
+        let tail = &bytes[bytes.len() - 2 - 32 - 1..];
+        assert_eq!(tail[0], 1);
+        assert_eq!(&tail[1..33], &[0xab; 32]);
+        assert_eq!(&tail[33..], &[0, 0]);
+    }
+
+    #[test]
     fn root_hash_must_be_32_byte_lowercase_hex() {
         let key = SigningKey::generate(&mut rand::rng());
         for bad in [

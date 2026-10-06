@@ -2,6 +2,7 @@
 
 use super::*;
 use avalon_chain::{hash_entry, EntryContent};
+use avalon_protocol::signing_bytes::SigningBytesError;
 use wiremock::{matchers, Mock, MockServer, Request, ResponseTemplate};
 
 const NET: &str = "avalon-test-entry-binding";
@@ -500,6 +501,157 @@ fn binding_check_rejects_each_tampered_field_and_a_bad_link() {
         err,
         MirrorWatcherError::EntryPayloadPruned { seq: 2 }
     ));
+}
+
+/// Envelope fields a served entry may carry that this node cannot verify, with the typed result each must give.
+fn unreadable_envelopes() -> Vec<(&'static str, serde_json::Value, SigningBytesError)> {
+    use avalon_protocol::signing_bytes::VersionKind;
+    let needs = |what, required| SigningBytesError::NeedsNewerVersion { what, required };
+    vec![
+        (
+            "unknown critical extension",
+            serde_json::json!({ "extensions": "000100030100000000" }),
+            needs(VersionKind::CriticalExtension, 3),
+        ),
+        (
+            "layout version above the range",
+            serde_json::json!({ "layout_version": 2 }),
+            needs(VersionKind::Layout, 2),
+        ),
+        (
+            "rules version above the range",
+            serde_json::json!({ "rules_version": 2 }),
+            needs(VersionKind::Rules, 2),
+        ),
+        (
+            "unknown hash algorithm",
+            serde_json::json!({ "hash_algo": 9 }),
+            needs(VersionKind::HashAlgo, 9),
+        ),
+    ]
+}
+
+/// DB-free: an entry this node cannot read is never verified, and the result is typed.
+#[test]
+fn an_entry_needing_a_newer_version_is_not_verified_and_gives_the_typed_result() {
+    let ledger = genuine_ledger(NET, 2);
+    let v = &ledger.entries[1];
+    let entry_with = |patch: &serde_json::Value| {
+        let mut wire = avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        );
+        let mut as_json = serde_json::to_value(&wire).unwrap();
+        for (k, val) in patch.as_object().unwrap() {
+            as_json[k] = val.clone();
+        }
+        wire = serde_json::from_value(as_json).unwrap();
+        mirror::MirroredEntry {
+            source_url: "p".into(),
+            network_id: NET.into(),
+            shard_id: mirror::CORE_SHARD_ID.into(),
+            seq: 2,
+            event_id: v["event_id"].as_str().unwrap().parse().unwrap(),
+            kind: v["kind"].as_str().unwrap().into(),
+            issuer: v["issuer"].as_str().unwrap().into(),
+            subject: v["subject"].as_str().unwrap().into(),
+            payload: Some(v["payload"].clone()),
+            payload_hash: avalon_chain::payload_hash_hex(&v["payload"].clone()).unwrap(),
+            event_timestamp: OffsetDateTime::parse(
+                v["event_timestamp"].as_str().unwrap(),
+                &time::format_description::well_known::Rfc3339,
+            )
+            .unwrap(),
+            version: 1,
+            prev_hash: v["prev_hash"].as_str().unwrap().into(),
+            entry_hash: v["entry_hash"].as_str().unwrap().into(),
+            batch_id: Uuid::new_v4(),
+            verified_tree_size: 2,
+            envelope: wire,
+        }
+    };
+    for (name, patch, want) in unreadable_envelopes() {
+        let err = verify_entry_binding(&entry_with(&patch), &ledger.hashes[1], &ledger.hashes[0])
+            .unwrap_err();
+        assert!(
+            matches!(&err, MirrorWatcherError::NeedsNewerVersion(e) if *e == want),
+            "{name}: {err:?}"
+        );
+    }
+}
+
+/// An entry the node cannot verify is refused with the typed result and never stored; earlier
+/// entries stay.
+#[tokio::test]
+#[ignore]
+async fn an_entry_needing_a_newer_version_is_refused_with_the_typed_result_and_not_stored() {
+    let pool = pool().await;
+    for (name, patch, want) in unreadable_envelopes() {
+        let net = fresh_net();
+        let ledger = genuine_ledger(&net, 3);
+        let mut served = ledger.entries.clone();
+        for (k, val) in patch.as_object().unwrap() {
+            served[1][k] = val.clone();
+        }
+        let server = ledger.serve(served).await;
+        let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
+        assert!(
+            matches!(&err, MirrorWatcherError::NeedsNewerVersion(e) if *e == want),
+            "{name}: {err:?}"
+        );
+        assert_eq!(stored_seqs(&pool, &net).await, vec![1], "{name}");
+    }
+}
+
+/// The insert itself refuses an entry it cannot read, so nothing unverifiable is stored or served.
+#[tokio::test]
+#[ignore]
+async fn inserting_an_entry_needing_a_newer_version_stores_nothing() {
+    let pool = pool().await;
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 1);
+    let v = &ledger.entries[0];
+    let mut wire = avalon_protocol::signing_bytes::EnvelopeWire::from(
+        &avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+        ),
+    );
+    wire.extensions = "000100030100000000".to_string();
+    let entry = mirror::MirroredEntry {
+        source_url: "p".into(),
+        network_id: net.clone(),
+        shard_id: mirror::CORE_SHARD_ID.into(),
+        seq: 1,
+        event_id: v["event_id"].as_str().unwrap().parse().unwrap(),
+        kind: v["kind"].as_str().unwrap().into(),
+        issuer: v["issuer"].as_str().unwrap().into(),
+        subject: v["subject"].as_str().unwrap().into(),
+        payload: Some(v["payload"].clone()),
+        payload_hash: avalon_chain::payload_hash_hex(&v["payload"].clone()).unwrap(),
+        event_timestamp: OffsetDateTime::parse(
+            v["event_timestamp"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap(),
+        version: 1,
+        prev_hash: v["prev_hash"].as_str().unwrap().into(),
+        entry_hash: v["entry_hash"].as_str().unwrap().into(),
+        batch_id: Uuid::new_v4(),
+        verified_tree_size: 1,
+        envelope: wire,
+    };
+    let err = mirror::insert_mirrored_entry(&pool, &entry)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        avalon_chain::SettlementError::NeedsNewerVersion {
+            what: avalon_protocol::signing_bytes::VersionKind::CriticalExtension,
+            required: 3
+        }
+    ));
+    assert!(stored_seqs(&pool, &net).await.is_empty());
 }
 
 async fn stored_payload(pool: &PgPool, net: &str, seq: i64) -> Option<serde_json::Value> {
