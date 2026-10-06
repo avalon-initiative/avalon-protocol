@@ -1424,6 +1424,11 @@ async fn inspect_ledger(full: bool) {
         .list_signed_tree_heads()
         .await
         .expect("failed to read signed tree heads");
+    if let Err(avalon_chain::SettlementError::NeedsNewerVersion { .. }) =
+        chain.latest_signed_tree_head().await
+    {
+        println!("warning: the newest stored signed tree head needs a newer version of this tool; the head below is not the latest");
+    }
     println!();
     match signed_tree_heads.last() {
         None => println!("signed tree head: (none yet)"),

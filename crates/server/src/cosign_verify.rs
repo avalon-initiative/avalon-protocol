@@ -123,7 +123,8 @@ impl WitnessCosignatureDto {
 }
 
 /// The cosignatures of `dtos` this node can read, bound to `sth`. One whose envelope needs a newer
-/// version is logged and left out, so it never counts and never voids the head or the others.
+/// version, or is malformed, is logged and left out, so it never counts and never voids the head
+/// or the others.
 pub fn readable_cosignatures(
     dtos: &[WitnessCosignatureDto],
     sth: &SignedTreeHead,
@@ -132,8 +133,10 @@ pub fn readable_cosignatures(
         .filter_map(|dto| match dto.to_witness_cosignature(sth) {
             Ok(cosig) => Some(cosig),
             Err(err) => {
+                // The id is peer-supplied: bound and escape it before logging.
+                let witness: String = dto.witness_key_id.chars().take(64).collect();
                 tracing::warn!(
-                    witness = %dto.witness_key_id,
+                    witness = ?witness,
                     error = %err,
                     "dropping a cosignature this node cannot read; it does not count"
                 );
