@@ -82,7 +82,7 @@ pub fn witness_signing_message(cosig: &WitnessCosignature) -> Result<Vec<u8>, Wi
         .str(&cosig.network_id)
         .i64(cosig.author_created_at.unix_timestamp())
         .str(&cosig.author_key_id)
-        .fixed(&author_signature)
+        .signature(&author_signature)
         .str(&cosig.witness_key_id)
         .i64(cosig.observed_at.unix_timestamp())
         .finish()?)

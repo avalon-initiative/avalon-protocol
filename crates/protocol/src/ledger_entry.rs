@@ -1,13 +1,11 @@
-//! The ledger entry hash (#1226): one structured layout every authoring node and mirror recomputes.
+//! The ledger entry hash: one structured layout every authoring node and mirror recomputes.
 //!
-//! Layout (tag `avalon.ledger.entry`, `u16` version = the entry's own `version`): network id `str`,
-//! shard id `str`, `seq` `u64`, previous entry hash (32 raw), event id (16 raw), kind, issuer and
-//! subject `str`, payload hash (32 raw), event time as `i64` unix microseconds. The entry commits to
-//! the payload hash, not the payload, so a row with a pruned payload still verifies. A different
-//! field set is a new tag, since the version slot carries the event version.
-//!
-//! Exception to the signing-bytes rule "a new field means a new version": the version slot here is
-//! the event's own `version`, so it cannot version this layout. A changed field set gets a new tag.
+//! Layout (tag `avalon.ledger.entry`, header and extensions as in [`crate::signing_bytes`]): network
+//! id `str`, shard id `str`, `seq` `u64`, event id (16 raw), kind, issuer and subject `str`, the
+//! event's own `version` as `u32`, event time as `i64` unix microseconds, `hash_algo` `u8`, previous
+//! entry hash (32 raw), payload hash (32 raw). The entry commits to the payload hash, not the
+//! payload, so a row with a pruned payload still verifies. The entry hash is the digest of these
+//! bytes under the same `hash_algo`.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -16,7 +14,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::canonical_payload::{canonicalize, CanonicalPayloadError};
-use crate::signing_bytes::{tags, Builder, SigningBytesError};
+use crate::signing_bytes::{tags, Builder, Envelope, SigningBytesError};
 
 /// Why an entry hash could not be computed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -41,7 +39,10 @@ pub struct EntryHashInput<'a> {
     pub subject: &'a str,
     pub payload_hash: &'a [u8; 32],
     pub timestamp_micros: i64,
-    pub version: u16,
+    /// The payload schema version of `kind`, not the layout version.
+    pub event_version: u32,
+    /// Layout version, rules version, hash algorithm and extensions as stored with the entry.
+    pub envelope: &'a Envelope,
 }
 
 /// SHA-256 of the canonical payload bytes (#1308): what an entry commits to in place of the payload.
@@ -53,11 +54,6 @@ pub fn payload_hash(payload: &Value) -> Result<[u8; 32], CanonicalPayloadError> 
 pub fn timestamp_micros(time: OffsetDateTime) -> Result<i64, EntryHashError> {
     i64::try_from(time.unix_timestamp_nanos().div_euclid(1000))
         .map_err(|_| EntryHashError::OutOfRange("timestamp"))
-}
-
-/// The layout's `u16` version slot for an event version, rejecting anything above `u16::MAX`.
-pub fn layout_version(version: u32) -> Result<u16, EntryHashError> {
-    u16::try_from(version).map_err(|_| EntryHashError::OutOfRange("version"))
 }
 
 /// The instant floored to whole microseconds: the value that is both hashed and stored.
@@ -77,30 +73,38 @@ pub fn parse_hash(name: &'static str, text: &str) -> Result<[u8; 32], EntryHashE
     Ok(out)
 }
 
-/// The exact bytes the entry hash is the SHA-256 of.
+/// The exact bytes the entry hash is the digest of.
 pub fn entry_signing_bytes(input: &EntryHashInput<'_>) -> Result<Vec<u8>, EntryHashError> {
-    Ok(Builder::new(tags::LEDGER_ENTRY, input.version)
+    Ok(Builder::with_envelope(tags::LEDGER_ENTRY, input.envelope)
         .str(input.network_id)
         .str(input.shard_id)
         .u64(input.seq)
-        .hash(input.prev_hash)
         .uuid(input.event_id)
         .str(input.kind)
         .str(input.issuer)
         .str(input.subject)
-        .hash(input.payload_hash)
+        .u32(input.event_version)
         .i64(input.timestamp_micros)
+        .hash_algo(input.envelope.hash_algo)
+        .hash(input.prev_hash)
+        .hash(input.payload_hash)
         .finish()?)
 }
 
-/// The entry hash: SHA-256 of [`entry_signing_bytes`].
+/// The entry hash: the envelope's hash algorithm over [`entry_signing_bytes`].
 pub fn entry_hash(input: &EntryHashInput<'_>) -> Result<[u8; 32], EntryHashError> {
-    Ok(Sha256::digest(entry_signing_bytes(input)?).into())
+    Ok(input
+        .envelope
+        .hash_algo
+        .digest(&entry_signing_bytes(input)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ENVELOPE: std::sync::LazyLock<Envelope> =
+        std::sync::LazyLock::new(|| Envelope::current(tags::LEDGER_ENTRY));
 
     fn input<'a>(prev: &'a [u8; 32], payload: &'a [u8; 32]) -> EntryHashInput<'a> {
         EntryHashInput {
@@ -114,7 +118,8 @@ mod tests {
             subject: "s",
             payload_hash: payload,
             timestamp_micros: 1,
-            version: 1,
+            event_version: 1,
+            envelope: &ENVELOPE,
         }
     }
 
@@ -123,6 +128,23 @@ mod tests {
         let (p, h) = ([0u8; 32], [1u8; 32]);
         let base = entry_hash(&input(&p, &h)).unwrap();
         let other = [9u8; 32];
+        let other_rules = Envelope {
+            rules_version: 1,
+            layout_version: 1,
+            ..ENVELOPE.clone()
+        };
+        let with_extension = Envelope {
+            extensions: crate::signing_bytes::Extensions::new(
+                vec![crate::signing_bytes::Extension {
+                    ext_type: 9,
+                    critical: false,
+                    value: vec![1],
+                }],
+                1,
+            )
+            .unwrap(),
+            ..ENVELOPE.clone()
+        };
         let variants: Vec<EntryHashInput<'_>> = vec![
             EntryHashInput {
                 network_id: "net2",
@@ -165,7 +187,15 @@ mod tests {
                 ..input(&p, &h)
             },
             EntryHashInput {
-                version: 2,
+                event_version: 2,
+                ..input(&p, &h)
+            },
+            EntryHashInput {
+                envelope: &other_rules,
+                ..input(&p, &h)
+            },
+            EntryHashInput {
+                envelope: &with_extension,
                 ..input(&p, &h)
             },
         ];
@@ -218,12 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn layout_version_rejects_above_u16() {
-        assert_eq!(layout_version(65535).unwrap(), 65535);
-        assert!(layout_version(65536).is_err());
-    }
-
-    #[test]
     fn parse_hash_is_strict() {
         assert!(parse_hash("h", &"0".repeat(64)).is_ok());
         for bad in [
@@ -242,18 +266,22 @@ mod tests {
         let (p, h) = ([3u8; 32], [4u8; 32]);
         let bytes = entry_signing_bytes(&input(&p, &h)).unwrap();
         let mut r = crate::signing_bytes::Reader::new(tags::LEDGER_ENTRY, &bytes).unwrap();
-        assert_eq!(r.version(), 1);
-        assert_eq!(r.str().unwrap(), "net");
-        assert_eq!(r.str().unwrap(), "core");
+        assert_eq!((r.layout_version(), r.rules_version()), (1, 1));
+        assert_eq!((r.str().unwrap(), r.str().unwrap()), ("net", "core"));
         assert_eq!(r.u64().unwrap(), 1);
-        assert_eq!(r.fixed::<32>().unwrap(), p);
         assert_eq!(r.uuid().unwrap(), Uuid::from_u128(1));
         assert_eq!(
             (r.str().unwrap(), r.str().unwrap(), r.str().unwrap()),
             ("k", "i", "s")
         );
-        assert_eq!(r.fixed::<32>().unwrap(), h);
+        assert_eq!(r.u32().unwrap(), 1);
         assert_eq!(r.i64().unwrap(), 1);
-        r.finish().unwrap();
+        assert_eq!(
+            r.hash_algo().unwrap(),
+            crate::signing_bytes::HashAlgo::Sha256
+        );
+        assert_eq!(r.fixed::<32>().unwrap(), p);
+        assert_eq!(r.fixed::<32>().unwrap(), h);
+        assert!(r.finish().unwrap().is_empty());
     }
 }
