@@ -30,6 +30,9 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use time::OffsetDateTime;
 
+use crate::ledger_entry::parse_hash;
+use crate::signing_bytes::{tags, Builder, SigningBytesError};
+
 /// Default `signing_key_id` when `AVALON_SETTLEMENT_SIGNING_KEY_ID` isn't
 /// set — fine for a single-operator milestone-1 deployment. A real key
 /// rotation should set this explicitly so historical STHs keep naming the
@@ -39,7 +42,7 @@ pub const DEFAULT_SIGNING_KEY_ID: &str = "settlement-operator-1";
 /// Issue #531 (managed hosting): the *unsigned* candidate tree head
 /// `PostgresSettlementProvider::prepare` returns as a preview — the exact
 /// fields an integrator using a managed host needs to sign locally
-/// (`signing_message`'s inputs, minus the signature itself) before
+/// (`signing_message`'s inputs, minus the signature itself and its own `signing_key_id`) before
 /// calling `POST /ledger/finalize-batch`. A preview only, never persisted
 /// — see `prepare`'s own doc comment for why finalize recomputes fresh
 /// rather than trusting this back.
@@ -69,41 +72,40 @@ pub struct SignedTreeHead {
     pub created_at: OffsetDateTime,
 }
 
-/// The exact bytes an STH's signature covers: `(tree_size, root_hash,
-/// network_id, timestamp)`, canonically encoded so there is exactly one
-/// way to serialize a given tuple of those fields — a fixed domain tag (so
-/// this can never be confused with a signature produced by some other
-/// scheme in this codebase, the same motivation `postgres.rs::hash_entry`
-/// has for hashing in `network_id`), `tree_size` and the timestamp as
-/// fixed-width big-endian integers, and `root_hash` explicitly
-/// length-prefixed ahead of its bytes. Only `network_id` is variable-length
-/// with no length prefix of its own, but it's unambiguous anyway: it's the
-/// last field before the fixed-width timestamp suffix, so two different
-/// `network_id` values (of any length) can never produce identical
-/// trailing bytes once that fixed-width suffix is accounted for.
-/// Public since issue #531: a managed-hosting integrator needs to
-/// construct these exact bytes themselves, outside this crate entirely
-/// (they sign locally, with a key this crate/node never holds — see
-/// `PostgresSettlementProvider::prepare`'s doc comment), not just internal
-/// callers signing/verifying with an in-process key.
+/// Why an STH's signing bytes could not be built.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SthSigningError {
+    #[error("root_hash is not 64 lowercase hex characters")]
+    InvalidRootHash,
+    #[error(transparent)]
+    Layout(#[from] SigningBytesError),
+}
+
+/// The exact bytes an STH's signature covers, in the structured layout (tag
+/// `avalon.settlement.sth`, version 1): `tree_size` `i64`, the root hash as 32 raw
+/// bytes, `network_id` and `signing_key_id` as `str`, then `created_at` as `i64` unix
+/// seconds. Public because a managed-hosting integrator signs these bytes locally,
+/// with a key this node never holds, so it must be able to build them itself.
 pub fn signing_message(
     tree_size: i64,
     root_hash_hex: &str,
     network_id: &str,
+    signing_key_id: &str,
     created_at: OffsetDateTime,
-) -> Vec<u8> {
-    let mut message = Vec::new();
-    message.extend_from_slice(b"avalon-settlement-sth-v1");
-    message.extend_from_slice(&tree_size.to_be_bytes());
-    message.extend_from_slice(&(root_hash_hex.len() as u32).to_be_bytes());
-    message.extend_from_slice(root_hash_hex.as_bytes());
-    message.extend_from_slice(network_id.as_bytes());
-    message.extend_from_slice(&created_at.unix_timestamp().to_be_bytes());
-    message
+) -> Result<Vec<u8>, SthSigningError> {
+    let root =
+        parse_hash("root_hash", root_hash_hex).map_err(|_| SthSigningError::InvalidRootHash)?;
+    Ok(Builder::new(tags::SETTLEMENT_STH, 1)
+        .i64(tree_size)
+        .hash(&root)
+        .str(network_id)
+        .str(signing_key_id)
+        .i64(created_at.unix_timestamp())
+        .finish()?)
 }
 
-/// Signs `(tree_size, root_hash_hex, network_id, created_at)` with
-/// `signing_key`, producing the [`SignedTreeHead`] `commit` stores.
+/// Signs the head's fields (see [`signing_message`]) with `signing_key`, producing the
+/// [`SignedTreeHead`] `commit` stores. Fails when `root_hash_hex` is not a 32-byte hash.
 pub fn sign_tree_head(
     signing_key: &SigningKey,
     signing_key_id: &str,
@@ -111,29 +113,38 @@ pub fn sign_tree_head(
     root_hash_hex: &str,
     network_id: &str,
     created_at: OffsetDateTime,
-) -> SignedTreeHead {
-    let message = signing_message(tree_size, root_hash_hex, network_id, created_at);
+) -> Result<SignedTreeHead, SthSigningError> {
+    let message = signing_message(
+        tree_size,
+        root_hash_hex,
+        network_id,
+        signing_key_id,
+        created_at,
+    )?;
     let signature: Signature = signing_key.sign(&message);
-    SignedTreeHead {
+    Ok(SignedTreeHead {
         tree_size,
         root_hash: root_hash_hex.to_string(),
         network_id: network_id.to_string(),
         signing_key_id: signing_key_id.to_string(),
         signature: hex::encode(signature.to_bytes()),
         created_at,
-    }
+    })
 }
 
 /// Verifies `sth`'s signature against `verifying_key` — `false` for any
 /// malformed signature (bad hex, wrong length) as well as an
 /// outright-invalid one; never panics on attacker-controlled input.
 pub fn verify_tree_head(verifying_key: &VerifyingKey, sth: &SignedTreeHead) -> bool {
-    let message = signing_message(
+    let Ok(message) = signing_message(
         sth.tree_size,
         &sth.root_hash,
         &sth.network_id,
+        &sth.signing_key_id,
         sth.created_at,
-    );
+    ) else {
+        return false;
+    };
     let Ok(signature_bytes) = hex::decode(&sth.signature) else {
         return false;
     };
@@ -222,7 +233,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(verify_tree_head(&verifying_key, &sth));
     }
@@ -239,7 +251,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(!verify_tree_head(&other_key.verifying_key(), &sth));
     }
@@ -255,7 +268,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         let mut tampered_size = sth.clone();
         tampered_size.tree_size += 1;
@@ -269,9 +283,41 @@ mod tests {
         tampered_network.network_id = "avalon-mainnet-1".to_string();
         assert!(!verify_tree_head(&verifying_key, &tampered_network));
 
+        let mut tampered_key_id = sth.clone();
+        tampered_key_id.signing_key_id = "other-key".to_string();
+        assert!(!verify_tree_head(&verifying_key, &tampered_key_id));
+
         let mut tampered_timestamp = sth.clone();
         tampered_timestamp.created_at = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1);
         assert!(!verify_tree_head(&verifying_key, &tampered_timestamp));
+    }
+
+    #[test]
+    fn root_hash_must_be_32_byte_lowercase_hex() {
+        let key = SigningKey::generate(&mut rand::rng());
+        for bad in [
+            "",
+            "abab",
+            &"AB".repeat(32),
+            &"zz".repeat(32),
+            &"ab".repeat(33),
+        ] {
+            assert_eq!(
+                sign_tree_head(&key, "k", 1, bad, "n", OffsetDateTime::UNIX_EPOCH).unwrap_err(),
+                SthSigningError::InvalidRootHash
+            );
+        }
+        let mut sth = sign_tree_head(
+            &key,
+            "k",
+            1,
+            &root_hash_fixture(),
+            "n",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        sth.root_hash = "AB".repeat(32);
+        assert!(!verify_tree_head(&key.verifying_key(), &sth));
     }
 
     #[test]
@@ -284,7 +330,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         sth.signature = "not-hex".to_string();
         assert!(!verify_tree_head(&signing_key.verifying_key(), &sth));

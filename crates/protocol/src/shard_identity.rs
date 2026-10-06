@@ -246,7 +246,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(verify_self_certifying_tree_head(&id, &verifying_key, &sth));
     }
@@ -267,7 +268,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(!verify_self_certifying_tree_head(
             &claimed_id,
@@ -291,7 +293,8 @@ mod tests {
             &root_hash_fixture(),
             "avalon-test",
             OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(!verify_self_certifying_tree_head(
             &id,
