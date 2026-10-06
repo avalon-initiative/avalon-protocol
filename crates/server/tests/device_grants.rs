@@ -97,34 +97,75 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
     request.bearer_auth(token)
 }
 
-fn device_grant_approval_signing_bytes(
-    grant_id: Uuid,
-    identity_id: avalon_protocol::ids::IdentityId,
-    requested_signing_public_key: &[u8; 32],
-) -> Vec<u8> {
-    avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
-        grant_id,
-        &identity_id,
-        requested_signing_public_key,
-    )
+/// The 32-byte chain head hash behind a request's lowercase-hex `prev_hash`.
+fn head_bytes(prev_hash: Option<&str>) -> Option<[u8; 32]> {
+    prev_hash.map(|h| hex::decode(h).unwrap().try_into().unwrap())
 }
 
-/// The signed body `POST /me/devices/{id}/revoke` requires.
+/// The signed body `POST /me/devices/grants/{id}/approve` requires, at a chain position.
+fn approve_body_at(
+    grant_id: Uuid,
+    identity_id: avalon_protocol::ids::IdentityId,
+    approver: (Uuid, &SigningKey),
+    requested_signing_public_key: &[u8; 32],
+    seq: u64,
+    prev_hash: Option<&str>,
+) -> serde_json::Value {
+    let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+        grant_id,
+        &identity_id,
+        approver.0,
+        requested_signing_public_key,
+        seq,
+        head_bytes(prev_hash).as_ref(),
+    );
+    serde_json::json!({
+        "approver_signing_key_id": approver.0,
+        "seq": seq,
+        "prev_hash": prev_hash,
+        "signature": BASE64.encode(approver.1.sign(&bytes).to_bytes()),
+    })
+}
+
+/// The signed body `POST /me/devices/{id}/revoke` requires, at a chain position.
+fn revoke_body_at(
+    identity_id: avalon_protocol::ids::IdentityId,
+    target_key_id: Uuid,
+    revoker_key_id: Uuid,
+    revoker_key: &SigningKey,
+    seq: u64,
+    prev_hash: Option<&str>,
+) -> serde_json::Value {
+    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+        &identity_id,
+        target_key_id,
+        revoker_key_id,
+        seq,
+        head_bytes(prev_hash).as_ref(),
+    );
+    serde_json::json!({
+        "revoked_by_signing_key_id": revoker_key_id,
+        "seq": seq,
+        "prev_hash": prev_hash,
+        "signature": BASE64.encode(revoker_key.sign(&bytes).to_bytes()),
+    })
+}
+
+/// A revocation at the first chain position (seeded identities start with an empty chain).
 fn revoke_body(
     identity_id: avalon_protocol::ids::IdentityId,
     target_key_id: Uuid,
     revoker_key_id: Uuid,
     revoker_key: &SigningKey,
 ) -> serde_json::Value {
-    let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
-        &identity_id,
+    revoke_body_at(
+        identity_id,
         target_key_id,
         revoker_key_id,
-    );
-    serde_json::json!({
-        "revoked_by_signing_key_id": revoker_key_id,
-        "signature": BASE64.encode(revoker_key.sign(&bytes).to_bytes()),
-    })
+        revoker_key,
+        1,
+        None,
+    )
 }
 
 #[tokio::test]
@@ -164,14 +205,14 @@ async fn a_grant_approved_by_a_valid_trusted_key_succeeds_and_the_new_key_is_reg
     assert_eq!(grant["status"], "pending");
     let grant_id: Uuid = grant["id"].as_str().unwrap().parse().unwrap();
 
-    let signing_bytes =
-        device_grant_approval_signing_bytes(grant_id, identity_id, &new_device_public_key);
-    let signature = trusted_key.sign(&signing_bytes);
-
-    let approve_body = serde_json::json!({
-        "approver_signing_key_id": trusted_key_id,
-        "signature": BASE64.encode(signature.to_bytes()),
-    });
+    let approve_body = approve_body_at(
+        grant_id,
+        identity_id,
+        (trusted_key_id, &trusted_key),
+        &new_device_public_key,
+        1,
+        None,
+    );
     let approve = auth(
         http.post(format!("{base}/me/devices/grants/{grant_id}/approve")),
         &token,
@@ -235,13 +276,14 @@ async fn an_approval_attempt_from_a_revoked_key_is_rejected() {
         .unwrap();
     let grant_id: Uuid = grant["id"].as_str().unwrap().parse().unwrap();
 
-    let signing_bytes =
-        device_grant_approval_signing_bytes(grant_id, identity_id, &new_device_public_key);
-    let signature = revoked_key.sign(&signing_bytes);
-    let approve_body = serde_json::json!({
-        "approver_signing_key_id": revoked_key_id,
-        "signature": BASE64.encode(signature.to_bytes()),
-    });
+    let approve_body = approve_body_at(
+        grant_id,
+        identity_id,
+        (revoked_key_id, &revoked_key),
+        &new_device_public_key,
+        1,
+        None,
+    );
     let approve = auth(
         http.post(format!("{base}/me/devices/grants/{grant_id}/approve")),
         &token,
@@ -508,4 +550,191 @@ async fn two_keys_revoking_each_other_concurrently_leave_one_active() {
     .await
     .unwrap();
     assert_eq!(active, 1);
+}
+
+async fn request_grant(http: &reqwest::Client, token: &str, public_key: &[u8; 32]) -> Uuid {
+    let grant: serde_json::Value = auth(
+        http.post(format!("{}/me/devices/grants", server_url())),
+        token,
+    )
+    .json(&serde_json::json!({
+        "requested_signing_public_key": BASE64.encode(public_key),
+        "device_label": null,
+    }))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    grant["id"].as_str().unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_key_event_signed_at_a_stale_position_is_refused_with_the_head_and_resigns() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (trusted_id, trusted) = seed_signing_key(&pool, identity_id).await;
+    let first_device = SigningKey::generate(&mut rand::rng())
+        .verifying_key()
+        .to_bytes();
+    let second_device = SigningKey::generate(&mut rand::rng())
+        .verifying_key()
+        .to_bytes();
+    let (first, second) = (
+        request_grant(&http, &token, &first_device).await,
+        request_grant(&http, &token, &second_device).await,
+    );
+    let approve = |grant_id: Uuid, key: &[u8; 32], seq: u64, prev: Option<&str>| {
+        let body = approve_body_at(
+            grant_id,
+            identity_id,
+            (trusted_id, &trusted),
+            key,
+            seq,
+            prev,
+        );
+        auth(
+            http.post(format!("{base}/me/devices/grants/{grant_id}/approve")),
+            &token,
+        )
+        .json(&body)
+        .send()
+    };
+
+    assert!(approve(first, &first_device, 1, None)
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    // The second grant was signed against the empty chain, which is no longer the head.
+    let stale = approve(second, &second_device, 1, None).await.unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = stale.json().await.unwrap();
+    assert_eq!(body["code"], "IDENTITY_CHAIN_POSITION_STALE");
+    assert_eq!(body["head_seq"], 1);
+    let head = body["head_hash"].as_str().unwrap().to_string();
+    // Nothing changed, and signing at the returned head succeeds.
+    let devices: serde_json::Value = auth(http.get(format!("{base}/me/devices")), &token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(devices.as_array().unwrap().len(), 2);
+    let ok = approve(second, &second_device, 2, Some(&head))
+        .await
+        .unwrap();
+    assert!(ok.status().is_success(), "{:?}", ok.status());
+    // The new key's id is the grant id.
+    let ids: Vec<String> = devices_ids(&http, &token).await;
+    assert!(ids.contains(&first.to_string()) && ids.contains(&second.to_string()));
+}
+
+async fn devices_ids(http: &reqwest::Client, token: &str) -> Vec<String> {
+    let devices: serde_json::Value = auth(http.get(format!("{}/me/devices", server_url())), token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_signature_does_not_carry_over_to_another_approver_id_position_or_malformed_head() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (trusted_id, trusted) = seed_signing_key(&pool, identity_id).await;
+    let (other_id, _other) = seed_signing_key(&pool, identity_id).await;
+    let device = SigningKey::generate(&mut rand::rng())
+        .verifying_key()
+        .to_bytes();
+    let grant_id = request_grant(&http, &token, &device).await;
+    let post = |body: serde_json::Value| {
+        auth(
+            http.post(format!("{base}/me/devices/grants/{grant_id}/approve")),
+            &token,
+        )
+        .json(&body)
+        .send()
+    };
+    let signed = approve_body_at(
+        grant_id,
+        identity_id,
+        (trusted_id, &trusted),
+        &device,
+        1,
+        None,
+    );
+
+    // The same signature under another approver key id, or claiming another position.
+    let mut other_approver = signed.clone();
+    other_approver["approver_signing_key_id"] = serde_json::json!(other_id);
+    let mut other_seq = signed.clone();
+    other_seq["seq"] = serde_json::json!(2);
+    let mut other_prev = signed.clone();
+    other_prev["prev_hash"] = serde_json::json!("00".repeat(32));
+    for replay in [other_approver, other_seq, other_prev] {
+        let response = post(replay).await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    }
+    let mut malformed = signed.clone();
+    malformed["prev_hash"] = serde_json::json!("ABCD");
+    let response = post(malformed).await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(post(signed).await.unwrap().status().is_success());
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_revocation_signed_at_a_stale_position_is_refused_with_the_head() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (a_id, a) = seed_signing_key(&pool, identity_id).await;
+    let (b_id, b) = seed_signing_key(&pool, identity_id).await;
+    let (c_id, _c) = seed_signing_key(&pool, identity_id).await;
+    let revoke = |target: Uuid, body: serde_json::Value| {
+        auth(
+            http.post(format!("{base}/me/devices/{target}/revoke")),
+            &token,
+        )
+        .json(&body)
+        .send()
+    };
+    let first = revoke(a_id, revoke_body_at(identity_id, a_id, b_id, &b, 1, None))
+        .await
+        .unwrap();
+    assert!(first.status().is_success());
+    let stale = revoke(c_id, revoke_body_at(identity_id, c_id, b_id, &b, 1, None))
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = stale.json().await.unwrap();
+    assert_eq!(body["code"], "IDENTITY_CHAIN_POSITION_STALE");
+    assert_eq!(body["head_seq"], 1);
+    let head = body["head_hash"].as_str().unwrap();
+    let ok = revoke(
+        c_id,
+        revoke_body_at(identity_id, c_id, b_id, &b, 2, Some(head)),
+    )
+    .await
+    .unwrap();
+    assert!(ok.status().is_success(), "{:?}", ok.status());
+    let _ = a;
 }

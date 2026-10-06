@@ -660,7 +660,7 @@ fn valid_creation(
             return None;
         }
         let signature = <[u8; 64]>::try_from(BASE64.decode(&payload.signature).ok()?).ok()?;
-        let bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        let bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
             network_id,
             shard_id,
             payload.ticket_id,

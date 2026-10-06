@@ -8,7 +8,7 @@ use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
-use avalon_protocol::identity_id::{device_grant_approval_signing_bytes_v2, TestIdentity};
+use avalon_protocol::identity_id::{device_grant_approval_signing_bytes, TestIdentity};
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -57,16 +57,24 @@ fn indexer(pool: &PgPool) -> PostgresIndexer {
     PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core")
 }
 
-/// A signed `identity.signing_key_added` payload for a fresh device key, approved by `approver`.
+/// A signed `identity.signing_key_added` payload for a fresh device key, approved by `approver`
+/// at the first chain position (seq 1, no previous event).
 fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> serde_json::Value {
     use base64::Engine as _;
     use ed25519_dalek::Signer as _;
     let device = TestIdentity::from_seed([seed; 32]);
     let grant_id = Uuid::new_v4();
-    let bytes = device_grant_approval_signing_bytes_v2(grant_id, &who.id, &device.public_key());
+    let bytes = device_grant_approval_signing_bytes(
+        grant_id,
+        &who.id,
+        approver_key_id,
+        &device.public_key(),
+        1,
+        None,
+    );
     let b64 = base64::engine::general_purpose::STANDARD;
     serde_json::json!({
-        "signing_key_id": Uuid::new_v4(),
+        "signing_key_id": grant_id,
         "public_key": b64.encode(device.public_key()),
         "device_label": null,
         "approved_by_signing_key_id": approver_key_id,

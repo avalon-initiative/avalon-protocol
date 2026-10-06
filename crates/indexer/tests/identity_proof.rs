@@ -5,9 +5,10 @@
 use avalon_indexer::identity_proof::EventOrigin;
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::IndexError;
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
+use avalon_protocol::identity_chain_wire::event_hash;
 use avalon_protocol::identity_id::{
-    device_grant_approval_signing_bytes_v2, signing_key_revoked_signing_bytes_v2, TestIdentity,
+    device_grant_approval_signing_bytes, signing_key_revoked_signing_bytes, TestIdentity,
     TEST_NETWORK_ID, TEST_SHARD_ID,
 };
 use avalon_protocol::ids::GlobalId;
@@ -107,17 +108,43 @@ fn inception(who: &TestIdentity, key_id: Uuid) -> ProtocolEvent {
     )
 }
 
-/// A grant adding `device`'s key to `who`, signed by `signer` and naming `approver_key_id`.
+/// The chain position directly after `after` (the first chained position when `None`).
+fn next_position(after: Option<&ProtocolEvent>) -> (u64, Option<[u8; 32]>) {
+    after.map_or((1, None), |e| {
+        let position = e.identity_chain.as_ref().unwrap();
+        (position.seq + 1, Some(event_hash(e).unwrap()))
+    })
+}
+
+fn positioned(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> ProtocolEvent {
+    event.identity_chain = Some(IdentityChainPosition {
+        seq,
+        prev_hash: prev.map(hex::encode),
+    });
+    event
+}
+
+/// A grant adding `device`'s key to `who` as `key_id` (the grant id), signed by `signer`, naming
+/// `approver_key_id`, at the chain position after `after`.
 fn grant(
     who: &TestIdentity,
     signer: &TestIdentity,
     approver_key_id: Uuid,
     device: &TestIdentity,
     key_id: Uuid,
+    after: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
-    let grant_id = Uuid::new_v4();
-    let bytes = device_grant_approval_signing_bytes_v2(grant_id, &who.id, &device.public_key());
-    event(
+    let grant_id = key_id;
+    let (seq, prev) = next_position(after);
+    let bytes = device_grant_approval_signing_bytes(
+        grant_id,
+        &who.id,
+        approver_key_id,
+        &device.public_key(),
+        seq,
+        prev.as_ref(),
+    );
+    let event = event(
         who,
         "identity.signing_key_added",
         2,
@@ -131,7 +158,8 @@ fn grant(
             "grant_id": grant_id,
             "approval_signature": b64(&signer.signing_key.sign(&bytes).to_bytes()),
         }),
-    )
+    );
+    positioned(event, seq, prev)
 }
 
 fn revoke(
@@ -139,9 +167,12 @@ fn revoke(
     signer: &TestIdentity,
     signer_key_id: Uuid,
     key_id: Uuid,
+    after: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
-    let bytes = signing_key_revoked_signing_bytes_v2(&who.id, key_id, signer_key_id);
-    event(
+    let (seq, prev) = next_position(after);
+    let bytes =
+        signing_key_revoked_signing_bytes(&who.id, key_id, signer_key_id, seq, prev.as_ref());
+    let event = event(
         who,
         "identity.signing_key_revoked",
         2,
@@ -151,7 +182,8 @@ fn revoke(
             "revoked_by_signing_key_id": signer_key_id,
             "signature": b64(&signer.signing_key.sign(&bytes).to_bytes()),
         }),
-    )
+    );
+    positioned(event, seq, prev)
 }
 
 async fn count(pool: &PgPool, sql: &'static str, bind: impl ToString) -> i64 {
@@ -287,7 +319,14 @@ async fn keys_are_added_only_with_proof_from_an_active_key_of_the_identity() {
     assert!(apply(&pool, &as_victim, &game()).await.is_err());
 
     // A grant signed by the attacker's key but naming the victim's approver key.
-    let bad_sig = grant(&victim, &attacker, inception_id, &device, Uuid::new_v4());
+    let bad_sig = grant(
+        &victim,
+        &attacker,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     assert!(apply(&pool, &bad_sig, &game()).await.is_err());
     // A grant naming an approver key id that does not belong to the victim.
     let foreign_approver = grant(
@@ -296,10 +335,18 @@ async fn keys_are_added_only_with_proof_from_an_active_key_of_the_identity() {
         attacker_inception,
         &device,
         Uuid::new_v4(),
+        None,
     );
     assert!(apply(&pool, &foreign_approver, &game()).await.is_err());
     // A grant with the signature stripped.
-    let mut unsigned = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let mut unsigned = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     unsigned
         .payload
         .as_object_mut()
@@ -307,11 +354,25 @@ async fn keys_are_added_only_with_proof_from_an_active_key_of_the_identity() {
         .remove("approval_signature");
     assert!(apply(&pool, &unsigned, &game()).await.is_err());
     // The pre-v2 shape is refused outright.
-    let mut v1 = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let mut v1 = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     v1.version = 1;
     assert!(apply(&pool, &v1, &game()).await.is_err());
     // A recovery-kind key carries no proof.
-    let mut recovery = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let mut recovery = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     recovery.payload["kind"] = serde_json::json!("recovery");
     assert!(apply(&pool, &recovery, &game()).await.is_err());
     assert_eq!(
@@ -329,7 +390,7 @@ async fn keys_are_added_only_with_proof_from_an_active_key_of_the_identity() {
     let device_key = Uuid::new_v4();
     apply(
         &pool,
-        &grant(&victim, &victim, inception_id, &device, device_key),
+        &grant(&victim, &victim, inception_id, &device, device_key, None),
         &game(),
     )
     .await
@@ -349,47 +410,44 @@ async fn revocations_need_a_signature_from_an_active_key_of_the_identity() {
     let inception_id = register(&pool, &victim).await;
     let attacker_key = register(&pool, &attacker).await;
     let device_key = Uuid::new_v4();
-    apply(
-        &pool,
-        &grant(&victim, &victim, inception_id, &device, device_key),
-        &game(),
-    )
-    .await
-    .unwrap();
+    let added = grant(&victim, &victim, inception_id, &device, device_key, None);
+    apply(&pool, &added, &game()).await.unwrap();
 
     // Signed by the attacker, or naming a key the victim does not have, or tampered.
     assert!(apply(
         &pool,
-        &revoke(&victim, &attacker, inception_id, device_key),
+        &revoke(&victim, &attacker, inception_id, device_key, Some(&added)),
         &game()
     )
     .await
     .is_err());
     assert!(apply(
         &pool,
-        &revoke(&victim, &attacker, attacker_key, device_key),
+        &revoke(&victim, &attacker, attacker_key, device_key, Some(&added)),
         &game()
     )
     .await
     .is_err());
-    let mut tampered = revoke(&victim, &victim, inception_id, device_key);
+    let mut tampered = revoke(&victim, &victim, inception_id, device_key, Some(&added));
     tampered.payload["signing_key_id"] = serde_json::json!(inception_id);
     assert!(apply(&pool, &tampered, &game()).await.is_err());
     assert!(active(&pool, &victim, device_key).await);
     assert!(active(&pool, &victim, inception_id).await);
 
     // A revoked key can no longer revoke or approve.
-    apply(
-        &pool,
-        &revoke(&victim, &victim, inception_id, device_key),
-        &game(),
-    )
-    .await
-    .unwrap();
+    let revoked = revoke(&victim, &victim, inception_id, device_key, Some(&added));
+    apply(&pool, &revoked, &game()).await.unwrap();
     assert!(!active(&pool, &victim, device_key).await);
-    let from_revoked = revoke(&victim, &device, device_key, inception_id);
+    let from_revoked = revoke(&victim, &device, device_key, inception_id, Some(&revoked));
     assert!(apply(&pool, &from_revoked, &game()).await.is_err());
-    let approved_by_revoked = grant(&victim, &device, device_key, &attacker, Uuid::new_v4());
+    let approved_by_revoked = grant(
+        &victim,
+        &device,
+        device_key,
+        &attacker,
+        Uuid::new_v4(),
+        Some(&revoked),
+    );
     assert!(apply(&pool, &approved_by_revoked, &game()).await.is_err());
 }
 
@@ -400,21 +458,18 @@ async fn a_revoked_key_cannot_return_under_a_new_key_id() {
     let (victim, device) = (TestIdentity::new(), TestIdentity::new());
     let inception_id = register(&pool, &victim).await;
     let device_key = Uuid::new_v4();
-    apply(
-        &pool,
-        &grant(&victim, &victim, inception_id, &device, device_key),
-        &game(),
-    )
-    .await
-    .unwrap();
-    apply(
-        &pool,
-        &revoke(&victim, &victim, inception_id, device_key),
-        &game(),
-    )
-    .await
-    .unwrap();
-    let replay = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let added = grant(&victim, &victim, inception_id, &device, device_key, None);
+    apply(&pool, &added, &game()).await.unwrap();
+    let revoked = revoke(&victim, &victim, inception_id, device_key, Some(&added));
+    apply(&pool, &revoked, &game()).await.unwrap();
+    let replay = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        Some(&revoked),
+    );
     assert!(matches!(
         apply(&pool, &replay, &game()).await,
         Err(IndexError::Rejected(_))
@@ -422,7 +477,7 @@ async fn a_revoked_key_cannot_return_under_a_new_key_id() {
     // A replayed inception under a fresh id is refused the same way.
     apply(
         &pool,
-        &revoke(&victim, &victim, inception_id, inception_id),
+        &revoke(&victim, &victim, inception_id, inception_id, Some(&revoked)),
         &core(),
     )
     .await
@@ -623,7 +678,14 @@ async fn a_replay_from_a_foreign_shard_cannot_fork_the_chain() {
     let pool = pool().await;
     let (victim, device) = (TestIdentity::new(), TestIdentity::new());
     let inception_id = register(&pool, &victim).await;
-    let signed = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let signed = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     let genuine = at_position(signed.clone(), 1, None, 100);
     apply(&pool, &genuine, &game()).await.unwrap();
     let rows = chain_rows(&pool, &victim).await;
@@ -646,13 +708,56 @@ async fn a_replay_from_a_foreign_shard_cannot_fork_the_chain() {
 
 #[tokio::test]
 #[ignore]
+async fn a_signed_key_event_replayed_under_another_key_id_or_position_is_refused_even_from_home() {
+    let pool = pool().await;
+    let (victim, device) = (TestIdentity::new(), TestIdentity::new());
+    let inception_id = register(&pool, &victim).await;
+    let key_id = Uuid::new_v4();
+    let added = grant(&victim, &victim, inception_id, &device, key_id, None);
+
+    // Another key id, another approver id, or a conflicting position: the signature no longer holds.
+    let mut other_key = added.clone();
+    other_key.payload["signing_key_id"] = serde_json::json!(Uuid::new_v4());
+    let mut other_approver = added.clone();
+    other_approver.payload["approved_by_signing_key_id"] = serde_json::json!(Uuid::new_v4());
+    let moved = positioned(added.clone(), 2, Some([7; 32]));
+    let mut unchained = added.clone();
+    unchained.identity_chain = None;
+    for replay in [other_key, other_approver, moved, unchained] {
+        assert!(matches!(
+            apply(&pool, &replay, &game()).await,
+            Err(IndexError::Rejected(_)) | Err(IndexError::AwaitingKey(_))
+        ));
+    }
+    assert_eq!(chain_rows(&pool, &victim).await, 0);
+    apply(&pool, &added, &game()).await.unwrap();
+
+    let revoked = revoke(&victim, &victim, inception_id, key_id, Some(&added));
+    let moved = positioned(revoked.clone(), 3, Some([7; 32]));
+    let mut unchained = revoked.clone();
+    unchained.identity_chain = None;
+    let mut other_target = revoked.clone();
+    other_target.payload["signing_key_id"] = serde_json::json!(inception_id);
+    for replay in [moved, unchained, other_target] {
+        assert!(matches!(
+            apply(&pool, &replay, &game()).await,
+            Err(IndexError::Rejected(_))
+        ));
+    }
+    apply(&pool, &revoked, &game()).await.unwrap();
+    assert!(!active(&pool, &victim, key_id).await);
+    assert!(active(&pool, &victim, inception_id).await);
+}
+
+#[tokio::test]
+#[ignore]
 async fn an_alias_published_first_by_a_foreign_shard_does_not_block_the_real_key_or_its_revocation()
 {
     let pool = pool().await;
     let (victim, device) = (TestIdentity::new(), TestIdentity::new());
     let inception_id = register(&pool, &victim).await;
     let real_key = Uuid::new_v4();
-    let real = grant(&victim, &victim, inception_id, &device, real_key);
+    let real = grant(&victim, &victim, inception_id, &device, real_key, None);
 
     let mut alias = real.clone();
     alias.id = Uuid::new_v4();
@@ -663,7 +768,7 @@ async fn an_alias_published_first_by_a_foreign_shard_does_not_block_the_real_key
     assert!(active(&pool, &victim, real_key).await);
     apply(
         &pool,
-        &revoke(&victim, &victim, inception_id, real_key),
+        &revoke(&victim, &victim, inception_id, real_key, Some(&real)),
         &game(),
     )
     .await
@@ -697,7 +802,14 @@ async fn the_home_shard_is_recorded_from_the_verified_creation_only() {
     .await
     .unwrap();
     let device = TestIdentity::new();
-    let from_evil = grant(&victim, &victim, inception_id, &device, Uuid::new_v4());
+    let from_evil = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
     assert!(apply(&pool, &from_evil, &evil()).await.is_err());
     // A forged creation of the victim on the evil shard records nothing either.
     let mut forged = created(&victim, "game:evil/1", &unique_name("f"));
@@ -725,7 +837,7 @@ async fn a_grant_or_revocation_ahead_of_its_signing_key_is_deferred_then_applies
     // The approving key arrives later (another shard's ordering).
     let approver_key = Uuid::new_v4();
     let device_key = Uuid::new_v4();
-    let early_grant = grant(&victim, &victim, approver_key, &device, device_key);
+    let early_grant = grant(&victim, &victim, approver_key, &device, device_key, None);
     let err = apply(&pool, &early_grant, &game()).await.unwrap_err();
     assert!(err.is_deferred() && !err.is_transient(), "{err:?}");
     apply(&pool, &inception(&victim, approver_key), &game())
@@ -736,26 +848,29 @@ async fn a_grant_or_revocation_ahead_of_its_signing_key_is_deferred_then_applies
 
     // A revocation naming a key that is not projected yet is deferred the same way.
     let later_key = Uuid::new_v4();
-    let early_revoke = revoke(&victim, &second, later_key, device_key);
+    let early_revoke = revoke(&victim, &second, later_key, device_key, Some(&early_grant));
     assert!(apply(&pool, &early_revoke, &game())
         .await
         .unwrap_err()
         .is_deferred());
     // Once it is known but revoked, it is refused for good.
-    apply(
-        &pool,
-        &grant(&victim, &victim, approver_key, &second, later_key),
-        &game(),
-    )
-    .await
-    .unwrap();
-    apply(
-        &pool,
-        &revoke(&victim, &victim, approver_key, later_key),
-        &game(),
-    )
-    .await
-    .unwrap();
+    let second_grant = grant(
+        &victim,
+        &victim,
+        approver_key,
+        &second,
+        later_key,
+        Some(&early_grant),
+    );
+    apply(&pool, &second_grant, &game()).await.unwrap();
+    let second_revoke = revoke(
+        &victim,
+        &victim,
+        approver_key,
+        later_key,
+        Some(&second_grant),
+    );
+    apply(&pool, &second_revoke, &game()).await.unwrap();
     let err = apply(&pool, &early_revoke, &game()).await.unwrap_err();
     assert!(matches!(err, IndexError::Rejected(_)), "{err:?}");
 }
@@ -796,7 +911,7 @@ async fn database_rule_violations_are_classified_not_parked_as_storage_faults() 
     let key = Uuid::new_v4();
     apply(
         &pool,
-        &grant(&who, &who, inception_id, &device, key),
+        &grant(&who, &who, inception_id, &device, key, None),
         &game(),
     )
     .await

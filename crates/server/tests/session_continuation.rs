@@ -89,15 +89,14 @@ async fn create_identity_and_log_in(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    let signing_bytes_for_creation =
-        avalon_protocol::identity_id::identity_created_signing_bytes_v2(
-            start["network_id"].as_str().unwrap(),
-            start["shard_id"].as_str().unwrap(),
-            ticket_id.parse().unwrap(),
-            &identity_id,
-            &signing_key.verifying_key().to_bytes(),
-            &display_name,
-        );
+    let signing_bytes_for_creation = avalon_protocol::identity_id::identity_created_signing_bytes(
+        start["network_id"].as_str().unwrap(),
+        start["shard_id"].as_str().unwrap(),
+        ticket_id.parse().unwrap(),
+        &identity_id,
+        &signing_key.verifying_key().to_bytes(),
+        &display_name,
+    );
     let signature = signing_key.sign(&signing_bytes_for_creation);
 
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -391,16 +390,21 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
         .await
         .unwrap();
     let grant_id: uuid::Uuid = grant["id"].as_str().unwrap().parse().unwrap();
-    let approval = avalon_protocol::identity_id::device_grant_approval_signing_bytes_v2(
+    let approval = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
         grant_id,
         &identity_id,
+        signing_key_id,
         &second_public,
+        1,
+        None,
     );
     let approved = http
         .post(format!("{base}/me/devices/grants/{grant_id}/approve"))
         .bearer_auth(&session_token)
         .json(&serde_json::json!({
             "approver_signing_key_id": signing_key_id,
+            "seq": 1,
+            "prev_hash": null,
             "signature": base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 signing_key.sign(&approval).to_bytes(),
@@ -411,25 +415,37 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
         .unwrap();
     assert!(approved.status().is_success(), "{:?}", approved.status());
 
-    let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2(
-        &identity_id,
-        signing_key_id,
-        signing_key_id,
-    );
-    let revoke_status = http
-        .post(format!("{base}/me/devices/{signing_key_id}/revoke"))
-        .bearer_auth(&session_token)
-        .json(&serde_json::json!({
-            "revoked_by_signing_key_id": signing_key_id,
-            "signature": base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                signing_key.sign(&revoke_bytes).to_bytes(),
-            ),
-        }))
-        .send()
-        .await
+    let revoke_at = |seq: u64, prev: Option<[u8; 32]>| {
+        let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+            &identity_id,
+            signing_key_id,
+            signing_key_id,
+            seq,
+            prev.as_ref(),
+        );
+        http.post(format!("{base}/me/devices/{signing_key_id}/revoke"))
+            .bearer_auth(&session_token)
+            .json(&serde_json::json!({
+                "revoked_by_signing_key_id": signing_key_id,
+                "seq": seq,
+                "prev_hash": prev.map(hex::encode),
+                "signature": base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    signing_key.sign(&bytes).to_bytes(),
+                ),
+            }))
+            .send()
+    };
+    // The approval took position 1; a signer that does not know the head learns it from the refusal.
+    let stale = revoke_at(2, None).await.unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    let head: serde_json::Value = stale.json().await.unwrap();
+    assert_eq!(head["head_seq"], 1);
+    let head_hash: [u8; 32] = hex::decode(head["head_hash"].as_str().unwrap())
         .unwrap()
-        .status();
+        .try_into()
+        .unwrap();
+    let revoke_status = revoke_at(2, Some(head_hash)).await.unwrap().status();
     assert!(revoke_status.is_success());
 
     let now = time::OffsetDateTime::now_utc();

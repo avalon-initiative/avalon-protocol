@@ -26,7 +26,7 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use avalon_protocol::identity_id::{derive_identity_id_for_key, identity_created_signing_bytes_v2};
+use avalon_protocol::identity_id::{derive_identity_id_for_key, identity_created_signing_bytes};
 use avalon_protocol::ids::IdentityId;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -201,7 +201,7 @@ pub(crate) async fn create_identity() {
         .await
         .expect("WebAuthn registration ceremony failed");
 
-    let signing_bytes = identity_created_signing_bytes_v2(
+    let signing_bytes = identity_created_signing_bytes(
         start["network_id"]
             .as_str()
             .expect("register/start response missing network_id"),

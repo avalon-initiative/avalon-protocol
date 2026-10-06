@@ -17,7 +17,7 @@
 //! `POST`s a grant request (its freshly generated public key); any other
 //! currently-trusted device (one whose own `identity_signing_keys` row
 //! isn't revoked) polls for pending grants and approves one by signing
-//! `device_grant_approval_signing_bytes_v2(...)` with its own key — proving
+//! `device_grant_approval_signing_bytes(...)` with its own key — proving
 //! the approval itself came from a device that once passed a real WebAuthn
 //! ceremony, not a bare unauthenticated request. Revocation is
 //! unilateral: any authenticated session for the identity can revoke any
@@ -34,7 +34,7 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity_id::{
-    device_grant_approval_signing_bytes_v2, signing_key_revoked_signing_bytes_v2,
+    device_grant_approval_signing_bytes, signing_key_revoked_signing_bytes,
 };
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::ids::IdentityId;
@@ -76,7 +76,7 @@ pub struct DeviceGrantResponse {
     pub status: String,
     pub device_label: Option<String>,
     /// Base64-encoded — the approving device needs this exact value to
-    /// reconstruct `device_grant_approval_signing_bytes_v2` and sign it; the
+    /// reconstruct `device_grant_approval_signing_bytes` and sign it; the
     /// server never trusts a client-supplied copy of its own request back,
     /// but the *approver* is a different device that only ever learns this
     /// key by reading it back off this response.
@@ -280,9 +280,14 @@ pub struct ApproveDeviceGrantRequest {
     /// this grant — must belong to the caller's identity and not be
     /// revoked.
     pub approver_signing_key_id: Uuid,
-    /// Base64-encoded Ed25519 signature over
-    /// `device_grant_approval_signing_bytes_v2(grant_id, identity_id, requested_signing_public_key)`,
-    /// produced by `approver_signing_key_id`'s key.
+    /// Chain position the signature covers: the identity chain's head `seq` plus one (1 for a
+    /// new chain). A stale position is refused with `IDENTITY_CHAIN_POSITION_STALE`.
+    pub seq: u64,
+    /// Lowercase hex event hash of the chain head the event extends; absent for a new chain.
+    pub prev_hash: Option<String>,
+    /// Base64-encoded Ed25519 signature over `device_grant_approval_signing_bytes`
+    /// (grant, identity, approver key id, requested key, `seq`, `prev_hash`), produced by
+    /// `approver_signing_key_id`'s key. The new key's id is the grant id.
     pub signature: String,
 }
 
@@ -320,7 +325,10 @@ pub struct DeviceResponse {
     tag = "devices",
     params(("id" = Uuid, Path)),
     request_body = ApproveDeviceGrantRequest,
-    responses((status = 200, description = "The resulting device", body = DeviceResponse)),
+    responses(
+        (status = 200, description = "The resulting device", body = DeviceResponse),
+        (status = 409, description = "IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head; the body carries head_seq and head_hash to sign against"),
+    ),
 )]
 pub async fn approve_device_grant(
     State(state): State<AppState>,
@@ -336,6 +344,7 @@ pub async fn approve_device_grant(
     // Locks every active key of the identity, so a concurrent revocation commits before or after
     // this approval, never between the approver check and the insert.
     let active_keys = lock_active_signing_keys(&mut tx, identity_id).await?;
+    let prev_hash = crate::identity_chain::parse_prev_hash(body.prev_hash.as_deref())?;
     let approver_public_key = active_keys
         .iter()
         .find(|(id, _)| *id == body.approver_signing_key_id)
@@ -350,15 +359,29 @@ pub async fn approve_device_grant(
         .as_slice()
         .try_into()
         .map_err(|_| AppError::InvalidGrantSignature)?;
-    let signing_bytes =
-        device_grant_approval_signing_bytes_v2(grant_id, &identity_id, &requested_key);
+    let signing_bytes = device_grant_approval_signing_bytes(
+        grant_id,
+        &identity_id,
+        body.approver_signing_key_id,
+        &requested_key,
+        body.seq,
+        prev_hash.as_ref(),
+    );
     if !verify_event_signature(&approver_public_key, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidGrantSignature);
     }
+    crate::identity_chain::require_signed_position(
+        &mut tx,
+        identity_id,
+        body.seq,
+        body.prev_hash.as_deref(),
+    )
+    .await?;
 
     let new_key_row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
+        "INSERT INTO identity_signing_keys (id, identity_id, public_key, label) VALUES ($1, $2, $3, $4) RETURNING id, added_at",
     )
+    .bind(grant_id)
     .bind(identity_id)
     .bind(&grant.requested_signing_public_key)
     .bind(&grant.device_label)
@@ -511,8 +534,13 @@ pub async fn rename_device(
 pub struct RevokeDeviceRequest {
     /// The caller's own active signing key that signs the revocation (may be the key being revoked).
     pub revoked_by_signing_key_id: Uuid,
+    /// Chain position the signature covers: the identity chain's head `seq` plus one (1 for a
+    /// new chain). A stale position is refused with `IDENTITY_CHAIN_POSITION_STALE`.
+    pub seq: u64,
+    /// Lowercase hex event hash of the chain head the event extends; absent for a new chain.
+    pub prev_hash: Option<String>,
     /// Base64 Ed25519 signature by `revoked_by_signing_key_id` over
-    /// `avalon_protocol::identity_id::signing_key_revoked_signing_bytes_v2`.
+    /// `avalon_protocol::identity_id::signing_key_revoked_signing_bytes`.
     pub signature: String,
 }
 
@@ -545,7 +573,7 @@ async fn lock_active_signing_keys(
     request_body = RevokeDeviceRequest,
     responses(
         (status = 200, description = "Signing key revoked"),
-        (status = 409, description = "LAST_SIGNING_KEY: the last active signing key cannot be revoked"),
+        (status = 409, description = "LAST_SIGNING_KEY: the last active signing key cannot be revoked; IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head, the body carries head_seq and head_hash to sign against"),
     ),
 )]
 pub async fn revoke_device(
@@ -575,14 +603,24 @@ pub async fn revoke_device(
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidEventSignature)?;
-    let signing_bytes = signing_key_revoked_signing_bytes_v2(
+    let prev_hash = crate::identity_chain::parse_prev_hash(body.prev_hash.as_deref())?;
+    let signing_bytes = signing_key_revoked_signing_bytes(
         &identity_id,
         signing_key_id,
         body.revoked_by_signing_key_id,
+        body.seq,
+        prev_hash.as_ref(),
     );
     if !verify_event_signature(&revoker_public_key, &signing_bytes, &signature_bytes) {
         return Err(AppError::InvalidEventSignature);
     }
+    crate::identity_chain::require_signed_position(
+        &mut tx,
+        identity_id,
+        body.seq,
+        body.prev_hash.as_deref(),
+    )
+    .await?;
 
     let revoked = sqlx::query(
         "UPDATE identity_signing_keys SET revoked_at = now() WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",

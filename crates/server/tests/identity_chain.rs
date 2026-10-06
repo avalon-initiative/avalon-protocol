@@ -125,6 +125,7 @@ async fn a_forked_identity_refuses_key_dependent_operations_but_allows_profile_e
         .bearer_auth(&token)
         .json(&serde_json::json!({
             "revoked_by_signing_key_id": Uuid::new_v4(),
+            "seq": 1,
             "signature": "",
         }))
         .send()

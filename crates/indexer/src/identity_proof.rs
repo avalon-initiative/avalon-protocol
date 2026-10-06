@@ -12,9 +12,10 @@ use avalon_protocol::event_payloads::{
     SIGNING_KEY_KIND_DEVICE_GRANT, SIGNING_KEY_KIND_INCEPTION,
 };
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_chain_wire::parse_hash;
 use avalon_protocol::identity_id::{
-    device_grant_approval_signing_bytes_v2, display_name_permitted,
-    identity_created_signing_bytes_v2, signing_key_revoked_signing_bytes_v2, IdentityId,
+    device_grant_approval_signing_bytes, display_name_permitted, identity_created_signing_bytes,
+    signing_key_revoked_signing_bytes, IdentityId,
 };
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::shard::CORE_SHARD_ID;
@@ -146,7 +147,7 @@ pub fn verify_created(
         return Err(IndexError::DisplayNameNotPermitted);
     }
     let signature = decode_signature(&created.signature)?;
-    let bytes = identity_created_signing_bytes_v2(
+    let bytes = identity_created_signing_bytes(
         &origin.network_id,
         &origin.shard_id,
         created.ticket_id,
@@ -164,6 +165,20 @@ pub fn verify_created(
         inception_key: key,
         display_name: created.display_name,
     })
+}
+
+/// The chain position the event carries, which a key event's signature must cover.
+fn signed_position(event: &ProtocolEvent) -> Result<(u64, Option<[u8; 32]>), IndexError> {
+    let position = event
+        .identity_chain
+        .as_ref()
+        .ok_or_else(|| reject("key event carries no identity chain position"))?;
+    let prev_hash = position
+        .prev_hash
+        .as_deref()
+        .map(|h| parse_hash(h).ok_or_else(|| reject("chain position prev_hash is malformed")))
+        .transpose()?;
+    Ok((position.seq, prev_hash))
 }
 
 /// A key of an identity as the projection knows it.
@@ -213,9 +228,10 @@ async fn signer_key(
     }
 }
 
-/// Key events change what authenticates as the identity, and their chain position and key id are
-/// not signed, so only a shard the identity itself created on, the core shard or this node's own
-/// shard may deliver them.
+/// Key events change what authenticates as the identity. The signatures cover key ids and chain
+/// position, but the chain hash also covers unsigned fields (timestamp, label), so a delivering
+/// shard could still fork the chain; only a shard the identity itself created on, the core shard
+/// or this node's own shard may deliver them.
 async fn require_key_authority(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
@@ -280,7 +296,18 @@ async fn verify_key_added(
                 "approving",
             )
             .await?;
-            let bytes = device_grant_approval_signing_bytes_v2(grant_id, &added.identity_id, &key);
+            if added.signing_key_id != grant_id {
+                return Err(reject("device key id is not the id of the grant"));
+            }
+            let (seq, prev_hash) = signed_position(event)?;
+            let bytes = device_grant_approval_signing_bytes(
+                grant_id,
+                &added.identity_id,
+                added.approved_by_signing_key_id,
+                &key,
+                seq,
+                prev_hash.as_ref(),
+            );
             if !verify_with_key(&approver, &bytes, &signature) {
                 return Err(reject(
                     "device grant approval signature does not verify under the approving key",
@@ -318,10 +345,13 @@ async fn verify_key_revoked(
         "revoking",
     )
     .await?;
-    let bytes = signing_key_revoked_signing_bytes_v2(
+    let (seq, prev_hash) = signed_position(event)?;
+    let bytes = signing_key_revoked_signing_bytes(
         &revoked.identity_id,
         revoked.signing_key_id,
         revoked.revoked_by_signing_key_id,
+        seq,
+        prev_hash.as_ref(),
     );
     if !verify_with_key(&revoker, &bytes, &signature) {
         return Err(reject(
@@ -444,7 +474,7 @@ mod tests {
         let attacker = TestIdentity::new();
         // The attacker signs, with their own key, bytes that name the victim's id.
         let ticket = Uuid::new_v4();
-        let bytes = identity_created_signing_bytes_v2(
+        let bytes = identity_created_signing_bytes(
             TEST_NETWORK_ID,
             TEST_SHARD_ID,
             ticket,

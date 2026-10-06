@@ -120,7 +120,7 @@ mod hub_side {
             .await
             .expect("WebAuthn registration ceremony failed");
 
-        let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+        let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
             start["network_id"].as_str().unwrap(),
             start["shard_id"].as_str().unwrap(),
             ticket_id.parse().unwrap(),

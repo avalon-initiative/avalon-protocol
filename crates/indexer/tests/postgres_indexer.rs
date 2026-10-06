@@ -6,9 +6,10 @@
 
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
+use avalon_protocol::identity_chain_wire::event_hash;
 use avalon_protocol::identity_id::{
-    device_grant_approval_signing_bytes_v2, signing_key_revoked_signing_bytes_v2, TestIdentity,
+    device_grant_approval_signing_bytes, signing_key_revoked_signing_bytes, TestIdentity,
 };
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
@@ -50,6 +51,22 @@ fn key_event(who: &TestIdentity, kind: &str, payload: serde_json::Value) -> Prot
     }
 }
 
+/// The chain position directly after `after` (the first chained position when `None`).
+fn next_position(after: Option<&ProtocolEvent>) -> (u64, Option<[u8; 32]>) {
+    after.map_or((1, None), |e| {
+        let position = e.identity_chain.as_ref().unwrap();
+        (position.seq + 1, Some(event_hash(e).unwrap()))
+    })
+}
+
+fn at_position(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> ProtocolEvent {
+    event.identity_chain = Some(IdentityChainPosition {
+        seq,
+        prev_hash: prev.map(hex::encode),
+    });
+    event
+}
+
 fn inception_event(who: &TestIdentity, key_id: Uuid) -> ProtocolEvent {
     key_event(
         who,
@@ -65,18 +82,28 @@ fn inception_event(who: &TestIdentity, key_id: Uuid) -> ProtocolEvent {
     )
 }
 
-/// A device-grant addition of `device`'s key as `key_id`, approved (signed) by `approver`.
+/// A device-grant addition of `device`'s key (the key id is the grant id), approved (signed) by
+/// `approver` at the chain position after `after`.
 fn grant_event(
     who: &TestIdentity,
     approver: &TestIdentity,
     approver_key_id: Uuid,
     device: &TestIdentity,
     key_id: Uuid,
+    after: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
     use ed25519_dalek::Signer as _;
-    let grant_id = Uuid::new_v4();
-    let bytes = device_grant_approval_signing_bytes_v2(grant_id, &who.id, &device.public_key());
-    key_event(
+    let grant_id = key_id;
+    let (seq, prev) = next_position(after);
+    let bytes = device_grant_approval_signing_bytes(
+        grant_id,
+        &who.id,
+        approver_key_id,
+        &device.public_key(),
+        seq,
+        prev.as_ref(),
+    );
+    let event = key_event(
         who,
         "identity.signing_key_added",
         serde_json::json!({
@@ -89,19 +116,24 @@ fn grant_event(
             "grant_id": grant_id,
             "approval_signature": b64(&approver.signing_key.sign(&bytes).to_bytes()),
         }),
-    )
+    );
+    at_position(event, seq, prev)
 }
 
-/// A revocation of `key_id` signed by `signer`, naming `signer_key_id` as the revoker.
+/// A revocation of `key_id` signed by `signer`, naming `signer_key_id` as the revoker, at the
+/// chain position after `after`.
 fn revoke_event(
     who: &TestIdentity,
     signer: &TestIdentity,
     signer_key_id: Uuid,
     key_id: Uuid,
+    after: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
     use ed25519_dalek::Signer as _;
-    let bytes = signing_key_revoked_signing_bytes_v2(&who.id, key_id, signer_key_id);
-    key_event(
+    let (seq, prev) = next_position(after);
+    let bytes =
+        signing_key_revoked_signing_bytes(&who.id, key_id, signer_key_id, seq, prev.as_ref());
+    let event = key_event(
         who,
         "identity.signing_key_revoked",
         serde_json::json!({
@@ -110,7 +142,8 @@ fn revoke_event(
             "revoked_by_signing_key_id": signer_key_id,
             "signature": b64(&signer.signing_key.sign(&bytes).to_bytes()),
         }),
-    )
+    );
+    at_position(event, seq, prev)
 }
 
 async fn key_active(pool: &PgPool, who: &TestIdentity, key_id: Uuid) -> bool {
@@ -307,18 +340,20 @@ async fn a_signing_key_row_cannot_change_its_public_key() {
         .unwrap();
     let (device, other) = (TestIdentity::new(), TestIdentity::new());
     let key_id = Uuid::new_v4();
-    indexer
-        .apply(&grant_event(&a, &a, inception, &device, key_id))
-        .await
-        .unwrap();
+    let grant = grant_event(&a, &a, inception, &device, key_id, None);
+    indexer.apply(&grant).await.unwrap();
     // The same registration delivered again is idempotent.
-    indexer
-        .apply(&grant_event(&a, &a, inception, &device, key_id))
-        .await
-        .unwrap();
+    indexer.apply(&grant).await.unwrap();
     // A validly approved grant that reuses the key id for another public key is refused.
     let swapped = indexer
-        .apply(&grant_event(&a, &a, inception, &other, key_id))
+        .apply(&grant_event(
+            &a,
+            &a,
+            inception,
+            &other,
+            key_id,
+            Some(&grant),
+        ))
         .await;
     assert!(
         matches!(swapped, Err(avalon_indexer::IndexError::Rejected(_))),
@@ -439,7 +474,7 @@ async fn key_ids_are_scoped_to_their_identity_and_early_revocations_stick() {
     assert!(key_active(&pool, &a, key_id).await);
     // b revoking "its" key id does not touch a's key.
     indexer
-        .apply(&revoke_event(&b, &b, key_id, key_id))
+        .apply(&revoke_event(&b, &b, key_id, key_id, None))
         .await
         .unwrap();
     assert!(key_active(&pool, &a, key_id).await);
@@ -453,12 +488,17 @@ async fn key_ids_are_scoped_to_their_identity_and_early_revocations_stick() {
         .await
         .unwrap();
     let (device, late_key) = (TestIdentity::new(), Uuid::new_v4());
+    let revocation = revoke_event(&c, &c, c_inception, late_key, None);
+    indexer.apply(&revocation).await.unwrap();
     indexer
-        .apply(&revoke_event(&c, &c, c_inception, late_key))
-        .await
-        .unwrap();
-    indexer
-        .apply(&grant_event(&c, &c, c_inception, &device, late_key))
+        .apply(&grant_event(
+            &c,
+            &c,
+            c_inception,
+            &device,
+            late_key,
+            Some(&revocation),
+        ))
         .await
         .unwrap();
     assert!(!key_active(&pool, &c, late_key).await);

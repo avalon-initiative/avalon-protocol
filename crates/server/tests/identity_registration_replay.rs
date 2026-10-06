@@ -56,7 +56,7 @@ async fn start(http: &reqwest::Client, key: &SigningKey, display_name: &str) -> 
 fn sign(key: &SigningKey, network_id: &str, shard_id: &str, ticket_id: Uuid, name: &str) -> String {
     let public_key = key.verifying_key().to_bytes();
     let id = avalon_protocol::identity_id::derive_identity_id(&public_key);
-    let bytes = avalon_protocol::identity_id::identity_created_signing_bytes_v2(
+    let bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
         network_id,
         shard_id,
         ticket_id,

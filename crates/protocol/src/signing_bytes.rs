@@ -27,8 +27,7 @@
 //!    signature, add boundary cases (empty, `:`, `,`, NUL, multi-byte UTF-8), and
 //!    mirror it in the SDK vector directories in the same change.
 //!
-//! Slices: `identity_id` v2 functions (`identity.created`, `device_grant.approved`,
-//! `identity.signing_key_revoked`), `cross_node_login`, `continuation`,
+//! Slices: `cross_node_login`, `continuation`,
 //! `interest_claim`, `achievements` (include `issued_at` where it is signed),
 //! `signature_gate::canonical_message` (tag `signature_gate.action`, the action
 //! name as the first `str` field, then the action's fields), the integrator nonce
