@@ -24,7 +24,7 @@ pub struct CosignedTreeHead {
 
 /// The witness ids from `head.cosignatures` that actually count toward
 /// majority: bound to this exact STH (every field `witness::witness_signing_message`
-/// covers besides the witness's own id/timestamp), individually signature-valid
+/// covers besides the witness's own id/timestamp, including the author's key id and signature), individually signature-valid
 /// against a key the caller's own `known_list` vouches for, and fresh
 /// (`freshness_cutoff <= observed_at <= now` — an old cosignature for a
 /// still-current head is not accepted just because it was once fresh, and a
@@ -53,6 +53,11 @@ fn valid_fresh_witness_ids(
             || cosig.root_hash != head.sth.root_hash
             || cosig.network_id != head.sth.network_id
             || cosig.author_created_at != head.sth.created_at
+            || cosig.envelope.hash_algo != head.sth.envelope.hash_algo
+            || cosig.author_key_id != head.sth.signing_key_id
+            || !cosig
+                .author_signature
+                .eq_ignore_ascii_case(&head.sth.signature)
         {
             continue;
         }
@@ -193,7 +198,8 @@ mod tests {
                 root_hash,
                 network_id,
                 created_at,
-            ),
+            )
+            .unwrap(),
             cosignatures: Vec::new(),
         }
     }
@@ -204,15 +210,8 @@ mod tests {
         head: &CosignedTreeHead,
         observed_at: OffsetDateTime,
     ) -> witness::WitnessCosignature {
-        witness::sign_witness_cosignature(
-            witness_key,
-            witness_key_id,
-            head.sth.tree_size,
-            &head.sth.root_hash,
-            &head.sth.network_id,
-            head.sth.created_at,
-            observed_at,
-        )
+        witness::sign_witness_cosignature(witness_key, witness_key_id, &head.sth, observed_at)
+            .unwrap()
     }
 
     struct Fixture {
@@ -279,6 +278,67 @@ mod tests {
             f.freshness_cutoff,
             f.now
         ));
+    }
+
+    #[test]
+    fn a_cosignature_over_another_hash_algorithm_does_not_count() {
+        use crate::signing_bytes::{Envelope, HashAlgo};
+        let f = fixture(3);
+        let mut head = base_head(
+            &f.author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            f.now,
+        );
+        let ok = cosign(&f.witness_keys[0].1, &f.witness_keys[0].0, &head, f.now);
+        let mut other = cosign(&f.witness_keys[1].1, &f.witness_keys[1].0, &head, f.now);
+        other.envelope = Envelope {
+            hash_algo: HashAlgo::SyntheticTest,
+            ..other.envelope
+        };
+        // Re-signed, so the signature is valid over its own (different) bytes.
+        other = witness::sign_unsigned(&f.witness_keys[1].1, other).unwrap();
+        head.cosignatures = vec![ok, other];
+        assert!(!verify_cosigned_tree_head(
+            &f.author_verifying_key,
+            &head,
+            &f.known_list,
+            f.freshness_cutoff,
+            f.now
+        ));
+    }
+
+    #[test]
+    fn cosignatures_over_another_author_signature_or_key_id_do_not_count() {
+        let f = fixture(3);
+        let head = base_head(
+            &f.author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            f.now,
+        );
+        let mut other_key_id = head.clone();
+        other_key_id.sth.signing_key_id = "rotated-key".to_string();
+        let mut other_signature = head.clone();
+        other_signature.sth.signature = "11".repeat(64);
+        for variant in [other_key_id, other_signature] {
+            let mut bound_elsewhere = head.clone();
+            for (id, key) in &f.witness_keys[..2] {
+                bound_elsewhere
+                    .cosignatures
+                    .push(cosign(key, id, &variant, f.now));
+            }
+            let verified = valid_fresh_witness_ids(
+                &f.author_verifying_key,
+                &bound_elsewhere,
+                &f.known_list,
+                f.freshness_cutoff,
+                f.now,
+            );
+            assert!(verified.is_empty());
+        }
     }
 
     #[test]

@@ -566,7 +566,7 @@ async fn a_proven_witness_key_is_listed_and_a_forged_one_is_dropped_without_deny
     let good_url = fabricated_url();
     let bad_url = fabricated_url();
     let proof_for =
-        |url: &str| avalon_protocol::witness::sign_witness_announce(&key, url, &key_id, now);
+        |url: &str| avalon_protocol::witness::sign_witness_announce(&key, url, now).unwrap();
     for (url, proof_url) in [(&good_url, &good_url), (&bad_url, &good_url)] {
         let resp = http
             .post(format!("{target}/nodes/announce"))

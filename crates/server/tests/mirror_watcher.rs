@@ -185,6 +185,9 @@ fn sth_from_json(v: &serde_json::Value) -> sth::SignedTreeHead {
             &time::format_description::well_known::Rfc3339,
         )
         .unwrap(),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     }
 }
 
@@ -329,7 +332,7 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
             .collect();
 
         assert!(
-            merkle::verify_inclusion_proof(&leaf_bytes, verified_count, tree_size as usize, &proof, &root),
+            merkle::verify_inclusion_proof(avalon_chain::ledger_hash_algo(), &leaf_bytes, verified_count, tree_size as usize, &proof, &root),
             "inclusion proof for seq={entry_seq} (leaf_index={verified_count}) failed independent verification"
         );
         verified_count += 1;

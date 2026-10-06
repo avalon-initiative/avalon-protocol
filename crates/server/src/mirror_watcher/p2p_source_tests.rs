@@ -72,6 +72,9 @@ fn chain_hashes(shard_id: &str, entries: usize, payload_bytes: usize) -> Vec<Str
                     )
                     .unwrap(),
                     version: 1,
+                    envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
                 },
             )
             .unwrap();
@@ -86,7 +89,10 @@ fn shard_id(o: &SharedOrigin) -> String {
 
 impl Origin {
     fn head(&self, size: usize) -> serde_json::Value {
-        let root = hex::encode(merkle::mth_of_hex_hashes(&self.hashes[..size]).unwrap());
+        let root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &self.hashes[..size])
+                .unwrap(),
+        );
         let sth = avalon_protocol::sth::sign_tree_head(
             &self.signing,
             "k",
@@ -94,7 +100,8 @@ impl Origin {
             &root,
             NETWORK,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         let shown = self.key_override.as_ref().unwrap_or(&self.signing);
         let signature = if self.corrupt_signature {
             "00".repeat(64)
@@ -102,7 +109,7 @@ impl Origin {
             sth.signature
         };
         serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -150,6 +157,7 @@ impl Origin {
                             },
                             "entry_hash": self.hashes[seq - 1],
                             "batch_id": Uuid::nil(),
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000",
                         })
                     })
                     .collect();
@@ -164,11 +172,16 @@ impl Origin {
                 } else {
                     seq - 1
                 };
-                let proof = merkle::inclusion_proof_of_hex_hashes(idx, prefix).unwrap();
+                let proof = merkle::inclusion_proof_of_hex_hashes(
+                    avalon_chain::ledger_hash_algo(),
+                    idx,
+                    prefix,
+                )
+                .unwrap();
                 (
                     200,
                     serde_json::json!({
-                        "root_hash": hex::encode(merkle::mth_of_hex_hashes(prefix).unwrap()),
+                        "root_hash": hex::encode(merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), prefix).unwrap()),
                         "leaf_hash": self.hashes[idx],
                         "proof": proof.iter().map(hex::encode).collect::<Vec<_>>(),
                     }),

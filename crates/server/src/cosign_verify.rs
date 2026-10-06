@@ -6,6 +6,7 @@
 //! Head over `GET /ledger/sth/latest`/`GET /ledger/sth/{tree_size}`.
 
 use avalon_protocol::cosigned_sth::{self, CosignedTreeHead};
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 use avalon_protocol::sth::SignedTreeHead;
 use avalon_protocol::witness::WitnessCosignature;
 use ed25519_dalek::VerifyingKey;
@@ -84,22 +85,31 @@ pub struct WitnessCosignatureDto {
     #[serde(with = "time::serde::rfc3339")]
     pub observed_at: OffsetDateTime,
     pub signature: String,
+    /// The cosignature's own layout, rules version, hash algorithm and extensions.
+    #[serde(flatten)]
+    pub envelope: EnvelopeWire,
 }
 
 impl WitnessCosignatureDto {
     /// Reconstructs the full [`WitnessCosignature`] this DTO describes,
     /// binding it to `sth`'s own signed fields — the same binding
     /// `avalon_protocol::witness::witness_signing_message` itself covers.
-    pub fn to_witness_cosignature(&self, sth: &SignedTreeHead) -> WitnessCosignature {
-        WitnessCosignature {
+    pub fn to_witness_cosignature(
+        &self,
+        sth: &SignedTreeHead,
+    ) -> Result<WitnessCosignature, SigningBytesError> {
+        Ok(WitnessCosignature {
             tree_size: sth.tree_size,
             root_hash: sth.root_hash.clone(),
             network_id: sth.network_id.clone(),
             author_created_at: sth.created_at,
+            author_key_id: sth.signing_key_id.clone(),
+            author_signature: sth.signature.clone(),
             witness_key_id: self.witness_key_id.clone(),
             observed_at: self.observed_at,
             signature: self.signature.clone(),
-        }
+            envelope: self.envelope.to_envelope(tags::WITNESS_COSIGN)?,
+        })
     }
 
     pub fn from_witness_cosignature(cosig: &WitnessCosignature) -> Self {
@@ -107,7 +117,113 @@ impl WitnessCosignatureDto {
             witness_key_id: cosig.witness_key_id.clone(),
             observed_at: cosig.observed_at,
             signature: cosig.signature.clone(),
+            envelope: EnvelopeWire::from(&cosig.envelope),
         }
+    }
+}
+
+/// The cosignatures of `dtos` this node can read, bound to `sth`. One whose envelope needs a newer
+/// version, or is malformed, is logged and left out, so it never counts and never voids the head
+/// or the others.
+pub fn readable_cosignatures(
+    dtos: &[WitnessCosignatureDto],
+    sth: &SignedTreeHead,
+) -> Vec<WitnessCosignature> {
+    dtos.iter()
+        .filter_map(|dto| match dto.to_witness_cosignature(sth) {
+            Ok(cosig) => Some(cosig),
+            Err(err) => {
+                // The id is peer-supplied: bound and escape it before logging.
+                let witness: String = dto.witness_key_id.chars().take(64).collect();
+                tracing::warn!(
+                    witness = ?witness,
+                    error = %err,
+                    "dropping a cosignature this node cannot read; it does not count"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+/// Fixtures for the per-site DTO tests: one signed head served with two readable cosignatures
+/// and one whose envelope needs a newer rules version.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use avalon_protocol::witness::sign_witness_cosignature;
+    use ed25519_dalek::SigningKey;
+
+    pub struct Served {
+        pub body: serde_json::Value,
+        pub author: VerifyingKey,
+        pub known: Vec<(String, VerifyingKey)>,
+        pub now: OffsetDateTime,
+    }
+
+    pub fn served_with_one_unreadable_cosignature() -> Served {
+        let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        let author = SigningKey::from_bytes(&[5u8; 32]);
+        let sth = avalon_protocol::sth::sign_tree_head(
+            &author,
+            "op",
+            4,
+            &"ab".repeat(32),
+            "avalon-test",
+            now,
+        )
+        .unwrap();
+        let mut known = Vec::new();
+        let mut cosigs = Vec::new();
+        for i in 0..3u8 {
+            let key = SigningKey::from_bytes(&[10 + i; 32]);
+            let id = hex::encode(key.verifying_key().to_bytes());
+            known.push((id.clone(), key.verifying_key()));
+            let cosig = sign_witness_cosignature(&key, &id, &sth, now).unwrap();
+            let mut dto =
+                serde_json::to_value(WitnessCosignatureDto::from_witness_cosignature(&cosig))
+                    .unwrap();
+            if i == 2 {
+                dto["rules_version"] = serde_json::json!(2);
+            }
+            cosigs.push(dto);
+        }
+        let mut body =
+            serde_json::to_value(crate::settlement::SignedTreeHeadResponse::from(sth)).unwrap();
+        body["cosignatures"] = serde_json::Value::Array(cosigs);
+        Served {
+            body,
+            author: author.verifying_key(),
+            known,
+            now,
+        }
+    }
+
+    /// The same body as a peer that predates the envelope would send it.
+    pub fn without_envelope(mut body: serde_json::Value) -> serde_json::Value {
+        let o = body.as_object_mut().unwrap();
+        for k in ["layout_version", "rules_version", "hash_algo", "extensions"] {
+            o.remove(k);
+        }
+        for c in o["cosignatures"].as_array_mut().unwrap() {
+            for k in ["layout_version", "rules_version", "hash_algo", "extensions"] {
+                c.as_object_mut().unwrap().remove(k);
+            }
+        }
+        body
+    }
+
+    /// An unreadable cosignature is dropped, the head and the other cosignatures are kept, and
+    /// the head is accepted on the two readable ones.
+    pub fn assert_head_survives(head: &CosignedTreeHead, served: &Served) {
+        assert_eq!(head.cosignatures.len(), 2);
+        assert!(avalon_protocol::cosigned_sth::verify_cosigned_tree_head(
+            &served.author,
+            head,
+            &served.known,
+            served.now - std::time::Duration::from_secs(60),
+            served.now + std::time::Duration::from_secs(60),
+        ));
     }
 }
 
@@ -155,19 +271,12 @@ mod tests {
             root_hash,
             network_id,
             created_at,
-        );
+        )
+        .unwrap();
         let cosignatures = cosigners
             .iter()
             .map(|(key, id, observed_at)| {
-                sign_witness_cosignature(
-                    key,
-                    id,
-                    tree_size,
-                    root_hash,
-                    network_id,
-                    created_at,
-                    *observed_at,
-                )
+                sign_witness_cosignature(key, id, &sth, *observed_at).unwrap()
             })
             .collect();
         CosignedTreeHead { sth, cosignatures }
@@ -216,10 +325,11 @@ mod tests {
         {
             let (key, id) = witness();
             let signer = WitnessSigner::new(key.clone(), id.clone()).unwrap();
-            let advert = verified_advert(url, Some(signer.advert(url, now)), now).map(|mut a| {
-                a.direct = true;
-                a
-            });
+            let advert =
+                verified_advert(url, Some(signer.advert(url, now).unwrap()), now).map(|mut a| {
+                    a.direct = true;
+                    a
+                });
             assert!(advert.is_some());
             table.upsert(PeerInfo {
                 identity_bound: false,
@@ -299,7 +409,12 @@ mod tests {
         let (key, id) = witness();
         let advert = verified_advert(
             url,
-            Some(WitnessSigner::new(key, id).unwrap().advert(url, now)),
+            Some(
+                WitnessSigner::new(key, id)
+                    .unwrap()
+                    .advert(url, now)
+                    .unwrap(),
+            ),
             now,
         );
         assert!(advert.is_some());
@@ -471,13 +586,97 @@ mod tests {
             &root(4),
             "avalon-test",
             now,
-        );
+        )
+        .unwrap();
         let (witness_key, id) = witness();
-        let cosig =
-            sign_witness_cosignature(&witness_key, &id, 3, &root(4), "avalon-test", now, now);
+        let cosig = sign_witness_cosignature(&witness_key, &id, &sth, now).unwrap();
 
         let dto = WitnessCosignatureDto::from_witness_cosignature(&cosig);
-        let rebuilt = dto.to_witness_cosignature(&sth);
+        let rebuilt = dto.to_witness_cosignature(&sth).unwrap();
         assert_eq!(rebuilt, cosig);
+    }
+
+    #[test]
+    fn one_unreadable_cosignature_is_dropped_not_counted_and_does_not_void_the_head() {
+        let served = test_support::served_with_one_unreadable_cosignature();
+        let sth = avalon_protocol::sth::SignedTreeHead::try_from(
+            serde_json::from_value::<TestSth>(served.body.clone()).unwrap(),
+        )
+        .unwrap();
+        let dtos: Vec<WitnessCosignatureDto> =
+            serde_json::from_value(served.body["cosignatures"].clone()).unwrap();
+        assert_eq!(readable_cosignatures(&dtos, &sth).len(), 2);
+        // Only the unreadable one plus one readable: below the majority of 3, so rejected.
+        let head = CosignedTreeHead {
+            cosignatures: readable_cosignatures(&dtos[1..], &sth),
+            sth,
+        };
+        assert!(!cosigned_sth::verify_cosigned_tree_head(
+            &served.author,
+            &head,
+            &served.known,
+            served.now - std::time::Duration::from_secs(60),
+            served.now + std::time::Duration::from_secs(60),
+        ));
+    }
+
+    #[test]
+    fn an_unknown_hash_algorithm_or_critical_extension_is_unreadable_too() {
+        let served = test_support::served_with_one_unreadable_cosignature();
+        let sth = avalon_protocol::sth::SignedTreeHead::try_from(
+            serde_json::from_value::<TestSth>(served.body.clone()).unwrap(),
+        )
+        .unwrap();
+        for patch in [
+            serde_json::json!({"hash_algo": 9}),
+            serde_json::json!({"extensions": "000100030100000000"}),
+            serde_json::json!({"layout_version": 2}),
+        ] {
+            let mut dto = served.body["cosignatures"][0].clone();
+            for (k, v) in patch.as_object().unwrap() {
+                dto[k] = v.clone();
+            }
+            let dtos = vec![serde_json::from_value::<WitnessCosignatureDto>(dto).unwrap()];
+            assert!(readable_cosignatures(&dtos, &sth).is_empty(), "{patch}");
+        }
+    }
+
+    #[test]
+    fn a_cosignature_without_envelope_fields_does_not_decode() {
+        let served = test_support::served_with_one_unreadable_cosignature();
+        let old = test_support::without_envelope(served.body);
+        assert!(
+            serde_json::from_value::<WitnessCosignatureDto>(old["cosignatures"][0].clone())
+                .is_err()
+        );
+    }
+
+    /// Just the head fields of a served body, for building the protocol type in tests.
+    #[derive(serde::Deserialize)]
+    struct TestSth {
+        tree_size: i64,
+        root_hash: String,
+        network_id: String,
+        signing_key_id: String,
+        signature: String,
+        #[serde(with = "time::serde::rfc3339")]
+        created_at: OffsetDateTime,
+        #[serde(flatten)]
+        envelope: EnvelopeWire,
+    }
+
+    impl TryFrom<TestSth> for SignedTreeHead {
+        type Error = SigningBytesError;
+        fn try_from(t: TestSth) -> Result<Self, Self::Error> {
+            Ok(SignedTreeHead {
+                tree_size: t.tree_size,
+                root_hash: t.root_hash,
+                network_id: t.network_id,
+                signing_key_id: t.signing_key_id,
+                signature: t.signature,
+                created_at: t.created_at,
+                envelope: t.envelope.to_envelope(tags::SETTLEMENT_STH)?,
+            })
+        }
     }
 }

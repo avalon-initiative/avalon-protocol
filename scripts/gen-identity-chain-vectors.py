@@ -12,6 +12,9 @@ import sys
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import signing_envelope as env  # noqa: E402
+
 TAG = b"avalon.identity.chain_event"
 OUT = Path(__file__).resolve().parent.parent / "conformance" / "vectors" / "identity-chain.json"
 
@@ -29,18 +32,21 @@ def canonical(doc):
 def message(i, payload_hash):
     prev = i["prevHashHex"]
     return (
-        TAG
-        + struct.pack(">H", 1)
+        env.header(TAG, i["layoutVersion"], i["rulesVersion"])
         + bytes.fromhex(i["identityIdHex"])
         + struct.pack(">Q", int(i["seq"]))
-        + (b"\x00" if prev is None else b"\x01" + bytes.fromhex(prev))
         + uuid.UUID(i["eventId"]).bytes
         + s(i["kind"])
         + s(i["issuer"])
         + s(i["subject"])
         + struct.pack(">I", i["eventVersion"])
         + struct.pack(">q", int(i["timestampUnixMicros"]))
+        + env.hash_algo(i["hashAlgo"])
+        + (b"\x00" if prev is None else b"\x01" + bytes.fromhex(prev))
         + bytes.fromhex(payload_hash)
+        + env.extension_region(
+            [(e["type"], e["critical"], bytes.fromhex(e["valueHex"])) for e in i["extensions"]]
+        )
     )
 
 
@@ -56,6 +62,10 @@ BASE = dict(
     subject=SELF,
     eventVersion=1,
     timestampUnixMicros="1700000000000000",
+    layoutVersion=1,
+    rulesVersion=1,
+    hashAlgo=1,
+    extensions=[],
 )
 
 
@@ -106,6 +116,11 @@ vectors += [
     vec("event version 0", '{"n":1}', eventVersion=0),
     vec("event version u32 max", '{"n":1}', eventVersion=4294967295),
     vec("event version 2", '{"n":1}', eventVersion=2),
+    vec(
+        "unknown non-critical extension is hashed",
+        '{"n":1}',
+        extensions=[{"type": 12, "critical": False, "valueHex": "0102"}],
+    ),
     vec("non-zero prev hash", '{"n":1}', seq="2", prevHashHex="ab" * 32),
     vec("all-zero prev hash is not genesis", '{"n":1}', seq="2", prevHashHex="00" * 32),
     vec("other identity", '{"n":1}', identityIdHex="11" * 32),
@@ -141,12 +156,14 @@ doc = {
     "$schema": "./SCHEMA.md#identity-chain",
     "description": (
         "Per-identity event chains (avalon_protocol::identity_chain). hashVectors pin the chain event "
-        "hash (domain tag avalon.identity.chain_event): eventHashHex is the SHA-256 of signingBytesHex, "
-        "which is the tag (ASCII, no length), layout version 1 as u16 BE, identityIdHex (32 raw bytes), "
-        "seq as u64 BE, prevHashHex (u8 0 for genesis, or u8 1 then 32 raw bytes), eventId (16 raw bytes), "
-        "kind, issuer and subject (u32 BE length and UTF-8), eventVersion as u32 BE, "
-        "timestampUnixMicros as i64 BE (the instant floored to microseconds) and the payload hash "
-        "(32 raw bytes, the SHA-256 of the canonical payload from canonical-payload.json). The chain "
+        "hash (domain tag avalon.identity.chain_event): eventHashHex is the digest of signingBytesHex, "
+        "which is the tag (ASCII, no length), layoutVersion as u16 BE, rulesVersion as u32 BE, identityIdHex "
+        "(32 raw bytes), seq as u64 BE, eventId (16 raw bytes), kind, issuer and subject (u32 BE length "
+        "and UTF-8), eventVersion as u32 BE, timestampUnixMicros as i64 BE (the instant floored to "
+        "microseconds), hashAlgo as u8 (1 = SHA-256), prevHashHex (u8 0 for genesis, or u8 1 then 32 raw "
+        "bytes), the payload hash (32 raw bytes, the SHA-256 of the canonical payload from "
+        "canonical-payload.json) and the extensions region (see ledger-entry-hash.json); extensions is a "
+        "list of {type, critical, valueHex}. The chain "
         "position is never part of the payload. seq and timestampUnixMicros are decimal strings. "
         "resolutionCases pin the deterministic conflict rule (apply_chain): a runner must reach the "
         "same accepted chain and fork position for every ordering of a case's events. "

@@ -106,7 +106,7 @@ pub async fn enqueue(
     }
     avalon_protocol::canonical_payload::validate(&event.payload)
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    avalon_protocol::ledger_entry::layout_version(event.version).map_err(|_| {
+    i32::try_from(event.version).map_err(|_| {
         sqlx::Error::Decode(Box::new(
             avalon_chain::SettlementError::UnsupportedEntryVersion {
                 version: event.version,

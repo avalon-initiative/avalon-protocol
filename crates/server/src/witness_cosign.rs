@@ -47,7 +47,8 @@
 use avalon_chain::mirror::{self, WitnessCheckpoint};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
-use avalon_protocol::witness::sign_witness_cosignature;
+use avalon_protocol::signing_bytes::HashAlgo;
+use avalon_protocol::witness::{reattest_witness_cosignature, sign_witness_cosignature};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -281,6 +282,7 @@ async fn verify_consistency_extends_checkpoint(
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
+    algo: HashAlgo,
 ) -> bool {
     let url = format!("{peer_base_url}/ledger/proof/consistency");
     let response = match client
@@ -354,6 +356,7 @@ async fn verify_consistency_extends_checkpoint(
     };
 
     merkle::verify_consistency_proof(
+        algo,
         checkpoint.tree_size as usize,
         tree_size as usize,
         &proof,
@@ -368,12 +371,13 @@ async fn own_ledger_extends_checkpoint(
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
+    algo: HashAlgo,
 ) -> bool {
     match chain
         .consistency_proof(checkpoint.tree_size, tree_size)
         .await
     {
-        Ok(proof) => proof_extends_checkpoint(checkpoint, tree_size, root_hash, &proof),
+        Ok(proof) => proof_extends_checkpoint(algo, checkpoint, tree_size, root_hash, &proof),
         Err(err) => {
             tracing::warn!(error = %err, "witness-cosign: no own-ledger proof, not cosigning");
             false
@@ -383,6 +387,7 @@ async fn own_ledger_extends_checkpoint(
 
 /// Whether `proof` shows `root_hash` at `tree_size` extends `checkpoint`'s own recorded root.
 fn proof_extends_checkpoint(
+    algo: HashAlgo,
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
@@ -394,6 +399,7 @@ fn proof_extends_checkpoint(
         return false;
     };
     merkle::verify_consistency_proof(
+        algo,
         checkpoint.tree_size as usize,
         tree_size as usize,
         proof,
@@ -573,11 +579,19 @@ async fn decide(
                         &checkpoint,
                         size,
                         root,
+                        head.sth.envelope.hash_algo,
                     )
                     .await
                 }
                 ProofSource::OwnLedger => {
-                    own_ledger_extends_checkpoint(chain, &checkpoint, size, root).await
+                    own_ledger_extends_checkpoint(
+                        chain,
+                        &checkpoint,
+                        size,
+                        root,
+                        head.sth.envelope.hash_algo,
+                    )
+                    .await
                 }
             };
             if extends {
@@ -675,15 +689,23 @@ async fn ensure_own_cosignature_stored(
         }
     }
 
-    let cosig = sign_witness_cosignature(
+    let cosig = match sign_witness_cosignature(
         &config.signing_key,
         &config.witness_key_id,
-        head.sth.tree_size,
-        &head.sth.root_hash,
-        network_id,
-        head.sth.created_at,
+        &head.sth,
         OffsetDateTime::now_utc(),
-    );
+    ) {
+        Ok(cosig) => cosig,
+        Err(err) => {
+            tracing::error!(
+                network_id = %network_id,
+                shard_id,
+                error = %err,
+                "witness-cosign: cannot sign this head — not cosigning",
+            );
+            return false;
+        }
+    };
     if let Err(err) = chain.store_witness_cosignature(shard_id, &cosig).await {
         tracing::error!(
             network_id = %network_id,
@@ -723,16 +745,8 @@ fn reattested(
     config: &WitnessCosignConfig,
     existing: &avalon_protocol::witness::WitnessCosignature,
     now: OffsetDateTime,
-) -> avalon_protocol::witness::WitnessCosignature {
-    sign_witness_cosignature(
-        &config.signing_key,
-        &config.witness_key_id,
-        existing.tree_size,
-        &existing.root_hash,
-        &existing.network_id,
-        existing.author_created_at,
-        now,
-    )
+) -> Option<avalon_protocol::witness::WitnessCosignature> {
+    reattest_witness_cosignature(&config.signing_key, &config.witness_key_id, existing, now).ok()
 }
 
 /// Refreshes this node's cosignature over the head it last cosigned for every log it holds a
@@ -778,7 +792,9 @@ pub async fn reattest_once(
         }) else {
             continue;
         };
-        let fresh = reattested(config, own, now);
+        let Some(fresh) = reattested(config, own, now) else {
+            continue;
+        };
         match chain
             .refresh_witness_cosignature(&checkpoint.shard_id, &fresh)
             .await
@@ -935,24 +951,14 @@ mod tests {
             })
             .collect();
         let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0).unwrap();
         let known: Vec<(String, ed25519_dalek::VerifyingKey)> = cfg_keys
             .iter()
             .map(|c| (c.witness_key_id.clone(), c.signing_key.verifying_key()))
             .collect();
         let mut cosigs: Vec<_> = cfg_keys
             .iter()
-            .map(|c| {
-                sign_witness_cosignature(
-                    &c.signing_key,
-                    &c.witness_key_id,
-                    sth.tree_size,
-                    &sth.root_hash,
-                    &sth.network_id,
-                    sth.created_at,
-                    t0,
-                )
-            })
+            .map(|c| sign_witness_cosignature(&c.signing_key, &c.witness_key_id, &sth, t0).unwrap())
             .collect();
         let accepts = |cosigs: &[_], now: OffsetDateTime| {
             let head = CosignedTreeHead {
@@ -969,7 +975,7 @@ mod tests {
             cosigs = cfg_keys
                 .iter()
                 .zip(&cosigs)
-                .map(|(c, old)| reattested(c, old, now))
+                .map(|(c, old)| reattested(c, old, now).unwrap())
                 .collect();
             assert!(accepts(&cosigs, now));
         }
@@ -995,20 +1001,10 @@ mod tests {
             .map(|(id, k)| (id.clone(), k.verifying_key()))
             .collect();
         let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0).unwrap();
         let cosignatures = witnesses
             .iter()
-            .map(|(id, k)| {
-                sign_witness_cosignature(
-                    k,
-                    id,
-                    sth.tree_size,
-                    &sth.root_hash,
-                    &sth.network_id,
-                    sth.created_at,
-                    t0,
-                )
-            })
+            .map(|(id, k)| sign_witness_cosignature(k, id, &sth, t0).unwrap())
             .collect();
         let head = CosignedTreeHead { sth, cosignatures };
         let now = t0 + window * 2;
@@ -1024,16 +1020,40 @@ mod tests {
     #[test]
     fn own_ledger_proof_accepts_an_extension_and_refuses_a_fork() {
         let leaves: Vec<String> = (0u8..12).map(|i| hex::encode([i; 32])).collect();
-        let root = |n: usize| hex::encode(merkle::mth_of_hex_hashes(&leaves[..n]).unwrap());
+        let root = |n: usize| {
+            hex::encode(
+                merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &leaves[..n]).unwrap(),
+            )
+        };
         let cp = checkpoint(5, &root(5));
-        let proof = merkle::consistency_proof_of_hex_hashes(5, &leaves[..12]).unwrap();
-        assert!(proof_extends_checkpoint(&cp, 12, &root(12), &proof));
+        let proof = merkle::consistency_proof_of_hex_hashes(
+            avalon_chain::ledger_hash_algo(),
+            5,
+            &leaves[..12],
+        )
+        .unwrap();
+        assert!(proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
+            &cp,
+            12,
+            &root(12),
+            &proof
+        ));
 
         let mut forked = leaves.clone();
         forked[2] = hex::encode([0xEEu8; 32]);
-        let forked_root = hex::encode(merkle::mth_of_hex_hashes(&forked[..12]).unwrap());
-        assert!(!proof_extends_checkpoint(&cp, 12, &forked_root, &proof));
+        let forked_root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &forked[..12]).unwrap(),
+        );
         assert!(!proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
+            &cp,
+            12,
+            &forked_root,
+            &proof
+        ));
+        assert!(!proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
             &checkpoint(5, "zz"),
             12,
             &root(12),
@@ -1080,18 +1100,8 @@ mod tests {
             ),
         ];
         let now = OffsetDateTime::now_utc();
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now);
-        let cosign = |k: &SigningKey, id: &str| {
-            sign_witness_cosignature(
-                k,
-                id,
-                sth.tree_size,
-                &sth.root_hash,
-                &sth.network_id,
-                sth.created_at,
-                now,
-            )
-        };
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now).unwrap();
+        let cosign = |k: &SigningKey, id: &str| sign_witness_cosignature(k, id, &sth, now).unwrap();
         let resolve = |cosignatures| {
             let head = CosignedTreeHead {
                 sth: sth.clone(),

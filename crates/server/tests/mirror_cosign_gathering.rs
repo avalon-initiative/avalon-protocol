@@ -28,7 +28,7 @@ type Heads = Arc<Mutex<HashMap<i64, SignedTreeHead>>>;
 
 fn sth_json(sth: &SignedTreeHead, cosignatures: Vec<WitnessCosignatureDto>) -> serde_json::Value {
     serde_json::json!({
-        "tree_size": sth.tree_size,
+        "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
         "root_hash": sth.root_hash,
         "network_id": sth.network_id,
         "signing_key_id": sth.signing_key_id,
@@ -70,15 +70,8 @@ impl Respond for WitnessAtSize {
         let Some(sth) = heads.get(&size) else {
             return ResponseTemplate::new(404);
         };
-        let cosig = sign_witness_cosignature(
-            &self.key,
-            &self.id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
-            OffsetDateTime::now_utc(),
-        );
+        let cosig =
+            sign_witness_cosignature(&self.key, &self.id, sth, OffsetDateTime::now_utc()).unwrap();
         ResponseTemplate::new(200).set_body_json(sth_json(
             sth,
             vec![WitnessCosignatureDto::from_witness_cosignature(&cosig)],
@@ -216,7 +209,8 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
             &hex::encode([index as u8 + 1; 32]),
             &network_id,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         heads.lock().unwrap().insert(size, sth);
 
         let mut trusted = false;
@@ -280,7 +274,8 @@ async fn a_new_mirror_with_an_empty_known_list_reaches_a_majority_from_the_direc
         &hex::encode([1u8; 32]),
         &network_id,
         OffsetDateTime::now_utc().replace_nanosecond(0).unwrap(),
-    );
+    )
+    .unwrap();
     heads.lock().unwrap().insert(10, sth);
 
     let now = OffsetDateTime::now_utc();

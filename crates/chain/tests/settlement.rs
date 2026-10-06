@@ -277,7 +277,7 @@ async fn commit_produces_real_merkle_root_not_placeholder() {
         .map(|r| r.try_get::<String, _>("entry_hash").unwrap())
         .collect();
     let expected_root = hex::encode(
-        avalon_chain::merkle::mth_of_hex_hashes(&hashes)
+        avalon_chain::merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
             .expect("stored entry_hash values should always be valid hex"),
     );
     assert_eq!(claimed_root, expected_root);

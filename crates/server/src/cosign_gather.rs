@@ -176,7 +176,13 @@ async fn fetch_own_cosignature(
         .iter()
         .find(|c| c.witness_key_id == source.key_id)
     {
-        Some(c) => GatherOutcome::Fetched(c.to_witness_cosignature(sth)),
+        Some(c) => match c.to_witness_cosignature(sth) {
+            Ok(cosig) => GatherOutcome::Fetched(cosig),
+            Err(err) => {
+                tracing::warn!(witness = %source.key_id, error = %err, "witness cosignature unreadable, not counted");
+                GatherOutcome::Malformed
+            }
+        },
         None => GatherOutcome::NoOwnCosignature,
     }
 }
@@ -363,7 +369,8 @@ mod tests {
             &hex::encode([root_byte; 32]),
             "net",
             created_at,
-        );
+        )
+        .unwrap();
         CosignedTreeHead {
             sth,
             cosignatures: Vec::new(),
@@ -377,20 +384,12 @@ mod tests {
     }
 
     fn cosign(k: &SigningKey, id: &str, sth: &SignedTreeHead) -> WitnessCosignature {
-        sign_witness_cosignature(
-            k,
-            id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
-            OffsetDateTime::now_utc(),
-        )
+        sign_witness_cosignature(k, id, sth, OffsetDateTime::now_utc()).unwrap()
     }
 
     fn body(sth: &SignedTreeHead, cosigs: &[WitnessCosignature]) -> serde_json::Value {
         serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -472,12 +471,10 @@ mod tests {
         let stale = sign_witness_cosignature(
             &w2.0,
             &w2.1,
-            h.sth.tree_size,
-            &h.sth.root_hash,
-            &h.sth.network_id,
-            h.sth.created_at,
+            &h.sth,
             OffsetDateTime::now_utc() - time::Duration::hours(1),
-        );
+        )
+        .unwrap();
         let (s1, s2) = (MockServer::start().await, MockServer::start().await);
         // The first witness holds its own fresh cosignature plus an old copy of the second's.
         serve(
@@ -509,12 +506,10 @@ mod tests {
         sign_witness_cosignature(
             k,
             id,
-            sth.tree_size,
-            &sth.root_hash,
-            &sth.network_id,
-            sth.created_at,
+            sth,
             OffsetDateTime::now_utc() - time::Duration::hours(1),
         )
+        .unwrap()
     }
 
     #[test]

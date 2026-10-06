@@ -21,14 +21,13 @@
 
 use std::collections::BTreeMap;
 
-use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
 use uuid::Uuid;
 
 use crate::events::{ProtocolEventKind, ProtocolEventKindVariant};
 use crate::identity_id::IdentityId;
-use crate::signing_bytes::{tags, Builder, SigningBytesError};
+use crate::signing_bytes::{tags, Builder, Envelope, SigningBytesError};
 
 /// A sha256 digest identifying one chained event's content — the hash a
 /// later event's `prev_hash` points back to. Hex-encoded on the wire (see
@@ -36,8 +35,8 @@ use crate::signing_bytes::{tags, Builder, SigningBytesError};
 /// since every comparison and tie-break in this module works on the bytes.
 pub type EventHash = [u8; 32];
 
-/// Every field the chain hash covers; `payload_hash` is the SHA-256 of the canonical payload
-/// (#1308), so the position never rides inside the hashed payload.
+/// Every field the chain hash covers; `payload_hash` is the SHA-256 of the canonical payload,
+/// so the position never rides inside the hashed payload.
 pub struct ChainHashInput<'a> {
     pub identity_id: &'a IdentityId,
     pub seq: u64,
@@ -49,35 +48,39 @@ pub struct ChainHashInput<'a> {
     pub event_version: u32,
     pub timestamp_micros: i64,
     pub payload_hash: &'a [u8; 32],
+    /// Layout version, rules version, hash algorithm and extensions recorded with the event.
+    pub envelope: &'a Envelope,
 }
 
-/// The exact bytes the chain hash is the SHA-256 of (#1226). Layout: tag `avalon.identity.chain_event`,
-/// layout version 1, identity id (32 raw), `seq` u64, `prev_hash` (u8 flag 0, or 1 then 32 raw), event
-/// id (16 raw), kind, issuer and subject `str`, the event's own version u32, event time as `i64` unix
-/// microseconds, payload hash (32 raw).
+/// The exact bytes the chain hash is the digest of. Layout: tag `avalon.identity.chain_event`,
+/// header and extensions as in [`crate::signing_bytes`], identity id (32 raw), `seq` u64, event id
+/// (16 raw), kind, issuer and subject `str`, the event's own version u32, event time as `i64` unix
+/// microseconds, `hash_algo` u8, `prev_hash` (u8 flag 0, or 1 then 32 raw), payload hash (32 raw).
 pub fn chain_event_signing_bytes(input: &ChainHashInput<'_>) -> Result<Vec<u8>, SigningBytesError> {
-    let builder = Builder::new(tags::IDENTITY_CHAIN_EVENT, 1)
+    let builder = Builder::with_envelope(tags::IDENTITY_CHAIN_EVENT, input.envelope)
         .fixed(input.identity_id.as_bytes())
-        .u64(input.seq);
-    let builder = match input.prev_hash {
-        Some(hash) => builder.u8(1).hash(hash),
-        None => builder.u8(0),
-    };
-    builder
+        .u64(input.seq)
         .uuid(input.event_id)
         .str(input.kind)
         .str(input.issuer)
         .str(input.subject)
         .u32(input.event_version)
         .i64(input.timestamp_micros)
-        .hash(input.payload_hash)
-        .finish()
+        .hash_algo(input.envelope.hash_algo);
+    let builder = match input.prev_hash {
+        Some(hash) => builder.u8(1).hash(hash),
+        None => builder.u8(0),
+    };
+    builder.hash(input.payload_hash).finish()
 }
 
-/// The chain hash: SHA-256 of [`chain_event_signing_bytes`]. Every honest node computes the same value
-/// for the same event without coordinating on anything but the event's own bytes.
+/// The chain hash: the envelope's hash algorithm over [`chain_event_signing_bytes`]. Every honest
+/// node computes the same value for the same event without coordinating on anything but its bytes.
 pub fn compute_event_hash(input: &ChainHashInput<'_>) -> Result<EventHash, SigningBytesError> {
-    Ok(Sha256::digest(chain_event_signing_bytes(input)?).into())
+    Ok(input
+        .envelope
+        .hash_algo
+        .digest(&chain_event_signing_bytes(input)?))
 }
 
 /// How a layer-1 event kind participates in its identity's chain. Drives
@@ -432,6 +435,7 @@ pub fn events_by_seq(events: &[ChainedEvent]) -> BTreeMap<u64, Vec<&ChainedEvent
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn hash_of(label: &str) -> EventHash {
         let mut hasher = Sha256::new();
@@ -483,8 +487,12 @@ mod tests {
             event_version: 1,
             timestamp_micros: 1_000,
             payload_hash: payload,
+            envelope: &ENVELOPE,
         }
     }
+
+    static ENVELOPE: std::sync::LazyLock<Envelope> =
+        std::sync::LazyLock::new(|| Envelope::current(tags::IDENTITY_CHAIN_EVENT));
 
     #[test]
     fn compute_event_hash_is_deterministic_for_identical_inputs() {
@@ -501,6 +509,18 @@ mod tests {
         let other_id = IdentityId::random_for_tests();
         let (other_p, prev) = ([4u8; 32], [5u8; 32]);
         let base = compute_event_hash(&chain_input(&id, &p)).unwrap();
+        let ext_envelope = Envelope {
+            extensions: crate::signing_bytes::Extensions::new(
+                vec![crate::signing_bytes::Extension {
+                    ext_type: 9,
+                    critical: false,
+                    value: vec![1],
+                }],
+                1,
+            )
+            .unwrap(),
+            ..ENVELOPE.clone()
+        };
         let variants = [
             ChainHashInput {
                 identity_id: &other_id,
@@ -542,6 +562,10 @@ mod tests {
                 payload_hash: &other_p,
                 ..chain_input(&id, &p)
             },
+            ChainHashInput {
+                envelope: &ext_envelope,
+                ..chain_input(&id, &p)
+            },
         ];
         for (i, v) in variants.iter().enumerate() {
             assert_ne!(compute_event_hash(v).unwrap(), base, "variant {i}");
@@ -552,7 +576,7 @@ mod tests {
     fn chain_event_bytes_start_with_the_tag_and_layout_version() {
         let (id, p) = (IdentityId::random_for_tests(), [3u8; 32]);
         let bytes = chain_event_signing_bytes(&chain_input(&id, &p)).unwrap();
-        assert!(bytes.starts_with(b"avalon.identity.chain_event\x00\x01"));
+        assert!(bytes.starts_with(b"avalon.identity.chain_event\x00\x01\x00\x00\x00\x01"));
     }
 
     // --- clamp_timestamp -------------------------------------------------

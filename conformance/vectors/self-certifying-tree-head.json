@@ -6,7 +6,7 @@
     "csharp",
     "typescript"
   ],
-  "generation": "Deterministic. signingKeySeedHex and otherKeySeedHex are the Ed25519 seeds of the two keys (signingPublicKeyHex / otherPublicKeyHex, ids selfCertifyingId / otherSelfCertifyingId). Each head's signatureHex is Ed25519 over the Signed Tree Head signing message (see signed-tree-head.json) of that head's own fields, produced with avalon_protocol::sth::sign_tree_head; 'signed by a different key' vectors use the other seed, and tampered vectors reuse the original signature with one field changed. The non-curve key is 0x01 0x7f followed by zeros, which fails point decompression. Never real credentials. The 53 cases after the first 26 are reproducible from the seeds and the rules here (a pure-Python Ed25519 implementation generated them; every outcome is asserted against avalon_protocol). Signatures with a modified S keep the honest R and use S+L, S=L, S+2^255 and 2^256-1. 'R is the identity encoded non-canonically' uses R bytes of y=p+1 (0xee, then 30 bytes of 0xff, then 0x7f) and s = k*a mod L where a is the clamped secret scalar and k = SHA-512(R||A||M) mod L, so it satisfies the cofactored equation and fails the cofactorless byte comparison; the order-4 variant does the same with y=p. 'R is the identity point' uses the canonical identity as R (r=0) and s = k*a mod L, which verifies cofactorless. The three 'R carries a ... component' cases use r = SHA-512('cofactor-tainted-order-N') mod L (little-endian), R = rB + T with T of order 2 (y=p-1), 4 (y=0) or 8 (L times a curve point found by trying y=2,3,...), and s = r + k*a mod L: valid under cofactored verification, invalid under cofactorless. Signature-hex cases edit the honest signature hex: upper case and mixed case (accepted), odd length, a leading space, a trailing newline, a 0x prefix, and the first '0' digit replaced by '+' or '-'. Key cases use the identity (0x01 then zeros), the order-2 point (0xec, 30 bytes of 0xff, 0x7f), all eight canonical small-order points (the identity, the order-2 point, the two order-4 points and four order-8 points; the order-4 and order-8 points are the multiples of an order-8 point found as L times a curve point), the identity and the order-2 point with the sign bit (0x80 in the last byte) set, the identity as y=p+1, and the y=3 point (valid, not small order) as y+p; each key's id is 'node:' plus the SHA-256 of its bytes, and the signatures for the identity, order-2, order-4 and order-8 keys are forgeries that verify cofactorless under those keys (identity: R=identity, s=0; the others: R=[s]B for the smallest s where it verifies). Id and key cases append a newline or a NUL to the valid id or key hex, prepend a newline to the key, or replace the first key character with '+'. treeSize is a JSON number when its magnitude is below 2^53 and a decimal string otherwise (the i64 extremes and 2^53+1), each signed over that exact i64; the 'adjacent value' cases reuse the signature with the tree size one closer to zero. Non-ASCII cases sign a root hash of one two-byte character plus 62 ASCII characters and a network id containing multi-byte characters, with the root hash length prefix counting UTF-8 bytes. created_at cases sign the floor of the instant to whole seconds: before 1970 (-1), the epoch (0), a fractional second, a nine-digit fraction, a pre-1970 fractional second (floors to -1), a +02:00 offset, and one second later than signed (rejected). createdAtUnixSeconds always equals the floor of createdAtRfc3339.",
+  "generation": "Deterministic. signingKeySeedHex and otherKeySeedHex are the Ed25519 seeds of the two keys (signingPublicKeyHex / otherPublicKeyHex, ids selfCertifyingId / otherSelfCertifyingId). Each head's signatureHex is Ed25519 over the Signed Tree Head signing bytes (see signed-tree-head.json: tag avalon.settlement.sth, layout version 1, rules version 1, i64 tree size, network id and signing key id as u32-BE length plus UTF-8, i64 unix seconds, hash algorithm byte 01, 32 raw root bytes, empty extensions); 'signed by a different key' vectors use the other seed, and tampered vectors reuse the original signature with one field changed. The non-curve key is 0x01 0x7f followed by zeros, which fails point decompression. Never real credentials. Everything is reproducible from the seeds and the rules here by scripts/gen-sth-witness-vectors.py (a pure-Python Ed25519 implementation, independent of avalon_protocol; every outcome is asserted against avalon_protocol). Signatures with a modified S keep the honest R and use S+L, S=L, S+2^255 and 2^256-1. 'R is the identity encoded non-canonically' uses R bytes of y=p+1 (0xee, then 30 bytes of 0xff, then 0x7f) and s = k*a mod L where a is the clamped secret scalar and k = SHA-512(R||A||M) mod L, so it satisfies the cofactored equation and fails the cofactorless byte comparison; the order-4 variant does the same with y=p. 'R is the identity point' uses the canonical identity as R (r=0) and s = k*a mod L, which verifies cofactorless. The three 'R carries a ... component' cases use r = SHA-512('cofactor-tainted-order-N') mod L (little-endian), R = rB + T with T of order 2 (y=p-1), 4 (y=0) or 8 (L times a curve point found by trying y=2,3,...), and s = r + k*a mod L: valid under cofactored verification, invalid under cofactorless. Signature-hex cases edit the honest signature hex: upper case and mixed case (accepted), odd length, a leading space, a trailing newline, a 0x prefix, and the first '0' digit replaced by '+' or '-'. Key cases use the identity (0x01 then zeros), the order-2 point (0xec, 30 bytes of 0xff, 0x7f), all eight canonical small-order points (the identity, the order-2 point, the two order-4 points and four order-8 points; the order-4 and order-8 points are the multiples of an order-8 point found as L times a curve point), the identity and the order-2 point with the sign bit (0x80 in the last byte) set, the identity as y=p+1, and the y=3 point (valid, not small order) as y+p; each key's id is 'node:' plus the SHA-256 of its bytes, and the signatures for the identity, order-2, order-4 and order-8 keys are forgeries that verify cofactorless under those keys (identity: R=identity, s=0; the others: R=[s]B for the smallest s where it verifies). Id and key cases append a newline or a NUL to the valid id or key hex, prepend a newline to the key, or replace the first key character with '+'. treeSize is a JSON number when its magnitude is below 2^53 and a decimal string otherwise (the i64 extremes and 2^53+1), each signed over that exact i64; the 'adjacent value' cases reuse the signature with the tree size one closer to zero. A root hash must be exactly 64 lowercase hex characters (it is signed as 32 raw bytes), so a root hash with non-ASCII characters, in uppercase, or of another length never verifies, and each such case reuses an honest signature to show the rejection comes from the root hash. The signing key id is covered: the tampered key id reuses the honest signature, and the key id cases (empty, with ':', ',' and NUL, non-ASCII) sign that exact id. created_at cases sign the floor of the instant to whole seconds: before 1970 (-1), the epoch (0), a fractional second, a nine-digit fraction, a pre-1970 fractional second (floors to -1), a +02:00 offset, and one second later than signed (rejected). createdAtUnixSeconds always equals the floor of createdAtRfc3339.",
   "signingKeySeedHex": "1111111111111111111111111111111111111111111111111111111111111111",
   "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
   "selfCertifyingId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
@@ -25,7 +25,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -46,7 +46,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1790000123,
           "createdAtRfc3339": "2026-09-21T14:15:23Z",
-          "signatureHex": "f18305796d616f5783830ed21e078f505934b45351b11f80694f8a798ee8f80d5adeabf75dd80e69e3e59c1e29f024b828ef76514de277a23c401594db322b0d"
+          "signatureHex": "45f7522c18502ffcda75f72baadc670da58e8266232cb846916ac42e6bef6c41ec8e893e7420fec5f7778490b1d993b4be1c8893e6d32fd763f7e4e790756e0b"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -67,7 +67,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "23ecfb6dcad169ba9f39e65c13f0ecbe41acfd62d4b95f3d61e118ff4ded8dee1bde1266b3907e528e35e237635aeb346d3d867840e5fb78bb401079f7f73307"
+          "signatureHex": "6ff68d5af7637de243f88bae4fd450efb294cf7f6c7c14e8146e5fd161d9503b0ee8649783bed34ff68049cb502ce0b36dd513c48684d3f3481d2a37582c2402"
         },
         "signingPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
       },
@@ -88,7 +88,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
       },
@@ -109,7 +109,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "23ecfb6dcad169ba9f39e65c13f0ecbe41acfd62d4b95f3d61e118ff4ded8dee1bde1266b3907e528e35e237635aeb346d3d867840e5fb78bb401079f7f73307"
+          "signatureHex": "6ff68d5af7637de243f88bae4fd450efb294cf7f6c7c14e8146e5fd161d9503b0ee8649783bed34ff68049cb502ce0b36dd513c48684d3f3481d2a37582c2402"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -130,7 +130,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -151,7 +151,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -172,7 +172,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000001,
           "createdAtRfc3339": "2026-05-28T20:26:41Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -193,7 +193,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -256,7 +256,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737"
       },
@@ -277,7 +277,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c97787"
       },
@@ -298,7 +298,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873700"
       },
@@ -319,7 +319,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": ""
       },
@@ -340,7 +340,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
       },
@@ -361,7 +361,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "017f000000000000000000000000000000000000000000000000000000000000"
       },
@@ -382,7 +382,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         }
       },
       "expected": {
@@ -402,7 +402,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -423,7 +423,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -444,7 +444,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -465,7 +465,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -486,7 +486,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -507,7 +507,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -528,7 +528,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -549,7 +549,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -570,7 +570,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef234e54c15a9a9bade7f031bc5a170462cce25a11043fbdf4e7e148f4fbe54ff1d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a3098add6f093962072dc2837f415b3fb114cbaffe19e2ddcf86ec242eec81b10"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -591,7 +591,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7aedd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -612,7 +612,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff8d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b80"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -633,7 +633,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -654,7 +654,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f7c20e29d634d7a224c0e14cb666dfbea6fb12a2a493ef43c4243ec6c9c04e802"
+          "signatureHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fbebc8a7c8e8a37532e2b98dd08521aff9ffcb592c81a729d1b2439dd2d97da0f"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -675,7 +675,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0b6b85ad05b247916479f3090ad6d96115642de2e9b9be2bd6c92adfe0db010e"
+          "signatureHex": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fe50618795a66c8e3719d0a1bab90984c650ecde1796f615ec4704773fa82270e"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -696,7 +696,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0100000000000000000000000000000000000000000000000000000000000000cd51ec101128e5a87e9609904318648a18772a833bc9c2170c28d335bfdca50b"
+          "signatureHex": "0100000000000000000000000000000000000000000000000000000000000000839322c7f24b11a2db1f206b7e2e58cd027337fd328b39ffb48fed7ef808b10a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -717,7 +717,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "fa107aa05f033898ffafd068adadbe2c3a5e58e9f2e3b682e69884cb550d8e5091016e54e523f2cf0dacb9005a085695d517962aeaa87e40b2ff149e914a3405"
+          "signatureHex": "fa107aa05f033898ffafd068adadbe2c3a5e58e9f2e3b682e69884cb550d8e50a0705dbadb661bcf1ccec42bc05c8c9696254b77eab9c3c610cc79e66a7f400a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -738,7 +738,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "7989899bc66ebe2092933e6cccffd933a5190e866f5322e7685029a0869133901f1d38018aab788a7f32ab3ff3abe32ee6f9331b7a6d48faea00a72d87c10f05"
+          "signatureHex": "7989899bc66ebe2092933e6cccffd933a5190e866f5322e7685029a086913390f4846f9c113b741aadb4363e62db4b3ecc51c73dd1cbda5d75309399d85bd703"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -759,7 +759,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "5be216d1049fe770cd8e52b242343e8fe86a87b6fad3ff67ca1d2d325ca0c876b4ec2cf2b9af153d14009fa4212be6145d9f0850527f880e82116fc7b660600a"
+          "signatureHex": "5be216d1049fe770cd8e52b242343e8fe86a87b6fad3ff67ca1d2d325ca0c87691c7b2f2c1a20dae45b8fef04cbe367724a738c0610e7f46dade8f2873d2640d"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -780,7 +780,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0C77EB75E40A38943ED91936724F90216F65BA9166867F647AFFB809674C8EF2471157B88E46A886A9662322C3766717CE25A11043FBDF4E7E148F4FBE54FF0D"
+          "signatureHex": "D60563C0D61D6E3F51324784F82B0B606235C38780D47A9C03B5660013B6AE7A43C4B779D63084C89B3F3194151CD4E6114CBAFFE19E2DDCF86EC242EEC81B00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -801,7 +801,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943eD91936724F90216F65Ba9166867F647afFb809674c8ef2471157b88e46a886a9662322c3766717Ce25a11043fbDf4E7e148F4fBe54ff0d"
+          "signatureHex": "D60563C0d61d6e3F51324784F82B0b606235C38780D47A9c03b5660013b6Ae7A43C4b779D63084C89B3f3194151cd4e6114CbaFfe19e2ddCf86ec242Eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -822,7 +822,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b0"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -843,7 +843,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": " 0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0"
+          "signatureHex": " d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b0"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -864,7 +864,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d\n"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00\n"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -885,7 +885,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0x77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "0x0563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -906,7 +906,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "+c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d6+563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -927,7 +927,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "-c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d6-563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -948,7 +948,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -969,7 +969,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -990,7 +990,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\n"
       },
@@ -1011,7 +1011,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\u0000"
       },
@@ -1032,7 +1032,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "\nd04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1053,7 +1053,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "+04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1095,7 +1095,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "edc876d6831fd2105d0b4389ca2e283166469289146e2ce06faefe98b22548df0500000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
       },
@@ -1137,7 +1137,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "58666666666666666666666666666666666666666666666666666666666666660100000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b167120300000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "0000000000000000000000000000000000000000000000000000000000000080"
       },
@@ -1158,7 +1158,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "39289c8998fd69835c26b619e89848a7bf02b7cb7ad1ba1581cbc4506f2550ce0e00000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "2f1132ca61ab38dff00f2fea3228f24c6c71d58085b80e47e19515cb27e8d0470400000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"
       },
@@ -1179,7 +1179,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b10700000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"
       },
@@ -1200,7 +1200,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "58666666666666666666666666666666666666666666666666666666666666660100000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "c0f1225584444ec730446e231390781ffdd2f256e9fcbeb2f40dddc2c2233d7f0900000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "0000000000000000000000000000000000000000000000000000000000000000"
       },
@@ -1221,7 +1221,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "b4b937fca95b2f1e93e41e62fc3c78818ff38a66096fad6e7973e5c90006d3210800000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "f9e42d2edc81d23367967352b47e4856b82578634e6c1de72280ce8b60ce70c00c00000000000000000000000000000000000000000000000000000000000000"
         },
         "signingPublicKeyHex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"
       },
@@ -1242,7 +1242,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "0100000000000000000000000000000000000000000000000000000000000080"
       },
@@ -1263,7 +1263,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "edc876d6831fd2105d0b4389ca2e283166469289146e2ce06faefe98b22548df0500000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       },
@@ -1284,7 +1284,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
       },
@@ -1305,7 +1305,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
       },
@@ -1326,7 +1326,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "0300000000000000000000000000000000000000000000000000000000000000"
       },
@@ -1347,7 +1347,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "bfab5edcd1ec44c196ccfc6b4d41692bc34675dcd36cb67d7b40593bfed87e255c2d69d7f54a5592db835d7f948eaa225549b1d03a87fb65bf68701612cbb20d"
+          "signatureHex": "49859fca2411146b4688ed3fdbf6942e282ce70abadbccfa5c28cead2d42f01ab7d907e21f9daf76a787c16d54cffeaef95513148fc088c03b27a9dfe0ac120a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1368,7 +1368,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "bfab5edcd1ec44c196ccfc6b4d41692bc34675dcd36cb67d7b40593bfed87e255c2d69d7f54a5592db835d7f948eaa225549b1d03a87fb65bf68701612cbb20d"
+          "signatureHex": "49859fca2411146b4688ed3fdbf6942e282ce70abadbccfa5c28cead2d42f01ab7d907e21f9daf76a787c16d54cffeaef95513148fc088c03b27a9dfe0ac120a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1389,7 +1389,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "e91e2a0fa5cbb67b86aeb253822f33aeb6d6f63906ec921a535b6df24cb1952ed1fc5057abac704ca58d0be2bc6959bfe42bd123deba5ee85907fbc1a5d73000"
+          "signatureHex": "3bd003234e99de357af41a1072a79aca2d66004564901474509e97886fa19ac57c416d2a308c3a421603657a46d2797f878fe7466428c8839fa7f19999e5e90d"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1410,7 +1410,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "e91e2a0fa5cbb67b86aeb253822f33aeb6d6f63906ec921a535b6df24cb1952ed1fc5057abac704ca58d0be2bc6959bfe42bd123deba5ee85907fbc1a5d73000"
+          "signatureHex": "3bd003234e99de357af41a1072a79aca2d66004564901474509e97886fa19ac57c416d2a308c3a421603657a46d2797f878fe7466428c8839fa7f19999e5e90d"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1431,7 +1431,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "4fdf33490219c9ad9dfe0c8af5eb9e9bccaf68db187eda30725e5c9567ef67ccd81f605459dea3f00131c4579cd50d61a1a1a58cfbfd011d3db179435074250d"
+          "signatureHex": "3ca2b08c12cc276b3985b45acabcea438205860ab4adceaa2883bc37d65001d1dbd61425b64694c3147cd24d671707636ba500f18e12b5905dd2dbe666af330a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1452,7 +1452,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "de842454d759ef326fafd473f2d1cdf8e2944f945410d5269422d2203e05340c65626089654a85ff877ac8087976462a66fd7b1aa0e102fbdca13af665de7e08"
+          "signatureHex": "f59180966cd6b1ee764234700522e1b61bee79c3c3bbb631cf26dd646cd44c3ca42ab29673239878c1fcda8dccb73e3de953363d38b243f8dc0e2a76a6dc2509"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1473,7 +1473,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "d4b274da43e954cfae9eb08140a9bc5c9d882352d980129b09e9a9a522b10769c270a217022124718f8beb853ea63b19d5614a73902f16bf85f7562a285ddb02"
+          "signatureHex": "3f5fea44dfb3327b440332bba7542f42ad4e92ee99afb6b669a91dddc7b2bf80b6ee356e2db241043646ef50541dafc08bc2fefcdb953f773e1fea38a2cd8f06"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1494,7 +1494,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": -1,
           "createdAtRfc3339": "1969-12-31T23:59:59Z",
-          "signatureHex": "656a65e42a6515782958ef016e6f5c10c1ff9ca2439c7b3c492a2871840943001fde29b84e9adbfc47db8995d0284289d514d3f9f3988f13c4747815ca0f2d00"
+          "signatureHex": "a5658134584af0fd623f3525aa2ab92d1844ea63130d18dc08d48f1ae411cb8386bac7ed80923fc21d896f671e70c16edbfa05f2fc2a41186c37e9ee083bbe0e"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1515,7 +1515,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 0,
           "createdAtRfc3339": "1970-01-01T00:00:00Z",
-          "signatureHex": "a1a404f85ad5279522f132d4d97761216166f17747b11b7f27ed98556bcc1fe7f762fdca5156810df9e0c5707350679fd47bb301610cf462d15db7ea4d6dd40c"
+          "signatureHex": "7eaee8201ce626e445d6ddaf5467490ec78bef7eeadc0c5b26a4f8bd858902ea0f32b3903f013fcf097914eec6f2a8f1d67861540355e26b3340b708e993a009"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1536,7 +1536,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40.5Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1557,7 +1557,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40.999999999Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1578,7 +1578,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": -1,
           "createdAtRfc3339": "1969-12-31T23:59:59.5Z",
-          "signatureHex": "656a65e42a6515782958ef016e6f5c10c1ff9ca2439c7b3c492a2871840943001fde29b84e9adbfc47db8995d0284289d514d3f9f3988f13c4747815ca0f2d00"
+          "signatureHex": "a5658134584af0fd623f3525aa2ab92d1844ea63130d18dc08d48f1ae411cb8386bac7ed80923fc21d896f671e70c16edbfa05f2fc2a41186c37e9ee083bbe0e"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1599,7 +1599,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T22:26:40+02:00",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1620,7 +1620,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000001,
           "createdAtRfc3339": "2026-05-28T20:26:41.0Z",
-          "signatureHex": "0c77eb75e40a38943ed91936724f90216f65ba9166867f647affb809674c8ef2471157b88e46a886a9662322c3766717ce25a11043fbdf4e7e148f4fbe54ff0d"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1631,7 +1631,7 @@
       }
     },
     {
-      "name": "root hash with non-ASCII characters is length-prefixed in UTF-8 bytes",
+      "name": "root hash with non-ASCII characters cannot be signed or verified",
       "input": {
         "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
         "head": {
@@ -1641,14 +1641,14 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "5210e4ba945d344a32504cd410048105fd091e13ae135642379fccb75c6cf52207b5b92a3615021b333bf516efe717b655000d99cc5e2ee041cacb0dd326350c"
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
       "expected": {
         "check": "self_certifying",
-        "verified": true,
-        "failure": null
+        "verified": false,
+        "failure": "bad_signature"
       }
     },
     {
@@ -1662,7 +1662,7 @@
           "signingKeyId": "node-key-1",
           "createdAtUnixSeconds": 1780000000,
           "createdAtRfc3339": "2026-05-28T20:26:40Z",
-          "signatureHex": "788f88b76bb7a08fdb7ca7bd8152b58e9bfee8e2bbf47b7ad0f11fea3f1ad0b63780756073df2d47f8ab106c699c83ab60fcae7830b94cd8d2583212befc390d"
+          "signatureHex": "16f8a9de55b4db57260bdd3b9954c8d462fb6515c901d601a0d590f0fafde6c8ed870e78c1685e1947ffde1108a1832a8360a4e768c1d5bcfb02a6a883adfe0a"
         },
         "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
       },
@@ -1670,6 +1670,153 @@
         "check": "self_certifying",
         "verified": true,
         "failure": null
+      }
+    },
+    {
+      "name": "tampered signing_key_id",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-2",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "signing key id is empty",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "0aa0518edca02da75b8662895408078340c76cd6d3f9e91dcc9ce4a1d5b24d45932a7c5aaf8b379891465bc6e948606682f0388384e5e40efc4dc12e2f5b210b"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": true,
+        "failure": null
+      }
+    },
+    {
+      "name": "signing key id with a colon, a comma and a NUL",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "a:b,c\u0000d",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "db775c48be641ade6f27e5b9898e1f1d3f486d56b56614fd9a1b54727e5d6f4b6cdf68d01c36ec18d603db40c058cc85682aae2903961fe0bcdfd4d0bb68ec0b"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": true,
+        "failure": null
+      }
+    },
+    {
+      "name": "signing key id with non-ASCII characters is signed as UTF-8",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "clé-世界",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "081b32758f2ffd637df75609f6862a5dca34040521e9392b89aacabbe4404a351965e42c4e076b4377b8b0a513a3f748c0810811c35935f8919cc995af0be80f"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": true,
+        "failure": null
+      }
+    },
+    {
+      "name": "root hash in uppercase hex is rejected",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "root hash one byte short is rejected",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
+      }
+    },
+    {
+      "name": "root hash one byte long is rejected",
+      "input": {
+        "shardId": "node:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "head": {
+          "treeSize": 12,
+          "rootHashHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefab",
+          "networkId": "avalon-dev-local",
+          "signingKeyId": "node-key-1",
+          "createdAtUnixSeconds": 1780000000,
+          "createdAtRfc3339": "2026-05-28T20:26:40Z",
+          "signatureHex": "d60563c0d61d6e3f51324784f82b0b606235c38780d47a9c03b5660013b6ae7a43c4b779d63084c89b3f3194151cd4e6114cbaffe19e2ddcf86ec242eec81b00"
+        },
+        "signingPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+      },
+      "expected": {
+        "check": "self_certifying",
+        "verified": false,
+        "failure": "bad_signature"
       }
     }
   ]

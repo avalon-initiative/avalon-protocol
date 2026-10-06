@@ -86,6 +86,9 @@ fn real_entry() -> RealEntry {
             payload_hash: &payload_hash,
             timestamp,
             version,
+            envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
         },
     )
     .unwrap();
@@ -114,11 +117,18 @@ async fn mock_remote_node(
     served_payload: &serde_json::Value,
 ) -> (MockServer, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
-    let root = merkle::mth_of_hex_hashes(std::slice::from_ref(&real.entry_hash))
-        .expect("single valid hex hash should always produce a root");
+    let root = merkle::mth_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        std::slice::from_ref(&real.entry_hash),
+    )
+    .expect("single valid hex hash should always produce a root");
     let root_hash = hex::encode(root);
-    let proof = merkle::inclusion_proof_of_hex_hashes(0, std::slice::from_ref(&real.entry_hash))
-        .expect("single-leaf inclusion proof should always succeed");
+    let proof = merkle::inclusion_proof_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        0,
+        std::slice::from_ref(&real.entry_hash),
+    )
+    .expect("single-leaf inclusion proof should always succeed");
     assert!(
         proof.is_empty(),
         "a single-leaf tree's own inclusion proof has no audit-path nodes"
@@ -131,14 +141,15 @@ async fn mock_remote_node(
         &root_hash,
         NETWORK_ID,
         OffsetDateTime::now_utc(),
-    );
+    )
+    .unwrap();
 
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/ledger/sth/latest"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -165,6 +176,7 @@ async fn mock_remote_node(
             "prev_hash": real.prev_hash,
             "entry_hash": real.entry_hash,
             "batch_id": Uuid::new_v4(),
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000",
         }])))
         .mount(&server)
         .await;

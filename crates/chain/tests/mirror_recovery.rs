@@ -83,8 +83,13 @@ fn mirrored_entry(network_id: &str, seq: i64, verified_tree_size: i64) -> Mirror
         entry_hash: String::new(),
         batch_id: Uuid::new_v4(),
         verified_tree_size,
+        envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        ),
     };
-    entry.entry_hash = entry.recomputed_hash().expect("payload present");
+    entry.entry_hash = entry.recomputed_hash().unwrap().expect("payload present");
     entry
 }
 

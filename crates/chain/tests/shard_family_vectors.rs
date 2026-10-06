@@ -43,6 +43,9 @@ fn head(shard_id: &str, tree_size: i64, label: &str) -> ShardTreeHead {
                 sha_hex(&format!("sig-b:{shard_id}:{label}"))
             ),
             created_at: time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         },
     }
 }

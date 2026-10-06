@@ -127,7 +127,12 @@ impl<'a> PlanBuilder<'a> {
         Self {
             network_id,
             shard_id,
-            tree: IncrementalMerkleTree::new(),
+            tree: IncrementalMerkleTree::new(
+                avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                )
+                .hash_algo,
+            ),
             prev_hash: GENESIS_HASH.to_string(),
             last_seq: None,
             batches: Vec::new(),
@@ -154,9 +159,11 @@ impl<'a> PlanBuilder<'a> {
             return Err(PromotionError::BrokenLink { seq: entry.seq });
         }
         // The hash is recomputed from `payload_hash`, so a pruned entry verifies too.
+        // An envelope this node cannot read stays the typed result, not a hash mismatch.
+        let recomputed = entry.recomputed_hash()?;
         if entry.network_id != self.network_id
             || entry.shard_id != self.shard_id
-            || entry.recomputed_hash().as_deref() != Some(entry.entry_hash.as_str())
+            || recomputed.as_deref() != Some(entry.entry_hash.as_str())
         {
             return Err(PromotionError::HashMismatch { seq: entry.seq });
         }
@@ -285,7 +292,8 @@ async fn observed_sths_for(
 ) -> Result<Vec<ObservedSth>, SettlementError> {
     let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, \
-         created_at, observed_at FROM observed_sths WHERE network_id = ",
+         created_at, observed_at, layout_version, rules_version, hash_algo, extensions \
+         FROM observed_sths WHERE network_id = ",
     );
     builder.push_bind(params.network_id);
     builder.push(" AND shard_id = ").push_bind(params.shard_id);
@@ -311,6 +319,8 @@ async fn observed_sths_for(
                 signing_key_id: row.try_get("signing_key_id").map_err(get)?,
                 created_at: row.try_get("created_at").map_err(get)?,
                 observed_at: row.try_get("observed_at").map_err(get)?,
+                envelope: crate::envelope_row::EnvelopeRow::read(&row, "")?
+                    .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)?,
             })
         })
         .collect()
@@ -353,12 +363,15 @@ async fn insert_entry(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     entry: &MirroredEntry,
 ) -> Result<(), sqlx::Error> {
+    let envelope = crate::envelope_row::EnvelopeRow::from_wire(&entry.envelope)
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id)
+            (seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id,
+             layout_version, rules_version, hash_algo, extensions)
         OVERRIDING SYSTEM VALUE
-        VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6::jsonb IS NULL THEN now() END, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6::jsonb IS NULL THEN now() END, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(entry.seq)
@@ -373,6 +386,10 @@ async fn insert_entry(
     .bind(&entry.prev_hash)
     .bind(&entry.entry_hash)
     .bind(entry.batch_id)
+    .bind(envelope.layout_version)
+    .bind(envelope.rules_version)
+    .bind(envelope.hash_algo)
+    .bind(&envelope.extensions)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -509,9 +526,12 @@ pub async fn promote_mirror(
     .execute(&mut *tx)
     .await?;
     for sth in &sths {
+        let envelope = crate::envelope_row::EnvelopeRow::from_envelope(&sth.envelope)
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         sqlx::query(
-            "INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at, \
+             layout_version, rules_version, hash_algo, extensions) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(sth.tree_size)
         .bind(&sth.root_hash)
@@ -519,6 +539,10 @@ pub async fn promote_mirror(
         .bind(&sth.signing_key_id)
         .bind(&sth.signature)
         .bind(sth.created_at)
+        .bind(envelope.layout_version)
+        .bind(envelope.rules_version)
+        .bind(envelope.hash_algo)
+        .bind(&envelope.extensions)
         .execute(&mut *tx)
         .await?;
     }
@@ -588,6 +612,7 @@ async fn verify_target(
 mod tests {
     use super::*;
     use crate::mirror::CORE_SHARD_ID;
+    use avalon_protocol::signing_bytes::{tags, Envelope, EnvelopeWire, HashAlgo};
 
     const NET: &str = "avalon-test-promotion";
 
@@ -599,6 +624,7 @@ mod tests {
             let event_id = Uuid::new_v4();
             let payload = serde_json::json!({ "n": seq });
             let payload_hash = crate::payload_hash_hex(&payload).unwrap();
+            let envelope = Envelope::current(tags::LEDGER_ENTRY);
             let entry_hash = crate::hash_entry(
                 NET,
                 CORE_SHARD_ID,
@@ -612,6 +638,7 @@ mod tests {
                     payload_hash: &payload_hash,
                     timestamp: OffsetDateTime::UNIX_EPOCH,
                     version: 1,
+                    envelope: &envelope,
                 },
             )
             .unwrap();
@@ -632,6 +659,7 @@ mod tests {
                 entry_hash: entry_hash.clone(),
                 batch_id: batches[batch],
                 verified_tree_size: seq,
+                envelope: EnvelopeWire::from(&envelope),
             });
             prev = entry_hash;
         }
@@ -666,8 +694,10 @@ mod tests {
             (5, 6)
         );
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
-        let expected_first = hex::encode(crate::merkle::mth_of_hex_hashes(&hashes[..2]).unwrap());
-        let expected_last = hex::encode(crate::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let expected_first =
+            hex::encode(crate::merkle::mth_of_hex_hashes(HashAlgo::Sha256, &hashes[..2]).unwrap());
+        let expected_last =
+            hex::encode(crate::merkle::mth_of_hex_hashes(HashAlgo::Sha256, &hashes).unwrap());
         assert_eq!(plan.batches[0].batch_root, expected_first);
         assert_eq!(plan.batches[0].tree_size, 2);
         assert_eq!(plan.batches[1].batch_root, expected_last);
@@ -745,6 +775,7 @@ mod tests {
             signing_key_id: "key".into(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: Envelope::current(tags::SETTLEMENT_STH),
         };
         let observed = vec![
             sth(2, "ff".repeat(32), "forged"),

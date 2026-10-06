@@ -158,20 +158,18 @@ impl WitnessSigner {
         })
     }
 
-    /// A fresh advert binding this key to `base_url`.
-    pub fn advert(&self, base_url: &str, now: OffsetDateTime) -> WitnessAdvert {
+    /// A fresh advert binding this key to `base_url`; `None` if the proof cannot be built.
+    pub fn advert(&self, base_url: &str, now: OffsetDateTime) -> Option<WitnessAdvert> {
         let base_url = normalized_base_url(base_url);
-        WitnessAdvert {
+        let proof =
+            avalon_protocol::witness::sign_witness_announce(&self.signing_key, &base_url, now)
+                .ok()?;
+        Some(WitnessAdvert {
             key_id: self.key_id.clone(),
             announced_at: now,
-            proof: avalon_protocol::witness::sign_witness_announce(
-                &self.signing_key,
-                &base_url,
-                &self.key_id,
-                now,
-            ),
+            proof,
             direct: false,
-        }
+        })
     }
 }
 
@@ -1475,7 +1473,7 @@ fn announce_response(state: &AppState, caller_base_url: &str) -> AnnounceRespons
         .own_witness
         .as_ref()
         .zip(state.own_base_url.as_deref())
-        .map(|(w, url)| w.advert(url, OffsetDateTime::now_utc()));
+        .and_then(|(w, url)| w.advert(url, OffsetDateTime::now_utc()));
     AnnounceResponse {
         witness: own_witness,
         peers: state.peers.list_excluding(caller_base_url),
@@ -2681,7 +2679,7 @@ pub async fn run_worker(
                             &head_gossip.snapshot(),
                             witness_signer
                                 .as_ref()
-                                .map(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
+                                .and_then(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
                             neighbors.own_coordinate(),
                         ),
                     ),
@@ -2812,7 +2810,7 @@ pub async fn run_worker(
                     &head_gossip.snapshot(),
                     witness_signer
                         .as_ref()
-                        .map(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
+                        .and_then(|w| w.advert(own_base_url, OffsetDateTime::now_utc())),
                     neighbors.own_coordinate(),
                 );
                 for peer in &targets {
@@ -4049,24 +4047,29 @@ mod tests {
         let signer = WitnessSigner::new(key, id.clone()).unwrap();
 
         let mut good = supported("http://127.0.0.1:9601", now);
-        good.witness = Some(signer.advert("http://127.0.0.1:9601", now));
+        good.witness = Some(signer.advert("http://127.0.0.1:9601", now).unwrap());
 
         // Proof made for a different URL.
         let mut mismatched = supported("http://127.0.0.1:9602", now);
-        mismatched.witness = Some(signer.advert("http://127.0.0.1:9601", now));
+        mismatched.witness = Some(signer.advert("http://127.0.0.1:9601", now).unwrap());
 
         // Someone else's key id with this signer's proof.
         let other = ed25519_dalek::SigningKey::generate(&mut rand::rng());
         let mut forged = supported("http://127.0.0.1:9603", now);
-        let mut advert = signer.advert("http://127.0.0.1:9603", now);
+        let mut advert = signer.advert("http://127.0.0.1:9603", now).unwrap();
         advert.key_id = hex::encode(other.verifying_key().to_bytes());
         forged.witness = Some(advert);
 
         let mut stale = supported("http://127.0.0.1:9604", now);
-        stale.witness = Some(signer.advert(
-            "http://127.0.0.1:9604",
-            now - avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW - time::Duration::minutes(1),
-        ));
+        stale.witness = Some(
+            signer
+                .advert(
+                    "http://127.0.0.1:9604",
+                    now - avalon_protocol::witness::WITNESS_ANNOUNCE_MAX_SKEW
+                        - time::Duration::minutes(1),
+                )
+                .unwrap(),
+        );
 
         merge_gossip(
             &table,
@@ -4097,7 +4100,7 @@ mod tests {
         let id = hex::encode(key.verifying_key().to_bytes());
         let signer = WitnessSigner::new(key, id).unwrap();
         let mut with_key = supported("http://127.0.0.1:9605", now);
-        with_key.witness = Some(signer.advert("http://127.0.0.1:9605", now));
+        with_key.witness = Some(signer.advert("http://127.0.0.1:9605", now).unwrap());
         table.upsert(with_key);
         table.upsert(supported("http://127.0.0.1:9605", now));
         assert!(table.list_all()[0].witness.is_some());
@@ -4111,7 +4114,10 @@ mod tests {
         let mk = |direct: bool, at: OffsetDateTime| {
             let key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
             let id = hex::encode(key.verifying_key().to_bytes());
-            let mut a = WitnessSigner::new(key, id).unwrap().advert(url, at);
+            let mut a = WitnessSigner::new(key, id)
+                .unwrap()
+                .advert(url, at)
+                .unwrap();
             a.direct = direct;
             a
         };
@@ -4144,7 +4150,7 @@ mod tests {
         let signer = WitnessSigner::new(key, id).unwrap();
         let body = serde_json::json!({
             "peers": [],
-            "witness": signer.advert(&url, now),
+            "witness": signer.advert(&url, now).unwrap(),
             "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
         });
         Mock::given(method("POST"))
@@ -4157,7 +4163,7 @@ mod tests {
         let silent = "http://127.0.0.1:9";
         for u in [url.as_str(), silent] {
             let mut p = supported(u, now);
-            p.witness = Some(signer.advert(u, now));
+            p.witness = Some(signer.advert(u, now).unwrap());
             table.upsert(p);
         }
         let targets = pick_vouch_targets(&table, &[], 0, VOUCH_CONTACTS_PER_TICK);
@@ -5742,7 +5748,8 @@ mod tests {
         let id = hex::encode(key.verifying_key().to_bytes());
         let advert = WitnessSigner::new(key, id.clone())
             .unwrap()
-            .advert(known, OffsetDateTime::now_utc());
+            .advert(known, OffsetDateTime::now_utc())
+            .unwrap();
         let mut body = request(
             " http://Known.invalid:8080/ ",
             crate::version::PROTOCOL_VERSION,
@@ -5816,7 +5823,8 @@ mod tests {
         let id = hex::encode(key.verifying_key().to_bytes());
         let mut advert = WitnessSigner::new(key, id.clone())
             .unwrap()
-            .advert("http://v.test", OffsetDateTime::now_utc());
+            .advert("http://v.test", OffsetDateTime::now_utc())
+            .unwrap();
         advert.direct = true;
         stored.witness = Some(advert);
         table.upsert(stored.clone());
@@ -5830,7 +5838,8 @@ mod tests {
             relayed.witness = Some(
                 WitnessSigner::new(rival, rival_id)
                     .unwrap()
-                    .advert("http://v.test", OffsetDateTime::now_utc()),
+                    .advert("http://v.test", OffsetDateTime::now_utc())
+                    .unwrap(),
             );
             table.upsert_relayed(relayed);
             let now = table.list_all().remove(0);

@@ -3,6 +3,7 @@
 
 use avalon_chain::mirror;
 use avalon_chain::PostgresSettlementProvider;
+use avalon_protocol::sth;
 use avalon_protocol::witness::{sign_witness_cosignature, verify_witness_cosignature};
 use avalon_server::nodes::HeadGossipTracker;
 use avalon_server::witness_cosign::{reattest_once, WitnessCosignConfig};
@@ -29,15 +30,10 @@ async fn reattestation_refreshes_the_same_head_and_never_a_different_one() {
     let author_created_at = OffsetDateTime::now_utc() - time::Duration::hours(1);
     let first_seen = OffsetDateTime::now_utc() - time::Duration::minutes(30);
 
-    let original = sign_witness_cosignature(
-        &key,
-        &key_id,
-        4,
-        &root,
-        &network_id,
-        author_created_at,
-        first_seen,
-    );
+    let head = |root: &str| {
+        sth::sign_tree_head(&key, "author-key", 4, root, &network_id, author_created_at).unwrap()
+    };
+    let original = sign_witness_cosignature(&key, &key_id, &head(&root), first_seen).unwrap();
     chain
         .store_witness_cosignature(shard, &original)
         .await
@@ -64,12 +60,10 @@ async fn reattestation_refreshes_the_same_head_and_never_a_different_one() {
     let conflicting = sign_witness_cosignature(
         &key,
         &key_id,
-        4,
-        &other_root,
-        &network_id,
-        author_created_at,
+        &head(&other_root),
         now + time::Duration::minutes(5),
-    );
+    )
+    .unwrap();
     assert!(!chain
         .refresh_witness_cosignature(shard, &conflicting)
         .await

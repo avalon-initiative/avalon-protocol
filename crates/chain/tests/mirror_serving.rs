@@ -57,8 +57,13 @@ fn mirrored_entry(network_id: &str, seq: i64, subject: &str) -> MirroredEntry {
         entry_hash: String::new(),
         batch_id: Uuid::new_v4(),
         verified_tree_size: seq,
+        envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        ),
     };
-    entry.entry_hash = entry.recomputed_hash().expect("payload present");
+    entry.entry_hash = entry.recomputed_hash().unwrap().expect("payload present");
     entry
 }
 
@@ -169,10 +174,10 @@ async fn mirrored_entry_hashes_up_to_reproduces_the_verified_tree() {
         .expect("mirrored_entry_hashes_up_to failed");
     assert_eq!(up_to_all, hashes);
 
-    let expected_root =
-        merkle::mth_of_hex_hashes(&hashes[..3]).expect("valid hex hashes should hash cleanly");
-    let actual_root =
-        merkle::mth_of_hex_hashes(&up_to_three).expect("valid hex hashes should hash cleanly");
+    let expected_root = merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes[..3])
+        .expect("valid hex hashes should hash cleanly");
+    let actual_root = merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &up_to_three)
+        .expect("valid hex hashes should hash cleanly");
     assert_eq!(
         expected_root, actual_root,
         "root over the mirror-served leaves must match an independently computed root"
@@ -253,6 +258,9 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
             signing_key_id: "key-a".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::now_utc(),
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         },
     )
     .await
@@ -269,6 +277,9 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
             signing_key_id: "key-b".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::now_utc(),
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         },
     )
     .await
@@ -323,6 +334,9 @@ async fn observed_sth_round_trips_the_signed_created_at_not_the_observed_at() {
             signing_key_id: "key".to_string(),
             created_at: signed_created_at,
             observed_at,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         },
     )
     .await

@@ -12,6 +12,7 @@
 
 pub mod attestations;
 pub mod cross_shard;
+pub mod envelope_row;
 pub mod incremental_merkle;
 pub mod merkle;
 pub mod migration;
@@ -22,9 +23,9 @@ pub mod retention;
 pub use avalon_protocol::sth;
 
 pub use postgres::{
-    entry_content_intact, hash_entry, payload_hash_hex, payload_matches, EntryContent,
-    GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
-    GENESIS_HASH,
+    entry_content_intact, hash_entry, ledger_hash_algo, payload_hash_hex, payload_matches,
+    EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,
+    PostgresSettlementProvider, GENESIS_HASH,
 };
 
 use async_trait::async_trait;
@@ -50,9 +51,16 @@ pub enum SettlementError {
     /// An entry has a field the hash layout cannot represent, so it was not stored.
     #[error("entry cannot be hashed: {0}")]
     InvalidEntry(String),
-    /// An event version above `u16::MAX` cannot be carried by the entry hash layout.
-    #[error("event version {version} is not supported by the ledger entry layout (maximum 65535)")]
+    /// An event version above `i32::MAX` does not fit the stored `version` column.
+    #[error("event version {version} does not fit the stored version column (maximum 2147483647)")]
     UnsupportedEntryVersion { version: u32 },
+    /// A stored or received message needs a layout, rules version, hash algorithm or extension this
+    /// node lacks. Nothing was verified, stored as verified or cosigned.
+    #[error("needs a newer version: {what:?} {required}")]
+    NeedsNewerVersion {
+        what: avalon_protocol::signing_bytes::VersionKind,
+        required: u32,
+    },
 }
 
 /// Anything capable of durably committing event batches and letting a caller

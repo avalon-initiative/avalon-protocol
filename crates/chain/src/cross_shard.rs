@@ -14,6 +14,10 @@
 //! crate's.
 
 use crate::merkle;
+use avalon_protocol::signing_bytes::HashAlgo;
+
+/// The cross-shard and family trees keep their own legacy leaf layouts and stay on SHA-256.
+const TREE_ALGO: HashAlgo = HashAlgo::Sha256;
 use crate::sth::SignedTreeHead;
 
 /// One `(shard_id, SignedTreeHead)` pair — a shard's current claimed
@@ -114,7 +118,7 @@ pub fn compute_cross_shard_root(
         .iter()
         .map(|s| shard_leaf_bytes(&s.shard_id, &s.sth))
         .collect();
-    let root = merkle::mth(&leaves);
+    let root = merkle::mth(TREE_ALGO, &leaves);
     CrossShardRoot {
         root_hash: hex::encode(root),
         shard_count: ordered.len(),
@@ -169,7 +173,7 @@ pub fn inclusion_proof_for_shard(
         .iter()
         .map(|s| shard_leaf_bytes(&s.shard_id, &s.sth))
         .collect();
-    Some(merkle::inclusion_proof(index, &leaves))
+    Some(merkle::inclusion_proof(TREE_ALGO, index, &leaves))
 }
 
 /// Verifies a proof produced by [`inclusion_proof_for_shard`] against a
@@ -195,7 +199,7 @@ pub fn verify_shard_inclusion(
         .try_into()
         .map_err(|_| "root_hash must be exactly 32 bytes".to_string())?;
     Ok(merkle::verify_inclusion_proof(
-        &leaf, leaf_index, tree_size, proof, &root,
+        TREE_ALGO, &leaf, leaf_index, tree_size, proof, &root,
     ))
 }
 
@@ -268,7 +272,7 @@ pub fn compute_shard_family_head(
         hasher.update(owner.as_bytes());
         hasher.finalize().into()
     } else {
-        merkle::mth(&family_leaves(owner, &members))
+        merkle::mth(TREE_ALGO, &family_leaves(owner, &members))
     };
     let present: std::collections::BTreeSet<&str> =
         members.iter().map(|m| m.shard_id.as_str()).collect();
@@ -307,7 +311,7 @@ pub fn family_inclusion_proof(
     let leaves = family_leaves(owner, &members);
     let tree_size = leaves.len();
     Some(
-        merkle::inclusion_proof(leaf_index, &leaves).map(|path| FamilyInclusionProof {
+        merkle::inclusion_proof(TREE_ALGO, leaf_index, &leaves).map(|path| FamilyInclusionProof {
             leaf_index,
             tree_size,
             path,
@@ -332,6 +336,7 @@ pub fn verify_family_inclusion(
         .try_into()
         .map_err(|_| "root_hash must be exactly 32 bytes".to_string())?;
     Ok(merkle::verify_inclusion_proof(
+        TREE_ALGO,
         &family_leaf_bytes(owner, shard_id, sth),
         proof.leaf_index,
         proof.tree_size,
@@ -352,6 +357,9 @@ mod tests {
             signing_key_id: "k1".to_string(),
             signature: "deadbeef".to_string(),
             created_at: time::OffsetDateTime::from_unix_timestamp(0).unwrap(),
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         }
     }
 
@@ -591,7 +599,7 @@ mod tests {
     fn an_empty_family_does_not_equal_the_network_empty_root() {
         let empty = compute_shard_family_head("game:x", &no_known(), Vec::new());
         assert_eq!(empty.shard_count, 0);
-        assert_ne!(empty.root_hash, hex::encode(merkle::empty_root()));
+        assert_ne!(empty.root_hash, hex::encode(merkle::empty_root(TREE_ALGO)));
         let other = compute_shard_family_head("game:y", &no_known(), Vec::new());
         assert_ne!(empty.root_hash, other.root_hash);
     }

@@ -79,17 +79,9 @@ impl Respond for Cosigning {
             self.key.clone()
         };
         let observed = OffsetDateTime::now_utc() + self.opts.observed_offset.unwrap_or_default();
-        let cosig = sign_witness_cosignature(
-            &signer,
-            &self.id,
-            sth.tree_size,
-            &root,
-            &sth.network_id,
-            sth.created_at,
-            observed,
-        );
+        let cosig = sign_witness_cosignature(&signer, &self.id, &sth, observed).unwrap();
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": root,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -295,12 +287,10 @@ async fn a_stale_stored_cosignature_is_refreshed() {
     let old = sign_witness_cosignature(
         &w.key,
         &w.id,
-        sth.tree_size,
-        &sth.root_hash,
-        &sth.network_id,
-        sth.created_at,
+        &sth,
         OffsetDateTime::now_utc() - time::Duration::seconds(300),
-    );
+    )
+    .unwrap();
     a.chain
         .store_witness_cosignature(&a.shard, &old)
         .await
@@ -559,15 +549,15 @@ async fn a_row_the_store_leaves_untouched_is_not_counted_as_written() {
     let sth = a.commit_and_publish().await;
     let w = witness(None).await;
     // Same root, different author timestamp, older: the store accepts the call but keeps this row.
+    let mut older = sth.clone();
+    older.created_at -= time::Duration::seconds(1);
     let other = sign_witness_cosignature(
         &w.key,
         &w.id,
-        sth.tree_size,
-        &sth.root_hash,
-        &sth.network_id,
-        sth.created_at - time::Duration::seconds(1),
+        &older,
         OffsetDateTime::now_utc() - time::Duration::seconds(300),
-    );
+    )
+    .unwrap();
     a.chain
         .store_witness_cosignature(&a.shard, &other)
         .await

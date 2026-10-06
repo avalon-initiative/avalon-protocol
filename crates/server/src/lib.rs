@@ -1657,6 +1657,9 @@ mod node_auth_wiring {
                 signing_key_id: "key".into(),
                 created_at: now,
                 observed_at: now,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         )
         .await

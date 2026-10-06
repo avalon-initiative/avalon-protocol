@@ -59,7 +59,11 @@ async fn isolated_network_pool(schema: &str) -> PgPool {
             network_id TEXT NOT NULL,
             signing_key_id TEXT NOT NULL,
             signature TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
+            created_at TIMESTAMPTZ NOT NULL,
+            layout_version SMALLINT NOT NULL,
+            rules_version INTEGER NOT NULL,
+            hash_algo SMALLINT NOT NULL,
+            extensions BYTEA NOT NULL
         )"
     )))
     .execute(&pool)
@@ -87,7 +91,11 @@ async fn isolated_network_pool(schema: &str) -> PgPool {
             source_signing_key_id TEXT,
             source_signature TEXT,
             source_sth_created_at TIMESTAMPTZ,
-            migrated_at TIMESTAMPTZ NOT NULL
+            migrated_at TIMESTAMPTZ NOT NULL,
+            source_layout_version SMALLINT,
+            source_rules_version INTEGER,
+            source_hash_algo SMALLINT,
+            source_extensions BYTEA
         )"
     )))
     .execute(&pool)
@@ -112,8 +120,9 @@ async fn isolated_network_pool(schema: &str) -> PgPool {
 
 async fn insert_sth(pool: &PgPool, tree_size: i64, network_id: &str) {
     sqlx::query(
-        "INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at, \
+         layout_version, rules_version, hash_algo, extensions) \
+         VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 1, '\\x0000'::bytea)",
     )
     .bind(tree_size)
     .bind(format!("root-hash-{tree_size}"))

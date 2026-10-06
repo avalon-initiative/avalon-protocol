@@ -102,6 +102,8 @@ pub enum Rejection {
     SourceCapReached,
     /// The head's network id is not this node's network.
     WrongNetwork,
+    /// The head needs a layout, rules version, hash algorithm or extension this node lacks.
+    NeedsNewerVersion(avalon_protocol::signing_bytes::SigningBytesError),
     /// The database failed; the shard was neither pinned nor rejected on merit.
     Storage(String),
 }
@@ -351,7 +353,8 @@ mod tests {
             &"ab".repeat(32),
             "net",
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         CosignedTreeHead {
             sth,
             cosignatures: Vec::new(),

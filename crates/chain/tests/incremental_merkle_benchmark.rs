@@ -96,8 +96,12 @@ async fn avg_old_style_inclusion_proof_micros(
     let samples = sample_leaf_indices(tree_size);
     let start = Instant::now();
     for leaf_index in &samples {
-        let _proof = merkle::inclusion_proof_of_hex_hashes(*leaf_index as usize, &leaves)
-            .expect("proof should succeed");
+        let _proof = merkle::inclusion_proof_of_hex_hashes(
+            avalon_chain::ledger_hash_algo(),
+            *leaf_index as usize,
+            &leaves,
+        )
+        .expect("proof should succeed");
     }
     start.elapsed().as_micros() as f64 / samples.len() as f64
 }

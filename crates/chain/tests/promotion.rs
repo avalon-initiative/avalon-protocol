@@ -153,6 +153,11 @@ async fn mirror_authority(authority: &PostgresSettlementProvider, mirror_pool: &
                 entry_hash: e.entry_hash,
                 batch_id: e.batch_id,
                 verified_tree_size: e.seq,
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
             },
         )
         .await
@@ -272,6 +277,7 @@ async fn promoted_target_reproduces_the_authority_and_can_extend_it() {
         .await
         .unwrap();
     assert!(merkle::verify_consistency_proof(
+        avalon_chain::ledger_hash_algo(),
         old_size as usize,
         new_size as usize,
         &proof,

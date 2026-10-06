@@ -54,6 +54,7 @@ use uuid::Uuid;
 use crate::cosign_gather;
 use crate::cosign_verify::WitnessCosignatureDto;
 use crate::cross_shard::resolve_shard_verify_keys_from_db;
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 
 /// Entries fetched per `subject` lookup — generous enough for any real
 /// identity's signing-key history, capped so a malicious/misbehaving
@@ -81,6 +82,10 @@ pub enum CrossShardFetchError {
     EntryHashMismatch,
     #[error("inclusion proof did not verify against the trusted signed tree head's root")]
     InclusionProofVerificationFailed,
+    /// Nothing was verified: the head or entry needs a layout, rules version, hash algorithm or
+    /// extension this node does not have.
+    #[error("needs a newer version: {0}")]
+    NeedsNewerVersion(#[from] avalon_protocol::signing_bytes::SigningBytesError),
 }
 
 /// A ledger entry whose content has been independently verified against a
@@ -106,34 +111,38 @@ struct SignedTreeHeadDto {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
     /// Additive (`#[serde(default)]`): an older peer's response without
     /// this field still decodes as an empty cosignature list.
     #[serde(default)]
     cosignatures: Vec<WitnessCosignatureDto>,
 }
 
-impl From<SignedTreeHeadDto> for SignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
-        Self {
+impl TryFrom<SignedTreeHeadDto> for SignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
+        Ok(SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
             network_id: dto.network_id,
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
-        }
+            envelope: dto.envelope.to_envelope(tags::SETTLEMENT_STH)?,
+        })
     }
 }
 
-impl From<SignedTreeHeadDto> for CosignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
+impl TryFrom<SignedTreeHeadDto> for CosignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
         let cosignature_dtos = dto.cosignatures.clone();
-        let sth: SignedTreeHead = dto.into();
-        let cosignatures = cosignature_dtos
-            .iter()
-            .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+        let sth = SignedTreeHead::try_from(dto)?;
+        let cosignatures = crate::cosign_verify::readable_cosignatures(&cosignature_dtos, &sth);
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -151,6 +160,8 @@ struct LedgerEntryDto {
     event_timestamp: OffsetDateTime,
     prev_hash: String,
     entry_hash: String,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
 }
 
 #[derive(Deserialize)]
@@ -193,7 +204,7 @@ async fn fetch_verified_sth(
         .json()
         .await
         .map_err(|e| CrossShardFetchError::SthFetchFailed(base_url.to_string(), e.to_string()))?;
-    let head: CosignedTreeHead = sth_dto.into();
+    let head = CosignedTreeHead::try_from(sth_dto)?;
 
     if head.sth.network_id != this_network_id {
         return Err(CrossShardFetchError::NetworkMismatch);
@@ -358,6 +369,7 @@ async fn verify_one_entry(
 
     let payload_hash =
         payload_hash_hex(&payload).map_err(|_| CrossShardFetchError::EntryHashMismatch)?;
+    let entry_envelope = entry.envelope.to_envelope(tags::LEDGER_ENTRY)?;
     let recomputed = hash_entry(
         &sth.network_id,
         shard_id,
@@ -371,6 +383,7 @@ async fn verify_one_entry(
             payload_hash: &payload_hash,
             timestamp: entry.event_timestamp,
             version: entry.version,
+            envelope: &entry_envelope,
         },
     )
     .map_err(|_| CrossShardFetchError::EntryHashMismatch)?;
@@ -397,6 +410,7 @@ async fn verify_one_entry(
         .collect::<Result<_, _>>()?;
 
     if !merkle::verify_inclusion_proof(
+        sth.envelope.hash_algo,
         &leaf_bytes,
         proof_dto.leaf_index as usize,
         sth.tree_size as usize,
@@ -415,4 +429,21 @@ async fn verify_one_entry(
         event_timestamp: entry.event_timestamp,
         version: entry.version,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_head_with_one_unreadable_cosignature_survives_and_a_pre_envelope_body_is_refused() {
+        use crate::cosign_verify::test_support::*;
+        let served = served_with_one_unreadable_cosignature();
+        let dto: SignedTreeHeadDto = serde_json::from_value(served.body.clone()).unwrap();
+        let head = CosignedTreeHead::try_from(dto).unwrap();
+        assert_head_survives(&head, &served);
+        assert!(
+            serde_json::from_value::<SignedTreeHeadDto>(without_envelope(served.body)).is_err()
+        );
+    }
 }

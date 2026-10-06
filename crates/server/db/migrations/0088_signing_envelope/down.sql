@@ -1,0 +1,32 @@
+ALTER TABLE ledger_entries
+    DROP COLUMN layout_version,
+    DROP COLUMN rules_version,
+    DROP COLUMN hash_algo,
+    DROP COLUMN extensions;
+ALTER TABLE mirrored_entries
+    DROP COLUMN layout_version,
+    DROP COLUMN rules_version,
+    DROP COLUMN hash_algo,
+    DROP COLUMN extensions;
+ALTER TABLE signed_tree_heads
+    DROP COLUMN layout_version,
+    DROP COLUMN rules_version,
+    DROP COLUMN hash_algo,
+    DROP COLUMN extensions;
+ALTER TABLE observed_sths
+    DROP COLUMN layout_version,
+    DROP COLUMN rules_version,
+    DROP COLUMN hash_algo,
+    DROP COLUMN extensions;
+ALTER TABLE witness_cosignatures
+    DROP COLUMN layout_version,
+    DROP COLUMN rules_version,
+    DROP COLUMN hash_algo,
+    DROP COLUMN extensions;
+ALTER TABLE equivocation_evidence DROP COLUMN envelope_a, DROP COLUMN envelope_b;
+ALTER TABLE network_migration_checkpoints
+    DROP CONSTRAINT network_migration_checkpoints_source_envelope,
+    DROP COLUMN source_layout_version,
+    DROP COLUMN source_rules_version,
+    DROP COLUMN source_hash_algo,
+    DROP COLUMN source_extensions;

@@ -30,8 +30,15 @@ use avalon_protocol::witness::WitnessCosignature;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
+use crate::envelope_row::EnvelopeRow;
+use avalon_protocol::signing_bytes::{tags, Envelope, EnvelopeWire};
+
 use crate::sth::SignedTreeHead;
 use crate::{hash_entry, payload_matches, EntryContent, SettlementError};
+
+fn ledger_tree_algo() -> avalon_protocol::signing_bytes::HashAlgo {
+    Envelope::current(tags::SETTLEMENT_STH).hash_algo
+}
 
 /// `source_url` used for this node's own signed history
 /// (`signed_tree_heads`) when it's folded into an equivocation check
@@ -70,6 +77,8 @@ pub struct ObservedSth {
     /// the pinned network key would fail.
     pub created_at: OffsetDateTime,
     pub observed_at: OffsetDateTime,
+    /// The envelope the signature covers, recorded with the observation.
+    pub envelope: Envelope,
 }
 
 impl ObservedSth {
@@ -94,6 +103,7 @@ impl ObservedSth {
             signing_key_id: sth.signing_key_id.clone(),
             created_at: sth.created_at,
             observed_at,
+            envelope: sth.envelope.clone(),
         }
     }
 }
@@ -113,6 +123,7 @@ impl From<ObservedSth> for SignedTreeHead {
             signing_key_id: obs.signing_key_id,
             signature: obs.signature,
             created_at: obs.created_at,
+            envelope: obs.envelope,
         }
     }
 }
@@ -186,10 +197,12 @@ pub fn detect_equivocation(
 /// genuinely new observation (worth running equivocation detection over);
 /// `false` for a repeat.
 pub async fn insert_observation(pool: &PgPool, obs: &ObservedSth) -> Result<bool, SettlementError> {
+    let envelope = EnvelopeRow::from_envelope(&obs.envelope)?;
     let result = sqlx::query(
         r#"
-        INSERT INTO observed_sths (source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO observed_sths (source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at,
+                                  layout_version, rules_version, hash_algo, extensions)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (source_url, network_id, shard_id, tree_size) DO NOTHING
         "#,
     )
@@ -202,6 +215,10 @@ pub async fn insert_observation(pool: &PgPool, obs: &ObservedSth) -> Result<bool
     .bind(&obs.signing_key_id)
     .bind(obs.created_at)
     .bind(obs.observed_at)
+    .bind(envelope.layout_version)
+    .bind(envelope.rules_version)
+    .bind(envelope.hash_algo)
+    .bind(&envelope.extensions)
     .execute(pool)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -223,7 +240,8 @@ pub async fn observations_at(
 ) -> Result<Vec<ObservedSth>, SettlementError> {
     let rows = sqlx::query(
         r#"
-        SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at
+        SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at,
+               layout_version, rules_version, hash_algo, extensions
         FROM observed_sths
         WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3
         "#,
@@ -250,6 +268,7 @@ fn observed_sth_from_row(row: sqlx::postgres::PgRow) -> Result<ObservedSth, Sett
         signing_key_id: row.try_get("signing_key_id").map_err(get)?,
         created_at: row.try_get("created_at").map_err(get)?,
         observed_at: row.try_get("observed_at").map_err(get)?,
+        envelope: EnvelopeRow::read(&row, "")?.to_envelope(tags::SETTLEMENT_STH)?,
     })
 }
 
@@ -272,7 +291,8 @@ pub async fn observed_sth_matching_root(
 ) -> Result<Option<ObservedSth>, SettlementError> {
     let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, \
-         created_at, observed_at FROM observed_sths WHERE network_id = ",
+         created_at, observed_at, layout_version, rules_version, hash_algo, extensions \
+         FROM observed_sths WHERE network_id = ",
     );
     builder.push_bind(network_id);
     builder.push(" AND shard_id = ").push_bind(shard_id);
@@ -558,7 +578,7 @@ pub struct WitnessEquivocationEvidence {
 /// store — just enough per cosignature to re-derive
 /// `avalon_protocol::witness::witness_signing_message` and re-verify: the
 /// head-level fields (`tree_size`/`root_hash`/`network_id`/
-/// `author_created_at`) are already columns of the same row, stored once
+/// `author_created_at`/`signing_key_id`/`signature`) are already columns of the same row, stored once
 /// rather than repeated per witness.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CosignatureRecord {
@@ -566,6 +586,19 @@ struct CosignatureRecord {
     #[serde(with = "time::serde::rfc3339")]
     observed_at: OffsetDateTime,
     signature: String,
+    envelope: EnvelopeWire,
+}
+
+fn envelope_json(envelope: &Envelope) -> Result<serde_json::Value, SettlementError> {
+    serde_json::to_value(EnvelopeWire::from(envelope))
+        .map_err(|e| SettlementError::Storage(e.to_string()))
+}
+
+fn envelope_from_json(value: serde_json::Value) -> Result<Envelope, SettlementError> {
+    serde_json::from_value::<EnvelopeWire>(value)
+        .map_err(|e| SettlementError::Storage(format!("invalid stored envelope JSON: {e}")))?
+        .to_envelope(tags::SETTLEMENT_STH)
+        .map_err(SettlementError::from_layout)
 }
 
 fn cosignatures_to_json(cosigs: &[WitnessCosignature]) -> serde_json::Value {
@@ -575,6 +608,7 @@ fn cosignatures_to_json(cosigs: &[WitnessCosignature]) -> serde_json::Value {
             witness_key_id: c.witness_key_id.clone(),
             observed_at: c.observed_at,
             signature: c.signature.clone(),
+            envelope: EnvelopeWire::from(&c.envelope),
         })
         .collect();
     serde_json::to_value(records).unwrap_or(serde_json::Value::Array(Vec::new()))
@@ -586,21 +620,31 @@ fn cosignatures_from_json(
     root_hash: &str,
     network_id: &str,
     author_created_at: OffsetDateTime,
+    author_key_id: &str,
+    author_signature: &str,
 ) -> Result<Vec<WitnessCosignature>, SettlementError> {
     let records: Vec<CosignatureRecord> = serde_json::from_value(value)
         .map_err(|e| SettlementError::Storage(format!("invalid stored cosignature JSON: {e}")))?;
-    Ok(records
+    records
         .into_iter()
-        .map(|r| WitnessCosignature {
-            tree_size,
-            root_hash: root_hash.to_string(),
-            network_id: network_id.to_string(),
-            author_created_at,
-            witness_key_id: r.witness_key_id,
-            observed_at: r.observed_at,
-            signature: r.signature,
+        .map(|r| {
+            Ok(WitnessCosignature {
+                tree_size,
+                root_hash: root_hash.to_string(),
+                network_id: network_id.to_string(),
+                author_created_at,
+                author_key_id: author_key_id.to_string(),
+                author_signature: author_signature.to_string(),
+                witness_key_id: r.witness_key_id,
+                observed_at: r.observed_at,
+                signature: r.signature,
+                envelope: r
+                    .envelope
+                    .to_envelope(tags::WITNESS_COSIGN)
+                    .map_err(SettlementError::from_layout)?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Records `evidence`'s two conflicting heads durably — idempotent on a
@@ -642,8 +686,8 @@ pub async fn record_witness_equivocation_evidence(
             (network_id, shard_id, tree_size,
              root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
              root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
-             equivocating_witness_key_ids, evidence_kind)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+             equivocating_witness_key_ids, evidence_kind, envelope_a, envelope_b)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         ON CONFLICT (network_id, shard_id, tree_size, root_hash_a, root_hash_b) DO NOTHING
         "#,
     )
@@ -662,6 +706,8 @@ pub async fn record_witness_equivocation_evidence(
     .bind(cosignatures_to_json(&second.cosignatures))
     .bind(&evidence.equivocating_witness_key_ids)
     .bind(evidence.kind.as_str())
+    .bind(envelope_json(&first.sth.envelope)?)
+    .bind(envelope_json(&second.sth.envelope)?)
     .execute(pool)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -681,7 +727,7 @@ pub async fn witness_equivocation_evidence_for(
         SELECT network_id, shard_id, tree_size,
                root_hash_a, signing_key_id_a, signature_a, author_created_at_a, cosignatures_a,
                root_hash_b, signing_key_id_b, signature_b, author_created_at_b, cosignatures_b,
-               equivocating_witness_key_ids, evidence_kind, detected_at
+               equivocating_witness_key_ids, evidence_kind, detected_at, envelope_a, envelope_b
         FROM equivocation_evidence
         WHERE network_id = $1 AND shard_id = $2
         ORDER BY detected_at DESC
@@ -726,9 +772,10 @@ pub async fn witness_equivocation_evidence_for(
                 tree_size,
                 root_hash: root_hash_a.clone(),
                 network_id: network_id.clone(),
-                signing_key_id: signing_key_id_a,
-                signature: signature_a,
+                signing_key_id: signing_key_id_a.clone(),
+                signature: signature_a.clone(),
                 created_at: author_created_at_a,
+                envelope: envelope_from_json(row.try_get("envelope_a").map_err(get)?)?,
             },
             cosignatures: cosignatures_from_json(
                 cosignatures_a_json,
@@ -736,6 +783,8 @@ pub async fn witness_equivocation_evidence_for(
                 &root_hash_a,
                 &network_id,
                 author_created_at_a,
+                &signing_key_id_a,
+                &signature_a,
             )?,
         };
         let head_b = CosignedTreeHead {
@@ -743,9 +792,10 @@ pub async fn witness_equivocation_evidence_for(
                 tree_size,
                 root_hash: root_hash_b.clone(),
                 network_id: network_id.clone(),
-                signing_key_id: signing_key_id_b,
-                signature: signature_b,
+                signing_key_id: signing_key_id_b.clone(),
+                signature: signature_b.clone(),
                 created_at: author_created_at_b,
+                envelope: envelope_from_json(row.try_get("envelope_b").map_err(get)?)?,
             },
             cosignatures: cosignatures_from_json(
                 cosignatures_b_json,
@@ -753,6 +803,8 @@ pub async fn witness_equivocation_evidence_for(
                 &root_hash_b,
                 &network_id,
                 author_created_at_b,
+                &signing_key_id_b,
+                &signature_b,
             )?,
         };
 
@@ -822,16 +874,25 @@ pub struct MirroredEntry {
     pub entry_hash: String,
     pub batch_id: uuid::Uuid,
     pub verified_tree_size: i64,
+    /// The layout and rules the hash was made under, exactly as received. Unchecked until
+    /// [`MirroredEntry::recomputed_hash`] or the insert, which refuse anything this node cannot read.
+    pub envelope: EnvelopeWire,
 }
 
 impl MirroredEntry {
-    /// The entry hash this content produces under `network_id`, `shard_id` and `prev_hash`, or
-    /// `None` when `payload_hash` is malformed or a surviving payload does not hash to it.
-    pub fn recomputed_hash(&self) -> Option<String> {
+    /// The entry hash this content produces under `network_id`, `shard_id` and `prev_hash`.
+    /// `Ok(None)` when `payload_hash` is malformed or a surviving payload does not hash to it;
+    /// the typed "needs a newer version" error when the envelope is above this node's ranges, in
+    /// which case nothing is verified.
+    pub fn recomputed_hash(&self) -> Result<Option<String>, SettlementError> {
+        let envelope = self
+            .envelope
+            .to_envelope(tags::LEDGER_ENTRY)
+            .map_err(SettlementError::from_layout)?;
         if !payload_matches(self.payload.as_ref(), &self.payload_hash) {
-            return None;
+            return Ok(None);
         }
-        hash_entry(
+        Ok(hash_entry(
             &self.network_id,
             &self.shard_id,
             &self.prev_hash,
@@ -844,9 +905,10 @@ impl MirroredEntry {
                 payload_hash: &self.payload_hash,
                 timestamp: self.event_timestamp,
                 version: self.version,
+                envelope: &envelope,
             },
         )
-        .ok()
+        .ok())
     }
 }
 
@@ -887,15 +949,17 @@ where
     if entry.payload.is_none() {
         return Err(SettlementError::MirroredPayloadUnverifiable { seq: entry.seq });
     }
-    match entry.recomputed_hash() {
+    match entry.recomputed_hash()? {
         Some(hash) if hash == entry.entry_hash => {}
         _ => return Err(SettlementError::MirroredContentMismatch { seq: entry.seq }),
     }
+    let envelope = EnvelopeRow::from_wire(&entry.envelope)?;
     let result = sqlx::query(
         r#"
         INSERT INTO mirrored_entries
-            (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size,
+             layout_version, rules_version, hash_algo, extensions)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (network_id, shard_id, seq) DO NOTHING
         "#,
     )
@@ -915,6 +979,10 @@ where
     .bind(&entry.entry_hash)
     .bind(entry.batch_id)
     .bind(entry.verified_tree_size)
+    .bind(envelope.layout_version)
+    .bind(envelope.rules_version)
+    .bind(envelope.hash_algo)
+    .bind(&envelope.extensions)
     .execute(executor)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -1036,6 +1104,7 @@ pub fn mirrored_entry_from_row(
         entry_hash: row.try_get("entry_hash").map_err(get)?,
         batch_id: row.try_get("batch_id").map_err(get)?,
         verified_tree_size: row.try_get("verified_tree_size").map_err(get)?,
+        envelope: EnvelopeRow::read(&row, "")?.to_wire(),
     })
 }
 
@@ -1060,7 +1129,8 @@ pub async fn mirrored_entries_since(
 ) -> Result<Vec<MirroredEntry>, SettlementError> {
     let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, \
-         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
+         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size, \
+         layout_version, rules_version, hash_algo, extensions \
          FROM mirrored_entries WHERE network_id = ",
     );
     builder.push_bind(network_id);
@@ -1096,7 +1166,8 @@ pub async fn mirrored_entries_by_kinds_and_slug(
     let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_string()).collect();
     let rows = sqlx::query(
         "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, \
-         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
+         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size, \
+         layout_version, rules_version, hash_algo, extensions \
          FROM mirrored_entries \
          WHERE network_id = $1 AND shard_id = $2 AND kind = ANY($3) AND payload->>'slug' = $4 \
          ORDER BY seq ASC",
@@ -1218,7 +1289,8 @@ pub async fn latest_observed_sth(
 ) -> Result<Option<ObservedSth>, SettlementError> {
     let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, \
-         created_at, observed_at FROM observed_sths WHERE network_id = ",
+         created_at, observed_at, layout_version, rules_version, hash_algo, extensions \
+         FROM observed_sths WHERE network_id = ",
     );
     builder.push_bind(network_id);
     builder.push(" AND shard_id = ").push_bind(shard_id);
@@ -1242,7 +1314,8 @@ pub async fn latest_observed_sths_for_shard(
 ) -> Result<Vec<ObservedSth>, SettlementError> {
     let rows = sqlx::query(
         "SELECT DISTINCT ON (network_id) source_url, network_id, shard_id, tree_size, root_hash, \
-         signature, signing_key_id, created_at, observed_at FROM observed_sths \
+         signature, signing_key_id, created_at, observed_at, layout_version, rules_version, \
+         hash_algo, extensions FROM observed_sths \
          WHERE shard_id = $1 ORDER BY network_id, tree_size DESC, observed_at DESC",
     )
     .bind(shard_id)
@@ -1419,7 +1492,7 @@ pub async fn check_convergence(
     let recomputed_root = if hashes.is_empty() {
         None
     } else {
-        let root = crate::merkle::mth_of_hex_hashes(&hashes)
+        let root = crate::merkle::mth_of_hex_hashes(ledger_tree_algo(), &hashes)
             .map_err(|e| SettlementError::Storage(format!("invalid mirrored entry hash: {e}")))?;
         Some(hex::encode(root))
     };
@@ -1603,6 +1676,9 @@ mod tests {
             signing_key_id: "test-key".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         }
     }
 

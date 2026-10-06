@@ -8,7 +8,8 @@
 //!
 //! Design/tradeoff notes live in `avalon-docs/architecture/settlement.md`, not here.
 
-use crate::merkle::{leaf_hash, node_hash, split_point};
+use crate::merkle::{empty_root, leaf_hash, node_hash, split_point};
+use avalon_protocol::signing_bytes::HashAlgo;
 use std::collections::HashMap;
 
 /// An incrementally-built RFC 6962 tree: every "perfect" (power-of-two,
@@ -17,8 +18,9 @@ use std::collections::HashMap;
 /// index)` covers leaves `[index * 2^level, (index+1) * 2^level)`. Any
 /// root or proof for any tree size up to the current one is reconstructed
 /// from these in O(log n), never by rehashing raw leaves.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct IncrementalMerkleTree {
+    algo: HashAlgo,
     /// `frontier[level]` holds a completed subtree hash still awaiting its
     /// pair at that level (RFC 6962's append-only "carry" — see
     /// `docs/projects/backend-server/architecture/settlement.md`).
@@ -28,8 +30,18 @@ pub struct IncrementalMerkleTree {
 }
 
 impl IncrementalMerkleTree {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(algo: HashAlgo) -> Self {
+        Self {
+            algo,
+            frontier: Vec::new(),
+            nodes: HashMap::new(),
+            size: 0,
+        }
+    }
+
+    /// The hash algorithm the tree is built under.
+    pub fn algo(&self) -> HashAlgo {
+        self.algo
     }
 
     pub fn len(&self) -> u64 {
@@ -43,8 +55,8 @@ impl IncrementalMerkleTree {
     /// Rebuilds a tree from a full ordered leaf-input list — the fallback
     /// path when an in-memory tree can't be trusted to be caught up (mirrors
     /// `PostgresSettlementProvider::leaf_cache`'s own fallback posture).
-    pub fn from_leaves<T: AsRef<[u8]>>(leaves: &[T]) -> Self {
-        let mut tree = Self::new();
+    pub fn from_leaves<T: AsRef<[u8]>>(algo: HashAlgo, leaves: &[T]) -> Self {
+        let mut tree = Self::new(algo);
         for leaf in leaves {
             tree.append(leaf.as_ref());
         }
@@ -55,11 +67,11 @@ impl IncrementalMerkleTree {
     pub fn append(&mut self, leaf_data: &[u8]) {
         let start_size = self.size;
         let mut level: u32 = 0;
-        let mut h = leaf_hash(leaf_data);
+        let mut h = leaf_hash(self.algo, leaf_data);
         self.nodes.insert((0, start_size), h);
         while (level as usize) < self.frontier.len() && self.frontier[level as usize].is_some() {
             let left = self.frontier[level as usize].take().unwrap();
-            h = node_hash(&left, &h);
+            h = node_hash(self.algo, &left, &h);
             level += 1;
             self.nodes.insert((level, start_size >> level), h);
         }
@@ -89,7 +101,7 @@ impl IncrementalMerkleTree {
         let k = split_point(size as usize) as u64;
         let left = self.range_hash(start, k);
         let right = self.range_hash(start + k, size - k);
-        node_hash(&left, &right)
+        node_hash(self.algo, &left, &right)
     }
 
     /// `MTH` at the given `tree_size` — `None` if `tree_size` exceeds how
@@ -99,7 +111,7 @@ impl IncrementalMerkleTree {
             return None;
         }
         if tree_size == 0 {
-            return Some(crate::merkle::empty_root());
+            return Some(empty_root(self.algo));
         }
         Some(self.range_hash(0, tree_size))
     }
@@ -197,12 +209,12 @@ mod tests {
     fn matches_from_scratch_merkle_exhaustively() {
         let max = 40usize;
         let all_leaves = leaves(max);
-        let mut tree = IncrementalMerkleTree::new();
+        let mut tree = IncrementalMerkleTree::new(HashAlgo::Sha256);
 
         for size in 1..=max {
             tree.append(&all_leaves[size - 1]);
 
-            let want_root = merkle::mth(&all_leaves[..size]);
+            let want_root = merkle::mth(HashAlgo::Sha256, &all_leaves[..size]);
             assert_eq!(
                 tree.root(size as u64).unwrap(),
                 want_root,
@@ -210,7 +222,8 @@ mod tests {
             );
 
             for first in 0..=size {
-                let want = merkle::consistency_proof(first, &all_leaves[..size]).unwrap();
+                let want = merkle::consistency_proof(HashAlgo::Sha256, first, &all_leaves[..size])
+                    .unwrap();
                 let got = tree.consistency_proof(first as u64, size as u64).unwrap();
                 assert_eq!(
                     got, want,
@@ -219,7 +232,8 @@ mod tests {
             }
 
             for index in 0..size {
-                let want = merkle::inclusion_proof(index, &all_leaves[..size]).unwrap();
+                let want =
+                    merkle::inclusion_proof(HashAlgo::Sha256, index, &all_leaves[..size]).unwrap();
                 let got = tree.inclusion_proof(index as u64, size as u64).unwrap();
                 assert_eq!(
                     got, want,
@@ -234,11 +248,11 @@ mod tests {
     #[test]
     fn from_leaves_matches_incremental_append() {
         let all_leaves = leaves(15);
-        let mut incremental = IncrementalMerkleTree::new();
+        let mut incremental = IncrementalMerkleTree::new(HashAlgo::Sha256);
         for leaf in &all_leaves {
             incremental.append(leaf);
         }
-        let bulk = IncrementalMerkleTree::from_leaves(&all_leaves);
+        let bulk = IncrementalMerkleTree::from_leaves(HashAlgo::Sha256, &all_leaves);
         for size in 1..=all_leaves.len() as u64 {
             assert_eq!(incremental.root(size), bulk.root(size));
         }
@@ -246,14 +260,14 @@ mod tests {
 
     #[test]
     fn root_of_empty_tree_is_empty_root() {
-        let tree = IncrementalMerkleTree::new();
-        assert_eq!(tree.root(0).unwrap(), merkle::empty_root());
+        let tree = IncrementalMerkleTree::new(HashAlgo::Sha256);
+        assert_eq!(tree.root(0).unwrap(), merkle::empty_root(HashAlgo::Sha256));
         assert!(tree.root(1).is_none());
     }
 
     #[test]
     fn inclusion_proof_rejects_out_of_range_index() {
-        let tree = IncrementalMerkleTree::from_leaves(&leaves(5));
+        let tree = IncrementalMerkleTree::from_leaves(HashAlgo::Sha256, &leaves(5));
         assert!(tree.inclusion_proof(5, 5).is_err());
         assert!(tree.inclusion_proof(0, 6).is_err());
     }
@@ -261,12 +275,13 @@ mod tests {
     #[test]
     fn proofs_still_verify_against_root_via_merkle_verifiers() {
         let all_leaves = leaves(11);
-        let tree = IncrementalMerkleTree::from_leaves(&all_leaves);
+        let tree = IncrementalMerkleTree::from_leaves(HashAlgo::Sha256, &all_leaves);
         for size in 1..=all_leaves.len() as u64 {
             let root = tree.root(size).unwrap();
             for index in 0..size {
                 let proof = tree.inclusion_proof(index, size).unwrap();
                 assert!(merkle::verify_inclusion_proof(
+                    HashAlgo::Sha256,
                     &all_leaves[index as usize],
                     index as usize,
                     size as usize,

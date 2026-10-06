@@ -101,6 +101,7 @@ use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::known_list::KnownListHandle;
 use crate::nodes::HeadGossipTracker;
 use crate::witness_cosign::{self, WitnessCosignConfig};
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
@@ -376,7 +377,19 @@ async fn discover_and_verify_shard_peers(
 
         match fetch_source_head(client, &url, &shard_id, SELF_CERTIFYING_FETCH_DEADLINE).await {
             Ok((dto, _)) => {
-                let head: CosignedTreeHead = dto.into();
+                let head = match CosignedTreeHead::try_from(dto) {
+                    Ok(head) => head,
+                    Err(err) => {
+                        tracing::warn!(
+                            shard_id,
+                            url = %url,
+                            error = %err,
+                            "mirror-watcher: discovered shard's STH needs a newer version — not \
+                             auto-mirroring",
+                        );
+                        continue;
+                    }
+                };
                 let now = OffsetDateTime::now_utc();
                 match cosign_verify::verify_cosigned_against_any_key(
                     db_keys.iter().copied(),
@@ -522,7 +535,7 @@ async fn verify_fetched_self_certifying_head(
         verify_self_certifying_shard(pool, network_id, shard_id, source, pinned, &dto, bounds)
             .await
             .map_err(MirrorWatcherError::SelfCertifyingRejected)?;
-    let head: CosignedTreeHead = dto.into();
+    let head = CosignedTreeHead::try_from(dto)?;
     let now = OffsetDateTime::now_utc();
     let matched = cosign_verify::verify_cosigned_against_any_key([key], &head, &[], now)
         .ok_or(MirrorWatcherError::InvalidSignature)?;
@@ -574,6 +587,10 @@ async fn verify_self_certifying_shard(
         signing_key_id: dto.signing_key_id.clone(),
         signature: dto.signature.clone(),
         created_at: dto.created_at,
+        envelope: dto
+            .envelope
+            .to_envelope(tags::SETTLEMENT_STH)
+            .map_err(keys::Rejection::NeedsNewerVersion)?,
     };
     keys::check_head(
         &key,
@@ -1030,6 +1047,9 @@ pub enum MirrorWatcherError {
     AllPeersFailed,
     #[error("storage error: {0}")]
     Storage(#[from] avalon_chain::SettlementError),
+    /// Nothing was verified or stored: the head or entry needs a newer version than this node has.
+    #[error("needs a newer version: {0}")]
+    NeedsNewerVersion(#[from] SigningBytesError),
     /// Issue #368: distinguishable from [`Self::Decode`] on purpose — this
     /// peer's response decoded just fine, it's the reported version that
     /// doesn't clear this node's floor (or is empty/unparseable). Never a
@@ -1048,6 +1068,8 @@ struct SignedTreeHeadDto {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
     /// Issue #368: additive (`#[serde(default)]`) so an older peer's
     /// response without this field still decodes fine — it's reported as
     /// an empty string, which `crate::version::is_supported` always
@@ -1066,28 +1088,30 @@ struct SignedTreeHeadDto {
     signing_public_key: Option<String>,
 }
 
-impl From<SignedTreeHeadDto> for SignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
-        SignedTreeHead {
+impl TryFrom<SignedTreeHeadDto> for SignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
+        Ok(SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
             network_id: dto.network_id,
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
-        }
+            envelope: dto.envelope.to_envelope(tags::SETTLEMENT_STH)?,
+        })
     }
 }
 
-impl From<SignedTreeHeadDto> for CosignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
+impl TryFrom<SignedTreeHeadDto> for CosignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
         let cosignature_dtos = dto.cosignatures.clone();
-        let sth: SignedTreeHead = dto.into();
-        let cosignatures = cosignature_dtos
-            .iter()
-            .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+        let sth = SignedTreeHead::try_from(dto)?;
+        let cosignatures = crate::cosign_verify::readable_cosignatures(&cosignature_dtos, &sth);
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -1108,6 +1132,8 @@ struct LedgerEntryDto {
     prev_hash: String,
     entry_hash: String,
     batch_id: Uuid,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
 }
 
 #[derive(Deserialize)]
@@ -1267,7 +1293,7 @@ fn verify_head_against_anchors(
         return Err(MirrorWatcherError::UnpinnedNetwork(dto.network_id));
     };
 
-    let head: CosignedTreeHead = dto.into();
+    let head = CosignedTreeHead::try_from(dto)?;
     let now = OffsetDateTime::now_utc();
     let Some(matched_key) =
         cosign_verify::verify_cosigned_against_any_key([verify_key], &head, &[], now)
@@ -1545,7 +1571,9 @@ async fn served_head_observation(
             if (hashes.len() as i64) < count {
                 return None;
             }
-            let root = hex::encode(merkle::mth_of_hex_hashes(&hashes).ok()?);
+            let root = hex::encode(
+                merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).ok()?,
+            );
             state.served_roots.insert(
                 key,
                 crate::witness_refresh::ServedRoot {
@@ -2340,6 +2368,7 @@ async fn backfill_page(
             entry_hash: entry.entry_hash.clone(),
             batch_id: entry.batch_id,
             verified_tree_size: sth.tree_size,
+            envelope: entry.envelope.clone(),
         };
         let invalid_proof = || {
             PageError::Refused(MirrorWatcherError::InvalidInclusionProof {
@@ -2360,6 +2389,7 @@ async fn backfill_page(
         })?;
         let proof_nodes = decode_proof_nodes(&proof_dto.proof).map_err(PageError::Refused)?;
         if !merkle::verify_inclusion_proof(
+            sth.envelope.hash_algo,
             &leaf_bytes,
             leaf_index,
             sth.tree_size as usize,
@@ -2401,6 +2431,15 @@ fn verify_entry_binding(
     }
     let recomputed = entry
         .recomputed_hash()
+        .map_err(|e| match e {
+            avalon_chain::SettlementError::NeedsNewerVersion { what, required } => {
+                MirrorWatcherError::NeedsNewerVersion(SigningBytesError::NeedsNewerVersion {
+                    what,
+                    required,
+                })
+            }
+            other => MirrorWatcherError::Storage(other),
+        })?
         .ok_or(MirrorWatcherError::EntryContentMismatch { seq })?;
     if recomputed != entry.entry_hash || recomputed != proof_leaf {
         return Err(MirrorWatcherError::EntryContentMismatch { seq });
@@ -2713,7 +2752,8 @@ where
         let rows = sqlx::query(
             "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, \
                     m.issuer, m.subject, m.payload, m.payload_hash, m.event_timestamp, m.version, \
-                    m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size \
+                    m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size, \
+                    m.layout_version, m.rules_version, m.hash_algo, m.extensions \
              FROM mirrored_entries m \
              WHERE m.network_id = $1 AND m.shard_id = $2 AND m.seq > $3 \
                AND m.payload IS NOT NULL \
@@ -2920,6 +2960,18 @@ mod real_authority_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_head_with_one_unreadable_cosignature_survives_and_a_pre_envelope_body_is_refused() {
+        use crate::cosign_verify::test_support::*;
+        let served = served_with_one_unreadable_cosignature();
+        let dto: SignedTreeHeadDto = serde_json::from_value(served.body.clone()).unwrap();
+        let head = CosignedTreeHead::try_from(dto).unwrap();
+        assert_head_survives(&head, &served);
+        assert!(
+            serde_json::from_value::<SignedTreeHeadDto>(without_envelope(served.body)).is_err()
+        );
+    }
+
     fn seed_anchor(
         network_id: &str,
         seeds: &[&str],
@@ -3168,6 +3220,9 @@ mod tests {
             signing_key_id: "k".to_string(),
             signature: "sig".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         };
         let observations = vec![
             ("peer-a".to_string(), sth_a("aa")),
@@ -3213,6 +3268,11 @@ mod tests {
             entry_hash: "bb".repeat(32),
             batch_id: Uuid::new_v4(),
             verified_tree_size: 1,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         }
     }
 
@@ -3261,9 +3321,10 @@ mod tests {
             &"ab".repeat(32),
             network_id,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -3492,6 +3553,9 @@ mod tests {
             prev_hash: String::new(),
             entry_hash: String::new(),
             batch_id: Uuid::nil(),
+            envelope: EnvelopeWire::from(&avalon_protocol::signing_bytes::Envelope::current(
+                tags::LEDGER_ENTRY,
+            )),
         };
         assert!(entry_within_size_limit(&entry(
             serde_json::json!({"a": "b"})
@@ -3520,7 +3584,7 @@ mod tests {
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let root = hex::encode([1u8; 32]);
-        let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+        let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at).unwrap();
         mirror::insert_observation(
             &pool,
             &ObservedSth::from_sth("http://127.0.0.1:1", "core", &sth, created_at),
@@ -3541,7 +3605,7 @@ mod tests {
             .map(|(k, id)| (id.clone(), k.verifying_key()))
             .collect();
         let cosign_at = |k: &SigningKey, id: &str, at: OffsetDateTime| {
-            sign_witness_cosignature(k, id, 5, &root, &network_id, created_at, at)
+            sign_witness_cosignature(k, id, &sth, at).unwrap()
         };
         let mut servers = Vec::new();
         let mut sources = Vec::new();
@@ -3577,7 +3641,7 @@ mod tests {
                     .and(path("/ledger/sth/5"))
                     .and(query_param("witnesses", "1"))
                     .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                        "tree_size": 5, "root_hash": root, "network_id": network_id,
+                        "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": 5, "root_hash": root, "network_id": network_id,
                         "signing_key_id": sth.signing_key_id, "signature": sth.signature,
                         "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
                         "cosignatures": dtos,
@@ -3646,16 +3710,25 @@ mod tests {
                 entry_hash: String::new(),
                 batch_id: Uuid::new_v4(),
                 verified_tree_size: seq,
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
             };
-            e.entry_hash = e.recomputed_hash().unwrap();
+            e.entry_hash = e.recomputed_hash().unwrap().unwrap();
             prev = e.entry_hash.clone();
             hashes.push(e.entry_hash.clone());
             mirror::insert_mirrored_entry(&pool, &e).await.unwrap();
         }
-        let served_root = hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let served_root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).unwrap(),
+        );
         let heads: Vec<SignedTreeHead> = [(3i64, served_root), (5, hex::encode([2u8; 32]))]
             .iter()
-            .map(|(size, root)| sign_tree_head(&author, "op", *size, root, &network_id, created_at))
+            .map(|(size, root)| {
+                sign_tree_head(&author, "op", *size, root, &network_id, created_at).unwrap()
+            })
             .collect();
         // Five other sources report different roots at the served size.
         for i in 0..5u8 {
@@ -3666,7 +3739,8 @@ mod tests {
                 &hex::encode([0x40 + i; 32]),
                 &network_id,
                 created_at,
-            );
+            )
+            .unwrap();
             mirror::insert_observation(
                 &pool,
                 &ObservedSth::from_sth(
@@ -3692,19 +3766,11 @@ mod tests {
         let wid = hex::encode(wk.verifying_key().to_bytes());
         let server = MockServer::start().await;
         for h in &heads {
-            let cosig = sign_witness_cosignature(
-                &wk,
-                &wid,
-                h.tree_size,
-                &h.root_hash,
-                &network_id,
-                created_at,
-                OffsetDateTime::now_utc(),
-            );
+            let cosig = sign_witness_cosignature(&wk, &wid, h, OffsetDateTime::now_utc()).unwrap();
             Mock::given(method("GET"))
                 .and(path_regex(format!(r"^/ledger/sth/{}$", h.tree_size)))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "tree_size": h.tree_size, "root_hash": h.root_hash, "network_id": network_id,
+                    "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": h.tree_size, "root_hash": h.root_hash, "network_id": network_id,
                     "signing_key_id": h.signing_key_id, "signature": h.signature,
                     "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
                     "cosignatures": [WitnessCosignatureDto::from_witness_cosignature(&cosig)],
@@ -3782,13 +3848,18 @@ mod tests {
                 entry_hash: String::new(),
                 batch_id: Uuid::new_v4(),
                 verified_tree_size: seq,
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
             };
-            e.entry_hash = e.recomputed_hash().unwrap();
+            e.entry_hash = e.recomputed_hash().unwrap().unwrap();
             prev = e.entry_hash.clone();
             hashes.push(e.entry_hash.clone());
             mirror::insert_mirrored_entry(pool, &e).await.unwrap();
         }
-        hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap())
+        hex::encode(merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).unwrap())
     }
 
     async fn observe(
@@ -3802,7 +3873,7 @@ mod tests {
         use avalon_protocol::sth::sign_tree_head;
         let at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let author = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-        let sth = sign_tree_head(&author, "op", size, root, network, at);
+        let sth = sign_tree_head(&author, "op", size, root, network, at).unwrap();
         let obs = ObservedSth::from_sth(source, shard, &sth, at);
         mirror::insert_observation(pool, &obs).await.unwrap();
         obs
@@ -3915,15 +3986,7 @@ mod tests {
         ) {
             let cosigs: Vec<_> = observed_at
                 .map(|at| {
-                    let c = sign_witness_cosignature(
-                        &w.sk,
-                        &w.id,
-                        sth.tree_size,
-                        &sth.root_hash,
-                        &sth.network_id,
-                        sth.created_at,
-                        at,
-                    );
+                    let c = sign_witness_cosignature(&w.sk, &w.id, sth, at).unwrap();
                     WitnessCosignatureDto::from_witness_cosignature(&c)
                 })
                 .into_iter()
@@ -3937,7 +4000,7 @@ mod tests {
                 .and(query_param("shard_id", shard))
                 .and(query_param("witnesses", "1"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "tree_size": sth.tree_size, "root_hash": sth.root_hash,
+                    "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size, "root_hash": sth.root_hash,
                     "network_id": sth.network_id, "signing_key_id": sth.signing_key_id,
                     "signature": sth.signature, "created_at": fmt(sth.created_at),
                     "cosignatures": cosigs,
@@ -3968,7 +4031,7 @@ mod tests {
         let mut heads = std::collections::HashMap::new();
         for (i, shard) in [&shard_a, &shard_b, &shard_c].into_iter().enumerate() {
             let root = hex::encode([(i + 1) as u8; 32]);
-            let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+            let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at).unwrap();
             mirror::insert_observation(
                 &pool,
                 &ObservedSth::from_sth("http://127.0.0.1:1", shard, &sth, created_at),
@@ -4100,15 +4163,7 @@ mod tests {
         // real rows and a new directory witness is not even asked.
         let fillers: Vec<Wit> = vec![wit(10).await, wit(11).await, wit(12).await, wit(13).await];
         for f in &fillers {
-            let c = sign_witness_cosignature(
-                &f.sk,
-                &f.id,
-                5,
-                &heads[&shard_c].root_hash,
-                &network_id,
-                created_at,
-                cur,
-            );
+            let c = sign_witness_cosignature(&f.sk, &f.id, &heads[&shard_c], cur).unwrap();
             chain.store_witness_cosignature(&shard_c, &c).await.unwrap();
         }
         let d4 = wit(4).await;
@@ -4171,6 +4226,9 @@ mod tests {
                 signing_key_id: "test-key".to_string(),
                 signature: "sig".to_string(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         )];
 
@@ -4286,10 +4344,7 @@ mod tests {
     fn chained(payload: serde_json::Value, seq: u64, prev: Option<[u8; 32]>) -> serde_json::Value {
         avalon_protocol::identity_chain_wire::embed_position(
             &payload,
-            &avalon_protocol::events::IdentityChainPosition {
-                seq,
-                prev_hash: prev.map(hex::encode),
-            },
+            &avalon_protocol::events::IdentityChainPosition::current(seq, prev.map(hex::encode)),
         )
     }
 
@@ -4336,9 +4391,14 @@ mod tests {
             entry_hash: format!("{seq:064x}"),
             batch_id: Uuid::new_v4(),
             verified_tree_size: seq,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         };
         // A pruned (payload-less) fixture keeps its placeholder hash: it can never be stored.
-        if let Some(hash) = entry.recomputed_hash() {
+        if let Some(hash) = entry.recomputed_hash().ok().flatten() {
             entry.entry_hash = hash;
         }
         entry
@@ -4347,7 +4407,7 @@ mod tests {
     /// Moves a fixture to another shard; the shard is part of the entry hash.
     fn reshard(entry: &mut mirror::MirroredEntry, shard: &str) {
         entry.shard_id = shard.to_string();
-        entry.entry_hash = entry.recomputed_hash().unwrap();
+        entry.entry_hash = entry.recomputed_hash().unwrap().unwrap();
     }
 
     fn b64(bytes: &[u8]) -> String {
@@ -4470,8 +4530,8 @@ mod tests {
     /// storage-boundary check, to exercise handling of legacy rows.
     async fn insert_legacy_pruned_row(pool: &PgPool, e: &mirror::MirroredEntry) {
         sqlx::query(
-            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, repeat('0', 64), $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size, layout_version, rules_version, hash_algo, extensions) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, repeat('0', 64), $9, $10, $11, $12, $13, $14, 1, 1, 1, '\\x0000'::bytea)",
         )
         .bind(&e.source_url)
         .bind(&e.network_id)
@@ -5704,6 +5764,9 @@ mod tests {
                 signing_key_id: "test-key".to_string(),
                 signature: "sig".to_string(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         )]
     }

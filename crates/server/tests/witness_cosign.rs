@@ -69,7 +69,10 @@ impl Fixture {
     }
 
     fn root_at(&self, size: usize) -> String {
-        hex::encode(merkle::mth_of_hex_hashes(&self.leaves[..size]).unwrap())
+        hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &self.leaves[..size])
+                .unwrap(),
+        )
     }
 
     fn head(&self, size: i64, root: &str) -> CosignedTreeHead {
@@ -81,14 +84,20 @@ impl Fixture {
                 root,
                 &self.network_id,
                 OffsetDateTime::now_utc(),
-            ),
+            )
+            .unwrap(),
             cosignatures: Vec::new(),
         }
     }
 
     async fn peer_serving_proof(&self, first: usize, second: usize) -> MockServer {
         let server = MockServer::start().await;
-        let proof = merkle::consistency_proof_of_hex_hashes(first, &self.leaves[..second]).unwrap();
+        let proof = merkle::consistency_proof_of_hex_hashes(
+            avalon_chain::ledger_hash_algo(),
+            first,
+            &self.leaves[..second],
+        )
+        .unwrap();
         Mock::given(method("GET"))
             .and(path("/ledger/proof/consistency"))
             .and(query_param("first", first.to_string()))
@@ -177,8 +186,15 @@ async fn a_head_that_does_not_extend_the_checkpoint_is_refused() {
     // the real 5-leaf tree. The peer serves a proof for the forged pair.
     let mut forged_leaves = f.leaves.clone();
     forged_leaves[2] = hex::encode([0xEEu8; 32]);
-    let forged_root = hex::encode(merkle::mth_of_hex_hashes(&forged_leaves[..12]).unwrap());
-    let forged_proof = merkle::consistency_proof_of_hex_hashes(5, &forged_leaves[..12]).unwrap();
+    let forged_root = hex::encode(
+        merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &forged_leaves[..12]).unwrap(),
+    );
+    let forged_proof = merkle::consistency_proof_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        5,
+        &forged_leaves[..12],
+    )
+    .unwrap();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/ledger/proof/consistency"))

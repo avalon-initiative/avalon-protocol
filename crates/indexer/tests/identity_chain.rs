@@ -46,10 +46,10 @@ fn chained(
         version: 1,
         identity_chain: None,
     };
-    event.identity_chain = Some(IdentityChainPosition {
+    event.identity_chain = Some(IdentityChainPosition::current(
         seq,
-        prev_hash: prev.map(|p| hex::encode(event_hash(p).unwrap())),
-    });
+        prev.map(|p| hex::encode(event_hash(p).unwrap())),
+    ));
     event
 }
 

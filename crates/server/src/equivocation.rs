@@ -61,12 +61,16 @@ struct FetchedSthWithWitnesses {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: avalon_protocol::signing_bytes::EnvelopeWire,
     #[serde(default)]
     cosignatures: Vec<crate::cosign_verify::WitnessCosignatureDto>,
 }
 
-impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
-    fn from(dto: FetchedSthWithWitnesses) -> Self {
+impl TryFrom<FetchedSthWithWitnesses> for CosignedTreeHead {
+    type Error = avalon_protocol::signing_bytes::SigningBytesError;
+
+    fn try_from(dto: FetchedSthWithWitnesses) -> Result<Self, Self::Error> {
         let sth = avalon_protocol::sth::SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
@@ -74,13 +78,12 @@ impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
+            envelope: dto
+                .envelope
+                .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)?,
         };
-        let cosignatures = dto
-            .cosignatures
-            .iter()
-            .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+        let cosignatures = crate::cosign_verify::readable_cosignatures(&dto.cosignatures, &sth);
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -114,7 +117,7 @@ async fn fetch_cosigned_head(
         .json()
         .await
         .map_err(|e| format!("{base_url}: {e}"))?;
-    Ok(dto.into())
+    CosignedTreeHead::try_from(dto).map_err(|e| format!("{base_url}: {e}"))
 }
 
 /// The union of witness keys present (as valid hex-encoded Ed25519 public
@@ -460,6 +463,19 @@ pub async fn confirm_and_record(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_head_with_one_unreadable_cosignature_survives_and_a_pre_envelope_body_is_refused() {
+        use crate::cosign_verify::test_support::*;
+        let served = served_with_one_unreadable_cosignature();
+        let dto: FetchedSthWithWitnesses = serde_json::from_value(served.body.clone()).unwrap();
+        let head = CosignedTreeHead::try_from(dto).unwrap();
+        assert_head_survives(&head, &served);
+        assert!(
+            serde_json::from_value::<FetchedSthWithWitnesses>(without_envelope(served.body))
+                .is_err()
+        );
+    }
+
     use super::*;
     use avalon_protocol::sth;
     use ed25519_dalek::SigningKey;
@@ -483,13 +499,13 @@ mod tests {
             root_hash,
             network_id,
             now,
-        );
+        )
+        .unwrap();
         let cosignatures = cosigners
             .iter()
             .map(|(key, key_id)| {
-                avalon_protocol::witness::sign_witness_cosignature(
-                    key, key_id, tree_size, root_hash, network_id, now, now,
-                )
+                avalon_protocol::witness::sign_witness_cosignature(key, key_id, &author_sth, now)
+                    .unwrap()
             })
             .collect();
         CosignedTreeHead {
@@ -763,17 +779,15 @@ mod tests {
             now,
             &[(&w1.0, w1.1.clone())],
         );
-        head_a
-            .cosignatures
-            .push(avalon_protocol::witness::sign_witness_cosignature(
+        head_a.cosignatures.push(
+            avalon_protocol::witness::sign_witness_cosignature(
                 &w1.0,
                 "not-hex-at-all",
-                1,
-                &root_hash_fixture(1),
-                "avalon-test",
+                &head_a.sth,
                 now,
-                now,
-            ));
+            )
+            .unwrap(),
+        );
         let head_b = head_a.clone();
 
         let list = known_list_from_cosignatures(&head_a, &head_b);

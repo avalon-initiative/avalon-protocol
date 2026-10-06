@@ -6,6 +6,8 @@ use avalon_protocol::ledger_entry::{
     entry_hash, entry_signing_bytes, parse_hash, payload_hash, timestamp_micros, EntryHashError,
     EntryHashInput,
 };
+mod common;
+use avalon_protocol::signing_bytes::{tags, Envelope, Extension, Extensions};
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -28,9 +30,30 @@ fn build(input: &Value) -> Result<(Vec<u8>, [u8; 32]), EntryHashError> {
     let seq: u64 = text("seq")
         .parse()
         .map_err(|_| EntryHashError::OutOfRange("seq"))?;
-    let version = u16::try_from(input["version"].as_i64().unwrap())
+    let event_version = u32::try_from(input["eventVersion"].as_i64().unwrap())
         .map_err(|_| EntryHashError::OutOfRange("version"))?;
     let micros: i64 = text("timestampUnixMicros").parse().unwrap();
+    let rules = u32::try_from(input["rulesVersion"].as_u64().unwrap()).unwrap();
+    let extensions = Extensions::new(
+        input["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| Extension {
+                ext_type: u16::try_from(e["type"].as_u64().unwrap()).unwrap(),
+                critical: e["critical"].as_bool().unwrap(),
+                value: hex::decode(e["valueHex"].as_str().unwrap()).unwrap(),
+            })
+            .collect(),
+        rules,
+    )?;
+    let envelope = Envelope::from_parts(
+        tags::LEDGER_ENTRY,
+        u16::try_from(input["layoutVersion"].as_u64().unwrap()).unwrap(),
+        rules,
+        u8::try_from(input["hashAlgo"].as_u64().unwrap()).unwrap(),
+        &extensions.encode(),
+    )?;
     let message = entry_signing_bytes(&EntryHashInput {
         network_id: &text("networkId"),
         shard_id: &text("shardId"),
@@ -42,12 +65,10 @@ fn build(input: &Value) -> Result<(Vec<u8>, [u8; 32]), EntryHashError> {
         subject: &text("subject"),
         payload_hash: &payload_hash,
         timestamp_micros: micros,
-        version,
+        event_version,
+        envelope: &envelope,
     })?;
-    let hash = {
-        use sha2::{Digest, Sha256};
-        Sha256::digest(&message).into()
-    };
+    let hash = envelope.hash_algo.digest(&message);
     Ok((message, hash))
 }
 
@@ -58,6 +79,10 @@ fn payload_hash_of(json: &str) -> [u8; 32] {
 #[test]
 fn ledger_entry_hash_matches_shared_vectors() {
     let doc = load();
+    assert!(
+        doc["vectors"].as_array().unwrap().len() > 30,
+        "vectors look truncated"
+    );
     for v in doc["vectors"].as_array().unwrap() {
         let name = v["name"].as_str().unwrap();
         let (input, expected) = (&v["input"], &v["expected"]);
@@ -99,16 +124,17 @@ fn ledger_entry_hash_matches_shared_vectors() {
 #[test]
 fn ledger_entry_hash_rejects_per_shared_vectors() {
     let doc = load();
-    for v in doc["rejectVectors"].as_array().unwrap() {
+    let vectors = doc["rejectVectors"].as_array().unwrap();
+    assert!(vectors.len() > 15, "reject vectors look truncated");
+    for v in vectors {
         let name = v["name"].as_str().unwrap();
-        let want = v["expected"]["error"].as_str().unwrap();
         let got = match build(&v["input"]) {
-            Err(EntryHashError::InvalidHash(_)) => "invalid_hash",
-            Err(EntryHashError::OutOfRange(_)) => "out_of_range",
-            Err(other) => panic!("[{name}] unexpected {other}"),
+            Err(EntryHashError::InvalidHash(_)) => serde_json::json!({"error": "invalid_hash"}),
+            Err(EntryHashError::OutOfRange(_)) => serde_json::json!({"error": "out_of_range"}),
+            Err(EntryHashError::Layout(e)) => common::error_json(&e),
             Ok(_) => panic!("[{name}] accepted"),
         };
-        assert_eq!(got, want, "[{name}]");
+        assert_eq!(got, v["expected"], "[{name}]");
     }
 }
 
@@ -130,7 +156,8 @@ fn entry_hash_function_agrees_with_the_vector_hashes() {
         subject: input["subject"].as_str().unwrap(),
         payload_hash: &ph,
         timestamp_micros: 1_767_323_045_123_456,
-        version: 1,
+        event_version: 1,
+        envelope: &Envelope::current(tags::LEDGER_ENTRY),
     })
     .unwrap();
     assert_eq!(hex::encode(hash), v["expected"]["entryHashHex"]);

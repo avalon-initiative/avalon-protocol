@@ -4,15 +4,36 @@
 //! `avalon-docs/protocol/witness-cosigning.md`).
 //!
 //! A witness cosignature is a second, independent signature over the exact
-//! same `(tree_size, root_hash, network_id, created_at)` tuple an author's
-//! own [`crate::sth::SignedTreeHead`] already signs — a witness that has
-//! checked the head extends consistently from what it last saw, with no
-//! conflicting root at the same size, attests to that by cosigning it. A
+//! author-signed [`crate::sth::SignedTreeHead`]: its `(tree_size, root_hash,
+//! network_id, created_at)` tuple plus the author's key id and signature, so a
+//! cosignature cannot be re-attached to a different signature over the same tuple.
+//! A witness that has checked the head extends consistently from what it last saw,
+//! with no conflicting root at the same size, attests to that by cosigning it. A
 //! head counts as trusted once [`majority_threshold`] distinct witnesses
 //! from the verifier's own known list have cosigned it.
+//!
+//! Both signed messages use the structured layout in [`crate::signing_bytes`]
+//! (tags `avalon.witness.cosign` and `avalon.witness.announce`, layout version 1).
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use time::OffsetDateTime;
+
+use crate::ledger_entry::parse_hash;
+use crate::signing_bytes::{tags, Builder, Envelope, SigningBytesError};
+use crate::sth::SignedTreeHead;
+
+/// Why a witness message could not be built.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WitnessSigningError {
+    #[error("root_hash is not 64 lowercase hex characters")]
+    InvalidRootHash,
+    #[error("author_signature is not 64 bytes of hex")]
+    InvalidAuthorSignature,
+    #[error("witness key id is not 64 lowercase hex characters")]
+    InvalidKeyId,
+    #[error(transparent)]
+    Layout(#[from] SigningBytesError),
+}
 
 /// One witness's cosignature over an author-signed tree head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,11 +41,13 @@ pub struct WitnessCosignature {
     pub tree_size: i64,
     pub root_hash: String,
     pub network_id: String,
-    /// The author's own STH timestamp — binds this cosignature to that
-    /// exact STH, not just to the (tree_size, root_hash, network_id) triple
-    /// (an author could in principle re-sign the same triple at a different
-    /// time; this keeps a cosignature from applying to a head it never saw).
+    /// The author's own STH timestamp, so this cosignature applies only to the
+    /// head with that timestamp.
     pub author_created_at: OffsetDateTime,
+    /// The author STH's `signing_key_id`, covered by the cosignature.
+    pub author_key_id: String,
+    /// The author STH's signature (128 hex characters), covered by the cosignature.
+    pub author_signature: String,
     /// Hex-encoded Ed25519 public key identifying which witness this is —
     /// the known list is keyed by this, not by network address.
     pub witness_key_id: String,
@@ -38,63 +61,100 @@ pub struct WitnessCosignature {
     pub observed_at: OffsetDateTime,
     /// Lowercase hex-encoded Ed25519 signature (64 bytes).
     pub signature: String,
+    /// This cosignature's own layout, rules version and extensions; its `hash_algo` is the
+    /// author head's Merkle hash algorithm, which names the root it covers.
+    pub envelope: Envelope,
 }
 
-/// The exact bytes a witness cosignature covers — same length-prefixing
-/// discipline as `crate::sth::signing_message`, with its own domain tag so
-/// a witness cosignature can never be mistaken for an author's STH
-/// signature even though both cover overlapping fields.
+fn decode_author_signature(hex_text: &str) -> Result<[u8; 64], WitnessSigningError> {
+    let bytes = hex::decode(hex_text).map_err(|_| WitnessSigningError::InvalidAuthorSignature)?;
+    <[u8; 64]>::try_from(bytes.as_slice()).map_err(|_| WitnessSigningError::InvalidAuthorSignature)
+}
+
+/// The exact bytes a witness cosignature covers (tag `avalon.witness.cosign`, header and
+/// extensions as in [`crate::signing_bytes`]): `tree_size` `i64`, `network_id` `str`,
+/// `author_created_at` `i64` unix seconds, `author_key_id` `str`, author signature (alg `u8` + 64
+/// raw), `witness_key_id` `str`, the witness's verifying key (alg `u8` + 32 raw), `observed_at`
+/// `i64`, `hash_algo` `u8` of the author's tree, root hash (32 raw). The `signature` field of
+/// `cosig` is not read.
 pub fn witness_signing_message(
-    tree_size: i64,
-    root_hash_hex: &str,
-    network_id: &str,
-    author_created_at: OffsetDateTime,
-    witness_key_id: &str,
-    observed_at: OffsetDateTime,
-) -> Vec<u8> {
-    let mut message = Vec::new();
-    message.extend_from_slice(b"avalon-witness-cosign-v1");
-    message.extend_from_slice(&tree_size.to_be_bytes());
-    message.extend_from_slice(&(root_hash_hex.len() as u32).to_be_bytes());
-    message.extend_from_slice(root_hash_hex.as_bytes());
-    message.extend_from_slice(&(network_id.len() as u32).to_be_bytes());
-    message.extend_from_slice(network_id.as_bytes());
-    message.extend_from_slice(&author_created_at.unix_timestamp().to_be_bytes());
-    message.extend_from_slice(&(witness_key_id.len() as u32).to_be_bytes());
-    message.extend_from_slice(witness_key_id.as_bytes());
-    message.extend_from_slice(&observed_at.unix_timestamp().to_be_bytes());
-    message
+    cosig: &WitnessCosignature,
+    witness_key: &[u8; 32],
+) -> Result<Vec<u8>, WitnessSigningError> {
+    let root = parse_hash("root_hash", &cosig.root_hash)
+        .map_err(|_| WitnessSigningError::InvalidRootHash)?;
+    let author_signature = decode_author_signature(&cosig.author_signature)?;
+    Ok(
+        Builder::with_envelope(tags::WITNESS_COSIGN, &cosig.envelope)
+            .i64(cosig.tree_size)
+            .str(&cosig.network_id)
+            .i64(cosig.author_created_at.unix_timestamp())
+            .str(&cosig.author_key_id)
+            .signature(&author_signature)
+            .str(&cosig.witness_key_id)
+            .key(witness_key)
+            .i64(cosig.observed_at.unix_timestamp())
+            .hash_algo(cosig.envelope.hash_algo)
+            .hash(&root)
+            .finish()?,
+    )
 }
 
-/// Produces `witness_key_id`'s cosignature over an author-signed head.
-#[allow(clippy::too_many_arguments)]
+pub(crate) fn sign_unsigned(
+    witness_signing_key: &SigningKey,
+    mut cosig: WitnessCosignature,
+) -> Result<WitnessCosignature, WitnessSigningError> {
+    // Normalizes the author signature to lowercase hex so equal bytes compare equal.
+    cosig.author_signature = hex::encode(decode_author_signature(&cosig.author_signature)?);
+    let message = witness_signing_message(&cosig, &witness_signing_key.verifying_key().to_bytes())?;
+    let signature: Signature = witness_signing_key.sign(&message);
+    cosig.signature = hex::encode(signature.to_bytes());
+    Ok(cosig)
+}
+
+/// Produces `witness_key_id`'s cosignature over the author-signed head `head`.
 pub fn sign_witness_cosignature(
     witness_signing_key: &SigningKey,
     witness_key_id: &str,
-    tree_size: i64,
-    root_hash_hex: &str,
-    network_id: &str,
-    author_created_at: OffsetDateTime,
+    head: &SignedTreeHead,
     observed_at: OffsetDateTime,
-) -> WitnessCosignature {
-    let message = witness_signing_message(
-        tree_size,
-        root_hash_hex,
-        network_id,
-        author_created_at,
-        witness_key_id,
-        observed_at,
-    );
-    let signature: Signature = witness_signing_key.sign(&message);
-    WitnessCosignature {
-        tree_size,
-        root_hash: root_hash_hex.to_string(),
-        network_id: network_id.to_string(),
-        author_created_at,
-        witness_key_id: witness_key_id.to_string(),
-        observed_at,
-        signature: hex::encode(signature.to_bytes()),
-    }
+) -> Result<WitnessCosignature, WitnessSigningError> {
+    sign_unsigned(
+        witness_signing_key,
+        WitnessCosignature {
+            tree_size: head.tree_size,
+            root_hash: head.root_hash.clone(),
+            network_id: head.network_id.clone(),
+            author_created_at: head.created_at,
+            author_key_id: head.signing_key_id.clone(),
+            author_signature: head.signature.clone(),
+            witness_key_id: witness_key_id.to_string(),
+            observed_at,
+            signature: String::new(),
+            envelope: Envelope {
+                hash_algo: head.envelope.hash_algo,
+                ..Envelope::current(tags::WITNESS_COSIGN)
+            },
+        },
+    )
+}
+
+/// A new cosignature over the same head as `existing`, with a fresh `observed_at`.
+pub fn reattest_witness_cosignature(
+    witness_signing_key: &SigningKey,
+    witness_key_id: &str,
+    existing: &WitnessCosignature,
+    observed_at: OffsetDateTime,
+) -> Result<WitnessCosignature, WitnessSigningError> {
+    sign_unsigned(
+        witness_signing_key,
+        WitnessCosignature {
+            witness_key_id: witness_key_id.to_string(),
+            observed_at,
+            signature: String::new(),
+            ..existing.clone()
+        },
+    )
 }
 
 /// Verifies `cosig`'s signature against `witness_verifying_key` — `false`
@@ -104,14 +164,9 @@ pub fn verify_witness_cosignature(
     witness_verifying_key: &VerifyingKey,
     cosig: &WitnessCosignature,
 ) -> bool {
-    let message = witness_signing_message(
-        cosig.tree_size,
-        &cosig.root_hash,
-        &cosig.network_id,
-        cosig.author_created_at,
-        &cosig.witness_key_id,
-        cosig.observed_at,
-    );
+    let Ok(message) = witness_signing_message(cosig, &witness_verifying_key.to_bytes()) else {
+        return false;
+    };
     let Ok(signature_bytes) = hex::decode(&cosig.signature) else {
         return false;
     };
@@ -126,36 +181,37 @@ pub fn verify_witness_cosignature(
 /// announce proof to be accepted.
 pub const WITNESS_ANNOUNCE_MAX_SKEW: time::Duration = time::Duration::hours(1);
 
-/// The exact bytes a witness announce proof covers, under its own domain tag
-/// so it can never be mistaken for a cosignature or an STH signature.
+/// The exact bytes a witness announce proof covers (tag `avalon.witness.announce`, header and
+/// extensions as in [`crate::signing_bytes`]): the base URL as `str`, the witness key (alg `u8` +
+/// 32 raw) and `announced_at` as `i64` unix seconds. The audience stays the URL text: a node has no protocol-level
+/// id to bind yet. `witness_key_id` must be the lowercase hex of the key.
 pub fn witness_announce_message(
     base_url: &str,
     witness_key_id: &str,
     announced_at: OffsetDateTime,
-) -> Vec<u8> {
-    let mut message = Vec::new();
-    message.extend_from_slice(b"avalon-witness-announce-v1");
-    message.extend_from_slice(&(base_url.len() as u32).to_be_bytes());
-    message.extend_from_slice(base_url.as_bytes());
-    message.extend_from_slice(&(witness_key_id.len() as u32).to_be_bytes());
-    message.extend_from_slice(witness_key_id.as_bytes());
-    message.extend_from_slice(&announced_at.unix_timestamp().to_be_bytes());
-    message
+) -> Result<Vec<u8>, WitnessSigningError> {
+    let key = parse_hash("witness_key_id", witness_key_id)
+        .map_err(|_| WitnessSigningError::InvalidKeyId)?;
+    Ok(Builder::new(tags::WITNESS_ANNOUNCE, 1)
+        .str(base_url)
+        .key(&key)
+        .i64(announced_at.unix_timestamp())
+        .finish()?)
 }
 
-/// Signs a proof that the holder of `witness_signing_key` (whose hex verifying
-/// key is `witness_key_id`) advertises itself at `base_url`. Lowercase hex.
+/// Signs a proof that the holder of `witness_signing_key` advertises itself at
+/// `base_url`. Lowercase hex.
 pub fn sign_witness_announce(
     witness_signing_key: &SigningKey,
     base_url: &str,
-    witness_key_id: &str,
     announced_at: OffsetDateTime,
-) -> String {
-    let message = witness_announce_message(base_url, witness_key_id, announced_at);
-    hex::encode(witness_signing_key.sign(&message).to_bytes())
+) -> Result<String, WitnessSigningError> {
+    let key_id = hex::encode(witness_signing_key.verifying_key().to_bytes());
+    let message = witness_announce_message(base_url, &key_id, announced_at)?;
+    Ok(hex::encode(witness_signing_key.sign(&message).to_bytes()))
 }
 
-/// Verifies a witness announce proof: `witness_key_id` must be a hex Ed25519
+/// Verifies a witness announce proof: `witness_key_id` must be a lowercase hex Ed25519
 /// verifying key, the signature must verify under it over the announce
 /// message, and `announced_at` must be within [`WITNESS_ANNOUNCE_MAX_SKEW`]
 /// of `now`. Never panics on attacker-controlled input.
@@ -169,6 +225,9 @@ pub fn verify_witness_announce(
     if (now - announced_at).abs() > WITNESS_ANNOUNCE_MAX_SKEW {
         return false;
     }
+    let Ok(message) = witness_announce_message(base_url, witness_key_id, announced_at) else {
+        return false;
+    };
     let Ok(key_bytes) = hex::decode(witness_key_id) else {
         return false;
     };
@@ -184,7 +243,6 @@ pub fn verify_witness_announce(
     let Ok(sig_array) = <[u8; 64]>::try_from(sig_bytes.as_slice()) else {
         return false;
     };
-    let message = witness_announce_message(base_url, witness_key_id, announced_at);
     verifying_key
         .verify(&message, &Signature::from_bytes(&sig_array))
         .is_ok()
@@ -230,7 +288,7 @@ pub fn is_cosigned_by_majority(list_size: usize, distinct_witnesses: usize) -> b
 /// Ed25519 key across the settlement-signing and witness-cosigning domains
 /// is cryptographically sound here specifically because
 /// [`witness_signing_message`] prepends its own domain tag
-/// (`avalon-witness-cosign-v1`), so the exact bytes a witness cosignature
+/// (`avalon.witness.cosign`), so the exact bytes a witness cosignature
 /// covers can never collide with the exact bytes an author's STH signature
 /// covers, even though both cover overlapping fields — the same reasoning
 /// [`load_verify_key_from_env`](crate::sth::load_verify_key_from_env)
@@ -259,43 +317,45 @@ pub fn load_witness_signing_key_from_env() -> Result<(SigningKey, String), crate
 mod tests {
     use super::*;
 
-    fn root_hash_fixture() -> String {
-        "ab".repeat(32)
+    fn author_head(author: &SigningKey) -> SignedTreeHead {
+        crate::sth::sign_tree_head(
+            author,
+            "author-key",
+            42,
+            &"ab".repeat(32),
+            "avalon-test",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .unwrap()
+    }
+
+    fn cosign(witness: &SigningKey, head: &SignedTreeHead) -> WitnessCosignature {
+        sign_witness_cosignature(
+            witness,
+            "witness-1",
+            head,
+            OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(5),
+        )
+        .unwrap()
     }
 
     #[test]
     fn sign_then_verify_round_trip_succeeds() {
         let witness_key = SigningKey::generate(&mut rand::rng());
-        let verifying_key = witness_key.verifying_key();
-
-        let cosig = sign_witness_cosignature(
-            &witness_key,
-            "witness-1",
-            42,
-            &root_hash_fixture(),
-            "avalon-test",
-            OffsetDateTime::UNIX_EPOCH,
-            OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(5),
-        );
-
-        assert!(verify_witness_cosignature(&verifying_key, &cosig));
+        let head = author_head(&SigningKey::generate(&mut rand::rng()));
+        let cosig = cosign(&witness_key, &head);
+        assert!(verify_witness_cosignature(
+            &witness_key.verifying_key(),
+            &cosig
+        ));
     }
 
     #[test]
     fn verify_rejects_signature_from_a_different_witness() {
         let witness_key = SigningKey::generate(&mut rand::rng());
         let other_key = SigningKey::generate(&mut rand::rng());
-
-        let cosig = sign_witness_cosignature(
-            &witness_key,
-            "witness-1",
-            1,
-            &root_hash_fixture(),
-            "avalon-test",
-            OffsetDateTime::UNIX_EPOCH,
-            OffsetDateTime::UNIX_EPOCH,
-        );
-
+        let head = author_head(&SigningKey::generate(&mut rand::rng()));
+        let cosig = cosign(&witness_key, &head);
         assert!(!verify_witness_cosignature(
             &other_key.verifying_key(),
             &cosig
@@ -306,40 +366,71 @@ mod tests {
     fn verify_rejects_a_tampered_field() {
         let witness_key = SigningKey::generate(&mut rand::rng());
         let verifying_key = witness_key.verifying_key();
-        let cosig = sign_witness_cosignature(
-            &witness_key,
-            "witness-1",
-            7,
-            &root_hash_fixture(),
-            "avalon-test",
-            OffsetDateTime::UNIX_EPOCH,
-            OffsetDateTime::UNIX_EPOCH,
+        let head = author_head(&SigningKey::generate(&mut rand::rng()));
+        let cosig = cosign(&witness_key, &head);
+
+        let mut tampered = Vec::new();
+        let mut c = cosig.clone();
+        c.tree_size += 1;
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.root_hash = "cd".repeat(32);
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.network_id = "other".to_string();
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.author_created_at += time::Duration::seconds(1);
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.author_key_id = "other-key".to_string();
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.author_signature = "00".repeat(64);
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.witness_key_id = "witness-2".to_string();
+        tampered.push(c);
+        let mut c = cosig.clone();
+        c.observed_at += time::Duration::seconds(1);
+        tampered.push(c);
+        for c in tampered {
+            assert!(!verify_witness_cosignature(&verifying_key, &c));
+        }
+        assert!(verify_witness_cosignature(&verifying_key, &cosig));
+    }
+
+    #[test]
+    fn cosignature_is_bound_to_the_exact_author_signature() {
+        let witness_key = SigningKey::generate(&mut rand::rng());
+        let head = author_head(&SigningKey::generate(&mut rand::rng()));
+        let other_author = author_head(&SigningKey::generate(&mut rand::rng()));
+        assert_ne!(head.signature, other_author.signature);
+        let mut cosig = cosign(&witness_key, &head);
+        cosig.author_signature = other_author.signature;
+        assert!(!verify_witness_cosignature(
+            &witness_key.verifying_key(),
+            &cosig
+        ));
+    }
+
+    #[test]
+    fn malformed_root_or_author_signature_is_rejected() {
+        let witness_key = SigningKey::generate(&mut rand::rng());
+        let mut head = author_head(&SigningKey::generate(&mut rand::rng()));
+        head.root_hash = "AB".repeat(32);
+        assert_eq!(
+            sign_witness_cosignature(&witness_key, "w", &head, OffsetDateTime::UNIX_EPOCH)
+                .unwrap_err(),
+            WitnessSigningError::InvalidRootHash
         );
-
-        let mut tampered_size = cosig.clone();
-        tampered_size.tree_size += 1;
-        assert!(!verify_witness_cosignature(&verifying_key, &tampered_size));
-
-        let mut tampered_author_time = cosig.clone();
-        tampered_author_time.author_created_at += time::Duration::seconds(1);
-        assert!(!verify_witness_cosignature(
-            &verifying_key,
-            &tampered_author_time
-        ));
-
-        let mut tampered_witness_id = cosig.clone();
-        tampered_witness_id.witness_key_id = "witness-2".to_string();
-        assert!(!verify_witness_cosignature(
-            &verifying_key,
-            &tampered_witness_id
-        ));
-
-        let mut tampered_observed_at = cosig.clone();
-        tampered_observed_at.observed_at += time::Duration::seconds(1);
-        assert!(!verify_witness_cosignature(
-            &verifying_key,
-            &tampered_observed_at
-        ));
+        let mut head = author_head(&SigningKey::generate(&mut rand::rng()));
+        head.signature = "zz".to_string();
+        assert_eq!(
+            sign_witness_cosignature(&witness_key, "w", &head, OffsetDateTime::UNIX_EPOCH)
+                .unwrap_err(),
+            WitnessSigningError::InvalidAuthorSignature
+        );
     }
 
     #[test]
@@ -347,7 +438,7 @@ mod tests {
         let key = SigningKey::generate(&mut rand::rng());
         let id = hex::encode(key.verifying_key().to_bytes());
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(100);
-        let proof = sign_witness_announce(&key, "http://a.example", &id, now);
+        let proof = sign_witness_announce(&key, "http://a.example", now).unwrap();
         assert!(verify_witness_announce(
             "http://a.example",
             &id,
@@ -388,6 +479,13 @@ mod tests {
         assert!(!verify_witness_announce(
             "http://a.example",
             "not-hex",
+            now,
+            &proof,
+            now
+        ));
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &id.to_uppercase(),
             now,
             &proof,
             now

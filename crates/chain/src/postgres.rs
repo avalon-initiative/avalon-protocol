@@ -17,11 +17,18 @@ use avalon_protocol::ledger_entry::{self, EntryHashError, EntryHashInput};
 use avalon_protocol::witness::WitnessCosignature;
 
 use avalon_protocol::shard::CORE_SHARD_ID;
+use avalon_protocol::signing_bytes::{tags, Envelope, EnvelopeWire, HashAlgo};
 
+use crate::envelope_row::EnvelopeRow;
 use crate::incremental_merkle::IncrementalMerkleTree;
 use crate::retention::PruneReport;
 use crate::sth::SignedTreeHead;
 use crate::{merkle, sth, SettlementError, SettlementProvider};
+
+/// The hash algorithm of the ledger's Merkle tree for tree heads this node authors.
+pub fn ledger_hash_algo() -> HashAlgo {
+    Envelope::current(tags::SETTLEMENT_STH).hash_algo
+}
 
 /// All-zero hash, the `prev_hash` of the very first entry in the chain.
 pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -39,7 +46,10 @@ pub struct EntryContent<'a> {
     /// Lowercase hex SHA-256 of the canonical payload ([`payload_hash_hex`]).
     pub payload_hash: &'a str,
     pub timestamp: time::OffsetDateTime,
+    /// The payload schema version of `kind` (the stored `version` column).
     pub version: i32,
+    /// Layout version, rules version, hash algorithm and extensions recorded with the entry.
+    pub envelope: &'a Envelope,
 }
 
 /// Lowercase hex SHA-256 of the canonical payload, the value an entry commits to.
@@ -74,8 +84,9 @@ pub fn hash_entry(
         subject: content.subject,
         payload_hash: &payload_hash,
         timestamp_micros: ledger_entry::timestamp_micros(content.timestamp)?,
-        version: u16::try_from(content.version)
+        event_version: u32::try_from(content.version)
             .map_err(|_| EntryHashError::OutOfRange("version"))?,
+        envelope: content.envelope,
     })?;
     Ok(hex::encode(hash))
 }
@@ -105,14 +116,14 @@ fn stored_payload(event: &ProtocolEvent) -> serde_json::Value {
     }
 }
 
-/// Rejects the first event in `batch` the entry layout cannot carry, before anything is written.
+/// Rejects the first event in `batch` the stored version column cannot carry, before anything is written.
 fn check_batch(batch: &EventBatch) -> Result<(), SettlementError> {
     for event in &batch.events {
-        ledger_entry::layout_version(event.version).map_err(|_| {
-            SettlementError::UnsupportedEntryVersion {
+        if i32::try_from(event.version).is_err() {
+            return Err(SettlementError::UnsupportedEntryVersion {
                 version: event.version,
-            }
-        })?;
+            });
+        }
     }
     Ok(())
 }
@@ -133,6 +144,7 @@ fn hash_event(
     payload_hash: &str,
 ) -> Result<String, SettlementError> {
     let timestamp = stored_timestamp(event)?;
+    let envelope = Envelope::current(tags::LEDGER_ENTRY);
     hash_entry(
         network_id,
         shard_id,
@@ -146,6 +158,7 @@ fn hash_event(
             payload_hash,
             timestamp,
             version: i32::try_from(event.version).unwrap_or(i32::MAX),
+            envelope: &envelope,
         },
     )
     .map_err(|e| SettlementError::InvalidEntry(e.to_string()))
@@ -192,6 +205,7 @@ fn sth_from_row(row: sqlx::postgres::PgRow) -> Result<SignedTreeHead, Settlement
         signing_key_id: row.try_get("signing_key_id").map_err(get)?,
         signature: row.try_get("signature").map_err(get)?,
         created_at: row.try_get("created_at").map_err(get)?,
+        envelope: EnvelopeRow::read(&row, "")?.to_envelope(tags::SETTLEMENT_STH)?,
     })
 }
 
@@ -214,10 +228,18 @@ pub enum GenesisError {
 /// whenever `commit`/`entry_hashes_up_to` find it isn't caught up to what's
 /// actually been committed — see [`PostgresSettlementProvider::leaf_cache`]'s
 /// doc comment for why that fallback exists and when it triggers.
-#[derive(Default)]
 struct LedgerCache {
     leaves: Vec<String>,
     tree: IncrementalMerkleTree,
+}
+
+impl Default for LedgerCache {
+    fn default() -> Self {
+        Self {
+            leaves: Vec::new(),
+            tree: IncrementalMerkleTree::new(ledger_hash_algo()),
+        }
+    }
 }
 
 impl LedgerCache {
@@ -235,7 +257,7 @@ impl LedgerCache {
     /// Replaces both `leaves` and `tree` from a freshly-fetched full prefix
     /// — the fallback path when the cache can't be trusted to be caught up.
     fn rebuild(&mut self, all_hashes: Vec<String>) -> Result<(), String> {
-        let mut tree = IncrementalMerkleTree::new();
+        let mut tree = IncrementalMerkleTree::new(ledger_hash_algo());
         for hash in &all_hashes {
             let bytes = hex::decode(hash).map_err(|e| e.to_string())?;
             tree.append(&bytes);
@@ -439,7 +461,8 @@ impl PostgresSettlementProvider {
     pub async fn list_entries(&self) -> Result<Vec<LedgerEntryView>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id,
+                   layout_version, rules_version, hash_algo, extensions
             FROM ledger_entries
             ORDER BY seq ASC
             "#,
@@ -467,27 +490,35 @@ impl PostgresSettlementProvider {
             let prev_hash: String = row.try_get("prev_hash").map_err(get)?;
             let entry_hash: String = row.try_get("entry_hash").map_err(get)?;
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
+            let envelope_row = EnvelopeRow::read(&row, "")?;
 
             let link_intact = prev_hash == expected_prev;
             // The entry hash is recomputed from `payload_hash`, so it verifies even for a pruned
             // row; a surviving payload must also hash to `payload_hash`.
-            let content_intact = entry_content_intact(
-                &self.network_id,
-                &self.shard_id,
-                &prev_hash,
-                &entry_hash,
-                payload.as_ref(),
-                &EntryContent {
-                    seq,
-                    event_id,
-                    kind: &kind,
-                    issuer: &issuer,
-                    subject: &subject,
-                    payload_hash: &payload_hash,
-                    timestamp: event_timestamp,
-                    version,
-                },
-            );
+            // An envelope this node cannot read is not verifiable here, so the entry is not intact.
+            let content_intact =
+                envelope_row
+                    .to_envelope(tags::LEDGER_ENTRY)
+                    .is_ok_and(|envelope| {
+                        entry_content_intact(
+                            &self.network_id,
+                            &self.shard_id,
+                            &prev_hash,
+                            &entry_hash,
+                            payload.as_ref(),
+                            &EntryContent {
+                                seq,
+                                event_id,
+                                kind: &kind,
+                                issuer: &issuer,
+                                subject: &subject,
+                                payload_hash: &payload_hash,
+                                timestamp: event_timestamp,
+                                version,
+                                envelope: &envelope,
+                            },
+                        )
+                    });
             expected_prev = entry_hash.clone();
 
             entries.push(LedgerEntryView {
@@ -504,6 +535,7 @@ impl PostgresSettlementProvider {
                 prev_hash,
                 entry_hash,
                 batch_id,
+                envelope: envelope_row.to_wire(),
                 chain_intact: content_intact && link_intact,
             });
         }
@@ -554,7 +586,8 @@ impl PostgresSettlementProvider {
             Some(subject) => {
                 sqlx::query(
                     r#"
-                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id,
+                           layout_version, rules_version, hash_algo, extensions
                     FROM ledger_entries
                     WHERE seq > $1 AND subject = $3
                     ORDER BY seq ASC
@@ -570,7 +603,8 @@ impl PostgresSettlementProvider {
             None => {
                 sqlx::query(
                     r#"
-                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id,
+                           layout_version, rules_version, hash_algo, extensions
                     FROM ledger_entries
                     WHERE seq > $1
                     ORDER BY seq ASC
@@ -604,6 +638,7 @@ impl PostgresSettlementProvider {
                 prev_hash: row.try_get("prev_hash").map_err(get)?,
                 entry_hash: row.try_get("entry_hash").map_err(get)?,
                 batch_id: row.try_get("batch_id").map_err(get)?,
+                envelope: EnvelopeRow::read(&row, "")?.to_wire(),
                 chain_intact: true,
             });
         }
@@ -651,7 +686,8 @@ impl PostgresSettlementProvider {
     pub async fn list_signed_tree_heads(&self) -> Result<Vec<SignedTreeHead>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at,
+                   layout_version, rules_version, hash_algo, extensions
             FROM signed_tree_heads
             WHERE network_id = $1
             ORDER BY tree_size ASC
@@ -664,15 +700,14 @@ impl PostgresSettlementProvider {
 
         let mut heads = Vec::with_capacity(rows.len());
         for row in rows {
-            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
-            heads.push(SignedTreeHead {
-                tree_size: row.try_get("tree_size").map_err(get)?,
-                root_hash: row.try_get("root_hash").map_err(get)?,
-                network_id: row.try_get("network_id").map_err(get)?,
-                signing_key_id: row.try_get("signing_key_id").map_err(get)?,
-                signature: row.try_get("signature").map_err(get)?,
-                created_at: row.try_get("created_at").map_err(get)?,
-            });
+            match sth_from_row(row) {
+                Ok(head) => heads.push(head),
+                // One head this node cannot read must not hide the rest.
+                Err(err @ SettlementError::NeedsNewerVersion { .. }) => {
+                    tracing::warn!(error = %err, "skipping a stored tree head this node cannot read");
+                }
+                Err(other) => return Err(other),
+            }
         }
         Ok(heads)
     }
@@ -694,7 +729,8 @@ impl PostgresSettlementProvider {
     pub async fn latest_signed_tree_head(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
         let row = sqlx::query(
             r#"
-            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at,
+                   layout_version, rules_version, hash_algo, extensions
             FROM signed_tree_heads
             WHERE network_id = $1
             ORDER BY tree_size DESC
@@ -721,7 +757,8 @@ impl PostgresSettlementProvider {
     ) -> Result<Option<SignedTreeHead>, SettlementError> {
         let row = sqlx::query(
             r#"
-            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at,
+                   layout_version, rules_version, hash_algo, extensions
             FROM signed_tree_heads
             WHERE tree_size = $1 AND network_id = $2
             "#,
@@ -756,11 +793,14 @@ impl PostgresSettlementProvider {
         shard_id: &str,
         cosig: &WitnessCosignature,
     ) -> Result<(), SettlementError> {
+        let envelope = EnvelopeRow::from_envelope(&cosig.envelope)?;
         let outcome = sqlx::query(
             r#"
             INSERT INTO witness_cosignatures
-                (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at, observed_at, signature)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at,
+                 author_key_id, author_signature, observed_at, signature,
+                 layout_version, rules_version, hash_algo, extensions)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (network_id, shard_id, tree_size, witness_key_id) DO NOTHING
             "#,
         )
@@ -770,8 +810,14 @@ impl PostgresSettlementProvider {
         .bind(&cosig.witness_key_id)
         .bind(&cosig.root_hash)
         .bind(cosig.author_created_at)
+        .bind(&cosig.author_key_id)
+        .bind(&cosig.author_signature)
         .bind(cosig.observed_at)
         .bind(&cosig.signature)
+        .bind(envelope.layout_version)
+        .bind(envelope.rules_version)
+        .bind(envelope.hash_algo)
+        .bind(&envelope.extensions)
         .execute(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -784,7 +830,8 @@ impl PostgresSettlementProvider {
         // or a genuine equivocation — tell those apart below.
         let row = sqlx::query(
             r#"
-            SELECT root_hash, signature, observed_at FROM witness_cosignatures
+            SELECT root_hash, author_key_id, author_signature, signature, observed_at
+            FROM witness_cosignatures
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
             "#,
         )
@@ -798,6 +845,12 @@ impl PostgresSettlementProvider {
         let existing_root_hash: String = row
             .try_get("root_hash")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_author_key_id: String = row
+            .try_get("author_key_id")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_author_signature: String = row
+            .try_get("author_signature")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
         let existing_signature: String = row
             .try_get("signature")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -808,7 +861,11 @@ impl PostgresSettlementProvider {
         if existing_signature == cosig.signature {
             return Ok(());
         }
-        if existing_root_hash == cosig.root_hash && existing_observed_at < cosig.observed_at {
+        if existing_root_hash == cosig.root_hash
+            && existing_author_key_id == cosig.author_key_id
+            && existing_author_signature == cosig.author_signature
+            && existing_observed_at < cosig.observed_at
+        {
             // Same witness, same head, a fresher observation — a relayed
             // re-attestation, not an equivocation. Update in place.
             self.refresh_witness_cosignature(shard_id, cosig).await?;
@@ -836,6 +893,7 @@ impl PostgresSettlementProvider {
             SET observed_at = $6, signature = $7
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
               AND root_hash = $5 AND author_created_at = $8 AND observed_at < $6
+              AND author_key_id = $9 AND author_signature = $10
             "#,
         )
         .bind(&cosig.network_id)
@@ -846,6 +904,8 @@ impl PostgresSettlementProvider {
         .bind(cosig.observed_at)
         .bind(&cosig.signature)
         .bind(cosig.author_created_at)
+        .bind(&cosig.author_key_id)
+        .bind(&cosig.author_signature)
         .execute(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -862,7 +922,9 @@ impl PostgresSettlementProvider {
     ) -> Result<Vec<WitnessCosignature>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT tree_size, root_hash, network_id, author_created_at, witness_key_id, observed_at, signature
+            SELECT tree_size, root_hash, network_id, author_created_at, author_key_id,
+                   author_signature, witness_key_id, observed_at, signature,
+                   layout_version, rules_version, hash_algo, extensions
             FROM witness_cosignatures
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3
             "#,
@@ -877,14 +939,26 @@ impl PostgresSettlementProvider {
         let mut cosigs = Vec::with_capacity(rows.len());
         for row in rows {
             let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            let envelope = match EnvelopeRow::read(&row, "")?.to_envelope(tags::WITNESS_COSIGN) {
+                Ok(envelope) => envelope,
+                // One cosignature this node cannot read is left out, never counted.
+                Err(err @ SettlementError::NeedsNewerVersion { .. }) => {
+                    tracing::warn!(error = %err, "skipping a stored cosignature this node cannot read");
+                    continue;
+                }
+                Err(other) => return Err(other),
+            };
             cosigs.push(WitnessCosignature {
                 tree_size: row.try_get("tree_size").map_err(get)?,
                 root_hash: row.try_get("root_hash").map_err(get)?,
                 network_id: row.try_get("network_id").map_err(get)?,
                 author_created_at: row.try_get("author_created_at").map_err(get)?,
+                author_key_id: row.try_get("author_key_id").map_err(get)?,
+                author_signature: row.try_get("author_signature").map_err(get)?,
                 witness_key_id: row.try_get("witness_key_id").map_err(get)?,
                 observed_at: row.try_get("observed_at").map_err(get)?,
                 signature: row.try_get("signature").map_err(get)?,
+                envelope,
             });
         }
         Ok(cosigs)
@@ -1231,6 +1305,8 @@ pub struct LedgerEntryView {
     pub prev_hash: String,
     pub entry_hash: String,
     pub batch_id: Uuid,
+    /// Layout version, rules version, hash algorithm and extensions the entry hash was made under.
+    pub envelope: EnvelopeWire,
     /// Everything *checkable* about this entry checks out: the hash-chain
     /// link always, and content re-verification whenever the payload is
     /// still present. A pruned entry with an intact link still reports
@@ -1351,6 +1427,8 @@ impl PostgresSettlementProvider {
             let seq = next_seq;
             next_seq += 1;
             let payload = stored_payload(event);
+            let entry_envelope =
+                EnvelopeRow::from_envelope(&Envelope::current(tags::LEDGER_ENTRY))?;
             let payload_hash =
                 payload_hash_hex(&payload).map_err(SettlementError::InvalidPayload)?;
             let entry_hash = hash_event(
@@ -1364,9 +1442,10 @@ impl PostgresSettlementProvider {
             sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
-                    (seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
+                    (seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id,
+                     layout_version, rules_version, hash_algo, extensions)
                 OVERRIDING SYSTEM VALUE
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 "#,
             )
             .bind(seq)
@@ -1381,6 +1460,10 @@ impl PostgresSettlementProvider {
             .bind(&prev_hash)
             .bind(&entry_hash)
             .bind(batch.id)
+            .bind(entry_envelope.layout_version)
+            .bind(entry_envelope.rules_version)
+            .bind(entry_envelope.hash_algo)
+            .bind(&entry_envelope.extensions)
             .execute(&mut **tx)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -1445,7 +1528,8 @@ impl PostgresSettlementProvider {
                         .map_err(SettlementError::Storage)?;
                 }
                 let size = fetched.len() as i64;
-                let root = merkle::mth_of_hex_hashes(&fetched).map_err(SettlementError::Storage)?;
+                let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &fetched)
+                    .map_err(SettlementError::Storage)?;
                 (size, root)
             };
         drop(cached);
@@ -1482,10 +1566,12 @@ impl PostgresSettlementProvider {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         tree_head: &SignedTreeHead,
     ) -> Result<(), SettlementError> {
+        let envelope = EnvelopeRow::from_envelope(&tree_head.envelope)?;
         sqlx::query(
             r#"
-            INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at,
+                                           layout_version, rules_version, hash_algo, extensions)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(tree_head.tree_size)
@@ -1494,6 +1580,10 @@ impl PostgresSettlementProvider {
         .bind(&tree_head.signing_key_id)
         .bind(&tree_head.signature)
         .bind(tree_head.created_at)
+        .bind(envelope.layout_version)
+        .bind(envelope.rules_version)
+        .bind(envelope.hash_algo)
+        .bind(&envelope.extensions)
         .execute(&mut **tx)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -1566,7 +1656,8 @@ impl PostgresSettlementProvider {
         all_hashes.extend(entry_hashes);
 
         let tree_size = all_hashes.len() as i64;
-        let root = merkle::mth_of_hex_hashes(&all_hashes).map_err(SettlementError::Storage)?;
+        let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &all_hashes)
+            .map_err(SettlementError::Storage)?;
 
         Ok(sth::PreparedTreeHead {
             batch_id: batch.id,
@@ -1574,6 +1665,7 @@ impl PostgresSettlementProvider {
             root_hash: hex::encode(root),
             network_id: self.network_id.clone(),
             created_at: time::OffsetDateTime::now_utc(),
+            envelope: EnvelopeWire::from(&Envelope::current(tags::SETTLEMENT_STH)),
         })
     }
 
@@ -1651,6 +1743,7 @@ impl PostgresSettlementProvider {
                 signing_key_id: signing_key_id.to_string(),
                 signature: signature_hex.to_string(),
                 created_at,
+                envelope: Envelope::current(tags::SETTLEMENT_STH),
             };
             if !sth::verify_tree_head(verify_key, &candidate) {
                 // Transaction is dropped without `commit()`, rolling back
@@ -1717,7 +1810,8 @@ impl SettlementProvider for PostgresSettlementProvider {
                 &batch_root,
                 &self.network_id,
                 committed_at,
-            );
+            )
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
             self.insert_signed_tree_head(&mut tx, &tree_head).await?;
 
             tx.commit()
@@ -1745,7 +1839,8 @@ impl SettlementProvider for PostgresSettlementProvider {
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash,
+                   layout_version, rules_version, hash_algo, extensions
             FROM ledger_entries
             WHERE batch_id = $1
             ORDER BY seq ASC
@@ -1780,6 +1875,7 @@ impl SettlementProvider for PostgresSettlementProvider {
                 row.try_get::<i32, _>("version").map_err(get)?,
                 row.try_get::<String, _>("prev_hash").map_err(get)?,
                 row.try_get::<String, _>("entry_hash").map_err(get)?,
+                EnvelopeRow::read(row, "")?.to_envelope(tags::LEDGER_ENTRY)?,
             ));
         }
 
@@ -1800,6 +1896,7 @@ impl SettlementProvider for PostgresSettlementProvider {
             version,
             prev_hash,
             entry_hash,
+            envelope,
         ) in &owned
         {
             let link_intact = *prev_hash == expected_prev;
@@ -1818,6 +1915,7 @@ impl SettlementProvider for PostgresSettlementProvider {
                     payload_hash,
                     timestamp: *timestamp,
                     version: *version,
+                    envelope,
                 },
             );
             if !(link_intact && content_intact) {
@@ -1850,8 +1948,8 @@ impl SettlementProvider for PostgresSettlementProvider {
             .map(|row| row.try_get::<String, _>("entry_hash"))
             .collect::<Result<_, _>>()
             .map_err(|e: sqlx::Error| SettlementError::Storage(e.to_string()))?;
-        let recomputed_tree_root =
-            merkle::mth_of_hex_hashes(&leaf_hashes).map_err(SettlementError::Storage)?;
+        let recomputed_tree_root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &leaf_hashes)
+            .map_err(SettlementError::Storage)?;
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         let merkle_intact = hex::encode(recomputed_tree_root) == claimed_root;
 
@@ -1889,6 +1987,8 @@ mod tests {
 
     const NET: &str = "avalon-test";
     const SHARD: &str = CORE_SHARD_ID;
+    static TEST_ENVELOPE: std::sync::LazyLock<Envelope> =
+        std::sync::LazyLock::new(|| Envelope::current(tags::LEDGER_ENTRY));
 
     fn ph(payload: &serde_json::Value) -> String {
         payload_hash_hex(payload).unwrap()
@@ -1904,6 +2004,7 @@ mod tests {
             payload_hash,
             timestamp: time::OffsetDateTime::UNIX_EPOCH,
             version: 1,
+            envelope: &TEST_ENVELOPE,
         }
     }
 
@@ -2071,7 +2172,7 @@ mod tests {
                 ..entry(1, Uuid::nil(), &p)
             }
         )
-        .is_err());
+        .is_ok());
     }
 
     #[test]
@@ -2136,10 +2237,7 @@ mod tests {
         };
         let unchained = hash_of(&event);
         assert_eq!(stored_payload(&event), event.payload);
-        event.identity_chain = Some(IdentityChainPosition {
-            seq: 1,
-            prev_hash: None,
-        });
+        event.identity_chain = Some(IdentityChainPosition::current(1, None));
         assert_ne!(hash_of(&event), unchained);
         let (payload, position) =
             avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
@@ -2169,15 +2267,16 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_with_an_unrepresentable_version_is_rejected_up_front() {
+    fn a_batch_with_an_unstorable_version_is_rejected_up_front() {
+        let too_big = u32::try_from(i32::MAX).unwrap() + 1;
         let batch = EventBatch {
             id: Uuid::nil(),
-            events: vec![event_at(0, 1), event_at(0, 65536)],
+            events: vec![event_at(0, 1), event_at(0, 65536), event_at(0, too_big)],
             created_at: time::OffsetDateTime::UNIX_EPOCH,
         };
         assert!(matches!(
             check_batch(&batch),
-            Err(SettlementError::UnsupportedEntryVersion { version: 65536 })
+            Err(SettlementError::UnsupportedEntryVersion { version }) if version == too_big
         ));
     }
 
@@ -2223,14 +2322,14 @@ mod tests {
     #[test]
     fn merkle_root_is_not_the_chain_tip_and_detects_any_tampered_leaf() {
         let hashes = chain_of(&[json!(0), json!(1), json!(2), json!(3), json!(4)]);
-        let root = crate::merkle::mth_of_hex_hashes(&hashes).unwrap();
+        let root = crate::merkle::mth_of_hex_hashes(ledger_hash_algo(), &hashes).unwrap();
         assert_ne!(hex::encode(root), *hashes.last().unwrap());
         for i in 0..hashes.len() {
             let mut tampered = hashes.clone();
             tampered[i] = GENESIS_HASH.to_string();
             assert_ne!(
                 root,
-                crate::merkle::mth_of_hex_hashes(&tampered).unwrap(),
+                crate::merkle::mth_of_hex_hashes(ledger_hash_algo(), &tampered).unwrap(),
                 "leaf {i}"
             );
         }

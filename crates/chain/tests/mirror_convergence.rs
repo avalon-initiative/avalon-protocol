@@ -55,8 +55,13 @@ async fn seed_entries(
             entry_hash: String::new(),
             batch_id: Uuid::new_v4(),
             verified_tree_size: seq,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         };
-        entry.entry_hash = entry.recomputed_hash().expect("payload present");
+        entry.entry_hash = entry.recomputed_hash().unwrap().expect("payload present");
         hashes.push(entry.entry_hash.clone());
         mirror::insert_mirrored_entry(pool, &entry)
             .await
@@ -66,7 +71,10 @@ async fn seed_entries(
 }
 
 fn root_over(hashes: &[String]) -> String {
-    hex::encode(merkle::mth_of_hex_hashes(hashes).expect("valid hex hashes"))
+    hex::encode(
+        merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), hashes)
+            .expect("valid hex hashes"),
+    )
 }
 
 async fn observe(pool: &PgPool, network_id: &str, tree_size: i64, root_hash: String) {
@@ -82,6 +90,9 @@ async fn observe(pool: &PgPool, network_id: &str, tree_size: i64, root_hash: Str
             signing_key_id: "test-key".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         },
     )
     .await

@@ -32,6 +32,12 @@
 //!    timestamp of `now + skew` stays valid until `now + 2 * skew`), and insert
 //!    only after the signature, the PeerId check and the standing checks pass.
 //!
+//! # Signing layout
+//! Intentionally not on `crate::signing_bytes`: the message already has its own tag
+//! (`avalon-node-request-v1`), a `u32` length prefix on every variable field, a fixed-width `i64`
+//! timestamp and a fixed 16-byte nonce, so it is unambiguous. It is node-to-node only: no
+//! ledger, SDK or OpenAPI route depends on its bytes.
+//!
 //! The recipient and network are not carried in the header, so a signature made
 //! for another recipient or network is indistinguishable from a forged one and
 //! reports [`NodeRequestError::BadSignature`]. The matched recipient is not
