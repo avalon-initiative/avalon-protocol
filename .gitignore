@@ -1,6 +1,8 @@
 # Rust
 /target/
 crates/*/target/
+__pycache__/
+*.pyc
 
 # -----------------------------------------------------------------------------
 # Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries
