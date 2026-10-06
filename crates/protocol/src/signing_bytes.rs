@@ -32,8 +32,7 @@
 //! `signature_gate::canonical_message` (tag `signature_gate.action`, the action
 //! name as the first `str` field, then the action's fields), the integrator nonce
 //! challenge (has no tag today) and `issuer_registration`. The existing binary
-//! layouts (`sth`, `witness`, `shard_identity`, `node_request`, identity chain
-//! hash) keep their `avalon-...-v1` tags and are not part of this recipe.
+//! layouts (`sth`, `witness`, `shard_identity`, `node_request`) keep their `avalon-...-v1` tags and are not part of this recipe.
 
 use thiserror::Error;
 use uuid::Uuid;
@@ -72,6 +71,7 @@ pub mod tags {
     pub const INTEGRATOR_NONCE_CHALLENGE: DomainTag =
         DomainTag::new("avalon.integrator.nonce_challenge");
     pub const LEDGER_ENTRY: DomainTag = DomainTag::new("avalon.ledger.entry");
+    pub const IDENTITY_CHAIN_EVENT: DomainTag = DomainTag::new("avalon.identity.chain_event");
     /// Reserved for conformance vectors; no key ever signs it in production.
     pub const CONFORMANCE: DomainTag = DomainTag::new("avalon.conformance.vector");
 
@@ -90,6 +90,7 @@ pub mod tags {
         SIGNATURE_GATE_ACTION,
         INTEGRATOR_NONCE_CHALLENGE,
         LEDGER_ENTRY,
+        IDENTITY_CHAIN_EVENT,
         CONFORMANCE,
     ];
 }
@@ -307,7 +308,6 @@ mod tests {
         "avalon-witness-announce-v1",
         "avalon-name-binding-v1",
         "avalon-node-request-v1",
-        "avalon-identity-chain-v1",
         "avalon-identity-id-v1",
         "avalon-name-proof-v1",
         "avalon-shard-route-v1",

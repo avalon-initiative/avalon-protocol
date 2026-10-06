@@ -60,6 +60,10 @@
       "tag": "avalon.ledger.entry"
     },
     {
+      "kind": "identity_chain_event",
+      "tag": "avalon.identity.chain_event"
+    },
+    {
       "kind": "conformance",
       "tag": "avalon.conformance.vector"
     }
