@@ -86,9 +86,9 @@ async fn the_migration_refuses_a_database_with_projected_events() {
     sqlx::query(
         "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, \
          issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, \
-         verified_tree_size) \
+         verified_tree_size, layout_version, rules_version, hash_algo, extensions) \
          VALUES ('http://peer.invalid', 'net', 'core', 1, $1, 'x.y', 'a', 'b', '{}', repeat('0', 64), now(), 1, \
-                 'p', 'h', $2, 1)",
+                 'p', 'h', $2, 1, 1, 1, 1, '\\x0000'::bytea)",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())

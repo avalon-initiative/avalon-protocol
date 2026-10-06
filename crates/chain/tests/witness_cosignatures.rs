@@ -56,8 +56,9 @@ fn fixture_head(network_id: &str, tree_size: i64, root_hash: &str) -> SignedTree
 async fn insert_test_sth(pool: &PgPool, network_id: &str, tree_size: i64, root_hash: &str) {
     sqlx::query(
         r#"
-        INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at,
+                                       layout_version, rules_version, hash_algo, extensions)
+        VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 1, '\x0000'::bytea)
         "#,
     )
     .bind(tree_size)

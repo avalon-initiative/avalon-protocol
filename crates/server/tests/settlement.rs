@@ -283,8 +283,10 @@ async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert(
     let burned_seq: i64 = sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
-        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', repeat('0', 64), now(), 1, 'deadbeef', $2, $3)
+            (event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id,
+             layout_version, rules_version, hash_algo, extensions)
+        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', repeat('0', 64), now(), 1, 'deadbeef', $2, $3,
+                1, 1, 1, '\x0000'::bytea)
         RETURNING seq
         "#,
     )

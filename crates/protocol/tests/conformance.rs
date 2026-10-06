@@ -1221,17 +1221,14 @@ fn error_json(e: &avalon_protocol::signing_bytes::SigningBytesError) -> Value {
     }
 }
 
-fn read_all(
-    input: &Value,
-) -> Result<
-    (
-        u16,
-        u32,
-        avalon_protocol::signing_bytes::Extensions,
-        Vec<Vec<u8>>,
-    ),
-    avalon_protocol::signing_bytes::SigningBytesError,
-> {
+type ReadAll = (
+    u16,
+    u32,
+    avalon_protocol::signing_bytes::Extensions,
+    Vec<Vec<u8>>,
+);
+
+fn read_all(input: &Value) -> Result<ReadAll, avalon_protocol::signing_bytes::SigningBytesError> {
     use avalon_protocol::signing_bytes::Reader;
     let message = hex::decode(input["messageHex"].as_str().unwrap()).unwrap();
     let mut r = Reader::new(conformance_tag(input["tag"].as_str().unwrap()), &message)?;

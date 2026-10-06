@@ -4520,8 +4520,8 @@ mod tests {
     /// storage-boundary check, to exercise handling of legacy rows.
     async fn insert_legacy_pruned_row(pool: &PgPool, e: &mirror::MirroredEntry) {
         sqlx::query(
-            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, repeat('0', 64), $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size, layout_version, rules_version, hash_algo, extensions) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, repeat('0', 64), $9, $10, $11, $12, $13, $14, 1, 1, 1, '\\x0000'::bytea)",
         )
         .bind(&e.source_url)
         .bind(&e.network_id)
