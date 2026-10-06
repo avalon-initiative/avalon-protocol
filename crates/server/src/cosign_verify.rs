@@ -6,6 +6,7 @@
 //! Head over `GET /ledger/sth/latest`/`GET /ledger/sth/{tree_size}`.
 
 use avalon_protocol::cosigned_sth::{self, CosignedTreeHead};
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 use avalon_protocol::sth::SignedTreeHead;
 use avalon_protocol::witness::WitnessCosignature;
 use ed25519_dalek::VerifyingKey;
@@ -84,14 +85,20 @@ pub struct WitnessCosignatureDto {
     #[serde(with = "time::serde::rfc3339")]
     pub observed_at: OffsetDateTime,
     pub signature: String,
+    /// The cosignature's own layout, rules version, hash algorithm and extensions.
+    #[serde(flatten)]
+    pub envelope: EnvelopeWire,
 }
 
 impl WitnessCosignatureDto {
     /// Reconstructs the full [`WitnessCosignature`] this DTO describes,
     /// binding it to `sth`'s own signed fields — the same binding
     /// `avalon_protocol::witness::witness_signing_message` itself covers.
-    pub fn to_witness_cosignature(&self, sth: &SignedTreeHead) -> WitnessCosignature {
-        WitnessCosignature {
+    pub fn to_witness_cosignature(
+        &self,
+        sth: &SignedTreeHead,
+    ) -> Result<WitnessCosignature, SigningBytesError> {
+        Ok(WitnessCosignature {
             tree_size: sth.tree_size,
             root_hash: sth.root_hash.clone(),
             network_id: sth.network_id.clone(),
@@ -101,7 +108,8 @@ impl WitnessCosignatureDto {
             witness_key_id: self.witness_key_id.clone(),
             observed_at: self.observed_at,
             signature: self.signature.clone(),
-        }
+            envelope: self.envelope.to_envelope(tags::WITNESS_COSIGN)?,
+        })
     }
 
     pub fn from_witness_cosignature(cosig: &WitnessCosignature) -> Self {
@@ -109,6 +117,7 @@ impl WitnessCosignatureDto {
             witness_key_id: cosig.witness_key_id.clone(),
             observed_at: cosig.observed_at,
             signature: cosig.signature.clone(),
+            envelope: EnvelopeWire::from(&cosig.envelope),
         }
     }
 }

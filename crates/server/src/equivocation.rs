@@ -61,12 +61,16 @@ struct FetchedSthWithWitnesses {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: avalon_protocol::signing_bytes::EnvelopeWire,
     #[serde(default)]
     cosignatures: Vec<crate::cosign_verify::WitnessCosignatureDto>,
 }
 
-impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
-    fn from(dto: FetchedSthWithWitnesses) -> Self {
+impl TryFrom<FetchedSthWithWitnesses> for CosignedTreeHead {
+    type Error = avalon_protocol::signing_bytes::SigningBytesError;
+
+    fn try_from(dto: FetchedSthWithWitnesses) -> Result<Self, Self::Error> {
         let sth = avalon_protocol::sth::SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
@@ -74,13 +78,16 @@ impl From<FetchedSthWithWitnesses> for CosignedTreeHead {
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
+            envelope: dto
+                .envelope
+                .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)?,
         };
         let cosignatures = dto
             .cosignatures
             .iter()
             .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -114,7 +121,7 @@ async fn fetch_cosigned_head(
         .json()
         .await
         .map_err(|e| format!("{base_url}: {e}"))?;
-    Ok(dto.into())
+    CosignedTreeHead::try_from(dto).map_err(|e| format!("{base_url}: {e}"))
 }
 
 /// The union of witness keys present (as valid hex-encoded Ed25519 public

@@ -101,6 +101,7 @@ use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::known_list::KnownListHandle;
 use crate::nodes::HeadGossipTracker;
 use crate::witness_cosign::{self, WitnessCosignConfig};
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
@@ -376,7 +377,19 @@ async fn discover_and_verify_shard_peers(
 
         match fetch_source_head(client, &url, &shard_id, SELF_CERTIFYING_FETCH_DEADLINE).await {
             Ok((dto, _)) => {
-                let head: CosignedTreeHead = dto.into();
+                let head = match CosignedTreeHead::try_from(dto) {
+                    Ok(head) => head,
+                    Err(err) => {
+                        tracing::warn!(
+                            shard_id,
+                            url = %url,
+                            error = %err,
+                            "mirror-watcher: discovered shard's STH needs a newer version — not \
+                             auto-mirroring",
+                        );
+                        continue;
+                    }
+                };
                 let now = OffsetDateTime::now_utc();
                 match cosign_verify::verify_cosigned_against_any_key(
                     db_keys.iter().copied(),
@@ -522,7 +535,7 @@ async fn verify_fetched_self_certifying_head(
         verify_self_certifying_shard(pool, network_id, shard_id, source, pinned, &dto, bounds)
             .await
             .map_err(MirrorWatcherError::SelfCertifyingRejected)?;
-    let head: CosignedTreeHead = dto.into();
+    let head = CosignedTreeHead::try_from(dto)?;
     let now = OffsetDateTime::now_utc();
     let matched = cosign_verify::verify_cosigned_against_any_key([key], &head, &[], now)
         .ok_or(MirrorWatcherError::InvalidSignature)?;
@@ -574,6 +587,10 @@ async fn verify_self_certifying_shard(
         signing_key_id: dto.signing_key_id.clone(),
         signature: dto.signature.clone(),
         created_at: dto.created_at,
+        envelope: dto
+            .envelope
+            .to_envelope(tags::SETTLEMENT_STH)
+            .map_err(keys::Rejection::NeedsNewerVersion)?,
     };
     keys::check_head(
         &key,
@@ -1030,6 +1047,9 @@ pub enum MirrorWatcherError {
     AllPeersFailed,
     #[error("storage error: {0}")]
     Storage(#[from] avalon_chain::SettlementError),
+    /// Nothing was verified or stored: the head or entry needs a newer version than this node has.
+    #[error("needs a newer version: {0}")]
+    NeedsNewerVersion(#[from] SigningBytesError),
     /// Issue #368: distinguishable from [`Self::Decode`] on purpose — this
     /// peer's response decoded just fine, it's the reported version that
     /// doesn't clear this node's floor (or is empty/unparseable). Never a
@@ -1048,6 +1068,8 @@ struct SignedTreeHeadDto {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
     /// Issue #368: additive (`#[serde(default)]`) so an older peer's
     /// response without this field still decodes fine — it's reported as
     /// an empty string, which `crate::version::is_supported` always
@@ -1066,28 +1088,33 @@ struct SignedTreeHeadDto {
     signing_public_key: Option<String>,
 }
 
-impl From<SignedTreeHeadDto> for SignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
-        SignedTreeHead {
+impl TryFrom<SignedTreeHeadDto> for SignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
+        Ok(SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
             network_id: dto.network_id,
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
-        }
+            envelope: dto.envelope.to_envelope(tags::SETTLEMENT_STH)?,
+        })
     }
 }
 
-impl From<SignedTreeHeadDto> for CosignedTreeHead {
-    fn from(dto: SignedTreeHeadDto) -> Self {
+impl TryFrom<SignedTreeHeadDto> for CosignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: SignedTreeHeadDto) -> Result<Self, Self::Error> {
         let cosignature_dtos = dto.cosignatures.clone();
-        let sth: SignedTreeHead = dto.into();
+        let sth = SignedTreeHead::try_from(dto)?;
         let cosignatures = cosignature_dtos
             .iter()
             .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -1108,6 +1135,8 @@ struct LedgerEntryDto {
     prev_hash: String,
     entry_hash: String,
     batch_id: Uuid,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
 }
 
 #[derive(Deserialize)]
@@ -1267,7 +1296,7 @@ fn verify_head_against_anchors(
         return Err(MirrorWatcherError::UnpinnedNetwork(dto.network_id));
     };
 
-    let head: CosignedTreeHead = dto.into();
+    let head = CosignedTreeHead::try_from(dto)?;
     let now = OffsetDateTime::now_utc();
     let Some(matched_key) =
         cosign_verify::verify_cosigned_against_any_key([verify_key], &head, &[], now)
@@ -1545,7 +1574,9 @@ async fn served_head_observation(
             if (hashes.len() as i64) < count {
                 return None;
             }
-            let root = hex::encode(merkle::mth_of_hex_hashes(&hashes).ok()?);
+            let root = hex::encode(
+                merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).ok()?,
+            );
             state.served_roots.insert(
                 key,
                 crate::witness_refresh::ServedRoot {
@@ -2340,6 +2371,7 @@ async fn backfill_page(
             entry_hash: entry.entry_hash.clone(),
             batch_id: entry.batch_id,
             verified_tree_size: sth.tree_size,
+            envelope: entry.envelope.clone(),
         };
         let invalid_proof = || {
             PageError::Refused(MirrorWatcherError::InvalidInclusionProof {
@@ -2360,6 +2392,7 @@ async fn backfill_page(
         })?;
         let proof_nodes = decode_proof_nodes(&proof_dto.proof).map_err(PageError::Refused)?;
         if !merkle::verify_inclusion_proof(
+            sth.envelope.hash_algo,
             &leaf_bytes,
             leaf_index,
             sth.tree_size as usize,
@@ -2401,6 +2434,15 @@ fn verify_entry_binding(
     }
     let recomputed = entry
         .recomputed_hash()
+        .map_err(|e| match e {
+            avalon_chain::SettlementError::NeedsNewerVersion { what, required } => {
+                MirrorWatcherError::NeedsNewerVersion(SigningBytesError::NeedsNewerVersion {
+                    what,
+                    required,
+                })
+            }
+            other => MirrorWatcherError::Storage(other),
+        })?
         .ok_or(MirrorWatcherError::EntryContentMismatch { seq })?;
     if recomputed != entry.entry_hash || recomputed != proof_leaf {
         return Err(MirrorWatcherError::EntryContentMismatch { seq });

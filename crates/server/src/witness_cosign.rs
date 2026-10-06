@@ -47,6 +47,7 @@
 use avalon_chain::mirror::{self, WitnessCheckpoint};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
+use avalon_protocol::signing_bytes::HashAlgo;
 use avalon_protocol::witness::{reattest_witness_cosignature, sign_witness_cosignature};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
@@ -281,6 +282,7 @@ async fn verify_consistency_extends_checkpoint(
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
+    algo: HashAlgo,
 ) -> bool {
     let url = format!("{peer_base_url}/ledger/proof/consistency");
     let response = match client
@@ -354,6 +356,7 @@ async fn verify_consistency_extends_checkpoint(
     };
 
     merkle::verify_consistency_proof(
+        algo,
         checkpoint.tree_size as usize,
         tree_size as usize,
         &proof,
@@ -368,12 +371,13 @@ async fn own_ledger_extends_checkpoint(
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
+    algo: HashAlgo,
 ) -> bool {
     match chain
         .consistency_proof(checkpoint.tree_size, tree_size)
         .await
     {
-        Ok(proof) => proof_extends_checkpoint(checkpoint, tree_size, root_hash, &proof),
+        Ok(proof) => proof_extends_checkpoint(algo, checkpoint, tree_size, root_hash, &proof),
         Err(err) => {
             tracing::warn!(error = %err, "witness-cosign: no own-ledger proof, not cosigning");
             false
@@ -383,6 +387,7 @@ async fn own_ledger_extends_checkpoint(
 
 /// Whether `proof` shows `root_hash` at `tree_size` extends `checkpoint`'s own recorded root.
 fn proof_extends_checkpoint(
+    algo: HashAlgo,
     checkpoint: &WitnessCheckpoint,
     tree_size: i64,
     root_hash: &str,
@@ -394,6 +399,7 @@ fn proof_extends_checkpoint(
         return false;
     };
     merkle::verify_consistency_proof(
+        algo,
         checkpoint.tree_size as usize,
         tree_size as usize,
         proof,
@@ -573,11 +579,19 @@ async fn decide(
                         &checkpoint,
                         size,
                         root,
+                        head.sth.envelope.hash_algo,
                     )
                     .await
                 }
                 ProofSource::OwnLedger => {
-                    own_ledger_extends_checkpoint(chain, &checkpoint, size, root).await
+                    own_ledger_extends_checkpoint(
+                        chain,
+                        &checkpoint,
+                        size,
+                        root,
+                        head.sth.envelope.hash_algo,
+                    )
+                    .await
                 }
             };
             if extends {

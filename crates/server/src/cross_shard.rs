@@ -59,6 +59,7 @@ use crate::cosign_verify::{self, WitnessCosignatureDto};
 use crate::error::AppError;
 use crate::nodes::ShardRegistry;
 use crate::state::AppState;
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire, SigningBytesError};
 
 #[derive(Clone)]
 pub struct KnownShardsConfig {
@@ -193,34 +194,41 @@ struct FetchedSth {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: EnvelopeWire,
     /// Additive (`#[serde(default)]`): an older peer's response without
     /// this field still decodes as an empty cosignature list.
     #[serde(default)]
     cosignatures: Vec<WitnessCosignatureDto>,
 }
 
-impl From<FetchedSth> for SignedTreeHead {
-    fn from(dto: FetchedSth) -> Self {
-        SignedTreeHead {
+impl TryFrom<FetchedSth> for SignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: FetchedSth) -> Result<Self, Self::Error> {
+        Ok(SignedTreeHead {
             tree_size: dto.tree_size,
             root_hash: dto.root_hash,
             network_id: dto.network_id,
             signing_key_id: dto.signing_key_id,
             signature: dto.signature,
             created_at: dto.created_at,
-        }
+            envelope: dto.envelope.to_envelope(tags::SETTLEMENT_STH)?,
+        })
     }
 }
 
-impl From<FetchedSth> for CosignedTreeHead {
-    fn from(dto: FetchedSth) -> Self {
+impl TryFrom<FetchedSth> for CosignedTreeHead {
+    type Error = SigningBytesError;
+
+    fn try_from(dto: FetchedSth) -> Result<Self, Self::Error> {
         let cosignature_dtos = dto.cosignatures.clone();
-        let sth: SignedTreeHead = dto.into();
+        let sth = SignedTreeHead::try_from(dto)?;
         let cosignatures = cosignature_dtos
             .iter()
             .map(|c| c.to_witness_cosignature(&sth))
-            .collect();
-        CosignedTreeHead { sth, cosignatures }
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
 
@@ -357,7 +365,17 @@ pub async fn fetch_and_compute(
         .await;
 
         let head: CosignedTreeHead = match fetched {
-            Ok(dto) => dto.into(),
+            Ok(dto) => match CosignedTreeHead::try_from(dto) {
+                Ok(head) => head,
+                Err(err) => {
+                    tracing::warn!(
+                        shard_id,
+                        error = %err,
+                        "cross-shard root: STH needs a newer version, treating as missing"
+                    );
+                    continue;
+                }
+            },
             Err(err) => {
                 tracing::warn!(
                     shard_id,

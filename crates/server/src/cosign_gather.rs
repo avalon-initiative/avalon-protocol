@@ -176,7 +176,10 @@ async fn fetch_own_cosignature(
         .iter()
         .find(|c| c.witness_key_id == source.key_id)
     {
-        Some(c) => GatherOutcome::Fetched(c.to_witness_cosignature(sth)),
+        Some(c) => match c.to_witness_cosignature(sth) {
+            Ok(cosig) => GatherOutcome::Fetched(cosig),
+            Err(_) => GatherOutcome::Malformed,
+        },
         None => GatherOutcome::NoOwnCosignature,
     }
 }

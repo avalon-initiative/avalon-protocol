@@ -167,6 +167,9 @@ pub struct SignedTreeHeadResponse {
     pub signature: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Layout version, rules version, Merkle hash algorithm and extensions the signature covers.
+    #[serde(flatten)]
+    pub envelope: avalon_protocol::signing_bytes::EnvelopeWire,
     /// Issue #368: this node's own build version — not part of the signed
     /// bytes (see `signature`'s doc comment above; adding a field here
     /// never changes what's cryptographically covered), purely a
@@ -207,6 +210,7 @@ impl SignedTreeHeadResponse {
             signing_key_id: sth.signing_key_id,
             signature: sth.signature,
             created_at: sth.created_at,
+            envelope: (&sth.envelope).into(),
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
             cosignatures: cosignatures
                 .iter()
@@ -429,8 +433,8 @@ async fn mirror_sth_at(
     if (hashes.len() as i64) < tree_size {
         return Ok(None);
     }
-    let root =
-        merkle::mth_of_hex_hashes(&hashes).map_err(avalon_chain::SettlementError::Storage)?;
+    let root = merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
+        .map_err(avalon_chain::SettlementError::Storage)?;
     let observed = mirror::observed_sth_matching_root(
         pool,
         network_id,
@@ -536,7 +540,7 @@ pub async fn consistency_proof(
     let first_usize = first as usize;
 
     let first_root = if first == 0 {
-        merkle::empty_root()
+        merkle::empty_root(avalon_chain::ledger_hash_algo())
     } else {
         state
             .chain
@@ -557,6 +561,7 @@ pub async fn consistency_proof(
     // verifier before this response is ever built, exactly as a remote
     // mirror would, rather than trusting proof generation blindly.
     if !merkle::verify_consistency_proof(
+        avalon_chain::ledger_hash_algo(),
         first_usize,
         second_usize,
         &proof,
@@ -596,19 +601,28 @@ async fn mirror_consistency_proof(
 
     let hashes_to_second =
         mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, second, source_url).await?;
-    let second_root = merkle::mth_of_hex_hashes(&hashes_to_second)
-        .map_err(avalon_chain::SettlementError::Storage)?;
+    let second_root =
+        merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes_to_second)
+            .map_err(avalon_chain::SettlementError::Storage)?;
     let first_root = if first == 0 {
-        merkle::empty_root()
+        merkle::empty_root(avalon_chain::ledger_hash_algo())
     } else {
-        merkle::mth_of_hex_hashes(&hashes_to_second[..first as usize])
-            .map_err(avalon_chain::SettlementError::Storage)?
+        merkle::mth_of_hex_hashes(
+            avalon_chain::ledger_hash_algo(),
+            &hashes_to_second[..first as usize],
+        )
+        .map_err(avalon_chain::SettlementError::Storage)?
     };
 
-    let proof = merkle::consistency_proof_of_hex_hashes(first as usize, &hashes_to_second)
-        .map_err(avalon_chain::SettlementError::Storage)?;
+    let proof = merkle::consistency_proof_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        first as usize,
+        &hashes_to_second,
+    )
+    .map_err(avalon_chain::SettlementError::Storage)?;
 
     if !merkle::verify_consistency_proof(
+        avalon_chain::ledger_hash_algo(),
         first as usize,
         second as usize,
         &proof,
@@ -723,7 +737,14 @@ pub async fn inclusion_proof(
         .ok_or(AppError::LedgerRangeNotCommitted)?;
 
     // Same self-verification invariant as `consistency_proof` above.
-    if !merkle::verify_inclusion_proof(&leaf_bytes, leaf_index, tree_size_usize, &proof, &root) {
+    if !merkle::verify_inclusion_proof(
+        avalon_chain::ledger_hash_algo(),
+        &leaf_bytes,
+        leaf_index,
+        tree_size_usize,
+        &proof,
+        &root,
+    ) {
         return Err(AppError::ProofVerificationFailed);
     }
 
@@ -767,14 +788,19 @@ async fn mirror_inclusion_proof(
         mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, tree_size, source_url)
             .await?;
     let leaf_hash_hex = hashes[leaf_index_usize].clone();
-    let proof = merkle::inclusion_proof_of_hex_hashes(leaf_index_usize, &hashes)
-        .map_err(avalon_chain::SettlementError::Storage)?;
+    let proof = merkle::inclusion_proof_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        leaf_index_usize,
+        &hashes,
+    )
+    .map_err(avalon_chain::SettlementError::Storage)?;
     let leaf_bytes = hex::decode(&leaf_hash_hex)
         .map_err(|e: hex::FromHexError| avalon_chain::SettlementError::Storage(e.to_string()))?;
-    let root =
-        merkle::mth_of_hex_hashes(&hashes).map_err(avalon_chain::SettlementError::Storage)?;
+    let root = merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
+        .map_err(avalon_chain::SettlementError::Storage)?;
 
     if !merkle::verify_inclusion_proof(
+        avalon_chain::ledger_hash_algo(),
         &leaf_bytes,
         leaf_index_usize,
         tree_size_usize,
@@ -840,6 +866,9 @@ pub struct LedgerEntryResponse {
     pub prev_hash: String,
     pub entry_hash: String,
     pub batch_id: Uuid,
+    /// Layout version, rules version, hash algorithm and extensions the entry hash was made under.
+    #[serde(flatten)]
+    pub envelope: avalon_protocol::signing_bytes::EnvelopeWire,
 }
 
 impl From<LedgerEntryView> for LedgerEntryResponse {
@@ -858,6 +887,7 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
             prev_hash: entry.prev_hash,
             entry_hash: entry.entry_hash,
             batch_id: entry.batch_id,
+            envelope: entry.envelope,
         }
     }
 }
@@ -882,6 +912,7 @@ impl From<mirror::MirroredEntry> for LedgerEntryResponse {
             prev_hash: entry.prev_hash,
             entry_hash: entry.entry_hash,
             batch_id: entry.batch_id,
+            envelope: entry.envelope,
         }
     }
 }

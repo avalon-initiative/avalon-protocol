@@ -199,10 +199,10 @@ pub async fn assign_local(
         return Ok(());
     }
     event.timestamp = truncate_to_micros(event.timestamp);
-    event.identity_chain = Some(IdentityChainPosition {
-        seq: head.seq as u64 + 1,
-        prev_hash: head.head_hash,
-    });
+    event.identity_chain = Some(IdentityChainPosition::current(
+        head.seq as u64 + 1,
+        head.head_hash,
+    ));
     record_locked(tx, owner, event, OffsetDateTime::now_utc()).await?;
     Ok(())
 }

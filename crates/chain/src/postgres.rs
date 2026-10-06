@@ -26,7 +26,7 @@ use crate::sth::SignedTreeHead;
 use crate::{merkle, sth, SettlementError, SettlementProvider};
 
 /// The hash algorithm of the ledger's Merkle tree for tree heads this node authors.
-fn ledger_hash_algo() -> HashAlgo {
+pub fn ledger_hash_algo() -> HashAlgo {
     Envelope::current(tags::SETTLEMENT_STH).hash_algo
 }
 
