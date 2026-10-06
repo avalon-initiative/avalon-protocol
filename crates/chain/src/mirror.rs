@@ -824,10 +824,10 @@ pub struct MirroredEntry {
 
 impl MirroredEntry {
     /// The entry hash this content produces under `network_id` and `prev_hash`, or `None`
-    /// when the payload is absent (pruned) and the hash cannot be recomputed.
+    /// when the payload is absent (pruned) or has no canonical encoding.
     pub fn recomputed_hash(&self) -> Option<String> {
         let payload = self.payload.as_ref()?;
-        Some(hash_entry(
+        hash_entry(
             &self.network_id,
             &self.prev_hash,
             &EntryContent {
@@ -839,7 +839,8 @@ impl MirroredEntry {
                 timestamp: self.event_timestamp,
                 version: self.version,
             },
-        ))
+        )
+        .ok()
     }
 }
 
@@ -873,6 +874,10 @@ pub async fn insert_mirrored_entry<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
+    if let Some(payload) = &entry.payload {
+        avalon_protocol::canonical_payload::validate(payload)
+            .map_err(SettlementError::InvalidPayload)?;
+    }
     match entry.recomputed_hash() {
         Some(hash) if hash == entry.entry_hash => {}
         Some(_) => return Err(SettlementError::MirroredContentMismatch { seq: entry.seq }),

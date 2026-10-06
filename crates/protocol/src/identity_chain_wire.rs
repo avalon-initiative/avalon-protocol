@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use time::OffsetDateTime;
 
+use crate::canonical_payload::{canonicalize, CanonicalPayloadError};
 use crate::events::{IdentityChainPosition, ProtocolEvent, ProtocolEventKind};
 use crate::identity_chain::{
     apply_chain, clamp_timestamp, compute_event_hash, ActionClass, ChainOutcome, ChainedEvent,
@@ -23,9 +24,10 @@ use crate::identity_id::IdentityId;
 pub const PAYLOAD_KEY: &str = "_identity_chain";
 
 /// Why an event could not be turned into a [`ChainedEvent`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainEventError {
     NotChained,
+    Payload(CanonicalPayloadError),
     Timestamp(TimestampError),
     MalformedPrevHash,
 }
@@ -86,26 +88,6 @@ pub fn truncate_to_micros(ts: OffsetDateTime) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp_nanos(nanos - nanos.rem_euclid(1000)).unwrap_or(ts)
 }
 
-/// Serializes `value` with object keys sorted, recursively.
-pub fn canonical_json(value: &Value) -> String {
-    match value {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let body: Vec<String> = keys
-                .into_iter()
-                .map(|k| format!("{}:{}", Value::String(k.clone()), canonical_json(&map[k])))
-                .collect();
-            format!("{{{}}}", body.join(","))
-        }
-        Value::Array(items) => {
-            let body: Vec<String> = items.iter().map(canonical_json).collect();
-            format!("[{}]", body.join(","))
-        }
-        other => other.to_string(),
-    }
-}
-
 pub fn parse_hash(hex_str: &str) -> Option<EventHash> {
     hex::decode(hex_str).ok()?.try_into().ok()
 }
@@ -124,7 +106,7 @@ pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
         &event.kind,
         event.issuer.as_str(),
         event.subject.as_str(),
-        &canonical_json(&event.payload),
+        &canonicalize(&event.payload).map_err(ChainEventError::Payload)?,
         truncate_to_micros(event.timestamp),
         position.seq,
         prev.as_ref(),

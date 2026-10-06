@@ -466,13 +466,26 @@ pub enum AppError {
     #[error("database error")]
     Database(sqlx::Error),
     #[error("ledger error")]
-    Ledger(#[from] avalon_chain::SettlementError),
+    Ledger(avalon_chain::SettlementError),
+    /// A submitted payload has no canonical encoding (a number outside the
+    /// exact range, or a duplicate key); the caller can fix and resubmit.
+    #[error("payload cannot be canonically encoded: {0}")]
+    InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
     /// Deliberately hand-written rather than `#[from]`: an
     /// [`avalon_indexer::IndexError::RemoteUnreachable`] must map to
     /// [`Self::RemoteRoleUnreachable`] (a distinct 503, not a generic
     /// 500) — see that variant's own doc comment.
     #[error("index error")]
     Index(avalon_indexer::IndexError),
+}
+
+impl From<avalon_chain::SettlementError> for AppError {
+    fn from(e: avalon_chain::SettlementError) -> Self {
+        match e {
+            avalon_chain::SettlementError::InvalidPayload(inner) => AppError::InvalidPayload(inner),
+            other => AppError::Ledger(other),
+        }
+    }
 }
 
 impl From<sqlx::Error> for AppError {
@@ -710,6 +723,7 @@ impl AppError {
             AppError::ReplicaOnly => "REPLICA_ONLY",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
+            AppError::InvalidPayload(..) => "INVALID_PAYLOAD",
             AppError::Index(..) => "INDEX",
         }
     }
@@ -983,6 +997,7 @@ impl IntoResponse for AppError {
             // in proof generation, not a client-input problem.
             AppError::ProofVerificationFailed => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
+            AppError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
             AppError::InvalidLogFilter => StatusCode::BAD_REQUEST,
             AppError::LogReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
             // 503, not 409/403: the request itself is fine and the

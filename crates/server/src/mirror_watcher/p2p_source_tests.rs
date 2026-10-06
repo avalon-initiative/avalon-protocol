@@ -70,7 +70,8 @@ fn chain_hashes(entries: usize, payload_bytes: usize) -> Vec<String> {
                     .unwrap(),
                     version: 1,
                 },
-            );
+            )
+            .unwrap();
             prev.clone()
         })
         .collect()

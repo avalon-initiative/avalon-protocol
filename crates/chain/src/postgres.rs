@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use avalon_protocol::canonical_payload::{canonicalize, CanonicalPayloadError};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::witness::WitnessCosignature;
 
@@ -44,67 +45,17 @@ pub struct EntryContent<'a> {
     pub version: i32,
 }
 
-/// Serializes `value` with object keys sorted, recursively, so the result
-/// is independent of the `Value`'s in-memory map ordering.
-///
-/// This matters because that ordering is *not* stable across this entry's
-/// own lifecycle: a payload is built once in-process (order depends on
-/// whether `serde_json`'s `preserve_order` feature is active in whichever
-/// binary links this crate in — this crate doesn't request it itself, but
-/// picks it up transitively when built into `avalon-server`/`avalon-cli`,
-/// both of which pull it in via `webauthn-rs`/`passkey-types`), then
-/// travels through the outbox's `JSONB` column and the ledger's own
-/// `JSONB` column before `avalon inspect-ledger(-full)` ever reads it back
-/// to verify — and Postgres's `jsonb` type does not preserve original key
-/// order or formatting at all; it re-emits object keys in its own internal
-/// canonical order. Hashing `Value::to_string()` directly, as this used to,
-/// made the hash depend on which of those orderings happened to be current
-/// at the moment of hashing rather than on the payload's actual content,
-/// producing false "broken chain" reports for any multi-key payload
-/// despite nothing being tampered with. Sorting keys ourselves removes the
-/// dependency on any of those orderings agreeing with each other.
-fn canonical_json(value: &serde_json::Value) -> String {
-    fn write(value: &serde_json::Value, out: &mut String) {
-        match value {
-            serde_json::Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                out.push('{');
-                for (i, key) in keys.into_iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&serde_json::to_string(key).expect("string always serializes"));
-                    out.push(':');
-                    write(&map[key], out);
-                }
-                out.push('}');
-            }
-            serde_json::Value::Array(items) => {
-                out.push('[');
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write(item, out);
-                }
-                out.push(']');
-            }
-            leaf => out.push_str(&leaf.to_string()),
-        }
-    }
-    let mut out = String::new();
-    write(value, &mut out);
-    out
-}
-
 /// `network_id` is hashed in ahead of everything else, so two
 /// ledgers with different network identities produce disjoint hash spaces
 /// by construction — an entry hashed under one `network_id` can never
 /// collide with, or be mistaken for a valid link in, a chain rooted in a
 /// different one. See `PostgresSettlementProvider::connect` for where that
 /// identity is established and enforced.
-pub fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>) -> String {
+pub fn hash_entry(
+    network_id: &str,
+    prev_hash: &str,
+    content: &EntryContent<'_>,
+) -> Result<String, CanonicalPayloadError> {
     let mut hasher = Sha256::new();
     hasher.update(network_id.as_bytes());
     hasher.update(prev_hash.as_bytes());
@@ -112,10 +63,10 @@ pub fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>)
     hasher.update(content.kind.as_bytes());
     hasher.update(content.issuer.as_bytes());
     hasher.update(content.subject.as_bytes());
-    hasher.update(canonical_json(content.payload).as_bytes());
+    hasher.update(canonicalize(content.payload)?.as_bytes());
     hasher.update(content.timestamp.unix_timestamp().to_le_bytes());
     hasher.update(content.version.to_le_bytes());
-    hex::encode(hasher.finalize())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// The payload as stored in the ledger: the event's own payload with its
@@ -129,7 +80,11 @@ fn stored_payload(event: &ProtocolEvent) -> serde_json::Value {
     }
 }
 
-fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> String {
+fn hash_event(
+    network_id: &str,
+    prev_hash: &str,
+    event: &ProtocolEvent,
+) -> Result<String, SettlementError> {
     let payload = stored_payload(event);
     hash_entry(
         network_id,
@@ -144,6 +99,7 @@ fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> Strin
             version: event.version as i32,
         },
     )
+    .map_err(SettlementError::InvalidPayload)
 }
 
 /// Recomputes a batch's *chain tip* (not its Merkle `batch_root` — see
@@ -170,7 +126,7 @@ fn recompute_batch_root(
 ) -> String {
     let mut prev = entering_prev_hash.to_string();
     for content in entries {
-        prev = hash_entry(network_id, &prev, content);
+        prev = hash_entry(network_id, &prev, content).unwrap();
     }
     prev
 }
@@ -450,7 +406,7 @@ impl PostgresSettlementProvider {
                             version,
                         },
                     );
-                    recomputed == entry_hash
+                    recomputed.as_deref() == Ok(entry_hash.as_str())
                 }
                 None => true,
             };
@@ -1302,7 +1258,7 @@ impl PostgresSettlementProvider {
         // have this row yet.
         let mut batch_hashes: Vec<String> = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
-            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event)?;
             let row = sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
@@ -1474,7 +1430,7 @@ impl PostgresSettlementProvider {
         let mut prev_hash = self.tip_hash(&self.pool).await?;
         let mut entry_hashes = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
-            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event)?;
             entry_hashes.push(entry_hash.clone());
             prev_hash = entry_hash;
         }
@@ -1740,7 +1696,7 @@ impl SettlementProvider for PostgresSettlementProvider {
                             version: *version,
                         },
                     );
-                    recomputed == *entry_hash
+                    recomputed.as_deref() == Ok(entry_hash.as_str())
                 }
                 None => true,
             };
@@ -1811,26 +1767,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn canonical_json_is_stable_across_key_order() {
+    fn canonical_payload_is_stable_across_key_order() {
         let a = json!({ "from": "x", "to": "y", "actor": "x" });
         let b = json!({ "actor": "x", "to": "y", "from": "x" });
         let c = json!({ "to": "y", "from": "x", "actor": "x" });
-        assert_eq!(canonical_json(&a), canonical_json(&b));
-        assert_eq!(canonical_json(&b), canonical_json(&c));
+        assert_eq!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
+        assert_eq!(canonicalize(&b).unwrap(), canonicalize(&c).unwrap());
     }
 
     #[test]
-    fn canonical_json_sorts_nested_objects_too() {
+    fn canonical_payload_sorts_nested_objects_too() {
         let a = json!({ "outer": { "z": 1, "a": 2 } });
         let b = json!({ "outer": { "a": 2, "z": 1 } });
-        assert_eq!(canonical_json(&a), canonical_json(&b));
+        assert_eq!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
     }
 
     #[test]
-    fn canonical_json_still_distinguishes_different_content() {
+    fn canonical_payload_still_distinguishes_different_content() {
         let a = json!({ "from": "x", "to": "y" });
         let b = json!({ "from": "x", "to": "z" });
-        assert_ne!(canonical_json(&a), canonical_json(&b));
+        assert_ne!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
     }
 
     #[test]
@@ -1852,7 +1808,8 @@ mod tests {
                 timestamp,
                 version: 1,
             },
-        );
+        )
+        .unwrap();
         let hash_b = hash_entry(
             "avalon-test",
             GENESIS_HASH,
@@ -1865,7 +1822,8 @@ mod tests {
                 timestamp,
                 version: 1,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(hash_a, hash_b);
     }
 
@@ -1882,17 +1840,64 @@ mod tests {
             version: 1,
             identity_chain: None,
         };
-        let unchained = hash_event("avalon-test", GENESIS_HASH, &event);
+        let unchained = hash_event("avalon-test", GENESIS_HASH, &event).unwrap();
         assert_eq!(stored_payload(&event), event.payload);
         event.identity_chain = Some(IdentityChainPosition {
             seq: 1,
             prev_hash: None,
         });
-        assert_ne!(hash_event("avalon-test", GENESIS_HASH, &event), unchained);
+        assert_ne!(
+            hash_event("avalon-test", GENESIS_HASH, &event).unwrap(),
+            unchained
+        );
         let (payload, position) =
             avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
         assert_eq!(payload, event.payload);
         assert_eq!(position, event.identity_chain);
+    }
+
+    #[test]
+    fn hash_entry_rejects_payloads_without_a_canonical_encoding() {
+        for payload in [
+            json!({"n": 0.1234567890123456}),
+            json!({"n": 18446744073709551615u64}),
+        ] {
+            let content = EntryContent {
+                event_id: Uuid::new_v4(),
+                kind: "k",
+                issuer: "i",
+                subject: "s",
+                payload: &payload,
+                timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                version: 1,
+            };
+            assert!(matches!(
+                hash_entry("avalon-test", GENESIS_HASH, &content),
+                Err(CanonicalPayloadError::InvalidNumber { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn hash_entry_is_independent_of_payload_key_order() {
+        let (a, b) = (json!({"b": 1, "a": [2.5]}), json!({"a": [2.5], "b": 1}));
+        let hash = |payload: &serde_json::Value| {
+            hash_entry(
+                "avalon-test",
+                GENESIS_HASH,
+                &EntryContent {
+                    event_id: Uuid::nil(),
+                    kind: "k",
+                    issuer: "i",
+                    subject: "s",
+                    payload,
+                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                    version: 1,
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(hash(&a), hash(&b));
     }
 
     /// Issue #173's core guarantee: two networks never share a hash space,
@@ -1914,8 +1919,8 @@ mod tests {
             version: 1,
         };
 
-        let mainnet = hash_entry("avalon-mainnet-1", GENESIS_HASH, &content);
-        let devnet = hash_entry("avalon-dev-chris", GENESIS_HASH, &content);
+        let mainnet = hash_entry("avalon-mainnet-1", GENESIS_HASH, &content).unwrap();
+        let devnet = hash_entry("avalon-dev-chris", GENESIS_HASH, &content).unwrap();
         assert_ne!(mainnet, devnet);
     }
 
@@ -1944,7 +1949,7 @@ mod tests {
         let expected = {
             let mut prev = GENESIS_HASH.to_string();
             for entry in &entries {
-                prev = hash_entry("avalon-test", &prev, entry);
+                prev = hash_entry("avalon-test", &prev, entry).unwrap();
             }
             prev
         };
@@ -1986,7 +1991,10 @@ mod tests {
         let payload = json!({"solo": true});
         let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
         let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
-        assert_eq!(root, hash_entry("avalon-test", GENESIS_HASH, &entries[0]));
+        assert_eq!(
+            root,
+            hash_entry("avalon-test", GENESIS_HASH, &entries[0]).unwrap()
+        );
     }
 
     // --- Merkle root / STH ---
@@ -2015,7 +2023,7 @@ mod tests {
         let mut entry_hashes = Vec::new();
         let mut prev = GENESIS_HASH.to_string();
         for entry in &entries {
-            let hash = hash_entry("avalon-test", &prev, entry);
+            let hash = hash_entry("avalon-test", &prev, entry).unwrap();
             entry_hashes.push(hash.clone());
             prev = hash;
         }
@@ -2041,6 +2049,7 @@ mod tests {
                     GENESIS_HASH,
                     &sample_entry(Uuid::new_v4(), &json!({ "i": i })),
                 )
+                .unwrap()
             })
             .collect();
         let original_root = crate::merkle::mth_of_hex_hashes(&entry_hashes).unwrap();

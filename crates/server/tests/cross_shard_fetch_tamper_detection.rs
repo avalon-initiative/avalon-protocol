@@ -84,7 +84,8 @@ fn real_entry() -> RealEntry {
             timestamp,
             version,
         },
-    );
+    )
+    .unwrap();
 
     RealEntry {
         prev_hash,
