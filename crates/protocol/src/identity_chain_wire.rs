@@ -107,6 +107,7 @@ pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
         Some(h) => Some(parse_hash(h).ok_or(ChainEventError::MalformedPrevHash)?),
         None => None,
     };
+    let envelope = position.envelope().map_err(ChainEventError::Layout)?;
     let payload = payload_hash(&event.payload).map_err(ChainEventError::Payload)?;
     let out_of_range = |_: EntryHashError| ChainEventError::OutOfRange;
     compute_event_hash(&ChainHashInput {
@@ -120,6 +121,7 @@ pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
         event_version: event.version,
         timestamp_micros: timestamp_micros(event.timestamp).map_err(out_of_range)?,
         payload_hash: &payload,
+        envelope: &envelope,
     })
     .map_err(ChainEventError::Layout)
 }
@@ -198,19 +200,13 @@ mod tests {
             payload: json!({"b": 1, "a": {"z": 1, "y": 2}}),
             timestamp: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(100),
             version: 1,
-            identity_chain: Some(IdentityChainPosition {
-                seq,
-                prev_hash: prev,
-            }),
+            identity_chain: Some(IdentityChainPosition::current(seq, prev)),
         }
     }
 
     #[test]
     fn position_round_trips_through_payload() {
-        let pos = IdentityChainPosition {
-            seq: 3,
-            prev_hash: Some("ab".repeat(32)),
-        };
+        let pos = IdentityChainPosition::current(3, Some("ab".repeat(32)));
         let embedded = embed_position(&json!({"k": 1}), &pos);
         let (payload, back) = split_position(embedded);
         assert_eq!(payload, json!({"k": 1}));
@@ -300,5 +296,20 @@ mod tests {
         let resolved = resolve_identity_chain(vec![ca, ca2, cr.clone()], &hashes);
         assert!(!resolved.is_forked());
         assert_eq!(resolved.head().unwrap().event_hash, cr.event_hash);
+    }
+
+    #[test]
+    fn an_unknown_layout_or_hash_algo_is_the_typed_result_not_a_hash() {
+        let id = IdentityId::random_for_tests();
+        let mut e = event("profile.updated", id, 1, None);
+        e.identity_chain.as_mut().unwrap().hash_algo = 9;
+        let err = event_hash(&e).unwrap_err();
+        assert!(matches!(
+            err,
+            ChainEventError::Layout(SigningBytesError::NeedsNewerVersion { .. })
+        ));
+        let mut e = event("profile.updated", id, 1, None);
+        e.identity_chain.as_mut().unwrap().layout_version = 2;
+        assert!(event_hash(&e).is_err());
     }
 }

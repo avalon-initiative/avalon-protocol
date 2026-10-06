@@ -15,6 +15,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::ids::GlobalId;
+use crate::signing_bytes::{Envelope, SigningBytesError};
 
 /// A `ProtocolEvent::kind`, enum-backed with a permanent-string mapping —
 /// issue #82, reusing `Capability`'s own template (see that type's doc
@@ -319,6 +320,41 @@ pub struct IdentityChainPosition {
     /// The previous event's hash in this identity's chain; `None` only for
     /// `seq == 1`, the chain's genesis event.
     pub prev_hash: Option<String>,
+    /// Layout version of the chain hash this position was hashed under.
+    pub layout_version: u16,
+    /// Rules version the event was authored under.
+    pub rules_version: u32,
+    /// Hash algorithm id of `prev_hash` and the chain hash (`0x01` = SHA-256).
+    pub hash_algo: u8,
+    /// Hex of the extensions region the chain hash covers; `0000` when there are none.
+    pub extensions: String,
+}
+
+impl IdentityChainPosition {
+    /// A position under this node's current envelope: no extensions.
+    pub fn current(seq: u64, prev_hash: Option<String>) -> Self {
+        let envelope = Envelope::current(crate::signing_bytes::tags::IDENTITY_CHAIN_EVENT);
+        Self {
+            seq,
+            prev_hash,
+            layout_version: envelope.layout_version,
+            rules_version: envelope.rules_version,
+            hash_algo: envelope.hash_algo.id(),
+            extensions: hex::encode(envelope.extensions.encode()),
+        }
+    }
+
+    /// The envelope this position records, or the typed "needs a newer version" result.
+    pub fn envelope(&self) -> Result<Envelope, SigningBytesError> {
+        let extensions = hex::decode(&self.extensions).map_err(|_| SigningBytesError::Truncated)?;
+        Envelope::from_parts(
+            crate::signing_bytes::tags::IDENTITY_CHAIN_EVENT,
+            self.layout_version,
+            self.rules_version,
+            self.hash_algo,
+            &extensions,
+        )
+    }
 }
 
 /// A durable, versioned fact Avalon considers part of protocol history.

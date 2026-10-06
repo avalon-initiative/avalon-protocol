@@ -11,13 +11,16 @@
 //! | `rules_version` | `u32 BE`, the rules the author wrote under ([`RULES_VERSION`]; readers accept [`RULES_VERSION_MIN`]..=[`RULES_VERSION_MAX`]) |
 //! | fields | fixed order; strings and byte strings are `u32 BE` length + bytes, keys and hashes raw, integers big-endian |
 //! | `hash_algo` | `u8` ([`HashAlgo`], `0x01` = SHA-256) immediately before the first hash-valued field, in layouts that contain a hash |
+//! | key, signature | `alg u8` (`0x01` = Ed25519) then the raw bytes; written only by [`Builder::key`] / [`Builder::signature`] |
 //! | extensions | `count u16`, then `ext_type u16`, `flags u8`, `len u32`, value; see [`Extensions`] |
 //!
 //! Extensions are always last. Entries are strictly ascending by `ext_type`, flags bit 0 is
 //! "critical" and every other bit must be zero, and the entries total at most
-//! [`max_extension_bytes(RULES_VERSION)`]. An unknown non-critical extension is hashed and preserved byte for byte.
+//! [`Caps::max_extension_bytes`] of [`caps_for`]. Every consensus cap is a function of the
+//! message's `rules_version`: a cap is only ever raised for entries authored under a newer rules
+//! version, so a lower cap never invalidates an older entry. An unknown non-critical extension is hashed and preserved byte for byte.
 //! An unknown critical extension, a layout version above [`layout_versions`], a rules version above
-//! [`RULES_VERSION_MAX`] or an unknown hash algorithm is
+//! [`RULES_VERSION_MAX`], an unknown hash algorithm or an unknown key or signature algorithm is
 //! [`SigningBytesError::NeedsNewerVersion`]: nothing is verified, and the error names what is
 //! required. Lower layout versions of a known tag stay verifiable: [`layout_versions`] is the
 //! per-tag table of supported versions, and a new field set is a new `layout_version`.
@@ -64,14 +67,40 @@ pub const RULES_VERSION_MIN: u32 = 1;
 /// The highest rules version a reader understands; anything above is [`SigningBytesError::NeedsNewerVersion`].
 pub const RULES_VERSION_MAX: u32 = 1;
 
-/// Upper bound on the extension entries of one message (each entry counts its 7 header bytes)
-/// for `rules_version`. The single place size caps live, so they can later vary with the rules.
-pub const fn max_extension_bytes(_rules_version: u32) -> usize {
-    4096
-}
-
 const EXTENSION_ENTRY_HEADER: usize = 7;
 const CRITICAL_FLAG: u8 = 0x01;
+
+/// Consensus size caps, always read through [`caps_for`] for the message's own rules version.
+/// A cap may be raised only for entries authored under a newer rules version; a lower cap never
+/// invalidates what an older rules version already allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    /// Upper bound on the extension entries of one message (each entry counts its 7 header bytes).
+    pub max_extension_bytes: usize,
+}
+
+/// `(first rules version, caps)` rows, ascending. A version uses the last row at or below it.
+const CAPS_TABLE: &[(u32, Caps)] = &[(
+    1,
+    Caps {
+        max_extension_bytes: 4096,
+    },
+)];
+
+/// The caps that apply to a message authored under `rules_version`.
+pub fn caps_for(rules_version: u32) -> Caps {
+    caps_in(CAPS_TABLE, rules_version)
+}
+
+fn caps_in(table: &[(u32, Caps)], rules_version: u32) -> Caps {
+    table
+        .iter()
+        .rev()
+        .find(|(from, _)| *from <= rules_version)
+        .or(table.first())
+        .map(|(_, caps)| *caps)
+        .expect("caps table has a row")
+}
 
 /// Which part of a message needs a newer version than this node has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +108,8 @@ pub enum VersionKind {
     Layout,
     Rules,
     HashAlgo,
+    /// An unknown key or signature algorithm tag.
+    SigAlgo,
     /// A critical extension this node does not understand; `required` is its `ext_type`.
     CriticalExtension,
 }
@@ -154,6 +185,31 @@ impl HashAlgo {
     }
 }
 
+/// Algorithm tag written next to every public key and signature (`0x01` = Ed25519).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigAlgo {
+    Ed25519,
+}
+
+impl SigAlgo {
+    pub const fn id(self) -> u8 {
+        match self {
+            Self::Ed25519 => 0x01,
+        }
+    }
+
+    /// Any other value is an algorithm this node does not know.
+    pub fn from_id(id: u8) -> Result<Self, SigningBytesError> {
+        match id {
+            0x01 => Ok(Self::Ed25519),
+            other => Err(SigningBytesError::NeedsNewerVersion {
+                what: VersionKind::SigAlgo,
+                required: u32::from(other),
+            }),
+        }
+    }
+}
+
 /// One extension entry. Reserved flag bits are not representable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extension {
@@ -162,7 +218,7 @@ pub struct Extension {
     pub value: Vec<u8>,
 }
 
-/// The extensions region: entries strictly ascending by type, bounded by [`max_extension_bytes(RULES_VERSION)`].
+/// The extensions region: entries strictly ascending by type, bounded by [`Caps::max_extension_bytes`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Extensions(Vec<Extension>);
 
@@ -173,7 +229,7 @@ impl Extensions {
 
     /// Validates order, uniqueness and the size bound for `rules_version`.
     pub fn new(entries: Vec<Extension>, rules_version: u32) -> Result<Self, SigningBytesError> {
-        let max = max_extension_bytes(rules_version);
+        let max = caps_for(rules_version).max_extension_bytes;
         let mut total = 0usize;
         for (i, e) in entries.iter().enumerate() {
             total = total.saturating_add(EXTENSION_ENTRY_HEADER.saturating_add(e.value.len()));
@@ -499,14 +555,14 @@ impl Builder {
         self
     }
 
-    /// A 32-byte public key, raw. Every key goes through here so an algorithm tag can be added once.
+    /// An Ed25519 public key: `alg u8` then 32 raw bytes. The only place keys are written.
     pub fn key(self, value: &[u8; 32]) -> Self {
-        self.fixed(value)
+        self.u8(SigAlgo::Ed25519.id()).fixed(value)
     }
 
-    /// A 64-byte signature, raw. Every signature goes through here, like [`Builder::key`].
+    /// An Ed25519 signature: `alg u8` then 64 raw bytes. The only place signatures are written.
     pub fn signature(self, value: &[u8; 64]) -> Self {
-        self.fixed(value)
+        self.u8(SigAlgo::Ed25519.id()).fixed(value)
     }
 
     /// A 32-byte hash, raw.
@@ -574,7 +630,7 @@ impl<'a> ByteCursor<'a> {
     }
 
     fn extensions(&mut self, rules_version: u32) -> Result<Extensions, SigningBytesError> {
-        let max = max_extension_bytes(rules_version);
+        let max = caps_for(rules_version).max_extension_bytes;
         let count = u16::from_be_bytes(self.take_array()?);
         let mut entries = Vec::new();
         let mut total = 0usize;
@@ -658,13 +714,15 @@ impl<'a> Reader<'a> {
         self.take_array()
     }
 
-    /// A 32-byte public key, raw.
+    /// A public key; an unknown algorithm tag is the typed "needs a newer version" result.
     pub fn key(&mut self) -> Result<[u8; 32], SigningBytesError> {
+        SigAlgo::from_id(self.u8()?)?;
         self.take_array()
     }
 
-    /// A 64-byte signature, raw.
+    /// A signature; an unknown algorithm tag is the typed "needs a newer version" result.
     pub fn signature(&mut self) -> Result<[u8; 64], SigningBytesError> {
+        SigAlgo::from_id(self.u8()?)?;
         self.take_array()
     }
 
@@ -777,7 +835,7 @@ mod tests {
         assert_eq!(r.rules_version(), RULES_VERSION);
         assert_eq!(r.str().unwrap(), "a:b,c\0d");
         assert_eq!(r.bytes().unwrap(), b"");
-        assert_eq!(r.fixed::<32>().unwrap(), [9; 32]);
+        assert_eq!(r.key().unwrap(), [9; 32]);
         assert_eq!(r.uuid().unwrap(), id);
         assert_eq!(r.u8().unwrap(), 1);
         assert_eq!(r.u16().unwrap(), 2);
@@ -998,12 +1056,12 @@ mod tests {
                 SigningBytesError::ExtensionReservedFlags(flags)
             );
         }
-        let big = vec![0u8; max_extension_bytes(RULES_VERSION)];
+        let big = vec![0u8; caps_for(RULES_VERSION).max_extension_bytes];
         assert_eq!(
             finish(region(&[(5, 0, &big)])).unwrap_err(),
             SigningBytesError::ExtensionsTooLarge
         );
-        let fits = vec![0u8; max_extension_bytes(RULES_VERSION) - EXTENSION_ENTRY_HEADER];
+        let fits = vec![0u8; caps_for(RULES_VERSION).max_extension_bytes - EXTENSION_ENTRY_HEADER];
         assert!(finish(region(&[(5, 0, &fits)])).is_ok());
         let mut trailing = region(&[]);
         trailing.push(0);
@@ -1019,6 +1077,69 @@ mod tests {
                 .unwrap_err(),
             SigningBytesError::ExtensionsUnsorted
         );
+    }
+
+    #[test]
+    fn keys_and_signatures_carry_an_algorithm_tag() {
+        let msg = conf(1).key(&[7; 32]).signature(&[8; 64]).finish().unwrap();
+        let header = tags::CONFORMANCE.as_bytes().len() + 6;
+        assert_eq!(msg[header], 1);
+        assert_eq!(msg[header + 33], 1);
+        let mut r = Reader::new(tags::CONFORMANCE, &msg).unwrap();
+        assert_eq!(r.key().unwrap(), [7; 32]);
+        assert_eq!(r.signature().unwrap(), [8; 64]);
+        let mut bad = msg.clone();
+        bad[header] = 2;
+        let err = Reader::new(tags::CONFORMANCE, &bad)
+            .unwrap()
+            .key()
+            .unwrap_err();
+        assert_eq!(err.needs_newer_version(), Some((VersionKind::SigAlgo, 2)));
+        let mut bad = msg;
+        bad[header + 33] = 0;
+        let mut r = Reader::new(tags::CONFORMANCE, &bad).unwrap();
+        r.key().unwrap();
+        assert_eq!(
+            r.signature().unwrap_err().needs_newer_version(),
+            Some((VersionKind::SigAlgo, 0))
+        );
+    }
+
+    #[test]
+    fn caps_are_a_function_of_rules_version_and_never_shrink() {
+        let at_cap = vec![Extension {
+            ext_type: 1,
+            critical: false,
+            value: vec![0; caps_for(1).max_extension_bytes - EXTENSION_ENTRY_HEADER],
+        }];
+        assert!(Extensions::new(at_cap.clone(), 1).is_ok());
+        let mut over = at_cap.clone();
+        over[0].value.push(0);
+        assert_eq!(
+            Extensions::new(over.clone(), 1).unwrap_err(),
+            SigningBytesError::ExtensionsTooLarge
+        );
+        // A synthetic newer rules version raises the cap; the older entry keeps verifying.
+        let table = [
+            (
+                1,
+                Caps {
+                    max_extension_bytes: 4096,
+                },
+            ),
+            (
+                2,
+                Caps {
+                    max_extension_bytes: 8192,
+                },
+            ),
+        ];
+        assert_eq!(caps_in(&table, 1).max_extension_bytes, 4096);
+        assert_eq!(caps_in(&table, 2).max_extension_bytes, 8192);
+        assert_eq!(caps_in(&table, 3).max_extension_bytes, 8192);
+        assert!(CAPS_TABLE.windows(2).all(|w| {
+            w[0].0 < w[1].0 && w[0].1.max_extension_bytes <= w[1].1.max_extension_bytes
+        }));
     }
 
     #[test]

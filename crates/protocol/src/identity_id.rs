@@ -32,7 +32,7 @@ use utoipa::{
 };
 use uuid::Uuid;
 
-use crate::signing_bytes::{tags, Builder};
+use crate::signing_bytes::{tags, Builder, HashAlgo};
 
 /// Domain-separation tag hashed ahead of the key when deriving an identity id.
 pub const IDENTITY_ID_DOMAIN_TAG: &[u8] = b"avalon-identity-id-v1";
@@ -345,7 +345,7 @@ impl Default for TestIdentity {
     }
 }
 
-/// Bytes signed for `identity.created`: tag `avalon.identity.created`, version 1, then
+/// Bytes signed for `identity.created`: tag `avalon.identity.created`, layout version 1 (header and extensions as in `signing_bytes`), then
 /// `network_id` str, `shard_id` str, `ticket_id` uuid, `identity_id` 32 raw bytes, inception
 /// `public_key` 32 raw bytes, `display_name` str. The ticket binds one registration ceremony and
 /// the network and shard one ledger stream. The ticket id is also the id of the inception signing
@@ -372,16 +372,16 @@ pub fn identity_created_signing_bytes(
 /// The identity-chain position a signed key event claims: the `seq` after the head it extends and
 /// the head's event hash (`None` for the first chained event).
 fn with_position(builder: Builder, seq: u64, prev_hash: Option<&[u8; 32]>) -> Builder {
-    let builder = builder.u64(seq);
+    let builder = builder.u64(seq).hash_algo(HashAlgo::Sha256);
     match prev_hash {
         Some(hash) => builder.u8(1).hash(hash),
         None => builder.u8(0),
     }
 }
 
-/// Bytes the approving device signs for a grant: tag `avalon.device_grant.approved`, version 1,
+/// Bytes the approving device signs for a grant: tag `avalon.device_grant.approved`, layout version 1,
 /// then `grant_id` uuid, `identity_id` 32 raw bytes, `approver_signing_key_id` uuid, the requested
-/// `public_key` 32 raw bytes, the chain position `seq` u64 and `prev_hash` (u8 flag 0, or 1 then
+/// `public_key` 32 raw bytes, the chain position `seq` u64, `hash_algo` u8 and `prev_hash` (u8 flag 0, or 1 then
 /// 32 raw bytes). The grant id is also the id of the key the grant creates.
 pub fn device_grant_approval_signing_bytes(
     grant_id: Uuid,
@@ -401,9 +401,9 @@ pub fn device_grant_approval_signing_bytes(
         .expect("device grant fields fit a u32 length")
 }
 
-/// Bytes a signing-key revocation signs: tag `avalon.identity.signing_key_revoked`, version 1,
+/// Bytes a signing-key revocation signs: tag `avalon.identity.signing_key_revoked`, layout version 1,
 /// then `identity_id` 32 raw bytes, `signing_key_id` uuid, `revoked_by_signing_key_id` uuid, and
-/// the chain position `seq` u64 and `prev_hash` encoded as for a device grant.
+/// the chain position `seq` u64, `hash_algo` u8 and `prev_hash` encoded as for a device grant.
 pub fn signing_key_revoked_signing_bytes(
     identity_id: &IdentityId,
     signing_key_id: Uuid,
@@ -618,15 +618,17 @@ mod tests {
         let pk = key.verifying_key().to_bytes();
         let bytes = identity_created_signing_bytes("net", "game:x/1", Uuid::nil(), &id, &pk, "a:b");
         let mut expected = b"avalon.identity.created".to_vec();
-        expected.extend_from_slice(&[0, 1, 0, 0, 0, 3]);
+        expected.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0, 0, 3]);
         expected.extend_from_slice(b"net");
         expected.extend_from_slice(&[0, 0, 0, 8]);
         expected.extend_from_slice(b"game:x/1");
         expected.extend_from_slice(&[0; 16]);
         expected.extend_from_slice(id.as_bytes());
+        expected.push(1);
         expected.extend_from_slice(&pk);
         expected.extend_from_slice(&[0, 0, 0, 3]);
         expected.extend_from_slice(b"a:b");
+        expected.extend_from_slice(&[0, 0]);
         assert_eq!(bytes, expected);
     }
 
@@ -645,7 +647,7 @@ mod tests {
         assert_ne!(base, grant(a, 2, Some(&[8u8; 32])));
         assert_ne!(base, grant(a, 2, None));
         assert_ne!(grant(a, 1, None), grant(a, 1, Some(&[0u8; 32])));
-        assert!(base.starts_with(b"avalon.device_grant.approved\x00\x01"));
+        assert!(base.starts_with(b"avalon.device_grant.approved\x00\x01\x00\x00\x00\x01"));
 
         let revoked = |signing, by, seq, prev: Option<&[u8; 32]>| {
             signing_key_revoked_signing_bytes(&id, signing, by, seq, prev)
@@ -654,9 +656,10 @@ mod tests {
         assert_ne!(base, revoked(b, a, 2, Some(&head)));
         assert_ne!(base, revoked(a, b, 3, Some(&head)));
         assert_ne!(base, revoked(a, b, 2, None));
-        assert!(base.starts_with(b"avalon.identity.signing_key_revoked\x00\x01"));
-        let mut tail = vec![0, 0, 0, 0, 0, 0, 0, 2, 1];
+        assert!(base.starts_with(b"avalon.identity.signing_key_revoked\x00\x01\x00\x00\x00\x01"));
+        let mut tail = vec![0, 0, 0, 0, 0, 0, 0, 2, 1, 1];
         tail.extend_from_slice(&head);
+        tail.extend_from_slice(&[0, 0]);
         assert!(base.ends_with(&tail));
     }
 

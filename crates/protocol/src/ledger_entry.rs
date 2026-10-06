@@ -128,11 +128,6 @@ mod tests {
         let (p, h) = ([0u8; 32], [1u8; 32]);
         let base = entry_hash(&input(&p, &h)).unwrap();
         let other = [9u8; 32];
-        let other_rules = Envelope {
-            rules_version: 1,
-            layout_version: 1,
-            ..ENVELOPE.clone()
-        };
         let with_extension = Envelope {
             extensions: crate::signing_bytes::Extensions::new(
                 vec![crate::signing_bytes::Extension {
@@ -188,10 +183,6 @@ mod tests {
             },
             EntryHashInput {
                 event_version: 2,
-                ..input(&p, &h)
-            },
-            EntryHashInput {
-                envelope: &other_rules,
                 ..input(&p, &h)
             },
             EntryHashInput {
