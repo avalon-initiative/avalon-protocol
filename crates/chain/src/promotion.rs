@@ -167,7 +167,7 @@ impl<'a> PlanBuilder<'a> {
                         version: entry.version,
                     },
                 );
-                if recomputed != entry.entry_hash {
+                if recomputed.as_deref() != Ok(entry.entry_hash.as_str()) {
                     return Err(PromotionError::HashMismatch { seq: entry.seq });
                 }
             }
@@ -614,7 +614,8 @@ mod tests {
                     timestamp: OffsetDateTime::UNIX_EPOCH,
                     version: 1,
                 },
-            );
+            )
+            .unwrap();
             out.push(MirroredEntry {
                 source_url: "peer".into(),
                 network_id: NET.into(),

@@ -45,7 +45,8 @@ fn genuine_ledger_with(network_id: &str, payloads: Vec<serde_json::Value>) -> Le
                 timestamp: ts,
                 version: 1,
             },
-        );
+        )
+        .unwrap();
         entries.push(serde_json::json!({
             "seq": i + 1, "event_id": event_id, "kind": "test.noop", "issuer": who,
             "subject": who, "payload": payload, "payload_pruned": false, "version": 1,
@@ -248,7 +249,8 @@ async fn forged_content_with_a_recomputed_hash_fails_the_proof_leaf_check() {
             timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
             version: 1,
         },
-    );
+    )
+    .unwrap();
     served[1]["entry_hash"] = serde_json::json!(forged);
     let server = ledger.serve(served).await;
     let err = ledger.backfill_from(&pool, &server).await.unwrap_err();

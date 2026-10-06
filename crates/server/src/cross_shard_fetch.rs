@@ -368,7 +368,8 @@ async fn verify_one_entry(
             timestamp: entry.event_timestamp,
             version: entry.version,
         },
-    );
+    )
+    .map_err(|_| CrossShardFetchError::EntryHashMismatch)?;
     if recomputed != entry.entry_hash || recomputed != proof_dto.leaf_hash {
         return Err(CrossShardFetchError::EntryHashMismatch);
     }

@@ -25,6 +25,7 @@ pub(crate) mod test_env {
 }
 
 pub mod achievements;
+pub mod canonical_payload;
 pub mod client_known_list;
 pub mod connectivity;
 pub mod continuation;

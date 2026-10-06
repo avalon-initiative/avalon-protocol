@@ -104,6 +104,8 @@ pub async fn enqueue(
             crate::replica::REFUSAL_MARKER.to_string(),
         ));
     }
+    avalon_protocol::canonical_payload::validate(&event.payload)
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let event_json = serde_json::to_value(event).expect("ProtocolEvent should serialize");
     if let Some(trace) = crate::op_trace::pending_for_current() {
         let row_id: Uuid =

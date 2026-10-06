@@ -336,6 +336,7 @@ pub struct ProtocolEvent {
     pub kind: String,
     pub issuer: GlobalId,
     pub subject: GlobalId,
+    #[serde(deserialize_with = "crate::canonical_payload::deserialize_strict")]
     pub payload: serde_json::Value,
     pub timestamp: OffsetDateTime,
     pub version: u32,

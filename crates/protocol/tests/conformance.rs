@@ -1119,3 +1119,38 @@ fn domain_tag_registry_matches_shared_vectors() {
         .collect();
     assert_eq!(have, want, "registry diverged from domain-tags.json");
 }
+
+/// `canonical-payload.json`: restricted RFC 8785 canonical encoding of
+/// free-form payloads, accepted and rejected inputs.
+#[test]
+fn canonical_payload_matches_shared_vectors() {
+    use avalon_protocol::canonical_payload::{canonicalize_str, CanonicalPayloadError};
+
+    let doc = load("canonical-payload.json");
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(vectors.len() > 50, "vectors file looks truncated");
+    for v in vectors {
+        let name = v["name"].as_str().expect("name");
+        let text = v["input"]["jsonUtf8"].as_str().expect("jsonUtf8");
+        let got = canonicalize_str(text);
+        match v["expected"]["error"].as_str() {
+            None => assert_eq!(
+                got.as_deref(),
+                Ok(v["expected"]["canonicalUtf8"]
+                    .as_str()
+                    .expect("canonicalUtf8")),
+                "{name}"
+            ),
+            Some(code) => {
+                let got_code = match got {
+                    Ok(out) => panic!("{name}: expected {code}, got {out}"),
+                    Err(CanonicalPayloadError::InvalidNumber { .. }) => "invalid_number",
+                    Err(CanonicalPayloadError::DuplicateKey { .. }) => "duplicate_key",
+                    Err(CanonicalPayloadError::Malformed(_)) => "malformed",
+                    Err(CanonicalPayloadError::TooDeep) => "too_deep",
+                };
+                assert_eq!(got_code, code, "{name}");
+            }
+        }
+    }
+}

@@ -43,6 +43,9 @@ pub enum SettlementError {
     /// A mirrored entry has no payload, so its hash cannot be recomputed and it was not stored.
     #[error("mirrored entry seq={seq}: payload is absent, so its hash cannot be recomputed")]
     MirroredPayloadUnverifiable { seq: i64 },
+    /// A submitted payload has no canonical encoding, so it was not stored.
+    #[error("payload cannot be canonically encoded: {0}")]
+    InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
 }
 
 /// Anything capable of durably committing event batches and letting a caller
