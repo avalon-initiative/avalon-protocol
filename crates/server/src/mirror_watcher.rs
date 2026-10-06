@@ -2755,7 +2755,8 @@ where
         let rows = sqlx::query(
             "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, \
                     m.issuer, m.subject, m.payload, m.payload_hash, m.event_timestamp, m.version, \
-                    m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size \
+                    m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size, \
+                    m.layout_version, m.rules_version, m.hash_algo, m.extensions \
              FROM mirrored_entries m \
              WHERE m.network_id = $1 AND m.shard_id = $2 AND m.seq > $3 \
                AND m.payload IS NOT NULL \
