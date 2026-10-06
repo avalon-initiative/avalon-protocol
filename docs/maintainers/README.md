@@ -27,6 +27,8 @@ settlement signing key) — see that project's own README.
 - [`environments.md`](environments.md) — bringing the dev, int, staging and prod
   networks up and down, adding a network to the trust-anchor list, and the
   protections around prod
+- [`ledger-payload-field-inventory.md`](ledger-payload-field-inventory.md) — every ledger payload
+  field classified against the permanence-versus-erasure decision, checked by a test
 - [`../../.github/CODE_OF_CONDUCT.md`](../../.github/CODE_OF_CONDUCT.md) and
   [`../../.github/SECURITY.md`](../../.github/SECURITY.md)
 

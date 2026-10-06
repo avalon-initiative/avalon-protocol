@@ -1,0 +1,1430 @@
+{
+  "version": 1,
+  "classes": [
+    "authority_state",
+    "pseudonymous_identifier",
+    "content",
+    "personal_data"
+  ],
+  "dispositions": [
+    "none",
+    "commitment",
+    "inline_redactable",
+    "remove",
+    "keep_inline"
+  ],
+  "nested": {
+    "GameRegisteredKeyPayload": "event_payloads.rs",
+    "GuildRoleBadgePayload": "event_payloads.rs",
+    "ClaimProofPayload": "event_payloads.rs",
+    "GuildLink": "guilds.rs"
+  },
+  "kinds": {
+    "achievement.defined": "ClaimDefinedPayload",
+    "achievement.definition_retired": "ClaimDefinitionRetiredPayload",
+    "achievement.definition_updated": "ClaimDefinitionUpdatedPayload",
+    "achievement.issued": "ClaimIssuedPayload",
+    "achievement.revoked": "ClaimRevokedPayload",
+    "friend.accepted": "FriendAcceptedPayload",
+    "friend.relationship_reversed": "FriendRelationshipReversedPayload",
+    "friend.removed": "FriendRemovedPayload",
+    "friend.requested": "FriendRequestedPayload",
+    "game.binding_ended": "GameBindingEndedPayload",
+    "game.binding_established": "GameBindingEstablishedPayload",
+    "game.registered": "GameRegisteredPayload",
+    "game_data.deleted": "GameDataDeletedPayload",
+    "game_data.published": "GameDataPublishedPayload",
+    "game_schema.published": "GameSchemaPublishedPayload",
+    "game_schema_mapping.published": "GameSchemaMappingPublishedPayload",
+    "guild.channel_archived": "GuildChannelArchivedPayload",
+    "guild.channel_created": "GuildChannelCreatedPayload",
+    "guild.channel_renamed": "GuildChannelRenamedPayload",
+    "guild.created": "GuildCreatedPayload",
+    "guild.favorite_games_updated": "GuildFavoriteGamesUpdatedPayload",
+    "guild.game_associated": "GuildGameAssociatedPayload",
+    "guild.member_added": "GuildMemberAddedPayload",
+    "guild.member_removed": "GuildMemberRemovedPayload",
+    "guild.membership_reversed": "GuildMembershipReversedPayload",
+    "guild.owner_transferred": "GuildOwnerTransferredPayload",
+    "guild.role_changed": "GuildRoleChangedPayload",
+    "guild.role_defined": "GuildRoleDefinedPayload",
+    "guild.role_deleted": "GuildRoleDeletedPayload",
+    "guild.updated": "GuildUpdatedPayload",
+    "identity.created": "IdentityCreatedPayload",
+    "identity.passkey_registered": "IdentityPasskeyRegisteredPayload",
+    "identity.passkey_revoked": "IdentityPasskeyRevokedPayload",
+    "identity.recovered": "IdentityRecoveredPayload",
+    "identity.recovery_approved": "IdentityRecoveryApprovedPayload",
+    "identity.recovery_cancelled": "IdentityRecoveryCancelledPayload",
+    "identity.recovery_configured": "IdentityRecoveryConfiguredPayload",
+    "identity.recovery_requested": "IdentityRecoveryRequestedPayload",
+    "identity.signing_key_added": "IdentitySigningKeyAddedPayload",
+    "identity.signing_key_revoked": "IdentitySigningKeyRevokedPayload",
+    "integrator.recognition_published": "IntegratorRecognitionPublishedPayload",
+    "integrator.recognition_revoked": "IntegratorRecognitionRevokedPayload",
+    "issuer.key_added": "IssuerKeyAddedPayload",
+    "issuer.key_revoked": "IssuerKeyRevokedPayload",
+    "issuer.registered": "IssuerRegisteredPayload",
+    "milestone.defined": "ClaimDefinedPayload",
+    "milestone.definition_retired": "ClaimDefinitionRetiredPayload",
+    "milestone.definition_updated": "ClaimDefinitionUpdatedPayload",
+    "milestone.issued": "ClaimIssuedPayload",
+    "milestone.revoked": "ClaimRevokedPayload",
+    "permission.granted": "PermissionGrantedPayload",
+    "permission.revoked": "PermissionRevokedPayload",
+    "profile.updated": "ProfileUpdatedPayload"
+  },
+  "payloads": {
+    "IdentityCreatedPayload": {
+      "fields": {
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "ticket_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "display_name": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Free-text name of a person; leaves public events for an owner-signed salted profile object.",
+          "ref": "#1125 #1314"
+        },
+        "public_key": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "signature": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentitySigningKeyAddedPayload": {
+      "fields": {
+        "signing_key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "public_key": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "device_label": {
+          "class": "personal_data",
+          "disposition": "remove",
+          "reason": "Free-text device name (e.g. a person's phone) is not authority state; keep it node-local or in the committed profile object.",
+          "ref": "#1306"
+        },
+        "approved_by_signing_key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "kind": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "grant_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "approval_signature": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentitySigningKeyRevokedPayload": {
+      "fields": {
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "signing_key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "revoked_by_signing_key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "signature": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentityPasskeyRegisteredPayload": {
+      "fields": {
+        "passkey_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "credential_id": {
+          "class": "personal_data",
+          "disposition": "remove",
+          "reason": "Stable per-device credential handle; passkeys become node-local and authorised by the signing key rather than mirrored credential data.",
+          "ref": "#1306"
+        },
+        "passkey_data": {
+          "class": "personal_data",
+          "disposition": "remove",
+          "reason": "Serialized WebAuthn credential (public key, counter, backup flags) fingerprints a device and is not portable authority.",
+          "ref": "#1306"
+        },
+        "label": {
+          "class": "personal_data",
+          "disposition": "remove",
+          "reason": "Free-text device name; same as device_label.",
+          "ref": "#1306"
+        }
+      }
+    },
+    "IdentityPasskeyRevokedPayload": {
+      "fields": {
+        "passkey_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentityRecoveryConfiguredPayload": {
+      "fields": {
+        "guardian_ids": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Guardian set is ids only and part of the recovery authority."
+        },
+        "threshold": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentityRecoveryRequestedPayload": {
+      "fields": {
+        "request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "threshold": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentityRecoveryApprovedPayload": {
+      "fields": {
+        "request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "guardian_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "approvals_count": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "threshold": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "delay_ends_at": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IdentityRecoveryCancelledPayload": {
+      "fields": {
+        "request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "cancelled_by": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Optional free-text explanation; make it a bounded code or keep it inline and redactable.",
+          "ref": "#1316"
+        }
+      }
+    },
+    "IdentityRecoveredPayload": {
+      "fields": {
+        "request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "device_label": {
+          "class": "personal_data",
+          "disposition": "remove",
+          "reason": "Free-text device name; same as device_label on key events.",
+          "ref": "#1306"
+        }
+      }
+    },
+    "ProfileUpdatedPayload": {
+      "fields": {
+        "display_name": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "avatar_url": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment. A URL also tells a fetcher's address to a third party.",
+          "ref": "#1125 #1314"
+        },
+        "bio": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "favorite_genres": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "pronouns": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "banner_url": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "status": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "links": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "timezone": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "theme_color": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "location": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Profile field; the whole profile moves behind the owner-signed salted commitment.",
+          "ref": "#1125 #1314"
+        },
+        "main_guild": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Not free text, but it is a profile preference and rides in the same committed object.",
+          "ref": "#1314"
+        }
+      }
+    },
+    "GameRegisteredKeyPayload": {
+      "fields": {
+        "key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "algorithm": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "public_key": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "GameRegisteredPayload": {
+      "fields": {
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Public integrator handle, not free text."
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined display text; stays inline and removable.",
+          "ref": "#1316"
+        },
+        "developer": {
+          "class": "personal_data",
+          "disposition": "inline_redactable",
+          "reason": "Can name a person or carry contact details; stays inline and removable (or move behind an integrator profile commitment).",
+          "ref": "#1316"
+        },
+        "category": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "requested_capabilities": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "initial_key": {
+          "class": "authority_state",
+          "disposition": "none",
+          "reason": "Nested key payload, classified separately."
+        }
+      }
+    },
+    "GameBindingEstablishedPayload": {
+      "fields": {
+        "binding_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GameBindingEndedPayload": {
+      "fields": {
+        "binding_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "PermissionGrantedPayload": {
+      "fields": {
+        "binding_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "capability": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "PermissionRevokedPayload": {
+      "fields": {
+        "binding_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "capability": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Optional free-text explanation; make it a bounded code or keep it inline and redactable.",
+          "ref": "#1316"
+        }
+      }
+    },
+    "IssuerRegisteredPayload": {
+      "fields": {
+        "issuer_ref": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "network_id": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "registered_at": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IssuerKeyAddedPayload": {
+      "fields": {
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "algorithm": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "public_key": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "role": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "purpose": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "valid_until": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IssuerKeyRevokedPayload": {
+      "fields": {
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "revoked_at": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Optional free-text explanation; make it a bounded code or keep it inline and redactable.",
+          "ref": "#1316"
+        }
+      }
+    },
+    "FriendRequestedPayload": {
+      "fields": {
+        "from": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "to": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        }
+      }
+    },
+    "FriendAcceptedPayload": {
+      "fields": {
+        "from": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "to": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        }
+      }
+    },
+    "FriendRemovedPayload": {
+      "fields": {
+        "a": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "b": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none",
+          "reason": "Social graph stays public as ids only.",
+          "ref": "#1223"
+        }
+      }
+    },
+    "FriendRelationshipReversedPayload": {
+      "fields": {
+        "reverses_event_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "recovery_request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "counterparty_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "effect": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildCreatedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "tag": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "owner": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildLink": {
+      "fields": {
+        "label": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "url": {
+          "class": "personal_data",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object. A URL can point at a person's own pages.",
+          "ref": "#1315"
+        }
+      }
+    },
+    "GuildUpdatedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "tag": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "motd": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "banner": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "icon": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "links": {
+          "class": "content",
+          "disposition": "commitment",
+          "reason": "Guild metadata is a non-unique label; moves into the committed guild object.",
+          "ref": "#1315"
+        },
+        "recruiting": {
+          "class": "authority_state",
+          "disposition": "none",
+          "reason": "Policy flag read by the join flow."
+        },
+        "public": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "game_breakdown_public": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "join_policy": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "roster_visibility": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildRoleBadgePayload": {
+      "fields": {
+        "icon": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Bounded cosmetic identifier, not free text."
+        },
+        "color": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Bounded cosmetic value (colour code)."
+        }
+      }
+    },
+    "GuildRoleDefinedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name_index": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text role label on the guild chain; inline and removable by a moderator.",
+          "ref": "#1316"
+        },
+        "permissions": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free text on the guild chain; inline and removable by a moderator.",
+          "ref": "#1316"
+        },
+        "badge": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Nested badge payload, classified separately."
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildRoleDeletedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name_index": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildMemberAddedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "role_index": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "via": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildMemberRemovedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text removal reason about a person; make it a bounded code or keep it inline and redactable.",
+          "ref": "#1316"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildMembershipReversedPayload": {
+      "fields": {
+        "reverses_event_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "recovery_request_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "effect": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "role_index": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildRoleChangedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "identity_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "role_index": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildOwnerTransferredPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "from": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "to": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildGameAssociatedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildFavoriteGamesUpdatedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_ids": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildChannelCreatedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "channel_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text channel label on the guild chain; inline and removable by a moderator.",
+          "ref": "#1316"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildChannelRenamedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "channel_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text channel label on the guild chain; inline and removable by a moderator.",
+          "ref": "#1316"
+        },
+        "announcement_only": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "topic": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text channel topic; inline and removable by a moderator.",
+          "ref": "#1316"
+        },
+        "public": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GuildChannelArchivedPayload": {
+      "fields": {
+        "guild_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "channel_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "actor": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GameSchemaPublishedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "version": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "proto_source": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-authored schema text (comments and names are free text); inline and removable, with the validation consequence tracked in #1316.",
+          "ref": "#1316"
+        },
+        "supersedes": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "default_visibility": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "field_visibility": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "GameSchemaMappingPublishedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "integrator_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "from_schema_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "to_schema_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-authored free text; inline and removable.",
+          "ref": "#1316"
+        },
+        "field_correspondence": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Structural field-name mapping that the mapping logic reads; bounded by the schemas, not prose."
+        }
+      }
+    },
+    "GameDataPublishedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "schema": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "subject": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "instance": {
+          "class": "personal_data",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined data about a person (arbitrary JSON); inline and removable, and private-visibility schemas should not be public events at all.",
+          "ref": "#1316"
+        },
+        "supersedes": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "GameDataDeletedPayload": {
+      "fields": {
+        "instance_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "schema": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "subject": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "reason_code": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Optional free-text explanation; make it a bounded code or keep it inline and redactable.",
+          "ref": "#1316"
+        }
+      }
+    },
+    "ClaimDefinedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "key": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined catalogue text; stays inline and removable.",
+          "ref": "#1316"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined catalogue text; stays inline and removable.",
+          "ref": "#1316"
+        },
+        "schema": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "icon": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Bounded cosmetic identifier, not free text."
+        },
+        "icon_url": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "External URL that third parties can use to track fetchers; inline and removable.",
+          "ref": "#1316"
+        },
+        "version": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "ClaimDefinitionUpdatedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "key": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "name": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined catalogue text; stays inline and removable.",
+          "ref": "#1316"
+        },
+        "description": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined catalogue text; stays inline and removable.",
+          "ref": "#1316"
+        },
+        "schema": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "icon": {
+          "class": "content",
+          "disposition": "keep_inline",
+          "reason": "Bounded cosmetic identifier, not free text."
+        },
+        "icon_url": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "External URL that third parties can use to track fetchers; inline and removable.",
+          "ref": "#1316"
+        },
+        "version": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "ClaimDefinitionRetiredPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "game_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "slug": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "key": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    },
+    "ClaimProofPayload": {
+      "fields": {
+        "key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "algorithm": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "bytes": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "ClaimIssuedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "issuer": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "subject": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "achievement": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "evidence": {
+          "class": "personal_data",
+          "disposition": "inline_redactable",
+          "reason": "Integrator-defined JSON (up to 4 KB) about a person; inline and removable.",
+          "ref": "#1316"
+        },
+        "proof": {
+          "class": "authority_state",
+          "disposition": "none",
+          "reason": "Nested proof payload, classified separately."
+        }
+      }
+    },
+    "ClaimRevokedPayload": {
+      "fields": {
+        "id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "attestation_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "issuer": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "reason_code": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "reason": {
+          "class": "content",
+          "disposition": "inline_redactable",
+          "reason": "Free-text revocation reason about a person's claim; inline and removable.",
+          "ref": "#1316"
+        }
+      }
+    },
+    "IntegratorRecognitionPublishedPayload": {
+      "fields": {
+        "recognizer_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "recognized_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "scope": {
+          "class": "authority_state",
+          "disposition": "none"
+        }
+      }
+    },
+    "IntegratorRecognitionRevokedPayload": {
+      "fields": {
+        "recognizer_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "recognized_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        }
+      }
+    }
+  }
+}

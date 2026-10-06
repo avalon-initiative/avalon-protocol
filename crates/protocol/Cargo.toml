@@ -35,3 +35,5 @@ sqlx = ["dep:sqlx"]
 
 [dev-dependencies]
 rand.workspace = true
+# Parses payload struct fields for the field-classification check (tests only).
+syn.workspace = true
