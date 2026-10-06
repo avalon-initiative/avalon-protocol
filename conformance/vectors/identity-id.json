@@ -1,6 +1,6 @@
 {
   "$schema": "./SCHEMA.md#identity-id",
-  "description": "Self-certifying identity id (avalon_protocol::identity_id): identity_id = lowercase_hex(SHA-256(domain tag || ed25519 public key, 32 raw bytes)), the full 256 bits as exactly 64 characters of [0-9a-f] with no prefix. The domain tag is the UTF-8 bytes of 'avalon-identity-id-v1'. Parsing is strict and never normalises: uppercase, any other length (63, 65), 'id:' or 'node:' prefixes and UUID text are rejected. Key acceptability (kind key_acceptability) is the shared Ed25519 policy: canonical encoding and not of small order; a torsion-component key such as y = 3 is accepted. The id differs from the node: shard id for the same key (kind distinct_from_shard_id). Encodings: a public key is lowercase HEX inside signing bytes and standard BASE64 on the wire.",
+  "description": "Self-certifying identity id (avalon_protocol::identity_id): identity_id = lowercase_hex(SHA-256(domain tag || ed25519 public key, 32 raw bytes)), the full 256 bits as exactly 64 characters of [0-9a-f] with no prefix. The domain tag is the UTF-8 bytes of 'avalon-identity-id-v1'. Parsing is strict and never normalises: uppercase, 'id:' or 'node:' prefixes and UUID text are rejected. A length other than 64 UTF-8 bytes is an unknown id scheme (a future scheme must use a different length and its own domain tag), reported apart from a malformed id of length 64. Parse vectors carry expected.result: valid, invalid_id or unknown_id_scheme (with expected.length, the UTF-8 byte length); expected.valid is kept. Key acceptability (kind key_acceptability) is the shared Ed25519 policy: canonical encoding and not of small order; a torsion-component key such as y = 3 is accepted. The id differs from the node: shard id for the same key (kind distinct_from_shard_id). Encodings: a public key is lowercase HEX inside signing bytes and standard BASE64 on the wire.",
   "domainTagHex": "6176616c6f6e2d6964656e746974792d69642d7631",
   "domainTagUtf8": "avalon-identity-id-v1",
   "generation": "Deterministic. Seeds are Ed25519 seeds (all bytes equal); publicKeyHex is the derived public key; preimageHex is domainTagHex followed by the key bytes.",
@@ -36,6 +36,7 @@
     },
     {
       "expected": {
+        "result": "valid",
         "valid": true
       },
       "input": {
@@ -46,6 +47,7 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -56,6 +58,8 @@
     },
     {
       "expected": {
+        "length": 63,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -66,6 +70,8 @@
     },
     {
       "expected": {
+        "length": 65,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -76,6 +82,8 @@
     },
     {
       "expected": {
+        "length": 67,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -86,6 +94,8 @@
     },
     {
       "expected": {
+        "length": 69,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -96,6 +106,8 @@
     },
     {
       "expected": {
+        "length": 36,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -106,6 +118,7 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -116,6 +129,8 @@
     },
     {
       "expected": {
+        "length": 0,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -188,6 +203,8 @@
     },
     {
       "expected": {
+        "length": 65,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -198,6 +215,8 @@
     },
     {
       "expected": {
+        "length": 65,
+        "result": "unknown_id_scheme",
         "valid": false
       },
       "input": {
@@ -208,6 +227,7 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -218,6 +238,7 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -228,26 +249,29 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
-        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce0023555０"
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce0023555\uff10"
       },
       "kind": "parse",
       "name": "parse: fullwidth digit zero in a 64-byte string"
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
-        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558٠"
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558\u0660"
       },
       "kind": "parse",
       "name": "parse: arabic-indic digit in a 64-byte string"
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -258,6 +282,7 @@
     },
     {
       "expected": {
+        "result": "invalid_id",
         "valid": false
       },
       "input": {
@@ -437,6 +462,75 @@
       },
       "kind": "strict_verify",
       "name": "strict verify: small-order key and small-order R, S = 0 (non-strict accepts)"
+    },
+    {
+      "expected": {
+        "result": "invalid_id",
+        "valid": false
+      },
+      "input": {
+        "identityId": "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+      },
+      "kind": "parse",
+      "name": "parse: 64 characters of non-hex letters"
+    },
+    {
+      "expected": {
+        "result": "invalid_id",
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e342A0b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: 64 characters with one uppercase hex digit"
+    },
+    {
+      "expected": {
+        "result": "invalid_id",
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558ez"
+      },
+      "kind": "parse",
+      "name": "parse: 64 characters, 'z' in the last position"
+    },
+    {
+      "expected": {
+        "length": 4096,
+        "result": "unknown_id_scheme",
+        "valid": false
+      },
+      "input": {
+        "identityId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "kind": "parse",
+      "name": "parse: very long string, 4096 characters"
+    },
+    {
+      "expected": {
+        "length": 128,
+        "result": "unknown_id_scheme",
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e97c26a0e34260b2c5bb6a795e29cdfe878c907df4bf8c7425c5a8ce00235558e9"
+      },
+      "kind": "parse",
+      "name": "parse: 128 characters, two concatenated ids"
+    },
+    {
+      "expected": {
+        "length": 32,
+        "result": "unknown_id_scheme",
+        "valid": false
+      },
+      "input": {
+        "identityId": "7c26a0e34260b2c5bb6a795e29cdfe87"
+      },
+      "kind": "parse",
+      "name": "parse: 32 characters, a 16-byte digest in hex"
     }
   ]
 }

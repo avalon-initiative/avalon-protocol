@@ -200,8 +200,10 @@ Each file has this shape:
   (`avalon_protocol::identity_id`): `identity_id = lowercase_hex(SHA-256("avalon-identity-id-v1"
   || ed25519_public_key_32_bytes))`, the full 256 bits as exactly 64 characters of `[0-9a-f]`
   with no prefix. Vectors carry a `kind`: `derive` (`seedHex`, `publicKeyHex`; expected
-  `preimageHex` and `identityId`), `parse` (strict: uppercase, 63 and 65 characters, `id:` and
-  `node:` prefixes, UUID text and surrounding whitespace are all rejected, never normalised),
+  `preimageHex` and `identityId`), `parse` (strict: uppercase, `id:` and `node:` prefixes, UUID text and surrounding
+  whitespace are all rejected, never normalised; `expected.result` is `valid`, `invalid_id` (64 UTF-8
+  bytes, not lowercase hex) or `unknown_id_scheme` (any other length, with `expected.length` in UTF-8
+  bytes: a future scheme must use a different length and its own domain tag)),
   `key_acceptability` (canonical encoding and not small-order, the same policy as the `node:`
   shard key; y = 3 is accepted) and `distinct_from_shard_id` (the identity id differs from the
   `node:` id of the same key). A public key is lowercase HEX inside signing bytes and standard

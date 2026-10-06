@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.13.0"
+    "version": "0.13.1"
   },
   "paths": {
     "/attestations/{id}": {
@@ -2714,7 +2714,7 @@
             }
           },
           "400": {
-            "description": "INVALID_IDENTITY_ID, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"
+            "description": "INVALID_IDENTITY_ID, UNKNOWN_ID_SCHEME, IDENTITY_ID_MISMATCH or INVALID_DISPLAY_NAME"
           },
           "409": {
             "description": "IDENTITY_ID_TAKEN or DISPLAY_NAME_TAKEN"
