@@ -305,7 +305,7 @@ impl<'de> Deserialize<'de> for ProtocolEventKind {
 /// One event's position in its identity's own per-identity chain —
 /// `crate::identity_chain`'s deterministic conflict rule operates on
 /// exactly these two numbers plus the event's own content hash (recomputed
-/// by `identity_chain::compute_event_hash`, never stored redundantly here).
+/// by `identity_chain::compute_event_hash` over a `ChainHashInput`, never stored redundantly here).
 ///
 /// `prev_hash` is hex-encoded on the wire (`sha256` digest,
 /// `identity_chain::EventHash`), matching every other hash-as-string
