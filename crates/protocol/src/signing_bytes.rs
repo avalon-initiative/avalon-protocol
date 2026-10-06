@@ -19,6 +19,7 @@
 //!    ids and strings via `str`, public keys and hashes via `key`/`hash`/`fixed`
 //!    (raw bytes, never hex text), times as `i64` unix seconds, UUIDs via `uuid`.
 //!    Start at version `1`; the old text layout is deleted, not kept (no shims).
+//!    `fixed` takes only widths the layout fixes, never caller-sized data.
 //! 3. Verifiers parse with [`Reader`] when they need the fields back, or rebuild
 //!    the bytes from the parsed request and compare; never split on a delimiter.
 //! 4. Replace the layout's conformance vector with exact `signingBytesHex` and
@@ -226,6 +227,7 @@ impl<'a> Reader<'a> {
         Ok(reader)
     }
 
+    /// The reader accepts any version; the caller must check it before reading fields.
     pub fn version(&self) -> u16 {
         self.version
     }

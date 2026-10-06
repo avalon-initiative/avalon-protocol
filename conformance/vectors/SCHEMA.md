@@ -207,7 +207,8 @@ Each file has this shape:
   fixed order (u32-BE length-prefixed strings and bytes, raw keys, hashes and
   UUIDs, fixed-width big-endian integers). `vectors` build the bytes from a field
   list and must read back; `rejectVectors` must fail with exactly `expected.error`
-  (`tag_mismatch`, `truncated`, `invalid_utf8`, `trailing_bytes`). Boundary cases:
+  (`tag_mismatch`, `truncated`, `invalid_utf8`, `trailing_bytes`; `field_too_long`
+  needs a 4 GiB field and has no vector). `fixed` fields are 4 bytes in the vectors. Boundary cases:
   empty and 65536-byte fields, `:` `,` and NUL, multi-byte UTF-8, integer extremes.
   The file's `description` defines the field-object format. Rust only today.
 - `domain-tags.json` — the registry of domain tags, one per signed kind
