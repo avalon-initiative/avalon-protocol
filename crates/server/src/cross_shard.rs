@@ -224,10 +224,7 @@ impl TryFrom<FetchedSth> for CosignedTreeHead {
     fn try_from(dto: FetchedSth) -> Result<Self, Self::Error> {
         let cosignature_dtos = dto.cosignatures.clone();
         let sth = SignedTreeHead::try_from(dto)?;
-        let cosignatures = cosignature_dtos
-            .iter()
-            .map(|c| c.to_witness_cosignature(&sth))
-            .collect::<Result<Vec<_>, _>>()?;
+        let cosignatures = crate::cosign_verify::readable_cosignatures(&cosignature_dtos, &sth);
         Ok(CosignedTreeHead { sth, cosignatures })
     }
 }
@@ -744,6 +741,16 @@ pub async fn list_integrator_shards(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_head_with_one_unreadable_cosignature_survives_and_a_pre_envelope_body_is_refused() {
+        use crate::cosign_verify::test_support::*;
+        let served = served_with_one_unreadable_cosignature();
+        let dto: FetchedSth = serde_json::from_value(served.body.clone()).unwrap();
+        let head = CosignedTreeHead::try_from(dto).unwrap();
+        assert_head_survives(&head, &served);
+        assert!(serde_json::from_value::<FetchedSth>(without_envelope(served.body)).is_err());
+    }
+
     use super::*;
 
     #[test]

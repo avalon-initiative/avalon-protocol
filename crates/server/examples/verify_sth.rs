@@ -35,8 +35,8 @@ struct Response {
 }
 
 impl Response {
-    fn sth(&self) -> SignedTreeHead {
-        SignedTreeHead {
+    fn sth(&self) -> Result<SignedTreeHead, String> {
+        Ok(SignedTreeHead {
             tree_size: self.tree_size,
             root_hash: self.root_hash.clone(),
             network_id: self.network_id.clone(),
@@ -46,8 +46,8 @@ impl Response {
             envelope: self
                 .envelope
                 .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
-                .expect("a head this tool can read"),
-        }
+                .map_err(|e| format!("head cannot be read by this tool: {e}"))?,
+        })
     }
 }
 
@@ -83,16 +83,19 @@ fn main() {
         Some("old") => {
             let response: Response = serde_json::from_str(&stdin()).expect("STH json");
             let key = load_verify_key_from_env().expect("verify key in env");
-            std::process::exit(if verify_tree_head(&key, &response.sth()) {
-                0
-            } else {
-                1
+            let sth = response.sth().unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(3)
             });
+            std::process::exit(if verify_tree_head(&key, &sth) { 0 } else { 1 });
         }
         Some("cosigned") => {
             let responses: Vec<Response> = serde_json::from_str(&stdin()).expect("STH json array");
             let author = load_verify_key_from_env().expect("verify key in env");
-            let sth = responses[0].sth();
+            let sth = responses[0].sth().unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(3)
+            });
             let mut cosignatures = Vec::new();
             for response in &responses {
                 if response.root_hash != sth.root_hash || response.tree_size != sth.tree_size {
@@ -104,10 +107,10 @@ fn main() {
                             c.witness_key_id == dto.witness_key_id
                         },
                     ) {
-                        cosignatures.push(
-                            dto.to_witness_cosignature(&sth)
-                                .expect("a cosignature this tool can read"),
-                        );
+                        // An unreadable cosignature is skipped, never counted.
+                        if let Ok(cosig) = dto.to_witness_cosignature(&sth) {
+                            cosignatures.push(cosig);
+                        }
                     }
                 }
             }

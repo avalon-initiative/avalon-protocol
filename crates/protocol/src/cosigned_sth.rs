@@ -53,6 +53,7 @@ fn valid_fresh_witness_ids(
             || cosig.root_hash != head.sth.root_hash
             || cosig.network_id != head.sth.network_id
             || cosig.author_created_at != head.sth.created_at
+            || cosig.envelope.hash_algo != head.sth.envelope.hash_algo
             || cosig.author_key_id != head.sth.signing_key_id
             || !cosig
                 .author_signature
@@ -271,6 +272,35 @@ mod tests {
         ));
 
         assert!(verify_cosigned_tree_head(
+            &f.author_verifying_key,
+            &head,
+            &f.known_list,
+            f.freshness_cutoff,
+            f.now
+        ));
+    }
+
+    #[test]
+    fn a_cosignature_over_another_hash_algorithm_does_not_count() {
+        use crate::signing_bytes::{Envelope, HashAlgo};
+        let f = fixture(3);
+        let mut head = base_head(
+            &f.author_key,
+            5,
+            &root_hash_fixture(1),
+            "avalon-test",
+            f.now,
+        );
+        let ok = cosign(&f.witness_keys[0].1, &f.witness_keys[0].0, &head, f.now);
+        let mut other = cosign(&f.witness_keys[1].1, &f.witness_keys[1].0, &head, f.now);
+        other.envelope = Envelope {
+            hash_algo: HashAlgo::SyntheticTest,
+            ..other.envelope
+        };
+        // Re-signed, so the signature is valid over its own (different) bytes.
+        other = witness::sign_unsigned(&f.witness_keys[1].1, other).unwrap();
+        head.cosignatures = vec![ok, other];
+        assert!(!verify_cosigned_tree_head(
             &f.author_verifying_key,
             &head,
             &f.known_list,

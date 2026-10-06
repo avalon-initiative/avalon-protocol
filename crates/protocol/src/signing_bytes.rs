@@ -158,12 +158,17 @@ impl SigningBytesError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashAlgo {
     Sha256,
+    /// A second algorithm that exists only so tests can exercise mismatches; never on the wire.
+    #[cfg(test)]
+    SyntheticTest,
 }
 
 impl HashAlgo {
     pub const fn id(self) -> u8 {
         match self {
             Self::Sha256 => 0x01,
+            #[cfg(test)]
+            Self::SyntheticTest => 0x7f,
         }
     }
 
@@ -181,6 +186,10 @@ impl HashAlgo {
     pub fn digest(self, data: &[u8]) -> [u8; 32] {
         match self {
             Self::Sha256 => Sha256::digest(data).into(),
+            #[cfg(test)]
+            Self::SyntheticTest => Sha256::digest(data).into(),
+            #[cfg(test)]
+            Self::SyntheticTest => Sha256::digest(data).into(),
         }
     }
 }

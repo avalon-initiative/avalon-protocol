@@ -100,7 +100,7 @@ pub fn witness_signing_message(
     )
 }
 
-fn sign_unsigned(
+pub(crate) fn sign_unsigned(
     witness_signing_key: &SigningKey,
     mut cosig: WitnessCosignature,
 ) -> Result<WitnessCosignature, WitnessSigningError> {

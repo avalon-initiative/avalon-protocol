@@ -178,7 +178,10 @@ async fn fetch_own_cosignature(
     {
         Some(c) => match c.to_witness_cosignature(sth) {
             Ok(cosig) => GatherOutcome::Fetched(cosig),
-            Err(_) => GatherOutcome::Malformed,
+            Err(err) => {
+                tracing::warn!(witness = %source.key_id, error = %err, "witness cosignature unreadable, not counted");
+                GatherOutcome::Malformed
+            }
         },
         None => GatherOutcome::NoOwnCosignature,
     }
