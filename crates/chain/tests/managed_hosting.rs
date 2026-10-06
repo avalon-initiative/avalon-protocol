@@ -81,6 +81,10 @@ async fn prepare_then_finalize_with_a_valid_signature_commits_the_batch() {
         &preview.network_id,
         "integrator-key-1",
         preview.created_at,
+        &preview
+            .envelope
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let signature = integrator_key.sign(&message);
@@ -143,6 +147,10 @@ async fn finalize_with_an_invalid_signature_is_rejected_and_inserts_nothing() {
         &preview.network_id,
         "integrator-key-1",
         preview.created_at,
+        &preview
+            .envelope
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let bad_signature = wrong_key.sign(&message);
@@ -211,6 +219,10 @@ async fn finalize_after_the_tip_moved_since_prepare_is_rejected() {
         &preview.network_id,
         "integrator-key-1",
         preview.created_at,
+        &preview
+            .envelope
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let signature = integrator_key.sign(&message);
@@ -260,6 +272,10 @@ async fn finalize_is_idempotent_on_a_replayed_batch_id() {
         &preview.network_id,
         "integrator-key-1",
         preview.created_at,
+        &preview
+            .envelope
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let signature = integrator_key.sign(&message);

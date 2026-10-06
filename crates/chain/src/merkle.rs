@@ -417,7 +417,10 @@ mod tests {
     #[test]
     fn empty_root_matches_sha256_of_empty_string() {
         assert_eq!(empty_root(HashAlgo::Sha256).to_vec(), expected_roots()[0]);
-        assert_eq!(mth::<Vec<u8>>(&[]).to_vec(), expected_roots()[0]);
+        assert_eq!(
+            mth::<Vec<u8>>(HashAlgo::Sha256, &[]).to_vec(),
+            expected_roots()[0]
+        );
     }
 
     /// The core correctness test: MTH for every tree size from the

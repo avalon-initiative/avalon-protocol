@@ -1676,6 +1676,9 @@ mod tests {
             signing_key_id: "test-key".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         }
     }
 

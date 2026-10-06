@@ -114,11 +114,18 @@ async fn mock_remote_node(
     served_payload: &serde_json::Value,
 ) -> (MockServer, SigningKey) {
     let signing_key = SigningKey::generate(&mut rand::rng());
-    let root = merkle::mth_of_hex_hashes(std::slice::from_ref(&real.entry_hash))
-        .expect("single valid hex hash should always produce a root");
+    let root = merkle::mth_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        std::slice::from_ref(&real.entry_hash),
+    )
+    .expect("single valid hex hash should always produce a root");
     let root_hash = hex::encode(root);
-    let proof = merkle::inclusion_proof_of_hex_hashes(0, std::slice::from_ref(&real.entry_hash))
-        .expect("single-leaf inclusion proof should always succeed");
+    let proof = merkle::inclusion_proof_of_hex_hashes(
+        avalon_chain::ledger_hash_algo(),
+        0,
+        std::slice::from_ref(&real.entry_hash),
+    )
+    .expect("single-leaf inclusion proof should always succeed");
     assert!(
         proof.is_empty(),
         "a single-leaf tree's own inclusion proof has no audit-path nodes"

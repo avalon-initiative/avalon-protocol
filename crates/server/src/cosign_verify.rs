@@ -487,7 +487,7 @@ mod tests {
         let cosig = sign_witness_cosignature(&witness_key, &id, &sth, now).unwrap();
 
         let dto = WitnessCosignatureDto::from_witness_cosignature(&cosig);
-        let rebuilt = dto.to_witness_cosignature(&sth);
+        let rebuilt = dto.to_witness_cosignature(&sth).unwrap();
         assert_eq!(rebuilt, cosig);
     }
 }

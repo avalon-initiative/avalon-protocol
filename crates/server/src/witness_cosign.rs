@@ -1020,16 +1020,40 @@ mod tests {
     #[test]
     fn own_ledger_proof_accepts_an_extension_and_refuses_a_fork() {
         let leaves: Vec<String> = (0u8..12).map(|i| hex::encode([i; 32])).collect();
-        let root = |n: usize| hex::encode(merkle::mth_of_hex_hashes(&leaves[..n]).unwrap());
+        let root = |n: usize| {
+            hex::encode(
+                merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &leaves[..n]).unwrap(),
+            )
+        };
         let cp = checkpoint(5, &root(5));
-        let proof = merkle::consistency_proof_of_hex_hashes(5, &leaves[..12]).unwrap();
-        assert!(proof_extends_checkpoint(&cp, 12, &root(12), &proof));
+        let proof = merkle::consistency_proof_of_hex_hashes(
+            avalon_chain::ledger_hash_algo(),
+            5,
+            &leaves[..12],
+        )
+        .unwrap();
+        assert!(proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
+            &cp,
+            12,
+            &root(12),
+            &proof
+        ));
 
         let mut forked = leaves.clone();
         forked[2] = hex::encode([0xEEu8; 32]);
-        let forked_root = hex::encode(merkle::mth_of_hex_hashes(&forked[..12]).unwrap());
-        assert!(!proof_extends_checkpoint(&cp, 12, &forked_root, &proof));
+        let forked_root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &forked[..12]).unwrap(),
+        );
         assert!(!proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
+            &cp,
+            12,
+            &forked_root,
+            &proof
+        ));
+        assert!(!proof_extends_checkpoint(
+            avalon_chain::ledger_hash_algo(),
             &checkpoint(5, "zz"),
             12,
             &root(12),

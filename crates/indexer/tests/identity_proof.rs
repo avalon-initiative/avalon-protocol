@@ -117,10 +117,7 @@ fn next_position(after: Option<&ProtocolEvent>) -> (u64, Option<[u8; 32]>) {
 }
 
 fn positioned(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> ProtocolEvent {
-    event.identity_chain = Some(IdentityChainPosition {
-        seq,
-        prev_hash: prev.map(hex::encode),
-    });
+    event.identity_chain = Some(IdentityChainPosition::current(seq, prev.map(hex::encode)));
     event
 }
 
@@ -664,11 +661,10 @@ fn at_position(
 ) -> ProtocolEvent {
     use avalon_protocol::events::IdentityChainPosition;
     e.timestamp = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs);
-    e.identity_chain = Some(IdentityChainPosition {
+    e.identity_chain = Some(IdentityChainPosition::current(
         seq,
-        prev_hash: prev
-            .map(|p| hex::encode(avalon_protocol::identity_chain_wire::event_hash(p).unwrap())),
-    });
+        prev.map(|p| hex::encode(avalon_protocol::identity_chain_wire::event_hash(p).unwrap())),
+    ));
     e
 }
 

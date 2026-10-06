@@ -610,7 +610,7 @@ async fn verify_target(
 mod tests {
     use super::*;
     use crate::mirror::CORE_SHARD_ID;
-    use avalon_protocol::signing_bytes::{tags, Envelope, EnvelopeWire};
+    use avalon_protocol::signing_bytes::{tags, Envelope, EnvelopeWire, HashAlgo};
 
     const NET: &str = "avalon-test-promotion";
 
@@ -692,8 +692,10 @@ mod tests {
             (5, 6)
         );
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
-        let expected_first = hex::encode(crate::merkle::mth_of_hex_hashes(&hashes[..2]).unwrap());
-        let expected_last = hex::encode(crate::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let expected_first =
+            hex::encode(crate::merkle::mth_of_hex_hashes(HashAlgo::Sha256, &hashes[..2]).unwrap());
+        let expected_last =
+            hex::encode(crate::merkle::mth_of_hex_hashes(HashAlgo::Sha256, &hashes).unwrap());
         assert_eq!(plan.batches[0].batch_root, expected_first);
         assert_eq!(plan.batches[0].tree_size, 2);
         assert_eq!(plan.batches[1].batch_root, expected_last);
@@ -771,6 +773,7 @@ mod tests {
             signing_key_id: "key".into(),
             created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: Envelope::current(tags::SETTLEMENT_STH),
         };
         let observed = vec![
             sth(2, "ff".repeat(32), "forged"),

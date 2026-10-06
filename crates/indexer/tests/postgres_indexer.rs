@@ -60,10 +60,7 @@ fn next_position(after: Option<&ProtocolEvent>) -> (u64, Option<[u8; 32]>) {
 }
 
 fn at_position(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> ProtocolEvent {
-    event.identity_chain = Some(IdentityChainPosition {
-        seq,
-        prev_hash: prev.map(hex::encode),
-    });
+    event.identity_chain = Some(IdentityChainPosition::current(seq, prev.map(hex::encode)));
     event
 }
 

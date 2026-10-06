@@ -357,6 +357,9 @@ mod tests {
             signing_key_id: "k1".to_string(),
             signature: "deadbeef".to_string(),
             created_at: time::OffsetDateTime::from_unix_timestamp(0).unwrap(),
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         }
     }
 
@@ -596,7 +599,7 @@ mod tests {
     fn an_empty_family_does_not_equal_the_network_empty_root() {
         let empty = compute_shard_family_head("game:x", &no_known(), Vec::new());
         assert_eq!(empty.shard_count, 0);
-        assert_ne!(empty.root_hash, hex::encode(merkle::empty_root()));
+        assert_ne!(empty.root_hash, hex::encode(merkle::empty_root(TREE_ALGO)));
         let other = compute_shard_family_head("game:y", &no_known(), Vec::new());
         assert_ne!(empty.root_hash, other.root_hash);
     }

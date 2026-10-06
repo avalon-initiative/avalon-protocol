@@ -47,6 +47,9 @@ fn fixture_head(network_id: &str, tree_size: i64, root_hash: &str) -> SignedTree
         signing_key_id: "test-key".to_string(),
         signature: "00".repeat(64),
         created_at: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_800_000_000),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     }
 }
 

@@ -763,6 +763,9 @@ mod tests {
                 signing_key_id: "k".to_string(),
                 signature: "sig".to_string(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         }
     }
@@ -1056,8 +1059,13 @@ mod tests {
             entry_hash: String::new(),
             batch_id: uuid::Uuid::new_v4(),
             verified_tree_size: seq,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         };
-        entry.entry_hash = entry.recomputed_hash().expect("payload present");
+        entry.entry_hash = entry.recomputed_hash().unwrap().expect("payload present");
         entry
     }
 

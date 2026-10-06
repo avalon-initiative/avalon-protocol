@@ -3210,6 +3210,9 @@ mod tests {
             signing_key_id: "k".to_string(),
             signature: "sig".to_string(),
             created_at: OffsetDateTime::UNIX_EPOCH,
+            envelope: avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         };
         let observations = vec![
             ("peer-a".to_string(), sth_a("aa")),
@@ -3255,6 +3258,11 @@ mod tests {
             entry_hash: "bb".repeat(32),
             batch_id: Uuid::new_v4(),
             verified_tree_size: 1,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         }
     }
 
@@ -3535,6 +3543,9 @@ mod tests {
             prev_hash: String::new(),
             entry_hash: String::new(),
             batch_id: Uuid::nil(),
+            envelope: EnvelopeWire::from(&avalon_protocol::signing_bytes::Envelope::current(
+                tags::LEDGER_ENTRY,
+            )),
         };
         assert!(entry_within_size_limit(&entry(
             serde_json::json!({"a": "b"})
@@ -3689,13 +3700,20 @@ mod tests {
                 entry_hash: String::new(),
                 batch_id: Uuid::new_v4(),
                 verified_tree_size: seq,
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
             };
-            e.entry_hash = e.recomputed_hash().unwrap();
+            e.entry_hash = e.recomputed_hash().unwrap().unwrap();
             prev = e.entry_hash.clone();
             hashes.push(e.entry_hash.clone());
             mirror::insert_mirrored_entry(&pool, &e).await.unwrap();
         }
-        let served_root = hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let served_root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).unwrap(),
+        );
         let heads: Vec<SignedTreeHead> = [(3i64, served_root), (5, hex::encode([2u8; 32]))]
             .iter()
             .map(|(size, root)| {
@@ -3820,13 +3838,18 @@ mod tests {
                 entry_hash: String::new(),
                 batch_id: Uuid::new_v4(),
                 verified_tree_size: seq,
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
             };
-            e.entry_hash = e.recomputed_hash().unwrap();
+            e.entry_hash = e.recomputed_hash().unwrap().unwrap();
             prev = e.entry_hash.clone();
             hashes.push(e.entry_hash.clone());
             mirror::insert_mirrored_entry(pool, &e).await.unwrap();
         }
-        hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap())
+        hex::encode(merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).unwrap())
     }
 
     async fn observe(
@@ -4193,6 +4216,9 @@ mod tests {
                 signing_key_id: "test-key".to_string(),
                 signature: "sig".to_string(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         )];
 
@@ -4308,10 +4334,7 @@ mod tests {
     fn chained(payload: serde_json::Value, seq: u64, prev: Option<[u8; 32]>) -> serde_json::Value {
         avalon_protocol::identity_chain_wire::embed_position(
             &payload,
-            &avalon_protocol::events::IdentityChainPosition {
-                seq,
-                prev_hash: prev.map(hex::encode),
-            },
+            &avalon_protocol::events::IdentityChainPosition::current(seq, prev.map(hex::encode)),
         )
     }
 
@@ -4358,9 +4381,14 @@ mod tests {
             entry_hash: format!("{seq:064x}"),
             batch_id: Uuid::new_v4(),
             verified_tree_size: seq,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         };
         // A pruned (payload-less) fixture keeps its placeholder hash: it can never be stored.
-        if let Some(hash) = entry.recomputed_hash() {
+        if let Some(hash) = entry.recomputed_hash().ok().flatten() {
             entry.entry_hash = hash;
         }
         entry
@@ -4369,7 +4397,7 @@ mod tests {
     /// Moves a fixture to another shard; the shard is part of the entry hash.
     fn reshard(entry: &mut mirror::MirroredEntry, shard: &str) {
         entry.shard_id = shard.to_string();
-        entry.entry_hash = entry.recomputed_hash().unwrap();
+        entry.entry_hash = entry.recomputed_hash().unwrap().unwrap();
     }
 
     fn b64(bytes: &[u8]) -> String {
@@ -5726,6 +5754,9 @@ mod tests {
                 signing_key_id: "test-key".to_string(),
                 signature: "sig".to_string(),
                 created_at: OffsetDateTime::UNIX_EPOCH,
+                envelope: avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             },
         )]
     }

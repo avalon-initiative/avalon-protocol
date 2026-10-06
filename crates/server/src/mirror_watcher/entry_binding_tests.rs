@@ -53,6 +53,9 @@ fn genuine_ledger_at(network_id: &str, payloads: Vec<serde_json::Value>, seqs: &
                 payload_hash: &payload_hash,
                 timestamp: ts,
                 version: 1,
+                envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
             },
         )
         .unwrap();
@@ -65,7 +68,8 @@ fn genuine_ledger_at(network_id: &str, payloads: Vec<serde_json::Value>, seqs: &
         hashes.push(hash.clone());
         prev = hash;
     }
-    let root = hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap());
+    let root =
+        hex::encode(merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes).unwrap());
     let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
     let sth = avalon_protocol::sth::sign_tree_head(
         &key,
@@ -118,7 +122,12 @@ impl Ledger {
                     .unwrap();
                 // The entry served under that label is the one proven, as a source would answer.
                 let idx = labels.iter().position(|l| *l == seq).unwrap();
-                let proof = merkle::inclusion_proof_of_hex_hashes(idx, &hashes).unwrap();
+                let proof = merkle::inclusion_proof_of_hex_hashes(
+                    avalon_chain::ledger_hash_algo(),
+                    idx,
+                    &hashes,
+                )
+                .unwrap();
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "root_hash": root, "leaf_hash": hashes[idx],
                     "proof": proof.iter().map(hex::encode).collect::<Vec<_>>(),
@@ -262,6 +271,9 @@ async fn forged_content_with_a_recomputed_hash_fails_the_proof_leaf_check() {
             payload_hash: &forged_payload_hash,
             timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
             version: 1,
+            envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
         },
     )
     .unwrap();
@@ -335,6 +347,11 @@ async fn a_resumed_backfill_links_to_the_stored_entry_and_refuses_a_bad_link() {
         entry_hash: ledger.hashes[0].clone(),
         batch_id: Uuid::new_v4(),
         verified_tree_size: 1,
+        envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        ),
     };
     mirror::insert_mirrored_entry(&pool, &stored).await.unwrap();
 
@@ -394,6 +411,11 @@ async fn storage_refuses_content_that_does_not_hash_to_the_claimed_hash() {
         entry_hash: ledger.hashes[0].clone(),
         batch_id: Uuid::new_v4(),
         verified_tree_size: 1,
+        envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        ),
     };
     entry.kind = "identity.created".into();
     let err = mirror::insert_mirrored_entry(&pool, &entry)
@@ -440,6 +462,11 @@ fn binding_check_rejects_each_tampered_field_and_a_bad_link() {
         entry_hash: v["entry_hash"].as_str().unwrap().into(),
         batch_id: Uuid::new_v4(),
         verified_tree_size: 2,
+        envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
+        ),
     };
     let leaf = ledger.hashes[1].clone();
     let prev = ledger.hashes[0].clone();
@@ -566,6 +593,11 @@ async fn a_conflicting_insert_is_an_error_and_advances_nothing() {
             entry_hash: l.hashes[0].clone(),
             batch_id: Uuid::new_v4(),
             verified_tree_size: 1,
+            envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                ),
+            ),
         }
     };
     let (first, second) = (to_entry(&a), to_entry(&b));

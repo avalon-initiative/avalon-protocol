@@ -300,6 +300,9 @@ fn sth_from_json(v: &Value, network_id: &str) -> SignedTreeHead {
         signing_key_id: v["signingKeyId"].as_str().unwrap().to_string(),
         signature: v["signatureHex"].as_str().unwrap().to_string(),
         created_at: parse_offset(v, "createdAtUnixSeconds"),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     }
 }
 
@@ -314,6 +317,9 @@ fn cosignature_from_json(v: &Value, sth: &SignedTreeHead) -> WitnessCosignature 
         witness_key_id: v["witnessKeyId"].as_str().unwrap().to_string(),
         observed_at: parse_offset(v, "observedAtUnixSeconds"),
         signature: v["signatureHex"].as_str().unwrap().to_string(),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::WITNESS_COSIGN,
+        ),
     }
 }
 
@@ -477,6 +483,9 @@ fn identity_chain_matches_shared_vectors() {
             event_version: i["eventVersion"].as_u64().unwrap().try_into().unwrap(),
             timestamp_micros: micros,
             payload_hash: &payload_hash,
+            envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::IDENTITY_CHAIN_EVENT,
+            ),
         };
         assert_eq!(
             hex::encode(chain_event_signing_bytes(&input).unwrap()),

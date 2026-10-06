@@ -1980,6 +1980,8 @@ mod tests {
 
     const NET: &str = "avalon-test";
     const SHARD: &str = CORE_SHARD_ID;
+    static TEST_ENVELOPE: std::sync::LazyLock<Envelope> =
+        std::sync::LazyLock::new(|| Envelope::current(tags::LEDGER_ENTRY));
 
     fn ph(payload: &serde_json::Value) -> String {
         payload_hash_hex(payload).unwrap()
@@ -1995,6 +1997,7 @@ mod tests {
             payload_hash,
             timestamp: time::OffsetDateTime::UNIX_EPOCH,
             version: 1,
+            envelope: &TEST_ENVELOPE,
         }
     }
 
@@ -2227,10 +2230,7 @@ mod tests {
         };
         let unchained = hash_of(&event);
         assert_eq!(stored_payload(&event), event.payload);
-        event.identity_chain = Some(IdentityChainPosition {
-            seq: 1,
-            prev_hash: None,
-        });
+        event.identity_chain = Some(IdentityChainPosition::current(1, None));
         assert_ne!(hash_of(&event), unchained);
         let (payload, position) =
             avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
@@ -2314,14 +2314,14 @@ mod tests {
     #[test]
     fn merkle_root_is_not_the_chain_tip_and_detects_any_tampered_leaf() {
         let hashes = chain_of(&[json!(0), json!(1), json!(2), json!(3), json!(4)]);
-        let root = crate::merkle::mth_of_hex_hashes(&hashes).unwrap();
+        let root = crate::merkle::mth_of_hex_hashes(ledger_hash_algo(), &hashes).unwrap();
         assert_ne!(hex::encode(root), *hashes.last().unwrap());
         for i in 0..hashes.len() {
             let mut tampered = hashes.clone();
             tampered[i] = GENESIS_HASH.to_string();
             assert_ne!(
                 root,
-                crate::merkle::mth_of_hex_hashes(&tampered).unwrap(),
+                crate::merkle::mth_of_hex_hashes(ledger_hash_algo(), &tampered).unwrap(),
                 "leaf {i}"
             );
         }

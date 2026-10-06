@@ -239,6 +239,7 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
             .unwrap();
     assert!(
         merkle::verify_inclusion_proof(
+            avalon_chain::ledger_hash_algo(),
             &leaf_bytes,
             leaf_index as usize,
             tree_size as usize,
@@ -378,6 +379,7 @@ async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert(
 
     assert!(
         merkle::verify_inclusion_proof(
+            avalon_chain::ledger_hash_algo(),
             &leaf_bytes,
             leaf_index as usize,
             tree_size as usize,
@@ -450,6 +452,7 @@ async fn consistency_proof_between_two_real_tree_sizes_verifies_client_side() {
 
     assert!(
         merkle::verify_consistency_proof(
+            avalon_chain::ledger_hash_algo(),
             first_tree_size as usize,
             second_tree_size as usize,
             &proof,

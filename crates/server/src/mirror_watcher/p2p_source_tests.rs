@@ -72,6 +72,9 @@ fn chain_hashes(shard_id: &str, entries: usize, payload_bytes: usize) -> Vec<Str
                     )
                     .unwrap(),
                     version: 1,
+                    envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
                 },
             )
             .unwrap();
@@ -86,7 +89,10 @@ fn shard_id(o: &SharedOrigin) -> String {
 
 impl Origin {
     fn head(&self, size: usize) -> serde_json::Value {
-        let root = hex::encode(merkle::mth_of_hex_hashes(&self.hashes[..size]).unwrap());
+        let root = hex::encode(
+            merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &self.hashes[..size])
+                .unwrap(),
+        );
         let sth = avalon_protocol::sth::sign_tree_head(
             &self.signing,
             "k",
@@ -165,11 +171,16 @@ impl Origin {
                 } else {
                     seq - 1
                 };
-                let proof = merkle::inclusion_proof_of_hex_hashes(idx, prefix).unwrap();
+                let proof = merkle::inclusion_proof_of_hex_hashes(
+                    avalon_chain::ledger_hash_algo(),
+                    idx,
+                    prefix,
+                )
+                .unwrap();
                 (
                     200,
                     serde_json::json!({
-                        "root_hash": hex::encode(merkle::mth_of_hex_hashes(prefix).unwrap()),
+                        "root_hash": hex::encode(merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), prefix).unwrap()),
                         "leaf_hash": self.hashes[idx],
                         "proof": proof.iter().map(hex::encode).collect::<Vec<_>>(),
                     }),

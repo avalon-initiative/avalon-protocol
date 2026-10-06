@@ -93,10 +93,7 @@ fn event(i: usize, payload: serde_json::Value, position: bool) -> ProtocolEvent 
         // Sub-second precision on purpose: only whole seconds are hashed.
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
-        identity_chain: position.then_some(IdentityChainPosition {
-            seq: 1,
-            prev_hash: None,
-        }),
+        identity_chain: position.then_some(IdentityChainPosition::current(1, None)),
     }
 }
 
@@ -179,7 +176,12 @@ async fn entries_written_by_a_real_authority_mirror_completely() {
                 .and_then(|(_, v)| v.parse().ok())
                 .unwrap();
             let idx = labels.iter().position(|l| *l == seq).unwrap();
-            let proof = merkle::inclusion_proof_of_hex_hashes(idx, &proof_hashes).unwrap();
+            let proof = merkle::inclusion_proof_of_hex_hashes(
+                avalon_chain::ledger_hash_algo(),
+                idx,
+                &proof_hashes,
+            )
+            .unwrap();
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "root_hash": root, "leaf_hash": proof_hashes[idx],
                 "proof": proof.iter().map(hex::encode).collect::<Vec<_>>(),
