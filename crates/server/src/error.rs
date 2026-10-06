@@ -487,7 +487,7 @@ pub enum AppError {
     #[error("ledger error")]
     Ledger(avalon_chain::SettlementError),
     /// A submitted payload has no canonical encoding (a number outside the
-    /// exact range, or a duplicate key); the caller can fix and resubmit.
+    /// exact range, a duplicate key, or U+0000 in a string); the caller can fix and resubmit.
     #[error("payload cannot be canonically encoded: {0}")]
     InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
     /// An event version the ledger entry layout cannot carry (above 65535).
@@ -1195,6 +1195,11 @@ mod tests {
         let err: AppError = sqlx::Error::Decode(Box::new(inner)).into();
         assert!(matches!(err, AppError::InvalidPayload(_)));
         assert_eq!(err.code(), "INVALID_PAYLOAD");
+        let nul: AppError = sqlx::Error::Decode(Box::new(
+            avalon_protocol::canonical_payload::CanonicalPayloadError::NulCharacter,
+        ))
+        .into();
+        assert_eq!(nul.code(), "INVALID_PAYLOAD");
         let other: AppError = sqlx::Error::Decode("x".into()).into();
         assert!(matches!(other, AppError::Database(_)));
     }
