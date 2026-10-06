@@ -164,6 +164,39 @@ async fn publishing_a_mapping_round_trips_and_is_fetchable() {
     );
 }
 
+/// U+0000 in a correspondence key or value is a typed 400, not a database error.
+#[tokio::test]
+#[ignore]
+async fn a_mapping_containing_nul_is_rejected_as_invalid_payload() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let integrator = register_integrator(&http, &base).await;
+    let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
+    let v2 = publish_schema(&http, &base, &integrator, PROTO_V2).await;
+
+    for correspondence in [
+        serde_json::json!({ "level": "rank\u{0}" }),
+        serde_json::json!({ "level\u{0}": "rank" }),
+    ] {
+        let headers = integrator_auth_headers(&http, &base, &integrator).await;
+        let response = http
+            .post(format!("{base}/integrations/{}/mappings", integrator.slug))
+            .headers(headers)
+            .json(&serde_json::json!({
+                "from_schema_id": v1,
+                "to_schema_id": v2,
+                "description": "nul",
+                "field_correspondence": correspondence,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["code"], "INVALID_PAYLOAD");
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn publishing_a_mapping_against_a_schema_not_owned_by_the_caller_is_rejected() {

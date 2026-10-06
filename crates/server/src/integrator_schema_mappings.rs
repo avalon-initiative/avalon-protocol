@@ -154,6 +154,9 @@ pub async fn publish_mapping(
 
     let field_correspondence_json = serde_json::to_value(&body.field_correspondence)
         .expect("BTreeMap<String, String> is always representable as a JSON object");
+    // Before the JSONB insert below, which would otherwise fail on U+0000 as a 500.
+    avalon_protocol::canonical_payload::validate(&field_correspondence_json)
+        .map_err(AppError::InvalidPayload)?;
 
     let mut tx = state.pool.begin().await?;
 
