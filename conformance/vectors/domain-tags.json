@@ -58,6 +58,10 @@
       "tag": "avalon.integrator.nonce_challenge"
     },
     {
+      "kind": "ledger_entry",
+      "tag": "avalon.ledger.entry"
+    },
+    {
       "kind": "conformance",
       "tag": "avalon.conformance.vector"
     }

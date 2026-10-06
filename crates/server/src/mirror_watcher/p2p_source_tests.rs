@@ -37,8 +37,8 @@ fn origin(entries: usize) -> SharedOrigin {
         avalon_protocol::shard_identity::derive_self_certifying_id(&signing.verifying_key());
     Arc::new(Mutex::new(Origin {
         signing,
-        shard_id,
-        hashes: chain_hashes(entries, 8),
+        shard_id: shard_id.clone(),
+        hashes: chain_hashes(&shard_id, entries, 8),
         payload_bytes: 8,
         corrupt_signature: false,
         key_override: None,
@@ -49,20 +49,23 @@ fn origin(entries: usize) -> SharedOrigin {
 }
 
 /// The genuine hash chain over the entries `Origin::respond` serves.
-fn chain_hashes(entries: usize, payload_bytes: usize) -> Vec<String> {
+fn chain_hashes(shard_id: &str, entries: usize, payload_bytes: usize) -> Vec<String> {
     let payload = serde_json::json!({"p": "x".repeat(payload_bytes)});
+    let payload_hash = avalon_chain::payload_hash_hex(&payload).unwrap();
     let mut prev = avalon_chain::GENESIS_HASH.to_string();
     (1..=entries)
         .map(|seq| {
             prev = avalon_chain::hash_entry(
                 NETWORK,
+                shard_id,
                 &prev,
                 &avalon_chain::EntryContent {
+                    seq: seq as i64,
                     event_id: Uuid::from_u128(seq as u128),
                     kind: "k",
                     issuer: "i",
                     subject: "s",
-                    payload: &payload,
+                    payload_hash: &payload_hash,
                     timestamp: OffsetDateTime::parse(
                         "2026-01-01T00:00:00Z",
                         &time::format_description::well_known::Rfc3339,
@@ -137,6 +140,7 @@ impl Origin {
                             "issuer": "i",
                             "subject": "s",
                             "payload": {"p": "x".repeat(self.payload_bytes)},
+                            "payload_hash": avalon_chain::payload_hash_hex(&serde_json::json!({"p": "x".repeat(self.payload_bytes)})).unwrap(),
                             "version": 1,
                             "event_timestamp": "2026-01-01T00:00:00Z",
                             "prev_hash": if seq == 1 {
@@ -418,7 +422,7 @@ async fn two_sources_signing_different_roots_are_an_equivocation_on_either_trans
                 wrong_proof: false,
             }))
         };
-        let chain = PostgresSettlementProvider::new(pool.clone(), NETWORK.to_string());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), NETWORK.to_string());
         let mut heads = Vec::new();
         for served in [serve(&o, transport).await, serve(&fork, transport).await] {
             let (head, _) = head_for(&served, &pool, &shard, &bounds)
@@ -879,7 +883,7 @@ async fn a_smaller_or_repeated_head_is_not_a_new_head_nor_an_equivocation() {
         let o = origin(5);
         let shard = shard_id(&o);
         let s = serve(&o, transport).await;
-        let chain = PostgresSettlementProvider::new(pool.clone(), NETWORK.to_string());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), NETWORK.to_string());
         let observe = |head: CosignedTreeHead| {
             let (pool, chain, shard, source) =
                 (pool.clone(), chain.clone(), shard.clone(), s.source.clone());

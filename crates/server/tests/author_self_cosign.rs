@@ -44,7 +44,7 @@ impl Author {
         let pool = PgPoolOptions::new().connect(&url).await.unwrap();
         let network_id = NETWORK_ID.to_string();
         let shard = format!("game:self-cosign-{}", Uuid::new_v4().simple());
-        let chain = PostgresSettlementProvider::connect(pool.clone(), &network_id)
+        let chain = PostgresSettlementProvider::connect_core_shard(pool.clone(), &network_id)
             .await
             .unwrap();
         let witness = SigningKey::generate(&mut rand::rng());

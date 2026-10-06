@@ -48,6 +48,7 @@ async fn seed_entries(
             issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
             subject: format!("identity:{seq}"),
             payload: Some(serde_json::json!({})),
+            payload_hash: avalon_chain::payload_hash_hex(&serde_json::json!({})).unwrap(),
             event_timestamp: OffsetDateTime::UNIX_EPOCH,
             version: 1,
             prev_hash,

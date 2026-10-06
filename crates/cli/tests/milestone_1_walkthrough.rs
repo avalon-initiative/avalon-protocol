@@ -973,7 +973,8 @@ async fn milestone_1_end_to_end_vertical_slice() {
             .await
             .expect("step 16: failed to read genesis")
             .expect("step 16: no genesis network_id set — has `make start` ever run against this database?");
-        let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone(), network_id);
+        let chain =
+            avalon_chain::PostgresSettlementProvider::new_core_shard(pool.clone(), network_id);
 
         let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool, "core")
             .await
@@ -1105,10 +1106,12 @@ async fn tampering_a_ledger_entry_breaks_the_chain() {
         .expect("failed to migrate scratch schema");
 
     let network_id = format!("avalon-m1-tamper-{schema}");
-    let chain =
-        avalon_chain::PostgresSettlementProvider::connect(scratch_pool.clone(), &network_id)
-            .await
-            .expect("failed to write genesis on scratch schema");
+    let chain = avalon_chain::PostgresSettlementProvider::connect_core_shard(
+        scratch_pool.clone(),
+        &network_id,
+    )
+    .await
+    .expect("failed to write genesis on scratch schema");
 
     let subject =
         avalon_protocol::ids::GlobalId::new("identity", "self", "identity", "tamper-test");

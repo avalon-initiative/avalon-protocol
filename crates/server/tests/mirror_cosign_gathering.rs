@@ -166,7 +166,7 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
 
     let own_witness_key = SigningKey::generate(&mut rand::rng());
     let own_witness_id = hex::encode(own_witness_key.verifying_key().to_bytes());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
     let config = MirrorWatcherConfig {
         peers: vec![("core".to_string(), author_server.uri())],
         poll_interval: Duration::from_millis(300),
@@ -323,7 +323,7 @@ async fn a_new_mirror_with_an_empty_known_list_reaches_a_majority_from_the_direc
 
     let own = SigningKey::generate(&mut rand::rng());
     let own_id = hex::encode(own.verifying_key().to_bytes());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
     let config = MirrorWatcherConfig {
         peers: vec![("core".to_string(), author_server.uri())],
         poll_interval: Duration::from_millis(300),

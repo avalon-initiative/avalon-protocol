@@ -84,8 +84,8 @@ async fn seed_ledger_entry(
     sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id)
-        VALUES ($1, $2, $3, $4, $5, $6, 1, 'seed', $7, $8)
+            (event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
+        VALUES ($1, $2, $3, $4, $5, repeat('0', 64), $6, 1, 'seed', $7, $8)
         "#,
     )
     .bind(Uuid::new_v4())

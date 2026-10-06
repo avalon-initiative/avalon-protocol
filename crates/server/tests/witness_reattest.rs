@@ -22,7 +22,7 @@ async fn reattestation_refreshes_the_same_head_and_never_a_different_one() {
 
     let network_id = format!("reattest-{}", Uuid::new_v4());
     let shard = "core";
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+    let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
     let key = SigningKey::generate(&mut rand::rng());
     let key_id = hex::encode(key.verifying_key().to_bytes());
     let root = "ab".repeat(32);

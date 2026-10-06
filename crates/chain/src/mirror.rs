@@ -31,7 +31,7 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
 use crate::sth::SignedTreeHead;
-use crate::{hash_entry, EntryContent, SettlementError};
+use crate::{hash_entry, payload_matches, EntryContent, SettlementError};
 
 /// `source_url` used for this node's own signed history
 /// (`signed_tree_heads`) when it's folded into an equivocation check
@@ -814,6 +814,8 @@ pub struct MirroredEntry {
     pub issuer: String,
     pub subject: String,
     pub payload: Option<serde_json::Value>,
+    /// Hex SHA-256 of the canonical payload; the entry hash commits to it.
+    pub payload_hash: String,
     pub event_timestamp: OffsetDateTime,
     pub version: i32,
     pub prev_hash: String,
@@ -823,19 +825,23 @@ pub struct MirroredEntry {
 }
 
 impl MirroredEntry {
-    /// The entry hash this content produces under `network_id` and `prev_hash`, or `None`
-    /// when the payload is absent (pruned) or has no canonical encoding.
+    /// The entry hash this content produces under `network_id`, `shard_id` and `prev_hash`, or
+    /// `None` when `payload_hash` is malformed or a surviving payload does not hash to it.
     pub fn recomputed_hash(&self) -> Option<String> {
-        let payload = self.payload.as_ref()?;
+        if !payload_matches(self.payload.as_ref(), &self.payload_hash) {
+            return None;
+        }
         hash_entry(
             &self.network_id,
+            &self.shard_id,
             &self.prev_hash,
             &EntryContent {
+                seq: self.seq,
                 event_id: self.event_id,
                 kind: &self.kind,
                 issuer: &self.issuer,
                 subject: &self.subject,
-                payload,
+                payload_hash: &self.payload_hash,
                 timestamp: self.event_timestamp,
                 version: self.version,
             },
@@ -878,16 +884,18 @@ where
         avalon_protocol::canonical_payload::validate(payload)
             .map_err(SettlementError::InvalidPayload)?;
     }
+    if entry.payload.is_none() {
+        return Err(SettlementError::MirroredPayloadUnverifiable { seq: entry.seq });
+    }
     match entry.recomputed_hash() {
         Some(hash) if hash == entry.entry_hash => {}
-        Some(_) => return Err(SettlementError::MirroredContentMismatch { seq: entry.seq }),
-        None => return Err(SettlementError::MirroredPayloadUnverifiable { seq: entry.seq }),
+        _ => return Err(SettlementError::MirroredContentMismatch { seq: entry.seq }),
     }
     let result = sqlx::query(
         r#"
         INSERT INTO mirrored_entries
-            (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (network_id, shard_id, seq) DO NOTHING
         "#,
     )
@@ -900,6 +908,7 @@ where
     .bind(&entry.issuer)
     .bind(&entry.subject)
     .bind(&entry.payload)
+    .bind(&entry.payload_hash)
     .bind(entry.event_timestamp)
     .bind(entry.version)
     .bind(&entry.prev_hash)
@@ -1020,6 +1029,7 @@ pub fn mirrored_entry_from_row(
         issuer: row.try_get("issuer").map_err(get)?,
         subject: row.try_get("subject").map_err(get)?,
         payload: row.try_get("payload").map_err(get)?,
+        payload_hash: row.try_get("payload_hash").map_err(get)?,
         event_timestamp: row.try_get("event_timestamp").map_err(get)?,
         version: row.try_get("version").map_err(get)?,
         prev_hash: row.try_get("prev_hash").map_err(get)?,
@@ -1049,7 +1059,7 @@ pub async fn mirrored_entries_since(
     source_url: Option<&str>,
 ) -> Result<Vec<MirroredEntry>, SettlementError> {
     let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, \
+        "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, \
          event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
          FROM mirrored_entries WHERE network_id = ",
     );
@@ -1085,7 +1095,7 @@ pub async fn mirrored_entries_by_kinds_and_slug(
 ) -> Result<Vec<MirroredEntry>, SettlementError> {
     let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_string()).collect();
     let rows = sqlx::query(
-        "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, \
+        "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, \
          event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
          FROM mirrored_entries \
          WHERE network_id = $1 AND shard_id = $2 AND kind = ANY($3) AND payload->>'slug' = $4 \

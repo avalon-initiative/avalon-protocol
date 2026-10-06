@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 
-use avalon_chain::{hash_entry, merkle, EntryContent};
+use avalon_chain::{hash_entry, merkle, payload_hash_hex, EntryContent};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
 use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
@@ -356,15 +356,19 @@ async fn verify_one_entry(
         return Err(CrossShardFetchError::ProofRootMismatch);
     }
 
+    let payload_hash =
+        payload_hash_hex(&payload).map_err(|_| CrossShardFetchError::EntryHashMismatch)?;
     let recomputed = hash_entry(
         &sth.network_id,
+        shard_id,
         &entry.prev_hash,
         &EntryContent {
+            seq: entry.seq,
             event_id: entry.event_id,
             kind: &entry.kind,
             issuer: &entry.issuer,
             subject: &entry.subject,
-            payload: &payload,
+            payload_hash: &payload_hash,
             timestamp: entry.event_timestamp,
             version: entry.version,
         },

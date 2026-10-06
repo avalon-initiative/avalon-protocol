@@ -378,7 +378,8 @@ mod live_tests {
             crate::auth::build_webauthn("localhost", "http://localhost:8080")
                 .expect("failed to build a throwaway Webauthn instance for this test"),
         );
-        let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+        let chain =
+            avalon_chain::PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
         let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
         AppState {
             pool,

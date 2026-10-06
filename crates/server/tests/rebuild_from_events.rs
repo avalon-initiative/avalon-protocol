@@ -264,7 +264,7 @@ async fn chain(pool: &PgPool) -> PostgresSettlementProvider {
         .await
         .expect("failed to read genesis")
         .expect("genesis must already be set on a running node");
-    PostgresSettlementProvider::new(pool.clone(), network_id)
+    PostgresSettlementProvider::new_core_shard(pool.clone(), network_id)
 }
 
 // --- Integrator Space helpers, issue #533's own fixture ---------------------

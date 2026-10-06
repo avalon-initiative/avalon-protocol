@@ -14,11 +14,10 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::hash_entry;
 use crate::incremental_merkle::IncrementalMerkleTree;
 use crate::mirror::{self, ConvergenceVerdict, MirroredEntry, ObservedSth};
 use crate::postgres::GENESIS_HASH;
-use crate::{EntryContent, PostgresSettlementProvider, SettlementError};
+use crate::{PostgresSettlementProvider, SettlementError};
 
 const PAGE_SIZE: i64 = 2000;
 
@@ -89,6 +88,7 @@ pub struct PlannedBatch {
 /// the batch boundaries and Merkle tree the authority would have stored.
 pub struct PlanBuilder<'a> {
     network_id: &'a str,
+    shard_id: &'a str,
     tree: IncrementalMerkleTree,
     prev_hash: String,
     last_seq: Option<i64>,
@@ -123,9 +123,10 @@ impl PromotionPlan {
 }
 
 impl<'a> PlanBuilder<'a> {
-    pub fn new(network_id: &'a str) -> Self {
+    pub fn new(network_id: &'a str, shard_id: &'a str) -> Self {
         Self {
             network_id,
+            shard_id,
             tree: IncrementalMerkleTree::new(),
             prev_hash: GENESIS_HASH.to_string(),
             last_seq: None,
@@ -152,26 +153,15 @@ impl<'a> PlanBuilder<'a> {
             }
             return Err(PromotionError::BrokenLink { seq: entry.seq });
         }
-        match &entry.payload {
-            Some(payload) => {
-                let recomputed = hash_entry(
-                    self.network_id,
-                    &entry.prev_hash,
-                    &EntryContent {
-                        event_id: entry.event_id,
-                        kind: &entry.kind,
-                        issuer: &entry.issuer,
-                        subject: &entry.subject,
-                        payload,
-                        timestamp: entry.event_timestamp,
-                        version: entry.version,
-                    },
-                );
-                if recomputed.as_deref() != Ok(entry.entry_hash.as_str()) {
-                    return Err(PromotionError::HashMismatch { seq: entry.seq });
-                }
-            }
-            None => self.pruned_entries += 1,
+        // The hash is recomputed from `payload_hash`, so a pruned entry verifies too.
+        if entry.network_id != self.network_id
+            || entry.shard_id != self.shard_id
+            || entry.recomputed_hash().as_deref() != Some(entry.entry_hash.as_str())
+        {
+            return Err(PromotionError::HashMismatch { seq: entry.seq });
+        }
+        if entry.payload.is_none() {
+            self.pruned_entries += 1;
         }
         let leaf = hex::decode(&entry.entry_hash).map_err(|e| PromotionError::InvalidHash {
             seq: entry.seq,
@@ -366,9 +356,9 @@ async fn insert_entry(
     sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id)
+            (seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id)
         OVERRIDING SYSTEM VALUE
-        VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6::jsonb IS NULL THEN now() END, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6::jsonb IS NULL THEN now() END, $8, $9, $10, $11, $12)
         "#,
     )
     .bind(entry.seq)
@@ -377,6 +367,7 @@ async fn insert_entry(
     .bind(&entry.issuer)
     .bind(&entry.subject)
     .bind(&entry.payload)
+    .bind(&entry.payload_hash)
     .bind(entry.event_timestamp)
     .bind(entry.version)
     .bind(&entry.prev_hash)
@@ -423,7 +414,7 @@ pub async fn promote_mirror(
     let mut tx = target.begin().await?;
     let write_genesis = check_target_fresh(&mut tx, params.network_id).await?;
 
-    let mut builder = PlanBuilder::new(params.network_id);
+    let mut builder = PlanBuilder::new(params.network_id, params.shard_id);
     let mut since_seq = 0i64;
     loop {
         let page = mirror::mirrored_entries_since(
@@ -544,19 +535,24 @@ pub async fn promote_mirror(
     .await?;
     tx.commit().await?;
 
-    verify_target(target, &plan)
+    verify_target(target, params.shard_id, &plan)
         .await
         .map_err(PromotionError::PostCommitVerification)?;
     Ok(report)
 }
 
 /// Re-opens the promoted ledger through the authority's own read paths.
-async fn verify_target(target: &PgPool, plan: &PromotionPlan) -> Result<(), String> {
+async fn verify_target(
+    target: &PgPool,
+    shard_id: &str,
+    plan: &PromotionPlan,
+) -> Result<(), String> {
     let network_id = PostgresSettlementProvider::read_genesis_network_id(target)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("target has no genesis")?;
-    let chain = PostgresSettlementProvider::new(target.clone(), network_id);
+    let chain = PostgresSettlementProvider::new_core_shard(target.clone(), network_id)
+        .with_shard_id(shard_id);
     let entries = chain.list_entries().await.map_err(|e| e.to_string())?;
     if let Some(bad) = entries.iter().find(|e| !e.chain_intact) {
         return Err(format!("entry seq {} is not chain-intact", bad.seq));
@@ -602,15 +598,18 @@ mod tests {
         for &(seq, batch, pruned) in layout {
             let event_id = Uuid::new_v4();
             let payload = serde_json::json!({ "n": seq });
-            let entry_hash = hash_entry(
+            let payload_hash = crate::payload_hash_hex(&payload).unwrap();
+            let entry_hash = crate::hash_entry(
                 NET,
+                CORE_SHARD_ID,
                 &prev,
-                &EntryContent {
+                &crate::EntryContent {
+                    seq,
                     event_id,
                     kind: "k",
                     issuer: "i",
                     subject: "s",
-                    payload: &payload,
+                    payload_hash: &payload_hash,
                     timestamp: OffsetDateTime::UNIX_EPOCH,
                     version: 1,
                 },
@@ -626,6 +625,7 @@ mod tests {
                 issuer: "i".into(),
                 subject: "s".into(),
                 payload: if pruned { None } else { Some(payload) },
+                payload_hash,
                 event_timestamp: OffsetDateTime::UNIX_EPOCH,
                 version: 1,
                 prev_hash: prev.clone(),
@@ -639,7 +639,7 @@ mod tests {
     }
 
     fn plan_of(entries: &[MirroredEntry]) -> Result<PromotionPlan, PromotionError> {
-        let mut builder = PlanBuilder::new(NET);
+        let mut builder = PlanBuilder::new(NET, CORE_SHARD_ID);
         for e in entries {
             builder.push(e)?;
         }

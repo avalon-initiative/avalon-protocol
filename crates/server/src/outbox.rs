@@ -106,6 +106,13 @@ pub async fn enqueue(
     }
     avalon_protocol::canonical_payload::validate(&event.payload)
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    avalon_protocol::ledger_entry::layout_version(event.version).map_err(|_| {
+        sqlx::Error::Decode(Box::new(
+            avalon_chain::SettlementError::UnsupportedEntryVersion {
+                version: event.version,
+            },
+        ))
+    })?;
     let event_json = serde_json::to_value(event).expect("ProtocolEvent should serialize");
     if let Some(trace) = crate::op_trace::pending_for_current() {
         let row_id: Uuid =
@@ -708,7 +715,7 @@ mod tests {
             .await
             .expect("failed to connect to Postgres — is it reachable?");
 
-        let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
         let mut tx = pool.begin().await.expect("begin failed");
         let mut event_ids = Vec::new();
@@ -830,7 +837,7 @@ mod tests {
             .await
             .expect("failed to connect to Postgres — is it reachable?");
 
-        let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), "avalon-test");
 
         let mut tx = pool.begin().await.expect("begin failed");
 

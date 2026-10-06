@@ -171,7 +171,7 @@ impl Author {
         }
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let pool = PgPoolOptions::new().connect(&url).await.unwrap();
-        let chain = PostgresSettlementProvider::connect(pool, NETWORK_ID)
+        let chain = PostgresSettlementProvider::connect_core_shard(pool, NETWORK_ID)
             .await
             .unwrap();
         Self {

@@ -73,6 +73,10 @@ fn mirrored_entry(network_id: &str, seq: i64, verified_tree_size: i64) -> Mirror
         issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
         subject: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
         payload: Some(serde_json::json!({"note": "mirror recovery test"})),
+        payload_hash: avalon_chain::payload_hash_hex(
+            &serde_json::json!({"note": "mirror recovery test"}),
+        )
+        .unwrap(),
         event_timestamp: OffsetDateTime::UNIX_EPOCH,
         version: 1,
         prev_hash: "aa".repeat(32),

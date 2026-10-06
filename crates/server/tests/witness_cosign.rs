@@ -49,7 +49,7 @@ impl Fixture {
     async fn new() -> Self {
         let pool = test_pool().await;
         let network_id = format!("witness-cosign-test-{}", Uuid::new_v4());
-        let chain = PostgresSettlementProvider::new(pool.clone(), network_id.clone());
+        let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id.clone());
         let witness = SigningKey::generate(&mut rand::rng());
         let witness_id = hex::encode(witness.verifying_key().to_bytes());
         let config = WitnessCosignConfig::new(witness.clone(), witness_id.clone());

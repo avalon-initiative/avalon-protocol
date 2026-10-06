@@ -832,6 +832,8 @@ pub struct LedgerEntryResponse {
     /// meaning as `avalon_chain::LedgerEntryView::payload_pruned`.
     pub payload: Option<serde_json::Value>,
     pub payload_pruned: bool,
+    /// Hex SHA-256 of the canonical payload; the entry hash commits to it, so a pruned row verifies.
+    pub payload_hash: String,
     pub version: i32,
     #[serde(with = "time::serde::rfc3339")]
     pub event_timestamp: OffsetDateTime,
@@ -850,6 +852,7 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
             subject: entry.subject,
             payload: entry.payload,
             payload_pruned: entry.payload_pruned,
+            payload_hash: entry.payload_hash,
             version: entry.version,
             event_timestamp: entry.event_timestamp,
             prev_hash: entry.prev_hash,
@@ -873,6 +876,7 @@ impl From<mirror::MirroredEntry> for LedgerEntryResponse {
             subject: entry.subject,
             payload: entry.payload,
             payload_pruned: false,
+            payload_hash: entry.payload_hash,
             version: entry.version,
             event_timestamp: entry.event_timestamp,
             prev_hash: entry.prev_hash,

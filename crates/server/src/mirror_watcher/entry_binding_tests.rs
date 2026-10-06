@@ -26,6 +26,12 @@ fn genuine_ledger(network_id: &str, count: usize) -> Ledger {
 }
 
 fn genuine_ledger_with(network_id: &str, payloads: Vec<serde_json::Value>) -> Ledger {
+    let seqs: Vec<i64> = (1..=payloads.len() as i64).collect();
+    genuine_ledger_at(network_id, payloads, &seqs)
+}
+
+/// A genuine ledger whose entries carry (and hash) the given `seq` labels.
+fn genuine_ledger_at(network_id: &str, payloads: Vec<serde_json::Value>, seqs: &[i64]) -> Ledger {
     let count = payloads.len();
     let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
     let who = format!("identity:{}:self:noop", Uuid::new_v4());
@@ -33,23 +39,26 @@ fn genuine_ledger_with(network_id: &str, payloads: Vec<serde_json::Value>) -> Le
     let (mut entries, mut hashes) = (Vec::new(), Vec::new());
     for (i, payload) in payloads.iter().enumerate() {
         let event_id = Uuid::new_v4();
+        let payload_hash = avalon_chain::payload_hash_hex(payload).unwrap();
         let hash = hash_entry(
             network_id,
+            mirror::CORE_SHARD_ID,
             &prev,
             &EntryContent {
+                seq: seqs[i],
                 event_id,
                 kind: "test.noop",
                 issuer: &who,
                 subject: &who,
-                payload,
+                payload_hash: &payload_hash,
                 timestamp: ts,
                 version: 1,
             },
         )
         .unwrap();
         entries.push(serde_json::json!({
-            "seq": i + 1, "event_id": event_id, "kind": "test.noop", "issuer": who,
-            "subject": who, "payload": payload, "payload_pruned": false, "version": 1,
+            "seq": seqs[i], "event_id": event_id, "kind": "test.noop", "issuer": who,
+            "subject": who, "payload": payload, "payload_hash": payload_hash, "payload_pruned": false, "version": 1,
             "event_timestamp": rfc3339(ts), "prev_hash": prev, "entry_hash": hash,
             "batch_id": Uuid::new_v4(),
         }));
@@ -237,15 +246,19 @@ async fn forged_content_with_a_recomputed_hash_fails_the_proof_leaf_check() {
     let ledger = genuine_ledger(&net, 2);
     let mut served = ledger.entries.clone();
     served[1]["payload"] = serde_json::json!({ "n": 7 });
+    let forged_payload_hash = avalon_chain::payload_hash_hex(&served[1]["payload"]).unwrap();
+    served[1]["payload_hash"] = serde_json::json!(forged_payload_hash);
     let forged = hash_entry(
         &net,
+        mirror::CORE_SHARD_ID,
         served[1]["prev_hash"].as_str().unwrap(),
         &EntryContent {
+            seq: 2,
             event_id: served[1]["event_id"].as_str().unwrap().parse().unwrap(),
             kind: "test.noop",
             issuer: served[1]["issuer"].as_str().unwrap(),
             subject: served[1]["subject"].as_str().unwrap(),
-            payload: &served[1]["payload"],
+            payload_hash: &forged_payload_hash,
             timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
             version: 1,
         },
@@ -314,6 +327,7 @@ async fn a_resumed_backfill_links_to_the_stored_entry_and_refuses_a_bad_link() {
         issuer: first["issuer"].as_str().unwrap().into(),
         subject: first["subject"].as_str().unwrap().into(),
         payload: Some(first["payload"].clone()),
+        payload_hash: avalon_chain::payload_hash_hex(&first["payload"].clone()).unwrap(),
         event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
         version: 1,
         prev_hash: avalon_chain::GENESIS_HASH.into(),
@@ -372,6 +386,7 @@ async fn storage_refuses_content_that_does_not_hash_to_the_claimed_hash() {
         issuer: e["issuer"].as_str().unwrap().into(),
         subject: e["subject"].as_str().unwrap().into(),
         payload: Some(e["payload"].clone()),
+        payload_hash: avalon_chain::payload_hash_hex(&e["payload"].clone()).unwrap(),
         event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
         version: 1,
         prev_hash: avalon_chain::GENESIS_HASH.into(),
@@ -413,6 +428,7 @@ fn binding_check_rejects_each_tampered_field_and_a_bad_link() {
         issuer: v["issuer"].as_str().unwrap().into(),
         subject: v["subject"].as_str().unwrap().into(),
         payload: Some(v["payload"].clone()),
+        payload_hash: avalon_chain::payload_hash_hex(&v["payload"].clone()).unwrap(),
         event_timestamp: OffsetDateTime::parse(
             v["event_timestamp"].as_str().unwrap(),
             &time::format_description::well_known::Rfc3339,
@@ -466,6 +482,24 @@ async fn stored_payload(pool: &PgPool, net: &str, seq: i64) -> Option<serde_json
         .unwrap()
 }
 
+/// #1170: a genuine entry served under a different, still increasing `seq` no longer verifies.
+#[tokio::test]
+#[ignore]
+async fn a_genuine_entry_under_a_wrong_increasing_seq_is_refused_as_a_content_mismatch() {
+    let pool = pool().await;
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 3);
+    let mut served = ledger.entries.clone();
+    served[2]["seq"] = serde_json::json!(5);
+    let server = ledger.serve(served).await;
+    let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
+    assert!(
+        matches!(err, MirrorWatcherError::EntryContentMismatch { seq: 5 }),
+        "{err:?}"
+    );
+    assert_eq!(stored_seqs(&pool, &net).await, vec![1, 2]);
+}
+
 #[tokio::test]
 #[ignore]
 async fn a_forged_seq_label_is_refused_not_silently_dropped() {
@@ -495,11 +529,12 @@ async fn a_forged_seq_label_is_refused_not_silently_dropped() {
 async fn seq_gaps_are_accepted_but_must_increase() {
     let pool = pool().await;
     let net = fresh_net();
-    let ledger = genuine_ledger(&net, 3);
-    let mut served = ledger.entries.clone();
-    served[1]["seq"] = serde_json::json!(5);
-    served[2]["seq"] = serde_json::json!(40);
-    let server = ledger.serve(served).await;
+    let ledger = genuine_ledger_at(
+        &net,
+        (0..3).map(|i| serde_json::json!({ "n": i })).collect(),
+        &[1, 5, 40],
+    );
+    let server = ledger.serve(ledger.entries.clone()).await;
     ledger.backfill_from(&pool, &server).await.unwrap();
     assert_eq!(stored_seqs(&pool, &net).await, vec![1, 5, 40]);
 }
@@ -523,6 +558,7 @@ async fn a_conflicting_insert_is_an_error_and_advances_nothing() {
             issuer: e["issuer"].as_str().unwrap().into(),
             subject: e["subject"].as_str().unwrap().into(),
             payload: Some(e["payload"].clone()),
+            payload_hash: avalon_chain::payload_hash_hex(&e["payload"].clone()).unwrap(),
             event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
             version: 1,
             prev_hash: avalon_chain::GENESIS_HASH.into(),
@@ -727,11 +763,12 @@ async fn the_seq_bound_is_exact_and_a_first_seq_above_a_million_is_accepted() {
     let pool = pool().await;
     // (first label, second label, expected outcome for the second)
     let net = fresh_net();
-    let ledger = genuine_ledger(&net, 2);
-    let mut served = ledger.entries.clone();
-    served[0]["seq"] = serde_json::json!(5_000_000);
-    served[1]["seq"] = serde_json::json!(5_000_000 + MAX_SEQ_GAP);
-    let server = ledger.serve(served).await;
+    let ledger = genuine_ledger_at(
+        &net,
+        vec![serde_json::json!({ "n": 0 }), serde_json::json!({ "n": 1 })],
+        &[5_000_000, 5_000_000 + MAX_SEQ_GAP],
+    );
+    let server = ledger.serve(ledger.entries.clone()).await;
     ledger.backfill_from(&pool, &server).await.unwrap();
     assert_eq!(
         stored_seqs(&pool, &net).await,
@@ -739,10 +776,12 @@ async fn the_seq_bound_is_exact_and_a_first_seq_above_a_million_is_accepted() {
     );
 
     let net = fresh_net();
-    let ledger = genuine_ledger(&net, 2);
-    let mut served = ledger.entries.clone();
-    served[1]["seq"] = serde_json::json!(1 + MAX_SEQ_GAP + 1);
-    let server = ledger.serve(served).await;
+    let ledger = genuine_ledger_at(
+        &net,
+        vec![serde_json::json!({ "n": 0 }), serde_json::json!({ "n": 1 })],
+        &[1, 1 + MAX_SEQ_GAP + 1],
+    );
+    let server = ledger.serve(ledger.entries.clone()).await;
     let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
     assert!(matches!(err, MirrorWatcherError::EntrySeqInvalid { .. }));
     assert_eq!(stored_seqs(&pool, &net).await, vec![1]);

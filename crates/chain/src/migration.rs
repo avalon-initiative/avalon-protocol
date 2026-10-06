@@ -124,7 +124,7 @@ pub async fn migrate_network(
     // Fails fast if the target database already belongs to some other
     // network_id — the same guarantee every other boot path against this
     // table gets (`PostgresSettlementProvider::connect`'s own doc comment).
-    PostgresSettlementProvider::connect(target_pool.clone(), target_network_id).await?;
+    PostgresSettlementProvider::connect_core_shard(target_pool.clone(), target_network_id).await?;
 
     let already_present = sqlx::query(
         "SELECT 1 AS present FROM network_migration_checkpoints \

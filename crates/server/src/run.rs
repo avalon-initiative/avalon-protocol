@@ -181,12 +181,13 @@ pub async fn run_with_tracing(
     // at all if it's already rooted in a different network_id —
     // deliberately fatal, before anything binds a listener or serves a
     // single request.
-    let chain = avalon_chain::PostgresSettlementProvider::connect(pool.clone(), &network_id)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("refusing to start: {e}");
-            std::process::exit(1);
-        });
+    let chain =
+        avalon_chain::PostgresSettlementProvider::connect_core_shard(pool.clone(), &network_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("refusing to start: {e}");
+                std::process::exit(1);
+            });
     tracing::info!(network_id = %chain.network_id(), "avalon-server: ledger network_id");
 
     // Issue #662: `AVALON_NODE_ROLES` now load-bearing for the Indexer role
@@ -458,6 +459,12 @@ pub async fn run_with_tracing(
         );
         std::process::exit(1);
     }
+    // The ledger's entry hashes are rooted in the shard this node authors.
+    let chain = if replica_only {
+        chain
+    } else {
+        chain.with_shard_id(&own_shard_id)
+    };
 
     // Events this node authors are verified against its own network and shard.
     let indexer = match indexer {
