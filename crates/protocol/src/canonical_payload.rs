@@ -629,7 +629,11 @@ mod tests {
 
     #[test]
     fn nul_is_rejected_in_values_and_keys_on_every_path() {
-        for text in [r#"["a\u0000b"]"#, r#"{"a\u0000":1}"#, r#"{"a":{"\u0000":1}}"#] {
+        for text in [
+            r#"["a\u0000b"]"#,
+            r#"{"a\u0000":1}"#,
+            r#"{"a":{"\u0000":1}}"#,
+        ] {
             assert_eq!(
                 canonicalize_str(text),
                 Err(CanonicalPayloadError::NulCharacter),

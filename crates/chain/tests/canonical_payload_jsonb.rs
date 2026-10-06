@@ -105,7 +105,8 @@ async fn jsonb_refuses_nul_in_values_and_keys() {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("unsupported Unicode escape sequence"),
+            err.to_string()
+                .contains("unsupported Unicode escape sequence"),
             "{err}"
         );
     }
