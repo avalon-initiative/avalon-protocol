@@ -21,10 +21,6 @@
       "signatureHex": "2d0d568a9a071708c9fc72b62ebb0397db879b6657dab81c489112b311d9eac43dde9410128a06a4003a74609987b31df34ec992990e3a499655c6fb4ab22301"
     }
   ],
-  "notSupported": {
-    "csharp": "Protocol-only until the SDK slice for #1214 (avalon-sdks #99, #100, #101) lands the structured identity key-event layouts.",
-    "typescript": "Protocol-only until the SDK slice for #1214 (avalon-sdks #99, #100, #101) lands the structured identity key-event layouts."
-  },
   "replayVectors": [
     {
       "expected": {
@@ -137,7 +133,9 @@
   "signingKeySeedHex": "4444444444444444444444444444444444444444444444444444444444444444",
   "signingPublicKeyHex": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
   "vectors": [
     {
