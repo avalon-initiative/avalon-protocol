@@ -22,8 +22,9 @@ pub mod retention;
 pub use avalon_protocol::sth;
 
 pub use postgres::{
-    hash_entry, EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,
-    PostgresSettlementProvider, GENESIS_HASH,
+    entry_content_intact, hash_entry, payload_hash_hex, payload_matches, EntryContent,
+    GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
+    GENESIS_HASH,
 };
 
 use async_trait::async_trait;
@@ -46,6 +47,9 @@ pub enum SettlementError {
     /// A submitted payload has no canonical encoding, so it was not stored.
     #[error("payload cannot be canonically encoded: {0}")]
     InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
+    /// An entry has a field the hash layout cannot represent, so it was not stored.
+    #[error("entry cannot be hashed: {0}")]
+    InvalidEntry(String),
 }
 
 /// Anything capable of durably committing event batches and letting a caller

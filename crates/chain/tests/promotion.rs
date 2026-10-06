@@ -119,17 +119,12 @@ fn batch(events: usize) -> EventBatch {
     }
 }
 
-/// Commits 3 batches (2, 3 and 1 events) with a burned seq value between
-/// the first and second, returning the authority's provider.
+/// Commits 3 batches (2, 3 and 1 events), returning the authority's provider.
 async fn build_authority(scratch: &Scratch, network_id: &str) -> PostgresSettlementProvider {
     let chain = PostgresSettlementProvider::connect(scratch.pool.clone(), network_id)
         .await
         .expect("genesis");
     chain.commit(&batch(2)).await.expect("commit 1");
-    sqlx::query("SELECT nextval(pg_get_serial_sequence('ledger_entries', 'seq'))")
-        .execute(&scratch.pool)
-        .await
-        .expect("burn a seq");
     chain.commit(&batch(3)).await.expect("commit 2");
     chain.commit(&batch(1)).await.expect("commit 3");
     chain
@@ -151,6 +146,7 @@ async fn mirror_authority(authority: &PostgresSettlementProvider, mirror_pool: &
                 issuer: e.issuer,
                 subject: e.subject,
                 payload: e.payload,
+                payload_hash: e.payload_hash,
                 event_timestamp: e.event_timestamp,
                 version: e.version,
                 prev_hash: e.prev_hash,
@@ -242,7 +238,6 @@ async fn promoted_target_reproduces_the_authority_and_can_extend_it() {
         );
         assert!(b.chain_intact);
     }
-    assert!(original.windows(2).any(|w| w[1].seq - w[0].seq > 1));
     assert!(copied[0].payload.is_none() && copied[0].payload_pruned);
     assert!(copied[1].payload.is_some() && !copied[1].payload_pruned);
 

@@ -71,6 +71,7 @@ pub mod tags {
     pub const SIGNATURE_GATE_ACTION: DomainTag = DomainTag::new("avalon.signature_gate.action");
     pub const INTEGRATOR_NONCE_CHALLENGE: DomainTag =
         DomainTag::new("avalon.integrator.nonce_challenge");
+    pub const LEDGER_ENTRY: DomainTag = DomainTag::new("avalon.ledger.entry");
     /// Reserved for conformance vectors; no key ever signs it in production.
     pub const CONFORMANCE: DomainTag = DomainTag::new("avalon.conformance.vector");
 
@@ -88,6 +89,7 @@ pub mod tags {
         ISSUER_REGISTERED,
         SIGNATURE_GATE_ACTION,
         INTEGRATOR_NONCE_CHALLENGE,
+        LEDGER_ENTRY,
         CONFORMANCE,
     ];
 }

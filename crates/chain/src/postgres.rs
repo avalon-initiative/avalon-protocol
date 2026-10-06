@@ -8,13 +8,15 @@
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
-use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use avalon_protocol::canonical_payload::{canonicalize, CanonicalPayloadError};
+use avalon_protocol::canonical_payload::CanonicalPayloadError;
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
+use avalon_protocol::ledger_entry::{self, EntryHashError, EntryHashInput};
 use avalon_protocol::witness::WitnessCosignature;
+
+use avalon_protocol::shard::CORE_SHARD_ID;
 
 use crate::incremental_merkle::IncrementalMerkleTree;
 use crate::retention::PruneReport;
@@ -24,49 +26,72 @@ use crate::{merkle, sth, SettlementError, SettlementProvider};
 /// All-zero hash, the `prev_hash` of the very first entry in the chain.
 pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-/// The fields that make up an entry's content hash — grouped so recomputing
-/// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
-/// stored row) takes one argument, not eight.
-///
-/// `pub`: a cross-shard verifier fetching a
-/// specific entry from a remote node it doesn't mirror needs to
-/// independently recompute that entry's `entry_hash` from its fetched
-/// content and compare — proving the *payload* it received is actually
-/// what the (separately, RFC 6962-)proven `leaf_hash` represents, not just
-/// that *some* leaf_hash was included in a signed root. Before this, that
-/// recomputation was only ever possible from inside this module.
+/// The fields that make up an entry's content hash, so recomputing one (at insert time from a
+/// `ProtocolEvent`, or at verify time from a stored row) takes one argument. `pub` so a
+/// cross-shard verifier can recompute a fetched entry's hash. The entry commits to
+/// `payload_hash`, not the payload, so a row with a pruned payload still verifies.
 pub struct EntryContent<'a> {
+    pub seq: i64,
     pub event_id: Uuid,
     pub kind: &'a str,
     pub issuer: &'a str,
     pub subject: &'a str,
-    pub payload: &'a serde_json::Value,
+    /// Lowercase hex SHA-256 of the canonical payload ([`payload_hash_hex`]).
+    pub payload_hash: &'a str,
     pub timestamp: time::OffsetDateTime,
     pub version: i32,
 }
 
-/// `network_id` is hashed in ahead of everything else, so two
-/// ledgers with different network identities produce disjoint hash spaces
-/// by construction — an entry hashed under one `network_id` can never
-/// collide with, or be mistaken for a valid link in, a chain rooted in a
-/// different one. See `PostgresSettlementProvider::connect` for where that
-/// identity is established and enforced.
+/// Lowercase hex SHA-256 of the canonical payload, the value an entry commits to.
+pub fn payload_hash_hex(payload: &serde_json::Value) -> Result<String, CanonicalPayloadError> {
+    Ok(hex::encode(ledger_entry::payload_hash(payload)?))
+}
+
+/// Whether a surviving payload hashes to the entry's `payload_hash`; a pruned payload (`None`) has
+/// nothing to contradict the hash and passes.
+pub fn payload_matches(payload: Option<&serde_json::Value>, payload_hash: &str) -> bool {
+    payload.is_none_or(|p| payload_hash_hex(p).is_ok_and(|h| h == payload_hash))
+}
+
+/// The entry hash (hex) for `content` under `network_id`, `shard_id` and `prev_hash`; see
+/// [`avalon_protocol::ledger_entry`] for the layout.
 pub fn hash_entry(
     network_id: &str,
+    shard_id: &str,
     prev_hash: &str,
     content: &EntryContent<'_>,
-) -> Result<String, CanonicalPayloadError> {
-    let mut hasher = Sha256::new();
-    hasher.update(network_id.as_bytes());
-    hasher.update(prev_hash.as_bytes());
-    hasher.update(content.event_id.as_bytes());
-    hasher.update(content.kind.as_bytes());
-    hasher.update(content.issuer.as_bytes());
-    hasher.update(content.subject.as_bytes());
-    hasher.update(canonicalize(content.payload)?.as_bytes());
-    hasher.update(content.timestamp.unix_timestamp().to_le_bytes());
-    hasher.update(content.version.to_le_bytes());
-    Ok(hex::encode(hasher.finalize()))
+) -> Result<String, EntryHashError> {
+    let prev = ledger_entry::parse_hash("prev_hash", prev_hash)?;
+    let payload_hash = ledger_entry::parse_hash("payload_hash", content.payload_hash)?;
+    let hash = ledger_entry::entry_hash(&EntryHashInput {
+        network_id,
+        shard_id,
+        seq: u64::try_from(content.seq).map_err(|_| EntryHashError::OutOfRange("seq"))?,
+        prev_hash: &prev,
+        event_id: content.event_id,
+        kind: content.kind,
+        issuer: content.issuer,
+        subject: content.subject,
+        payload_hash: &payload_hash,
+        timestamp_micros: ledger_entry::timestamp_micros(content.timestamp)?,
+        version: u16::try_from(content.version)
+            .map_err(|_| EntryHashError::OutOfRange("version"))?,
+    })?;
+    Ok(hex::encode(hash))
+}
+
+/// Everything checkable about one stored entry: its payload (when it survives) matches
+/// `payload_hash`, and the content hashes to `entry_hash`.
+pub fn entry_content_intact(
+    network_id: &str,
+    shard_id: &str,
+    prev_hash: &str,
+    entry_hash: &str,
+    payload: Option<&serde_json::Value>,
+    content: &EntryContent<'_>,
+) -> bool {
+    payload_matches(payload, content.payload_hash)
+        && hash_entry(network_id, shard_id, prev_hash, content).is_ok_and(|h| h == entry_hash)
 }
 
 /// The payload as stored in the ledger: the event's own payload with its
@@ -80,26 +105,31 @@ fn stored_payload(event: &ProtocolEvent) -> serde_json::Value {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hash_event(
     network_id: &str,
+    shard_id: &str,
+    seq: i64,
     prev_hash: &str,
     event: &ProtocolEvent,
+    payload_hash: &str,
 ) -> Result<String, SettlementError> {
-    let payload = stored_payload(event);
     hash_entry(
         network_id,
+        shard_id,
         prev_hash,
         &EntryContent {
+            seq,
             event_id: event.id,
             kind: &event.kind,
             issuer: event.issuer.as_str(),
             subject: event.subject.as_str(),
-            payload: &payload,
+            payload_hash,
             timestamp: event.timestamp,
-            version: event.version as i32,
+            version: i32::try_from(event.version).unwrap_or(i32::MAX),
         },
     )
-    .map_err(SettlementError::InvalidPayload)
+    .map_err(|e| SettlementError::InvalidEntry(e.to_string()))
 }
 
 /// Recomputes a batch's *chain tip* (not its Merkle `batch_root` — see
@@ -126,7 +156,7 @@ fn recompute_batch_root(
 ) -> String {
     let mut prev = entering_prev_hash.to_string();
     for content in entries {
-        prev = hash_entry(network_id, &prev, content).unwrap();
+        prev = hash_entry(network_id, CORE_SHARD_ID, &prev, content).unwrap();
     }
     prev
 }
@@ -201,6 +231,8 @@ impl LedgerCache {
 pub struct PostgresSettlementProvider {
     pool: PgPool,
     network_id: String,
+    /// The shard this ledger is the log of; part of every entry hash.
+    shard_id: String,
     /// In-memory cache of the committed leaf-hash prefix plus its Merkle
     /// tree, oldest-first — backs [`Self::entry_hashes_up_to`],
     /// [`Self::root_at`], [`Self::inclusion_proof`], and
@@ -234,6 +266,7 @@ impl PostgresSettlementProvider {
         Self {
             pool,
             network_id: network_id.into(),
+            shard_id: CORE_SHARD_ID.to_string(),
             leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(LedgerCache::default())),
         }
     }
@@ -282,6 +315,7 @@ impl PostgresSettlementProvider {
                 Ok(Self {
                     pool,
                     network_id: expected_network_id.to_string(),
+                    shard_id: CORE_SHARD_ID.to_string(),
                     leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                         LedgerCache::default(),
                     )),
@@ -294,6 +328,7 @@ impl PostgresSettlementProvider {
                 Ok(Self {
                     pool,
                     network_id: stored,
+                    shard_id: CORE_SHARD_ID.to_string(),
                     leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                         LedgerCache::default(),
                     )),
@@ -304,6 +339,18 @@ impl PostgresSettlementProvider {
                 configured: expected_network_id.to_string(),
             }),
         }
+    }
+
+    /// Binds this ledger to the shard it logs (default `core`); callers set it right after
+    /// construction, before any entry is hashed or verified.
+    pub fn with_shard_id(mut self, shard_id: impl Into<String>) -> Self {
+        self.shard_id = shard_id.into();
+        self
+    }
+
+    /// The shard this ledger logs; every entry hash is rooted in it.
+    pub fn shard_id(&self) -> &str {
+        &self.shard_id
     }
 
     /// The network identity this provider is bound to — every
@@ -319,6 +366,17 @@ impl PostgresSettlementProvider {
     /// `Self` everywhere.
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// The highest committed `seq`, 0 for an empty ledger.
+    async fn max_seq<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+    ) -> Result<i64, SettlementError> {
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM ledger_entries")
+            .fetch_one(executor)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))
     }
 
     /// Takes an executor rather than always using `self.pool` — a caller
@@ -356,7 +414,7 @@ impl PostgresSettlementProvider {
     pub async fn list_entries(&self) -> Result<Vec<LedgerEntryView>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
             FROM ledger_entries
             ORDER BY seq ASC
             "#,
@@ -374,6 +432,8 @@ impl PostgresSettlementProvider {
             let issuer: String = row.try_get("issuer").map_err(get)?;
             let subject: String = row.try_get("subject").map_err(get)?;
             let payload: Option<serde_json::Value> = row.try_get("payload").map_err(get)?;
+            let payload_hash: String = row.try_get("payload_hash").map_err(get)?;
+            let seq: i64 = row.try_get("seq").map_err(get)?;
             let payload_pruned_at: Option<time::OffsetDateTime> =
                 row.try_get("payload_pruned_at").map_err(get)?;
             let event_timestamp: time::OffsetDateTime =
@@ -384,41 +444,35 @@ impl PostgresSettlementProvider {
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
             let link_intact = prev_hash == expected_prev;
-            // Content can only be independently re-verified when the
-            // payload is still present — a pruned row has had
-            // its payload deliberately discarded, so recomputing its
-            // content hash is impossible by design, not a sign of
-            // tampering. `chain_intact` therefore only asserts what's
-            // actually checkable: the link always, and content whenever
-            // the payload survives to check it against.
-            let content_intact = match &payload {
-                Some(payload) => {
-                    let recomputed = hash_entry(
-                        &self.network_id,
-                        &prev_hash,
-                        &EntryContent {
-                            event_id,
-                            kind: &kind,
-                            issuer: &issuer,
-                            subject: &subject,
-                            payload,
-                            timestamp: event_timestamp,
-                            version,
-                        },
-                    );
-                    recomputed.as_deref() == Ok(entry_hash.as_str())
-                }
-                None => true,
-            };
+            // The entry hash is recomputed from `payload_hash`, so it verifies even for a pruned
+            // row; a surviving payload must also hash to `payload_hash`.
+            let content_intact = entry_content_intact(
+                &self.network_id,
+                &self.shard_id,
+                &prev_hash,
+                &entry_hash,
+                payload.as_ref(),
+                &EntryContent {
+                    seq,
+                    event_id,
+                    kind: &kind,
+                    issuer: &issuer,
+                    subject: &subject,
+                    payload_hash: &payload_hash,
+                    timestamp: event_timestamp,
+                    version,
+                },
+            );
             expected_prev = entry_hash.clone();
 
             entries.push(LedgerEntryView {
-                seq: row.try_get("seq").map_err(get)?,
+                seq,
                 event_id,
                 kind,
                 issuer,
                 subject,
                 payload,
+                payload_hash,
                 payload_pruned: payload_pruned_at.is_some(),
                 version,
                 event_timestamp,
@@ -475,7 +529,7 @@ impl PostgresSettlementProvider {
             Some(subject) => {
                 sqlx::query(
                     r#"
-                    SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
                     FROM ledger_entries
                     WHERE seq > $1 AND subject = $3
                     ORDER BY seq ASC
@@ -491,7 +545,7 @@ impl PostgresSettlementProvider {
             None => {
                 sqlx::query(
                     r#"
-                    SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
                     FROM ledger_entries
                     WHERE seq > $1
                     ORDER BY seq ASC
@@ -518,6 +572,7 @@ impl PostgresSettlementProvider {
                 issuer: row.try_get("issuer").map_err(get)?,
                 subject: row.try_get("subject").map_err(get)?,
                 payload: row.try_get("payload").map_err(get)?,
+                payload_hash: row.try_get("payload_hash").map_err(get)?,
                 payload_pruned: payload_pruned_at.is_some(),
                 version: row.try_get("version").map_err(get)?,
                 event_timestamp: row.try_get("event_timestamp").map_err(get)?,
@@ -1138,6 +1193,8 @@ pub struct LedgerEntryView {
     /// and its position in the chain/Merkle tree all survive regardless;
     /// only the content is gone. See [`Self::payload_pruned`].
     pub payload: Option<serde_json::Value>,
+    /// Hex SHA-256 of the canonical payload; the entry hash commits to it, so it survives pruning.
+    pub payload_hash: String,
     /// Whether this row's payload has been pruned. Redundant with
     /// `payload.is_none()` today, but kept as its own field — a payload
     /// legitimately being absent for some other reason in the future
@@ -1246,7 +1303,14 @@ impl PostgresSettlementProvider {
             ));
         }
 
+        // One appender at a time: `seq` and `prev_hash` are read, hashed and written together.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('avalon.ledger.append'))")
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
         let mut prev_hash = self.tip_hash(&mut **tx).await?;
+        // `seq` is part of the entry hash, so the next value is chosen here, not by the sequence.
+        let mut next_seq = self.max_seq(&mut **tx).await? + 1;
         let mut first_seq: Option<i64> = None;
         let mut last_seq: i64 = 0;
 
@@ -1258,32 +1322,43 @@ impl PostgresSettlementProvider {
         // have this row yet.
         let mut batch_hashes: Vec<String> = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
-            let entry_hash = hash_event(&self.network_id, &prev_hash, event)?;
-            let row = sqlx::query(
+            let seq = next_seq;
+            next_seq += 1;
+            let payload = stored_payload(event);
+            let payload_hash =
+                payload_hash_hex(&payload).map_err(SettlementError::InvalidPayload)?;
+            let entry_hash = hash_event(
+                &self.network_id,
+                &self.shard_id,
+                seq,
+                &prev_hash,
+                event,
+                &payload_hash,
+            )?;
+            sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
-                    (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING seq
+                    (seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
+                OVERRIDING SYSTEM VALUE
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 "#,
             )
+            .bind(seq)
             .bind(event.id)
             .bind(&event.kind)
             .bind(event.issuer.as_str())
             .bind(event.subject.as_str())
-            .bind(stored_payload(event))
+            .bind(&payload)
+            .bind(&payload_hash)
             .bind(event.timestamp)
             .bind(event.version as i32)
             .bind(&prev_hash)
             .bind(&entry_hash)
             .bind(batch.id)
-            .fetch_one(&mut **tx)
+            .execute(&mut **tx)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-            let seq: i64 = row
-                .try_get("seq")
-                .map_err(|e| SettlementError::Storage(e.to_string()))?;
             first_seq.get_or_insert(seq);
             last_seq = seq;
 
@@ -1291,6 +1366,12 @@ impl PostgresSettlementProvider {
             prev_hash = entry_hash;
         }
         let first_seq = first_seq.expect("checked batch.events is non-empty above");
+        // Keep the identity sequence ahead of the explicit values.
+        sqlx::query("SELECT setval(pg_get_serial_sequence('ledger_entries', 'seq'), $1)")
+            .bind(last_seq)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         // batch_root is the real RFC 6962 Merkle Tree Hash of the whole
         // ledger, computed via the incremental tree: fast path
@@ -1428,9 +1509,20 @@ impl PostgresSettlementProvider {
         }
 
         let mut prev_hash = self.tip_hash(&self.pool).await?;
+        let mut seq = self.max_seq(&self.pool).await?;
         let mut entry_hashes = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
-            let entry_hash = hash_event(&self.network_id, &prev_hash, event)?;
+            seq += 1;
+            let payload_hash = payload_hash_hex(&stored_payload(event))
+                .map_err(SettlementError::InvalidPayload)?;
+            let entry_hash = hash_event(
+                &self.network_id,
+                &self.shard_id,
+                seq,
+                &prev_hash,
+                event,
+                &payload_hash,
+            )?;
             entry_hashes.push(entry_hash.clone());
             prev_hash = entry_hash;
         }
@@ -1626,7 +1718,7 @@ impl SettlementProvider for PostgresSettlementProvider {
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash
             FROM ledger_entries
             WHERE batch_id = $1
             ORDER BY seq ASC
@@ -1648,12 +1740,14 @@ impl SettlementProvider for PostgresSettlementProvider {
         for row in &rows {
             let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
             owned.push((
+                row.try_get::<i64, _>("seq").map_err(get)?,
                 row.try_get::<Uuid, _>("event_id").map_err(get)?,
                 row.try_get::<String, _>("kind").map_err(get)?,
                 row.try_get::<String, _>("issuer").map_err(get)?,
                 row.try_get::<String, _>("subject").map_err(get)?,
                 row.try_get::<Option<serde_json::Value>, _>("payload")
                     .map_err(get)?,
+                row.try_get::<String, _>("payload_hash").map_err(get)?,
                 row.try_get::<time::OffsetDateTime, _>("event_timestamp")
                     .map_err(get)?,
                 row.try_get::<i32, _>("version").map_err(get)?,
@@ -1662,44 +1756,43 @@ impl SettlementProvider for PostgresSettlementProvider {
             ));
         }
 
-        // Issue #208: a hot-tier node may have pruned one or more of this
-        // batch's entries' payloads. Per-entry, not batch-wide — mirrors
-        // `list_entries`'s `link_intact`/`content_intact` split exactly.
-        // Pruning one entry must never disable tamper detection for its
-        // still-content-complete siblings in the same batch: the link
-        // (`prev_hash == expected_prev`) is always checkable regardless of
-        // pruning, and content is checked whenever the payload survives to
-        // check it against. A missing payload only ever widens what's
-        // *uncheckable* for that one entry — it never causes a batch-wide
-        // skip, and never masks a genuine mismatch on an entry whose
-        // payload is still present. `expected_prev` always advances to the
-        // entry's *stored* `entry_hash`, since that's the one thing every
-        // entry has regardless of pruning.
+        // Per entry: the link and the hash (recomputed from `payload_hash`) are checked even for
+        // a pruned row, and a surviving payload must also match `payload_hash`.
         let mut expected_prev = entering_prev_hash;
         let mut chain_intact = true;
-        for (event_id, kind, issuer, subject, payload, timestamp, version, prev_hash, entry_hash) in
-            &owned
+        #[allow(clippy::type_complexity)]
+        for (
+            seq,
+            event_id,
+            kind,
+            issuer,
+            subject,
+            payload,
+            payload_hash,
+            timestamp,
+            version,
+            prev_hash,
+            entry_hash,
+        ) in &owned
         {
             let link_intact = *prev_hash == expected_prev;
-            let content_intact = match payload {
-                Some(payload) => {
-                    let recomputed = hash_entry(
-                        &self.network_id,
-                        prev_hash,
-                        &EntryContent {
-                            event_id: *event_id,
-                            kind,
-                            issuer,
-                            subject,
-                            payload,
-                            timestamp: *timestamp,
-                            version: *version,
-                        },
-                    );
-                    recomputed.as_deref() == Ok(entry_hash.as_str())
-                }
-                None => true,
-            };
+            let content_intact = entry_content_intact(
+                &self.network_id,
+                &self.shard_id,
+                prev_hash,
+                entry_hash,
+                payload.as_ref(),
+                &EntryContent {
+                    seq: *seq,
+                    event_id: *event_id,
+                    kind,
+                    issuer,
+                    subject,
+                    payload_hash,
+                    timestamp: *timestamp,
+                    version: *version,
+                },
+            );
             if !(link_intact && content_intact) {
                 chain_intact = false;
             }
@@ -1764,67 +1857,227 @@ impl SettlementProvider for PostgresSettlementProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avalon_protocol::canonical_payload::canonicalize;
     use serde_json::json;
+
+    const NET: &str = "avalon-test";
+    const SHARD: &str = CORE_SHARD_ID;
+
+    fn ph(payload: &serde_json::Value) -> String {
+        payload_hash_hex(payload).unwrap()
+    }
+
+    fn entry<'a>(seq: i64, event_id: Uuid, payload_hash: &'a str) -> EntryContent<'a> {
+        EntryContent {
+            seq,
+            event_id,
+            kind: "guild.created",
+            issuer: "identity:x:self:guild_created",
+            subject: "guild:y:self:guild_created",
+            payload_hash,
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            version: 1,
+        }
+    }
+
+    fn hash(content: &EntryContent<'_>) -> String {
+        hash_entry(NET, SHARD, GENESIS_HASH, content).unwrap()
+    }
 
     #[test]
     fn canonical_payload_is_stable_across_key_order() {
         let a = json!({ "from": "x", "to": "y", "actor": "x" });
         let b = json!({ "actor": "x", "to": "y", "from": "x" });
-        let c = json!({ "to": "y", "from": "x", "actor": "x" });
         assert_eq!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
-        assert_eq!(canonicalize(&b).unwrap(), canonicalize(&c).unwrap());
+        assert_eq!(ph(&a), ph(&b));
+        assert_ne!(ph(&a), ph(&json!({ "from": "x", "to": "z", "actor": "x" })));
     }
 
     #[test]
-    fn canonical_payload_sorts_nested_objects_too() {
-        let a = json!({ "outer": { "z": 1, "a": 2 } });
-        let b = json!({ "outer": { "a": 2, "z": 1 } });
-        assert_eq!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
+    fn payload_hash_rejects_payloads_without_a_canonical_encoding() {
+        for payload in [
+            json!({"n": 0.1234567890123456}),
+            json!({"n": 18446744073709551615u64}),
+        ] {
+            assert!(matches!(
+                payload_hash_hex(&payload),
+                Err(CanonicalPayloadError::InvalidNumber { .. })
+            ));
+        }
     }
 
     #[test]
-    fn canonical_payload_still_distinguishes_different_content() {
-        let a = json!({ "from": "x", "to": "y" });
-        let b = json!({ "from": "x", "to": "z" });
-        assert_ne!(canonicalize(&a).unwrap(), canonicalize(&b).unwrap());
+    fn every_entry_field_is_covered_by_the_hash() {
+        let id = Uuid::from_u128(7);
+        let p = ph(&json!({"a": 1}));
+        let base = hash(&entry(1, id, &p));
+        let other_payload = ph(&json!({"a": 2}));
+        let variants = [
+            EntryContent {
+                seq: 2,
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                event_id: Uuid::from_u128(8),
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                kind: "k2",
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                issuer: "i2",
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                subject: "s2",
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                payload_hash: &other_payload,
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                timestamp: time::OffsetDateTime::UNIX_EPOCH + time::Duration::microseconds(1),
+                ..entry(1, id, &p)
+            },
+            EntryContent {
+                version: 2,
+                ..entry(1, id, &p)
+            },
+        ];
+        for v in &variants {
+            assert_ne!(hash(v), base);
+        }
+        let c = entry(1, id, &p);
+        assert_ne!(
+            hash_entry("other-net", SHARD, GENESIS_HASH, &c).unwrap(),
+            base
+        );
+        assert_ne!(hash_entry(NET, "game:x", GENESIS_HASH, &c).unwrap(), base);
+        assert_ne!(hash_entry(NET, SHARD, &"1".repeat(64), &c).unwrap(), base);
+    }
+
+    /// Issue #173: two networks never share a hash space, even for identical content.
+    #[test]
+    fn hash_entry_differs_across_network_ids() {
+        let p = ph(&json!({ "same": "content" }));
+        let c = entry(1, Uuid::new_v4(), &p);
+        let mainnet = hash_entry("avalon-mainnet-1", SHARD, GENESIS_HASH, &c).unwrap();
+        let devnet = hash_entry("avalon-dev-chris", SHARD, GENESIS_HASH, &c).unwrap();
+        assert_ne!(mainnet, devnet);
     }
 
     #[test]
-    fn hash_entry_is_order_independent_for_the_full_entry() {
-        let event_id = Uuid::new_v4();
-        let timestamp = time::OffsetDateTime::now_utc();
-        let a = json!({ "from": "x", "to": "y", "actor": "x" });
-        let b = json!({ "actor": "x", "to": "y", "from": "x" });
+    fn field_boundaries_cannot_shift() {
+        let p = ph(&json!(null));
+        let id = Uuid::nil();
+        let a = EntryContent {
+            kind: "ab",
+            issuer: "c",
+            ..entry(1, id, &p)
+        };
+        let b = EntryContent {
+            kind: "a",
+            issuer: "bc",
+            ..entry(1, id, &p)
+        };
+        assert_ne!(hash(&a), hash(&b));
+        let net_a = hash_entry("ab", "c", GENESIS_HASH, &entry(1, id, &p)).unwrap();
+        let net_b = hash_entry("a", "bc", GENESIS_HASH, &entry(1, id, &p)).unwrap();
+        assert_ne!(net_a, net_b);
+    }
 
-        let hash_a = hash_entry(
-            "avalon-test",
+    #[test]
+    fn malformed_inputs_are_rejected_not_hashed() {
+        let p = ph(&json!(1));
+        let c = entry(1, Uuid::nil(), &p);
+        for prev in ["", "zz", &"A".repeat(64), &"0".repeat(63)] {
+            assert!(hash_entry(NET, SHARD, prev, &c).is_err(), "{prev:?}");
+        }
+        assert!(hash_entry(
+            NET,
+            SHARD,
             GENESIS_HASH,
             &EntryContent {
-                event_id,
-                kind: "friend.requested",
-                issuer: "identity:x:self:friend_requested",
-                subject: "identity:y:self:friend_requested",
-                payload: &a,
-                timestamp,
-                version: 1,
-            },
+                payload_hash: "ab",
+                ..entry(1, Uuid::nil(), &p)
+            }
         )
-        .unwrap();
-        let hash_b = hash_entry(
-            "avalon-test",
+        .is_err());
+        assert!(hash_entry(
+            NET,
+            SHARD,
             GENESIS_HASH,
             &EntryContent {
-                event_id,
-                kind: "friend.requested",
-                issuer: "identity:x:self:friend_requested",
-                subject: "identity:y:self:friend_requested",
-                payload: &b,
-                timestamp,
-                version: 1,
-            },
+                seq: -1,
+                ..entry(1, Uuid::nil(), &p)
+            }
         )
-        .unwrap();
-        assert_eq!(hash_a, hash_b);
+        .is_err());
+        assert!(hash_entry(
+            NET,
+            SHARD,
+            GENESIS_HASH,
+            &EntryContent {
+                version: -1,
+                ..entry(1, Uuid::nil(), &p)
+            }
+        )
+        .is_err());
+        assert!(hash_entry(
+            NET,
+            SHARD,
+            GENESIS_HASH,
+            &EntryContent {
+                version: 65536,
+                ..entry(1, Uuid::nil(), &p)
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_pruned_row_verifies_and_a_tampered_payload_does_not() {
+        let payload = json!({"a": 1});
+        let p = ph(&payload);
+        let c = entry(1, Uuid::from_u128(1), &p);
+        let h = hash(&c);
+        let check = |payload: Option<&serde_json::Value>, claimed: &str| {
+            entry_content_intact(NET, SHARD, GENESIS_HASH, claimed, payload, &c)
+        };
+        assert!(check(Some(&payload), &h));
+        assert!(check(None, &h), "skeleton row verifies without its payload");
+        assert!(!check(Some(&json!({"a": 2})), &h), "tampered payload");
+        assert!(!check(None, &"f".repeat(64)), "tampered hash");
+    }
+
+    /// The pre-#1226 hash (no length prefixes, hex text, unix seconds) is not accepted.
+    #[test]
+    fn an_old_format_hash_is_rejected() {
+        use sha2::{Digest, Sha256};
+        let payload = json!({"a": 1});
+        let p = ph(&payload);
+        let c = entry(1, Uuid::from_u128(1), &p);
+        let mut hasher = Sha256::new();
+        hasher.update(NET.as_bytes());
+        hasher.update(GENESIS_HASH.as_bytes());
+        hasher.update(c.event_id.as_bytes());
+        hasher.update(c.kind.as_bytes());
+        hasher.update(c.issuer.as_bytes());
+        hasher.update(c.subject.as_bytes());
+        hasher.update(canonicalize(&payload).unwrap().as_bytes());
+        hasher.update(c.timestamp.unix_timestamp().to_le_bytes());
+        hasher.update(c.version.to_le_bytes());
+        let old = hex::encode(hasher.finalize());
+        assert!(!entry_content_intact(
+            NET,
+            SHARD,
+            GENESIS_HASH,
+            &old,
+            Some(&payload),
+            &c
+        ));
     }
 
     #[test]
@@ -1840,227 +2093,74 @@ mod tests {
             version: 1,
             identity_chain: None,
         };
-        let unchained = hash_event("avalon-test", GENESIS_HASH, &event).unwrap();
+        let hash_of = |event: &ProtocolEvent| {
+            let p = ph(&stored_payload(event));
+            hash_event(NET, SHARD, 1, GENESIS_HASH, event, &p).unwrap()
+        };
+        let unchained = hash_of(&event);
         assert_eq!(stored_payload(&event), event.payload);
         event.identity_chain = Some(IdentityChainPosition {
             seq: 1,
             prev_hash: None,
         });
-        assert_ne!(
-            hash_event("avalon-test", GENESIS_HASH, &event).unwrap(),
-            unchained
-        );
+        assert_ne!(hash_of(&event), unchained);
         let (payload, position) =
             avalon_protocol::identity_chain_wire::split_position(stored_payload(&event));
         assert_eq!(payload, event.payload);
         assert_eq!(position, event.identity_chain);
     }
 
-    #[test]
-    fn hash_entry_rejects_payloads_without_a_canonical_encoding() {
-        for payload in [
-            json!({"n": 0.1234567890123456}),
-            json!({"n": 18446744073709551615u64}),
-        ] {
-            let content = EntryContent {
-                event_id: Uuid::new_v4(),
-                kind: "k",
-                issuer: "i",
-                subject: "s",
-                payload: &payload,
-                timestamp: time::OffsetDateTime::UNIX_EPOCH,
-                version: 1,
-            };
-            assert!(matches!(
-                hash_entry("avalon-test", GENESIS_HASH, &content),
-                Err(CanonicalPayloadError::InvalidNumber { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn hash_entry_is_independent_of_payload_key_order() {
-        let (a, b) = (json!({"b": 1, "a": [2.5]}), json!({"a": [2.5], "b": 1}));
-        let hash = |payload: &serde_json::Value| {
-            hash_entry(
-                "avalon-test",
-                GENESIS_HASH,
-                &EntryContent {
-                    event_id: Uuid::nil(),
-                    kind: "k",
-                    issuer: "i",
-                    subject: "s",
-                    payload,
-                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
-                    version: 1,
-                },
+    fn chain_of(payloads: &[serde_json::Value]) -> Vec<String> {
+        let mut prev = GENESIS_HASH.to_string();
+        let mut out = Vec::new();
+        for (i, payload) in payloads.iter().enumerate() {
+            let p = ph(payload);
+            prev = hash_entry(
+                NET,
+                SHARD,
+                &prev,
+                &entry(i as i64 + 1, Uuid::from_u128(i as u128), &p),
             )
-            .unwrap()
-        };
-        assert_eq!(hash(&a), hash(&b));
-    }
-
-    /// Issue #173's core guarantee: two networks never share a hash space,
-    /// even for byte-identical entry content. This is what makes a dev
-    /// ledger's history structurally incapable of being mistaken for, or
-    /// spliced into, production's — not a policy, a hash input.
-    #[test]
-    fn hash_entry_differs_across_network_ids() {
-        let event_id = Uuid::new_v4();
-        let timestamp = time::OffsetDateTime::now_utc();
-        let payload = json!({ "same": "content" });
-        let content = EntryContent {
-            event_id,
-            kind: "friend.requested",
-            issuer: "identity:x:self:friend_requested",
-            subject: "identity:y:self:friend_requested",
-            payload: &payload,
-            timestamp,
-            version: 1,
-        };
-
-        let mainnet = hash_entry("avalon-mainnet-1", GENESIS_HASH, &content).unwrap();
-        let devnet = hash_entry("avalon-dev-chris", GENESIS_HASH, &content).unwrap();
-        assert_ne!(mainnet, devnet);
-    }
-
-    fn sample_entry(event_id: Uuid, payload: &serde_json::Value) -> EntryContent<'_> {
-        EntryContent {
-            event_id,
-            kind: "guild.created",
-            issuer: "identity:x:self:guild_created",
-            subject: "guild:y:self:guild_created",
-            payload,
-            timestamp: time::OffsetDateTime::UNIX_EPOCH,
-            version: 1,
+            .unwrap();
+            out.push(prev.clone());
         }
+        out
     }
 
     #[test]
     fn recompute_batch_root_matches_sequential_hash_entry_calls() {
-        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
         let payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
-        let entries: Vec<EntryContent<'_>> = ids
+        let hashes: Vec<String> = payloads.iter().map(ph).collect();
+        let contents: Vec<EntryContent<'_>> = hashes
             .iter()
-            .zip(&payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
+            .enumerate()
+            .map(|(i, h)| entry(i as i64 + 1, Uuid::from_u128(i as u128), h))
             .collect();
-
-        let expected = {
-            let mut prev = GENESIS_HASH.to_string();
-            for entry in &entries {
-                prev = hash_entry("avalon-test", &prev, entry).unwrap();
-            }
-            prev
-        };
-
         assert_eq!(
-            recompute_batch_root("avalon-test", GENESIS_HASH, &entries),
-            expected
+            recompute_batch_root(NET, GENESIS_HASH, &contents),
+            *chain_of(&payloads).last().unwrap()
         );
     }
 
     #[test]
-    fn recompute_batch_root_detects_tampering_with_any_entry_in_the_batch() {
-        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let original_payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
-        let entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&original_payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
-
-        // Tamper with the *first* entry's payload — not the last — to prove
-        // this isn't just re-hashing the tip; it must actually replay the
-        // whole chain to notice.
-        let mut tampered_payloads = original_payloads.clone();
-        tampered_payloads[0] = json!({"a": 999});
-        let tampered_entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&tampered_payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-        let tampered_root = recompute_batch_root("avalon-test", GENESIS_HASH, &tampered_entries);
-
-        assert_ne!(root, tampered_root);
+    fn tampering_with_the_first_entry_changes_the_chain_tip() {
+        let original = chain_of(&[json!({"a": 1}), json!({"b": 2}), json!({"c": 3})]);
+        let tampered = chain_of(&[json!({"a": 999}), json!({"b": 2}), json!({"c": 3})]);
+        assert_ne!(original.last(), tampered.last());
     }
 
     #[test]
-    fn recompute_batch_root_of_a_single_event_batch_is_legal() {
-        let payload = json!({"solo": true});
-        let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
-        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
-        assert_eq!(
-            root,
-            hash_entry("avalon-test", GENESIS_HASH, &entries[0]).unwrap()
-        );
-    }
-
-    // --- Merkle root / STH ---
-    //
-    // `merkle.rs` owns MTH correctness against RFC 6962 reference vectors;
-    // these tests are specifically about what `commit`/`verify` build on top
-    // of it — that `batch_root` is now that real tree's root rather than the
-    // old chain-tip placeholder, and that tampering with any `entry_hash` in
-    // the tree's leaf set changes the recomputed root `verify` checks
-    // against. Both are pure, DB-free — the actual `commit`/`verify`
-    // integration is covered (live-Postgres, `#[ignore]`) in
-    // `crates/chain/tests/settlement.rs`.
-
-    #[test]
-    fn merkle_root_of_multiple_entries_differs_from_the_old_chain_tip_placeholder() {
-        // Three chained entry_hash values, exactly the shape `commit` reads
-        // back to build its leaf set.
-        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
-        let entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-
-        let mut entry_hashes = Vec::new();
-        let mut prev = GENESIS_HASH.to_string();
-        for entry in &entries {
-            let hash = hash_entry("avalon-test", &prev, entry).unwrap();
-            entry_hashes.push(hash.clone());
-            prev = hash;
-        }
-        let old_placeholder_root = entry_hashes.last().unwrap().clone();
-
-        let merkle_root = hex::encode(
-            crate::merkle::mth_of_hex_hashes(&entry_hashes)
-                .expect("stored entry_hash values should always be valid hex"),
-        );
-
-        assert_ne!(
-            merkle_root, old_placeholder_root,
-            "batch_root must be a real Merkle root over the leaf set, not just the last entry's hash"
-        );
-    }
-
-    #[test]
-    fn merkle_root_detects_tampering_with_any_entry_hash_in_the_leaf_set() {
-        let entry_hashes: Vec<String> = (0..5)
-            .map(|i| {
-                hash_entry(
-                    "avalon-test",
-                    GENESIS_HASH,
-                    &sample_entry(Uuid::new_v4(), &json!({ "i": i })),
-                )
-                .unwrap()
-            })
-            .collect();
-        let original_root = crate::merkle::mth_of_hex_hashes(&entry_hashes).unwrap();
-
-        for i in 0..entry_hashes.len() {
-            let mut tampered = entry_hashes.clone();
+    fn merkle_root_is_not_the_chain_tip_and_detects_any_tampered_leaf() {
+        let hashes = chain_of(&[json!(0), json!(1), json!(2), json!(3), json!(4)]);
+        let root = crate::merkle::mth_of_hex_hashes(&hashes).unwrap();
+        assert_ne!(hex::encode(root), *hashes.last().unwrap());
+        for i in 0..hashes.len() {
+            let mut tampered = hashes.clone();
             tampered[i] = GENESIS_HASH.to_string();
-            let tampered_root = crate::merkle::mth_of_hex_hashes(&tampered).unwrap();
             assert_ne!(
-                original_root, tampered_root,
-                "tampering with entry_hash at index {i} must change the recomputed Merkle root"
+                root,
+                crate::merkle::mth_of_hex_hashes(&tampered).unwrap(),
+                "leaf {i}"
             );
         }
     }

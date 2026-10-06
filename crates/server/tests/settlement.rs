@@ -264,7 +264,7 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
 /// both stay correct despite it.
 #[tokio::test]
 #[ignore]
-async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
+async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert() {
     let base = server_url();
     let http = reqwest::Client::new();
     let pool = test_pool().await;
@@ -279,8 +279,8 @@ async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
     let burned_seq: i64 = sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id)
-        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', now(), 1, 'deadbeef', $2, $3)
+            (event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id)
+        VALUES ($1, 'test.gap_probe', 'test:gap:self', 'test:gap', '{}', '', now(), 1, 'deadbeef', $2, $3)
         RETURNING seq
         "#,
     )
@@ -307,14 +307,10 @@ async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
         "expected seq {burned_seq} to be burned (no row), test setup didn't reproduce a gap"
     );
 
-    // Commit a real entry through the normal API — its seq lands strictly
-    // after the burned one.
+    // Commit a real entry through the normal API. `seq` is part of the entry hash and chosen
+    // as max + 1 under a lock, so the burned value does not leave a gap.
     let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
-    assert!(
-        seq > burned_seq,
-        "expected the new entry's seq ({seq}) to land after the burned one ({burned_seq})"
-    );
     let rank = entry_rank(&pool, seq).await;
     let tree_size = wait_for_covering_sth(&pool, rank).await;
 
@@ -339,9 +335,10 @@ async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
             .unwrap()
             .try_get("idx")
             .unwrap();
-    assert_ne!(
-        leaf_index, seq - 1,
-        "test setup didn't actually produce a gap before this entry — seq - 1 still happens to equal the real rank, so this test wouldn't catch a regression of the bug it targets"
+    assert_eq!(
+        leaf_index,
+        seq - 1,
+        "a rolled-back insert must not leave a seq gap before this entry"
     );
 
     // And the inclusion proof for this entry — the thing that would have

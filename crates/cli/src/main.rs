@@ -515,11 +515,12 @@ async fn rebuild_index() {
         .await
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
-    let chain = PostgresSettlementProvider::new(pool.clone(), network_id);
     let configured_shard = std::env::var("AVALON_OWN_SHARD_ID").ok();
     let own_shard_id = configured_shard
         .clone()
         .unwrap_or_else(|| "core".to_string());
+    let chain =
+        PostgresSettlementProvider::new(pool.clone(), network_id).with_shard_id(&own_shard_id);
 
     let ledger = avalon_server::rebuild::load_ledger_events(&chain)
         .await
@@ -1299,7 +1300,9 @@ async fn inspect_ledger(full: bool) {
         .unwrap_or_else(|| "(no genesis set)".to_string());
     println!("network_id: {network_id}");
 
-    let chain = PostgresSettlementProvider::new(pool, network_id);
+    // Entry hashes are rooted in the shard the ledger belongs to, as configured for the node.
+    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
+    let chain = PostgresSettlementProvider::new(pool, network_id).with_shard_id(own_shard_id);
     let entries = chain.list_entries().await.expect("failed to read ledger");
     let batches = chain.list_batches().await.expect("failed to read batches");
 
@@ -1587,6 +1590,7 @@ mod tests {
                 issuer: "identity:x:self:test_event".to_string(),
                 subject: "identity:y:self:test_event".to_string(),
                 payload: Some(json!({})),
+                payload_hash: "0".repeat(64),
                 payload_pruned: false,
                 version: 1,
                 event_timestamp: time::OffsetDateTime::UNIX_EPOCH,

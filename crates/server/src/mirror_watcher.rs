@@ -55,13 +55,12 @@
 //! signature-checked (or pinned for a self-certifying shard) and corroborated.
 //! (2) The entry's inclusion proof verifies against that head's root at the
 //! entry's leaf index. (3) The entry's hash is recomputed from its content
-//! (event id, kind, issuer, subject, payload, timestamp, version, `prev_hash`
-//! and network id) and must equal both the claimed `entry_hash` and the proof
+//! (network id, shard id, `seq`, `prev_hash`, event id, kind, issuer, subject,
+//! the payload's hash, timestamp and version) and must equal both the claimed `entry_hash` and the proof
 //! leaf, so served content is bound to the proven hash. (4) Its `prev_hash`
 //! must equal the previous verified entry's hash (genesis for the first), so
-//! the hash chain links. (5) Its `seq` must exceed the last mirrored `seq`
-//! (gaps are legitimate; `seq` is not covered by the hash, so this is only an
-//! ordering and plausibility check) and may jump at most 2^32 past it; a larger
+//! the hash chain links. (5) Its `seq` (covered by the hash) must exceed the last
+//! mirrored `seq` (gaps are legitimate) and may jump at most 2^32 past it; a larger
 //! jump is refused loudly with the source, both seqs and the bound logged. An entry and its proof always come from
 //! the same candidate source. A candidate whose entry fails any check, or
 //! serves nothing, is excluded for the rest of the tick and the same page is
@@ -69,9 +68,9 @@
 //! and the tick errors only when every candidate failed.
 //! `avalon_chain::mirror::insert_mirrored_entry` repeats (3) at the storage
 //! boundary, and a row that already exists at the entry's `seq` is an error.
-//! **Pruned payloads are refused** (`payload_pruned`): a hash cannot be
-//! recomputed without the payload, so a pruned source is skipped and the shard
-//! mirrors only if another candidate keeps full history. A served JSON null
+//! **Pruned payloads are refused** (`payload_pruned`): the mirror projects
+//! content, so a pruned source is skipped and the shard mirrors only if
+//! another candidate keeps full history. A served JSON null
 //! payload that is not flagged pruned is a real payload and is hashed as null.
 //! A pruned or unverified entry is never stored or projected.
 
@@ -1100,6 +1099,7 @@ struct LedgerEntryDto {
     issuer: String,
     subject: String,
     payload: Option<serde_json::Value>,
+    payload_hash: String,
     #[serde(default)]
     payload_pruned: bool,
     version: i32,
@@ -2299,7 +2299,7 @@ async fn backfill_page(
         }
         state.fetched += 1;
 
-        // seq is not covered by the entry hash, so it must at least keep the stored order.
+        // seq is covered by the entry hash; it must still keep the stored order.
         let last_seq = state.progress.last_seq;
         if entry.seq > last_seq && entry.seq - last_seq > MAX_SEQ_GAP {
             tracing::error!(
@@ -2333,6 +2333,7 @@ async fn backfill_page(
             issuer: entry.issuer.clone(),
             subject: entry.subject.clone(),
             payload: served_payload(&entry),
+            payload_hash: entry.payload_hash.clone(),
             event_timestamp: entry.event_timestamp,
             version: entry.version,
             prev_hash: entry.prev_hash.clone(),
@@ -2385,7 +2386,7 @@ async fn backfill_page(
 
 /// Binds a fetched entry's content to the verified chain: its content must hash to the claimed
 /// `entry_hash`, which must equal the proof leaf, and its `prev_hash` must be the previous
-/// verified entry's hash. A pruned payload cannot be recomputed and is refused.
+/// verified entry's hash. A pruned payload is refused: the mirror projects content.
 fn verify_entry_binding(
     entry: &mirror::MirroredEntry,
     proof_leaf: &str,
@@ -2395,9 +2396,12 @@ fn verify_entry_binding(
     if entry.prev_hash != expected_prev_hash {
         return Err(MirrorWatcherError::EntryChainBroken { seq });
     }
+    if entry.payload.is_none() {
+        return Err(MirrorWatcherError::EntryPayloadPruned { seq });
+    }
     let recomputed = entry
         .recomputed_hash()
-        .ok_or(MirrorWatcherError::EntryPayloadPruned { seq })?;
+        .ok_or(MirrorWatcherError::EntryContentMismatch { seq })?;
     if recomputed != entry.entry_hash || recomputed != proof_leaf {
         return Err(MirrorWatcherError::EntryContentMismatch { seq });
     }
@@ -2708,7 +2712,7 @@ where
     'pass: loop {
         let rows = sqlx::query(
             "SELECT m.source_url, m.network_id, m.shard_id, m.seq, m.event_id, m.kind, \
-                    m.issuer, m.subject, m.payload, m.event_timestamp, m.version, \
+                    m.issuer, m.subject, m.payload, m.payload_hash, m.event_timestamp, m.version, \
                     m.prev_hash, m.entry_hash, m.batch_id, m.verified_tree_size \
              FROM mirrored_entries m \
              WHERE m.network_id = $1 AND m.shard_id = $2 AND m.seq > $3 \
@@ -3199,6 +3203,10 @@ mod tests {
             issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
             subject: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
             payload: Some(serde_json::json!({"display_name": "test"})),
+            payload_hash: avalon_chain::payload_hash_hex(
+                &serde_json::json!({"display_name": "test"}),
+            )
+            .unwrap(),
             event_timestamp: OffsetDateTime::UNIX_EPOCH,
             version: 1,
             prev_hash: "aa".repeat(32),
@@ -3477,6 +3485,7 @@ mod tests {
             issuer: "i".into(),
             subject: "s".into(),
             payload: Some(payload),
+            payload_hash: String::new(),
             payload_pruned: false,
             version: 1,
             event_timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -3629,6 +3638,8 @@ mod tests {
                 issuer: "i".into(),
                 subject: "s".into(),
                 payload: Some(serde_json::json!({ "n": seq })),
+                payload_hash: avalon_chain::payload_hash_hex(&serde_json::json!({ "n": seq }))
+                    .unwrap(),
                 event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
                 version: 1,
                 prev_hash: prev.clone(),
@@ -3761,6 +3772,10 @@ mod tests {
                 issuer: "i".into(),
                 subject: "s".into(),
                 payload: Some(serde_json::json!({ "n": seq, "salt": salt })),
+                payload_hash: avalon_chain::payload_hash_hex(
+                    &serde_json::json!({ "n": seq, "salt": salt }),
+                )
+                .unwrap(),
                 event_timestamp: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
                 version: 1,
                 prev_hash: prev.clone(),
@@ -4287,6 +4302,10 @@ mod tests {
             kind: kind.to_string(),
             issuer: who.clone(),
             subject: who,
+            payload_hash: payload
+                .as_ref()
+                .map(|p| avalon_chain::payload_hash_hex(p).unwrap())
+                .unwrap_or_default(),
             payload,
             event_timestamp: OffsetDateTime::now_utc(),
             version: if matches!(
@@ -4307,6 +4326,12 @@ mod tests {
             entry.entry_hash = hash;
         }
         entry
+    }
+
+    /// Moves a fixture to another shard; the shard is part of the entry hash.
+    fn reshard(entry: &mut mirror::MirroredEntry, shard: &str) {
+        entry.shard_id = shard.to_string();
+        entry.entry_hash = entry.recomputed_hash().unwrap();
     }
 
     fn b64(bytes: &[u8]) -> String {
@@ -4343,8 +4368,17 @@ mod tests {
     /// Entries as a core shard records a fresh registration: `identity.created`
     /// first, then the passkey and the inception signing key.
     fn full_history(network_id: &str, identities: usize) -> Vec<mirror::MirroredEntry> {
+        full_history_after(network_id, identities, 0)
+    }
+
+    /// Like [`full_history`], numbering entries from `after + 1` (seq is part of the hash).
+    fn full_history_after(
+        network_id: &str,
+        identities: usize,
+        after: i64,
+    ) -> Vec<mirror::MirroredEntry> {
         let mut entries = Vec::new();
-        let mut seq = 0;
+        let mut seq = after;
         for _ in 0..identities {
             let who = TestIdentity::new();
             let id = who.id;
@@ -4420,8 +4454,8 @@ mod tests {
     /// storage-boundary check, to exercise handling of legacy rows.
     async fn insert_legacy_pruned_row(pool: &PgPool, e: &mirror::MirroredEntry) {
         sqlx::query(
-            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $10, $11, $12, $13, $14)",
         )
         .bind(&e.source_url)
         .bind(&e.network_id)
@@ -4517,10 +4551,7 @@ mod tests {
                 Some(forged_created_payload(&b, network_id, &name)),
             ),
         ];
-        for mut e in full_history(network_id, 1) {
-            e.seq += 2;
-            entries.push(e);
-        }
+        entries.extend(full_history_after(network_id, 1, 2));
         entries
     }
 
@@ -4851,7 +4882,7 @@ mod tests {
                 .unwrap(),
             ),
         );
-        created.shard_id = "game:slug/1".to_string();
+        reshard(&mut created, "game:slug/1");
         mirror::insert_mirrored_entry(&pool, &created)
             .await
             .unwrap();
@@ -5443,7 +5474,7 @@ mod tests {
             who.id,
             Some(passkey_payload(who.id, Uuid::new_v4())),
         );
-        passkey.shard_id = "game:slug/1".to_string();
+        reshard(&mut passkey, "game:slug/1");
         let mut blocked = false;
         for e in [&created, &passkey] {
             store_and_project(&pool, &indexer, e, &mut blocked)
@@ -5502,7 +5533,7 @@ mod tests {
             avalon_protocol::shard_identity::derive_self_certifying_id(&key.verifying_key());
         let mut entries = full_history(&network_id, 1);
         for e in &mut entries {
-            e.shard_id = shard.clone();
+            reshard(e, &shard);
         }
         store_entries(&pool, &entries).await;
         let report = reproject_unapplied(&pool, &indexer, &network_id, &shard)

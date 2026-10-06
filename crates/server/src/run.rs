@@ -458,6 +458,12 @@ pub async fn run_with_tracing(
         );
         std::process::exit(1);
     }
+    // The ledger's entry hashes are rooted in the shard this node authors.
+    let chain = if replica_only {
+        chain
+    } else {
+        chain.with_shard_id(&own_shard_id)
+    };
 
     // Events this node authors are verified against its own network and shard.
     let indexer = match indexer {

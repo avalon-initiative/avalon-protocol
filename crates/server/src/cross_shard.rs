@@ -1030,6 +1030,7 @@ mod tests {
             kind: kind.to_string(),
             issuer: "game:x:self:k".to_string(),
             subject: "game:x:self:k".to_string(),
+            payload_hash: avalon_chain::payload_hash_hex(&payload).unwrap(),
             payload: Some(payload),
             event_timestamp: OffsetDateTime::now_utc(),
             version: 1,

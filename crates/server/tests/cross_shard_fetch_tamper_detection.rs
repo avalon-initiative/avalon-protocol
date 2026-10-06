@@ -72,15 +72,18 @@ fn real_entry() -> RealEntry {
     let issuer = subject.clone();
     let version = 1;
 
+    let payload_hash = avalon_chain::payload_hash_hex(&payload).unwrap();
     let entry_hash = hash_entry(
         NETWORK_ID,
+        "core",
         &prev_hash,
         &EntryContent {
+            seq: 1,
             event_id,
             kind: &kind,
             issuer: &issuer,
             subject: &subject,
-            payload: &payload,
+            payload_hash: &payload_hash,
             timestamp,
             version,
         },
@@ -156,6 +159,7 @@ async fn mock_remote_node(
             "subject": real.subject,
             "payload": served_payload,
             "payload_pruned": false,
+            "payload_hash": avalon_chain::payload_hash_hex(&real.payload).unwrap(),
             "version": real.version,
             "event_timestamp": real.timestamp.format(&time::format_description::well_known::Rfc3339).unwrap(),
             "prev_hash": real.prev_hash,
