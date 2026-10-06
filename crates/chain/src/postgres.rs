@@ -496,28 +496,29 @@ impl PostgresSettlementProvider {
             // The entry hash is recomputed from `payload_hash`, so it verifies even for a pruned
             // row; a surviving payload must also hash to `payload_hash`.
             // An envelope this node cannot read is not verifiable here, so the entry is not intact.
-            let content_intact = envelope_row
-                .to_envelope(tags::LEDGER_ENTRY)
-                .is_ok_and(|envelope| {
-                    entry_content_intact(
-                        &self.network_id,
-                        &self.shard_id,
-                        &prev_hash,
-                        &entry_hash,
-                        payload.as_ref(),
-                        &EntryContent {
-                            seq,
-                            event_id,
-                            kind: &kind,
-                            issuer: &issuer,
-                            subject: &subject,
-                            payload_hash: &payload_hash,
-                            timestamp: event_timestamp,
-                            version,
-                            envelope: &envelope,
-                        },
-                    )
-                });
+            let content_intact =
+                envelope_row
+                    .to_envelope(tags::LEDGER_ENTRY)
+                    .is_ok_and(|envelope| {
+                        entry_content_intact(
+                            &self.network_id,
+                            &self.shard_id,
+                            &prev_hash,
+                            &entry_hash,
+                            payload.as_ref(),
+                            &EntryContent {
+                                seq,
+                                event_id,
+                                kind: &kind,
+                                issuer: &issuer,
+                                subject: &subject,
+                                payload_hash: &payload_hash,
+                                timestamp: event_timestamp,
+                                version,
+                                envelope: &envelope,
+                            },
+                        )
+                    });
             expected_prev = entry_hash.clone();
 
             entries.push(LedgerEntryView {
@@ -1520,7 +1521,8 @@ impl PostgresSettlementProvider {
                         .map_err(SettlementError::Storage)?;
                 }
                 let size = fetched.len() as i64;
-                let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &fetched).map_err(SettlementError::Storage)?;
+                let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &fetched)
+                    .map_err(SettlementError::Storage)?;
                 (size, root)
             };
         drop(cached);
@@ -1647,7 +1649,8 @@ impl PostgresSettlementProvider {
         all_hashes.extend(entry_hashes);
 
         let tree_size = all_hashes.len() as i64;
-        let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &all_hashes).map_err(SettlementError::Storage)?;
+        let root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &all_hashes)
+            .map_err(SettlementError::Storage)?;
 
         Ok(sth::PreparedTreeHead {
             batch_id: batch.id,
@@ -1938,8 +1941,8 @@ impl SettlementProvider for PostgresSettlementProvider {
             .map(|row| row.try_get::<String, _>("entry_hash"))
             .collect::<Result<_, _>>()
             .map_err(|e: sqlx::Error| SettlementError::Storage(e.to_string()))?;
-        let recomputed_tree_root =
-            merkle::mth_of_hex_hashes(ledger_hash_algo(), &leaf_hashes).map_err(SettlementError::Storage)?;
+        let recomputed_tree_root = merkle::mth_of_hex_hashes(ledger_hash_algo(), &leaf_hashes)
+            .map_err(SettlementError::Storage)?;
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         let merkle_intact = hex::encode(recomputed_tree_root) == claimed_root;
 

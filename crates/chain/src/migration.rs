@@ -23,7 +23,9 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::envelope_row::EnvelopeRow;
 use crate::{GenesisError, PostgresSettlementProvider, SettlementError};
+use avalon_protocol::signing_bytes::EnvelopeWire;
 
 /// What a source network's history looks like at the moment of cutover.
 /// `root_hash`/`signing_key_id`/`signature`/`sth_created_at` are `None`
@@ -38,6 +40,8 @@ pub struct SourceCheckpoint {
     pub signing_key_id: Option<String>,
     pub signature: Option<String>,
     pub sth_created_at: Option<OffsetDateTime>,
+    /// The source head's envelope, present exactly when its signature is.
+    pub sth_envelope: Option<EnvelopeWire>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,7 +82,8 @@ pub async fn read_source_checkpoint(pool: &PgPool) -> Result<SourceCheckpoint, M
         .ok_or(MigrationError::SourceHasNoGenesis)?;
 
     let latest = sqlx::query(
-        "SELECT tree_size, root_hash, signing_key_id, signature, created_at \
+        "SELECT tree_size, root_hash, signing_key_id, signature, created_at, \
+         layout_version, rules_version, hash_algo, extensions \
          FROM signed_tree_heads WHERE network_id = $1 ORDER BY tree_size DESC LIMIT 1",
     )
     .bind(&network_id)
@@ -93,6 +98,7 @@ pub async fn read_source_checkpoint(pool: &PgPool) -> Result<SourceCheckpoint, M
             signing_key_id: Some(row.try_get("signing_key_id")?),
             signature: Some(row.try_get("signature")?),
             sth_created_at: Some(row.try_get("created_at")?),
+            sth_envelope: Some(EnvelopeRow::read(&row, "")?.to_wire()),
         },
         None => SourceCheckpoint {
             network_id,
@@ -101,6 +107,7 @@ pub async fn read_source_checkpoint(pool: &PgPool) -> Result<SourceCheckpoint, M
             signing_key_id: None,
             signature: None,
             sth_created_at: None,
+            sth_envelope: None,
         },
     })
 }
@@ -137,11 +144,17 @@ pub async fn migrate_network(
     .is_some();
 
     if !already_present {
+        let source_envelope = checkpoint
+            .sth_envelope
+            .as_ref()
+            .map(EnvelopeRow::from_wire)
+            .transpose()?;
         sqlx::query(
             "INSERT INTO network_migration_checkpoints \
              (id, source_network_id, source_tree_size, source_root_hash, \
-              source_signing_key_id, source_signature, source_sth_created_at, migrated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+              source_signing_key_id, source_signature, source_sth_created_at, migrated_at, \
+              source_layout_version, source_rules_version, source_hash_algo, source_extensions) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(Uuid::new_v4())
         .bind(&checkpoint.network_id)
@@ -151,6 +164,10 @@ pub async fn migrate_network(
         .bind(&checkpoint.signature)
         .bind(checkpoint.sth_created_at)
         .bind(OffsetDateTime::now_utc())
+        .bind(source_envelope.as_ref().map(|e| e.layout_version))
+        .bind(source_envelope.as_ref().map(|e| e.rules_version))
+        .bind(source_envelope.as_ref().map(|e| e.hash_algo))
+        .bind(source_envelope.map(|e| e.extensions))
         .execute(target_pool)
         .await?;
     }

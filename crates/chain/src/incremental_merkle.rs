@@ -222,7 +222,8 @@ mod tests {
             );
 
             for first in 0..=size {
-                let want = merkle::consistency_proof(HashAlgo::Sha256, first, &all_leaves[..size]).unwrap();
+                let want = merkle::consistency_proof(HashAlgo::Sha256, first, &all_leaves[..size])
+                    .unwrap();
                 let got = tree.consistency_proof(first as u64, size as u64).unwrap();
                 assert_eq!(
                     got, want,
@@ -231,7 +232,8 @@ mod tests {
             }
 
             for index in 0..size {
-                let want = merkle::inclusion_proof(HashAlgo::Sha256, index, &all_leaves[..size]).unwrap();
+                let want =
+                    merkle::inclusion_proof(HashAlgo::Sha256, index, &all_leaves[..size]).unwrap();
                 let got = tree.inclusion_proof(index as u64, size as u64).unwrap();
                 assert_eq!(
                     got, want,
@@ -278,7 +280,8 @@ mod tests {
             let root = tree.root(size).unwrap();
             for index in 0..size {
                 let proof = tree.inclusion_proof(index, size).unwrap();
-                assert!(merkle::verify_inclusion_proof(HashAlgo::Sha256, 
+                assert!(merkle::verify_inclusion_proof(
+                    HashAlgo::Sha256,
                     &all_leaves[index as usize],
                     index as usize,
                     size as usize,
