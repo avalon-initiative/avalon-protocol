@@ -581,6 +581,123 @@ fn an_entry_needing_a_newer_version_is_not_verified_and_gives_the_typed_result()
     }
 }
 
+/// The `idx`-th served entry as a `MirroredEntry` carrying its envelope patched by `patch`.
+fn mirrored_with(ledger: &Ledger, idx: usize, patch: &serde_json::Value) -> mirror::MirroredEntry {
+    let v = &ledger.entries[idx];
+    let mut as_json = serde_json::to_value(avalon_protocol::signing_bytes::EnvelopeWire::from(
+        &avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+        ),
+    ))
+    .unwrap();
+    for (k, val) in patch.as_object().unwrap() {
+        as_json[k] = val.clone();
+    }
+    mirror::MirroredEntry {
+        source_url: "p".into(),
+        network_id: NET.into(),
+        shard_id: mirror::CORE_SHARD_ID.into(),
+        seq: v["seq"].as_i64().unwrap(),
+        event_id: v["event_id"].as_str().unwrap().parse().unwrap(),
+        kind: v["kind"].as_str().unwrap().into(),
+        issuer: v["issuer"].as_str().unwrap().into(),
+        subject: v["subject"].as_str().unwrap().into(),
+        payload: Some(v["payload"].clone()),
+        payload_hash: avalon_chain::payload_hash_hex(&v["payload"].clone()).unwrap(),
+        event_timestamp: OffsetDateTime::parse(
+            v["event_timestamp"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap(),
+        version: 1,
+        prev_hash: v["prev_hash"].as_str().unwrap().into(),
+        entry_hash: v["entry_hash"].as_str().unwrap().into(),
+        batch_id: Uuid::new_v4(),
+        verified_tree_size: 2,
+        envelope: serde_json::from_value(as_json).unwrap(),
+    }
+}
+
+/// A readable but altered envelope: the entry hash was made without it, so the content no longer
+/// hashes to the claimed hash.
+fn altered_envelopes() -> Vec<(&'static str, serde_json::Value)> {
+    vec![(
+        "a non-critical extension added",
+        serde_json::json!({ "extensions": "000100050000000000" }),
+    )]
+}
+
+/// DB-free: a genuine entry under an altered readable envelope is a content mismatch.
+#[test]
+fn a_genuine_entry_under_an_altered_readable_envelope_is_a_content_mismatch() {
+    let ledger = genuine_ledger(NET, 2);
+    let (leaf, prev) = (ledger.hashes[1].clone(), ledger.hashes[0].clone());
+    for (name, patch) in &altered_envelopes() {
+        let err =
+            verify_entry_binding(&mirrored_with(&ledger, 1, patch), &leaf, &prev).unwrap_err();
+        assert!(
+            matches!(err, MirrorWatcherError::EntryContentMismatch { seq: 2 }),
+            "{name}: {err:?}"
+        );
+    }
+}
+
+/// A peer that predates the envelope (no envelope fields) is refused at decode, for entries too.
+#[test]
+fn a_pre_envelope_entry_does_not_decode() {
+    let ledger = genuine_ledger(NET, 1);
+    let mut v = ledger.entries[0].clone();
+    assert!(serde_json::from_value::<LedgerEntryDto>(v.clone()).is_ok());
+    for field in ["layout_version", "rules_version", "hash_algo", "extensions"] {
+        v.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<LedgerEntryDto>(v.clone()).is_err(),
+            "{field}"
+        );
+        v = ledger.entries[0].clone();
+    }
+}
+
+/// The insert refuses an altered readable envelope as a content mismatch and stores nothing.
+#[tokio::test]
+#[ignore]
+async fn inserting_a_genuine_entry_under_an_altered_envelope_is_a_content_mismatch() {
+    let pool = pool().await;
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 1);
+    let mut entry = mirrored_with(&ledger, 0, &altered_envelopes()[0].1);
+    entry.network_id = net.clone();
+    entry.verified_tree_size = 1;
+    let err = mirror::insert_mirrored_entry(&pool, &entry)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        avalon_chain::SettlementError::MirroredContentMismatch { seq: 1 }
+    ));
+    assert!(stored_seqs(&pool, &net).await.is_empty());
+}
+
+/// Backfill refuses a genuine entry served with an altered readable envelope as a content mismatch.
+#[tokio::test]
+#[ignore]
+async fn backfill_refuses_a_genuine_entry_under_an_altered_envelope() {
+    let pool = pool().await;
+    let net = fresh_net();
+    let ledger = genuine_ledger(&net, 3);
+    let mut served = ledger.entries.clone();
+    for (k, val) in altered_envelopes()[0].1.as_object().unwrap() {
+        served[1][k] = val.clone();
+    }
+    let server = ledger.serve(served).await;
+    let err = ledger.backfill_from(&pool, &server).await.unwrap_err();
+    assert!(
+        matches!(err, MirrorWatcherError::EntryContentMismatch { seq: 2 }),
+        "{err:?}"
+    );
+    assert_eq!(stored_seqs(&pool, &net).await, vec![1]);
+}
+
 /// An entry the node cannot verify is refused with the typed result and never stored; earlier
 /// entries stay.
 #[tokio::test]
