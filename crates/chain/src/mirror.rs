@@ -558,7 +558,7 @@ pub struct WitnessEquivocationEvidence {
 /// store — just enough per cosignature to re-derive
 /// `avalon_protocol::witness::witness_signing_message` and re-verify: the
 /// head-level fields (`tree_size`/`root_hash`/`network_id`/
-/// `author_created_at`) are already columns of the same row, stored once
+/// `author_created_at`/`signing_key_id`/`signature`) are already columns of the same row, stored once
 /// rather than repeated per witness.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CosignatureRecord {
@@ -586,6 +586,8 @@ fn cosignatures_from_json(
     root_hash: &str,
     network_id: &str,
     author_created_at: OffsetDateTime,
+    author_key_id: &str,
+    author_signature: &str,
 ) -> Result<Vec<WitnessCosignature>, SettlementError> {
     let records: Vec<CosignatureRecord> = serde_json::from_value(value)
         .map_err(|e| SettlementError::Storage(format!("invalid stored cosignature JSON: {e}")))?;
@@ -596,6 +598,8 @@ fn cosignatures_from_json(
             root_hash: root_hash.to_string(),
             network_id: network_id.to_string(),
             author_created_at,
+            author_key_id: author_key_id.to_string(),
+            author_signature: author_signature.to_string(),
             witness_key_id: r.witness_key_id,
             observed_at: r.observed_at,
             signature: r.signature,
@@ -726,8 +730,8 @@ pub async fn witness_equivocation_evidence_for(
                 tree_size,
                 root_hash: root_hash_a.clone(),
                 network_id: network_id.clone(),
-                signing_key_id: signing_key_id_a,
-                signature: signature_a,
+                signing_key_id: signing_key_id_a.clone(),
+                signature: signature_a.clone(),
                 created_at: author_created_at_a,
             },
             cosignatures: cosignatures_from_json(
@@ -736,6 +740,8 @@ pub async fn witness_equivocation_evidence_for(
                 &root_hash_a,
                 &network_id,
                 author_created_at_a,
+                &signing_key_id_a,
+                &signature_a,
             )?,
         };
         let head_b = CosignedTreeHead {
@@ -743,8 +749,8 @@ pub async fn witness_equivocation_evidence_for(
                 tree_size,
                 root_hash: root_hash_b.clone(),
                 network_id: network_id.clone(),
-                signing_key_id: signing_key_id_b,
-                signature: signature_b,
+                signing_key_id: signing_key_id_b.clone(),
+                signature: signature_b.clone(),
                 created_at: author_created_at_b,
             },
             cosignatures: cosignatures_from_json(
@@ -753,6 +759,8 @@ pub async fn witness_equivocation_evidence_for(
                 &root_hash_b,
                 &network_id,
                 author_created_at_b,
+                &signing_key_id_b,
+                &signature_b,
             )?,
         };
 

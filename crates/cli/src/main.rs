@@ -1621,7 +1621,8 @@ mod tests {
             &root,
             "avalon-test",
             time::OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         // The Merkle recompute is correct on its own...
         assert!(merkle_root_matches(&entries, &sth));
@@ -1655,7 +1656,8 @@ mod tests {
             &root,
             "avalon-test",
             time::OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
         assert!(merkle_root_matches(&entries, &sth));
 
         let mut tampered = entries;
@@ -1700,7 +1702,8 @@ mod tests {
             &root,
             "avalon-test",
             time::OffsetDateTime::UNIX_EPOCH,
-        );
+        )
+        .unwrap();
 
         assert!(
             merkle_root_matches(&entries, &sth),

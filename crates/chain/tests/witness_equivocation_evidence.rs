@@ -51,7 +51,8 @@ fn head(
         root_hash,
         network_id,
         created_at,
-    );
+    )
+    .unwrap();
     let cosignatures = cosigners
         .iter()
         .map(|(key, id)| {

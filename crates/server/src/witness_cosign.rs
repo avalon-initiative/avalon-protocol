@@ -47,7 +47,7 @@
 use avalon_chain::mirror::{self, WitnessCheckpoint};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_protocol::cosigned_sth::CosignedTreeHead;
-use avalon_protocol::witness::sign_witness_cosignature;
+use avalon_protocol::witness::{reattest_witness_cosignature, sign_witness_cosignature};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -675,15 +675,23 @@ async fn ensure_own_cosignature_stored(
         }
     }
 
-    let cosig = sign_witness_cosignature(
+    let cosig = match sign_witness_cosignature(
         &config.signing_key,
         &config.witness_key_id,
-        head.sth.tree_size,
-        &head.sth.root_hash,
-        network_id,
-        head.sth.created_at,
+        &head.sth,
         OffsetDateTime::now_utc(),
-    );
+    ) {
+        Ok(cosig) => cosig,
+        Err(err) => {
+            tracing::error!(
+                network_id = %network_id,
+                shard_id,
+                error = %err,
+                "witness-cosign: cannot sign this head — not cosigning",
+            );
+            return false;
+        }
+    };
     if let Err(err) = chain.store_witness_cosignature(shard_id, &cosig).await {
         tracing::error!(
             network_id = %network_id,
@@ -723,16 +731,8 @@ fn reattested(
     config: &WitnessCosignConfig,
     existing: &avalon_protocol::witness::WitnessCosignature,
     now: OffsetDateTime,
-) -> avalon_protocol::witness::WitnessCosignature {
-    sign_witness_cosignature(
-        &config.signing_key,
-        &config.witness_key_id,
-        existing.tree_size,
-        &existing.root_hash,
-        &existing.network_id,
-        existing.author_created_at,
-        now,
-    )
+) -> Option<avalon_protocol::witness::WitnessCosignature> {
+    reattest_witness_cosignature(&config.signing_key, &config.witness_key_id, existing, now).ok()
 }
 
 /// Refreshes this node's cosignature over the head it last cosigned for every log it holds a
@@ -778,7 +778,9 @@ pub async fn reattest_once(
         }) else {
             continue;
         };
-        let fresh = reattested(config, own, now);
+        let Some(fresh) = reattested(config, own, now) else {
+            continue;
+        };
         match chain
             .refresh_witness_cosignature(&checkpoint.shard_id, &fresh)
             .await
@@ -935,7 +937,7 @@ mod tests {
             })
             .collect();
         let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0).unwrap();
         let known: Vec<(String, ed25519_dalek::VerifyingKey)> = cfg_keys
             .iter()
             .map(|c| (c.witness_key_id.clone(), c.signing_key.verifying_key()))
@@ -995,7 +997,7 @@ mod tests {
             .map(|(id, k)| (id.clone(), k.verifying_key()))
             .collect();
         let t0 = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", t0).unwrap();
         let cosignatures = witnesses
             .iter()
             .map(|(id, k)| {
@@ -1080,7 +1082,7 @@ mod tests {
             ),
         ];
         let now = OffsetDateTime::now_utc();
-        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now);
+        let sth = sign_tree_head(&author, "author-key", 7, &"ab".repeat(32), "net", now).unwrap();
         let cosign = |k: &SigningKey, id: &str| {
             sign_witness_cosignature(
                 k,

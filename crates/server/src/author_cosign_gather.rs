@@ -468,7 +468,8 @@ mod tests {
         let key = SigningKey::from_bytes(&[1u8; 32]);
         let created = OffsetDateTime::now_utc();
         let sth =
-            avalon_protocol::sth::sign_tree_head(&key, "k", 4, &"ab".repeat(32), "n", created);
+            avalon_protocol::sth::sign_tree_head(&key, "k", 4, &"ab".repeat(32), "n", created)
+                .unwrap();
         let cosig = avalon_protocol::witness::sign_witness_cosignature(
             &key,
             "w",

@@ -198,6 +198,7 @@ mod tests {
                 network_id,
                 created_at,
             )
+            .unwrap()
             .unwrap(),
             cosignatures: Vec::new(),
         }

@@ -94,7 +94,8 @@ impl Origin {
             &root,
             NETWORK,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         let shown = self.key_override.as_ref().unwrap_or(&self.signing);
         let signature = if self.corrupt_signature {
             "00".repeat(64)

@@ -81,7 +81,8 @@ impl Fixture {
                 root,
                 &self.network_id,
                 OffsetDateTime::now_utc(),
-            ),
+            )
+            .unwrap(),
             cosignatures: Vec::new(),
         }
     }

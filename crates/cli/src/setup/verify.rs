@@ -250,7 +250,7 @@ mod tests {
 
     fn head_json(key: &SigningKey, network: &str) -> Value {
         let created = OffsetDateTime::parse("2026-09-28T10:00:00Z", &Rfc3339).unwrap();
-        let sth = sign_tree_head(key, "k1", 7, &"ab".repeat(32), network, created);
+        let sth = sign_tree_head(key, "k1", 7, &"ab".repeat(32), network, created).unwrap();
         json!({
             "tree_size": sth.tree_size, "root_hash": sth.root_hash, "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id, "signature": sth.signature,

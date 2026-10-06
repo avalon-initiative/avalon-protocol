@@ -216,7 +216,8 @@ async fn a_mirror_with_confirmed_witnesses_keeps_following_an_author_that_serves
             &hex::encode([index as u8 + 1; 32]),
             &network_id,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         heads.lock().unwrap().insert(size, sth);
 
         let mut trusted = false;
@@ -280,7 +281,8 @@ async fn a_new_mirror_with_an_empty_known_list_reaches_a_majority_from_the_direc
         &hex::encode([1u8; 32]),
         &network_id,
         OffsetDateTime::now_utc().replace_nanosecond(0).unwrap(),
-    );
+    )
+    .unwrap();
     heads.lock().unwrap().insert(10, sth);
 
     let now = OffsetDateTime::now_utc();

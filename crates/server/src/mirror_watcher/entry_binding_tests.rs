@@ -74,7 +74,8 @@ fn genuine_ledger_at(network_id: &str, payloads: Vec<serde_json::Value>, seqs: &
         &root,
         network_id,
         OffsetDateTime::now_utc(),
-    );
+    )
+    .unwrap();
     Ledger {
         entries,
         hashes,

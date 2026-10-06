@@ -351,7 +351,8 @@ mod tests {
             &"ab".repeat(32),
             "net",
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         CosignedTreeHead {
             sth,
             cosignatures: Vec::new(),

@@ -363,7 +363,8 @@ mod tests {
             &hex::encode([root_byte; 32]),
             "net",
             created_at,
-        );
+        )
+        .unwrap();
         CosignedTreeHead {
             sth,
             cosignatures: Vec::new(),

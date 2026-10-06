@@ -759,8 +759,9 @@ impl PostgresSettlementProvider {
         let outcome = sqlx::query(
             r#"
             INSERT INTO witness_cosignatures
-                (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at, observed_at, signature)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at,
+                 author_key_id, author_signature, observed_at, signature)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (network_id, shard_id, tree_size, witness_key_id) DO NOTHING
             "#,
         )
@@ -770,6 +771,8 @@ impl PostgresSettlementProvider {
         .bind(&cosig.witness_key_id)
         .bind(&cosig.root_hash)
         .bind(cosig.author_created_at)
+        .bind(&cosig.author_key_id)
+        .bind(&cosig.author_signature)
         .bind(cosig.observed_at)
         .bind(&cosig.signature)
         .execute(&self.pool)
@@ -784,7 +787,8 @@ impl PostgresSettlementProvider {
         // or a genuine equivocation — tell those apart below.
         let row = sqlx::query(
             r#"
-            SELECT root_hash, signature, observed_at FROM witness_cosignatures
+            SELECT root_hash, author_key_id, author_signature, signature, observed_at
+            FROM witness_cosignatures
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
             "#,
         )
@@ -798,6 +802,12 @@ impl PostgresSettlementProvider {
         let existing_root_hash: String = row
             .try_get("root_hash")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_author_key_id: String = row
+            .try_get("author_key_id")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let existing_author_signature: String = row
+            .try_get("author_signature")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
         let existing_signature: String = row
             .try_get("signature")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -808,7 +818,11 @@ impl PostgresSettlementProvider {
         if existing_signature == cosig.signature {
             return Ok(());
         }
-        if existing_root_hash == cosig.root_hash && existing_observed_at < cosig.observed_at {
+        if existing_root_hash == cosig.root_hash
+            && existing_author_key_id == cosig.author_key_id
+            && existing_author_signature == cosig.author_signature
+            && existing_observed_at < cosig.observed_at
+        {
             // Same witness, same head, a fresher observation — a relayed
             // re-attestation, not an equivocation. Update in place.
             self.refresh_witness_cosignature(shard_id, cosig).await?;
@@ -836,6 +850,7 @@ impl PostgresSettlementProvider {
             SET observed_at = $6, signature = $7
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
               AND root_hash = $5 AND author_created_at = $8 AND observed_at < $6
+              AND author_key_id = $9 AND author_signature = $10
             "#,
         )
         .bind(&cosig.network_id)
@@ -846,6 +861,8 @@ impl PostgresSettlementProvider {
         .bind(cosig.observed_at)
         .bind(&cosig.signature)
         .bind(cosig.author_created_at)
+        .bind(&cosig.author_key_id)
+        .bind(&cosig.author_signature)
         .execute(&self.pool)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -862,7 +879,8 @@ impl PostgresSettlementProvider {
     ) -> Result<Vec<WitnessCosignature>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT tree_size, root_hash, network_id, author_created_at, witness_key_id, observed_at, signature
+            SELECT tree_size, root_hash, network_id, author_created_at, author_key_id,
+                   author_signature, witness_key_id, observed_at, signature
             FROM witness_cosignatures
             WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3
             "#,
@@ -882,6 +900,8 @@ impl PostgresSettlementProvider {
                 root_hash: row.try_get("root_hash").map_err(get)?,
                 network_id: row.try_get("network_id").map_err(get)?,
                 author_created_at: row.try_get("author_created_at").map_err(get)?,
+                author_key_id: row.try_get("author_key_id").map_err(get)?,
+                author_signature: row.try_get("author_signature").map_err(get)?,
                 witness_key_id: row.try_get("witness_key_id").map_err(get)?,
                 observed_at: row.try_get("observed_at").map_err(get)?,
                 signature: row.try_get("signature").map_err(get)?,
@@ -1717,7 +1737,8 @@ impl SettlementProvider for PostgresSettlementProvider {
                 &batch_root,
                 &self.network_id,
                 committed_at,
-            );
+            )
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
             self.insert_signed_tree_head(&mut tx, &tree_head).await?;
 
             tx.commit()

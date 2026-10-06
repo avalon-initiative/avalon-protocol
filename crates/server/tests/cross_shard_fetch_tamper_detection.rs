@@ -131,7 +131,8 @@ async fn mock_remote_node(
         &root_hash,
         NETWORK_ID,
         OffsetDateTime::now_utc(),
-    );
+    )
+    .unwrap();
 
     let server = MockServer::start().await;
 

@@ -3261,7 +3261,8 @@ mod tests {
             &"ab".repeat(32),
             network_id,
             OffsetDateTime::now_utc(),
-        );
+        )
+        .unwrap();
         serde_json::json!({
             "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
@@ -3520,7 +3521,7 @@ mod tests {
         let author = SigningKey::from_bytes(&[9u8; 32]);
         let created_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let root = hex::encode([1u8; 32]);
-        let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+        let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at).unwrap();
         mirror::insert_observation(
             &pool,
             &ObservedSth::from_sth("http://127.0.0.1:1", "core", &sth, created_at),
@@ -3655,7 +3656,9 @@ mod tests {
         let served_root = hex::encode(merkle::mth_of_hex_hashes(&hashes).unwrap());
         let heads: Vec<SignedTreeHead> = [(3i64, served_root), (5, hex::encode([2u8; 32]))]
             .iter()
-            .map(|(size, root)| sign_tree_head(&author, "op", *size, root, &network_id, created_at))
+            .map(|(size, root)| {
+                sign_tree_head(&author, "op", *size, root, &network_id, created_at).unwrap()
+            })
             .collect();
         // Five other sources report different roots at the served size.
         for i in 0..5u8 {
@@ -3666,7 +3669,8 @@ mod tests {
                 &hex::encode([0x40 + i; 32]),
                 &network_id,
                 created_at,
-            );
+            )
+            .unwrap();
             mirror::insert_observation(
                 &pool,
                 &ObservedSth::from_sth(
@@ -3802,7 +3806,7 @@ mod tests {
         use avalon_protocol::sth::sign_tree_head;
         let at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
         let author = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-        let sth = sign_tree_head(&author, "op", size, root, network, at);
+        let sth = sign_tree_head(&author, "op", size, root, network, at).unwrap();
         let obs = ObservedSth::from_sth(source, shard, &sth, at);
         mirror::insert_observation(pool, &obs).await.unwrap();
         obs
@@ -3968,7 +3972,7 @@ mod tests {
         let mut heads = std::collections::HashMap::new();
         for (i, shard) in [&shard_a, &shard_b, &shard_c].into_iter().enumerate() {
             let root = hex::encode([(i + 1) as u8; 32]);
-            let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at);
+            let sth = sign_tree_head(&author, "op", 5, &root, &network_id, created_at).unwrap();
             mirror::insert_observation(
                 &pool,
                 &ObservedSth::from_sth("http://127.0.0.1:1", shard, &sth, created_at),

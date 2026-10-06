@@ -483,7 +483,8 @@ mod tests {
             root_hash,
             network_id,
             now,
-        );
+        )
+        .unwrap();
         let cosignatures = cosigners
             .iter()
             .map(|(key, key_id)| {

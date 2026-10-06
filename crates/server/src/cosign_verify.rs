@@ -96,6 +96,8 @@ impl WitnessCosignatureDto {
             root_hash: sth.root_hash.clone(),
             network_id: sth.network_id.clone(),
             author_created_at: sth.created_at,
+            author_key_id: sth.signing_key_id.clone(),
+            author_signature: sth.signature.clone(),
             witness_key_id: self.witness_key_id.clone(),
             observed_at: self.observed_at,
             signature: self.signature.clone(),
@@ -155,7 +157,8 @@ mod tests {
             root_hash,
             network_id,
             created_at,
-        );
+        )
+        .unwrap();
         let cosignatures = cosigners
             .iter()
             .map(|(key, id, observed_at)| {
@@ -216,7 +219,7 @@ mod tests {
         {
             let (key, id) = witness();
             let signer = WitnessSigner::new(key.clone(), id.clone()).unwrap();
-            let advert = verified_advert(url, Some(signer.advert(url, now)), now).map(|mut a| {
+            let advert = verified_advert(url, Some(signer.advert(url, now).unwrap()), now).map(|mut a| {
                 a.direct = true;
                 a
             });
@@ -299,7 +302,7 @@ mod tests {
         let (key, id) = witness();
         let advert = verified_advert(
             url,
-            Some(WitnessSigner::new(key, id).unwrap().advert(url, now)),
+            Some(WitnessSigner::new(key, id).unwrap().advert(url, now).unwrap()),
             now,
         );
         assert!(advert.is_some());
@@ -471,7 +474,8 @@ mod tests {
             &root(4),
             "avalon-test",
             now,
-        );
+        )
+        .unwrap();
         let (witness_key, id) = witness();
         let cosig =
             sign_witness_cosignature(&witness_key, &id, 3, &root(4), "avalon-test", now, now);
