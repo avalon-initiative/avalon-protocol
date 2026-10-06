@@ -176,6 +176,7 @@ async fn mock_remote_node(
             "prev_hash": real.prev_hash,
             "entry_hash": real.entry_hash,
             "batch_id": Uuid::new_v4(),
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000",
         }])))
         .mount(&server)
         .await;
