@@ -202,6 +202,18 @@ Each file has this shape:
   shard key; y = 3 is accepted) and `distinct_from_shard_id` (the identity id differs from the
   `node:` id of the same key). A public key is lowercase HEX inside signing bytes and standard
   BASE64 on the wire.
+- `structured-signing-bytes.json` — the structured signing-bytes primitive
+  (`avalon_protocol::signing_bytes`): domain tag, u16 BE version, then fields in a
+  fixed order (u32-BE length-prefixed strings and bytes, raw keys, hashes and
+  UUIDs, fixed-width big-endian integers). `vectors` build the bytes from a field
+  list and must read back; `rejectVectors` must fail with exactly `expected.error`
+  (`tag_mismatch`, `truncated`, `invalid_utf8`, `trailing_bytes`; `field_too_long`
+  needs a 4 GiB field and has no vector). `fixed` fields are 4 bytes in the vectors. Boundary cases:
+  empty and 65536-byte fields, `:` `,` and NUL, multi-byte UTF-8, integer extremes.
+  The file's `description` defines the field-object format. Rust only today.
+- `domain-tags.json` — the registry of domain tags, one per signed kind
+  (`avalon_protocol::signing_bytes::tags`); a runner asserts its registry equals
+  this list. Rust only today.
 - `identity-created-signing.json` — `identity.created` v2 signing bytes
   `avalon:identity.created:v2:{len(network_id)}:{network_id}:{len(shard_id)}:{shard_id}:{ticket_id}:{identity_id}:{public_key_hex}:{display_name}`
   (`len` = decimal UTF-8 BYTE length, not character count; one vector uses multi-byte ids, because network and shard ids are variable-width and shard

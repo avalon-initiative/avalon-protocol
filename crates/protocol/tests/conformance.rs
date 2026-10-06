@@ -967,3 +967,155 @@ fn signing_key_revoked_matches_shared_vectors() {
         )
     });
 }
+
+fn conformance_tag(doc_tag: &str) -> avalon_protocol::signing_bytes::DomainTag {
+    *avalon_protocol::signing_bytes::tags::ALL
+        .iter()
+        .find(|t| t.as_str() == doc_tag)
+        .unwrap_or_else(|| panic!("tag {doc_tag} is not in the registry"))
+}
+
+fn field_bytes(field: &Value) -> Vec<u8> {
+    let repeat = |unit: Vec<u8>| unit.repeat(field["count"].as_u64().unwrap() as usize);
+    match field["type"].as_str().unwrap() {
+        "str" => match field["utf8"].as_str() {
+            Some(s) => s.as_bytes().to_vec(),
+            None => repeat(field["repeatUtf8"].as_str().unwrap().as_bytes().to_vec()),
+        },
+        "bytes" => match field["hex"].as_str() {
+            Some(h) => hex::decode(h).unwrap(),
+            None => repeat(hex::decode(field["repeatByteHex"].as_str().unwrap()).unwrap()),
+        },
+        _ => hex::decode(field["hex"].as_str().unwrap()).unwrap(),
+    }
+}
+
+fn field_int(field: &Value) -> String {
+    field["value"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn structured_signing_bytes_build_and_read_back_per_shared_vectors() {
+    use avalon_protocol::signing_bytes::{Builder, Reader};
+    let doc = load("structured-signing-bytes.json");
+    for vector in doc["vectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap();
+        let input = &vector["input"];
+        let tag = conformance_tag(input["tag"].as_str().unwrap());
+        let version = input["version"].as_u64().unwrap() as u16;
+        let fields = input["fields"].as_array().unwrap();
+
+        let mut builder = Builder::new(tag, version);
+        for f in fields {
+            let ty = f["type"].as_str().unwrap();
+            builder = match ty {
+                "str" => builder.str(std::str::from_utf8(&field_bytes(f)).unwrap()),
+                "bytes" => builder.bytes(&field_bytes(f)),
+                "key" => builder.key(&field_bytes(f).try_into().unwrap()),
+                "hash" => builder.hash(&field_bytes(f).try_into().unwrap()),
+                "fixed" => builder.fixed::<4>(&field_bytes(f).try_into().unwrap()),
+                "uuid" => builder.uuid(Uuid::parse_str(f["value"].as_str().unwrap()).unwrap()),
+                "u8" => builder.u8(field_int(f).parse().unwrap()),
+                "u16" => builder.u16(field_int(f).parse().unwrap()),
+                "u32" => builder.u32(field_int(f).parse().unwrap()),
+                "u64" => builder.u64(field_int(f).parse().unwrap()),
+                "i64" => builder.i64(field_int(f).parse().unwrap()),
+                other => panic!("[{name}] unknown field type {other}"),
+            };
+        }
+        let message = builder.finish().unwrap();
+
+        let expected = &vector["expected"];
+        match expected["signingBytesHex"].as_str() {
+            Some(h) => assert_eq!(hex::encode(&message), h, "[{name}] bytes diverged"),
+            None => {
+                use sha2::{Digest, Sha256};
+                assert_eq!(
+                    message.len() as u64,
+                    expected["signingBytesLength"].as_u64().unwrap(),
+                    "[{name}] length diverged"
+                );
+                assert_eq!(
+                    hex::encode(Sha256::digest(&message)),
+                    expected["signingBytesSha256Hex"].as_str().unwrap(),
+                    "[{name}] digest diverged"
+                );
+            }
+        }
+
+        let mut reader = Reader::new(tag, &message).unwrap();
+        assert_eq!(reader.version(), version, "[{name}]");
+        for f in fields {
+            let ty = f["type"].as_str().unwrap();
+            match ty {
+                "str" => assert_eq!(reader.str().unwrap().as_bytes(), field_bytes(f), "[{name}]"),
+                "bytes" => assert_eq!(reader.bytes().unwrap(), field_bytes(f), "[{name}]"),
+                "key" | "hash" => {
+                    assert_eq!(reader.fixed::<32>().unwrap().to_vec(), field_bytes(f))
+                }
+                "fixed" => assert_eq!(reader.fixed::<4>().unwrap().to_vec(), field_bytes(f)),
+                "uuid" => assert_eq!(reader.uuid().unwrap().to_string(), f["value"]),
+                "u8" => assert_eq!(reader.u8().unwrap().to_string(), field_int(f)),
+                "u16" => assert_eq!(reader.u16().unwrap().to_string(), field_int(f)),
+                "u32" => assert_eq!(reader.u32().unwrap().to_string(), field_int(f)),
+                "u64" => assert_eq!(reader.u64().unwrap().to_string(), field_int(f)),
+                "i64" => assert_eq!(reader.i64().unwrap().to_string(), field_int(f)),
+                other => panic!("[{name}] unknown field type {other}"),
+            }
+        }
+        reader.finish().unwrap_or_else(|e| panic!("[{name}] {e}"));
+    }
+}
+
+#[test]
+fn structured_signing_bytes_reject_per_shared_vectors() {
+    use avalon_protocol::signing_bytes::{Reader, SigningBytesError};
+    let doc = load("structured-signing-bytes.json");
+    let vectors = doc["rejectVectors"].as_array().unwrap();
+    assert!(!vectors.is_empty());
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap();
+        let input = &vector["input"];
+        let message = hex::decode(input["messageHex"].as_str().unwrap()).unwrap();
+        let read = || -> Result<(), SigningBytesError> {
+            let mut r = Reader::new(conformance_tag(input["tag"].as_str().unwrap()), &message)?;
+            for ty in input["read"].as_array().unwrap() {
+                match ty.as_str().unwrap() {
+                    "str" => drop(r.str()?),
+                    "bytes" => drop(r.bytes()?),
+                    "u32" => drop(r.u32()?),
+                    other => panic!("[{name}] unknown read type {other}"),
+                }
+            }
+            r.finish()
+        };
+        let code = match read().unwrap_err() {
+            SigningBytesError::TagMismatch => "tag_mismatch",
+            SigningBytesError::Truncated => "truncated",
+            SigningBytesError::InvalidUtf8 => "invalid_utf8",
+            SigningBytesError::TrailingBytes => "trailing_bytes",
+            SigningBytesError::FieldTooLong => "field_too_long",
+        };
+        assert_eq!(
+            code,
+            vector["expected"]["error"].as_str().unwrap(),
+            "[{name}]"
+        );
+    }
+}
+
+#[test]
+fn domain_tag_registry_matches_shared_vectors() {
+    let doc = load("domain-tags.json");
+    let want: Vec<&str> = doc["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tag"].as_str().unwrap())
+        .collect();
+    let have: Vec<&str> = avalon_protocol::signing_bytes::tags::ALL
+        .iter()
+        .map(|t| t.as_str())
+        .collect();
+    assert_eq!(have, want, "registry diverged from domain-tags.json");
+}

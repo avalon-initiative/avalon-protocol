@@ -1,0 +1,609 @@
+{
+  "$schema": "./SCHEMA.md#structured-signing-bytes",
+  "description": "Structured signing bytes (avalon_protocol::signing_bytes): domain tag (ASCII, no length), u16 big-endian version, then fields in a fixed order. str and bytes are a u32 big-endian length and the bytes; key, hash, fixed and uuid are raw bytes; u8, u16, u32, u64 and i64 are fixed-width big-endian. Every build vector uses the reserved conformance tag. A field object is {type: str, utf8} or {type: str, repeatUtf8, count} (count repetitions of a UTF-8 string), {type: bytes, hex} or {type: bytes, repeatByteHex, count}, {type: key|hash|fixed, hex}, {type: uuid, value} or {type: u8|u16|u32|u64|i64, value} with value a decimal string. A build vector's expected is signingBytesHex, or signingBytesLength plus signingBytesSha256Hex when the message is large. Every build vector must also read back, field by field in order, to its input fields and then have no bytes left. rejectVectors list messages that must fail with exactly expected.error when read as input.read (the field types in order) under input.tag: tag_mismatch (message does not start with the tag), truncated (the message ends inside the version, a length prefix, a field, or a declared length exceeds the remaining bytes, checked before any allocation), invalid_utf8 (str bytes are not valid UTF-8, no lossy decoding) and trailing_bytes (bytes remain after the last field). Errors are checked in that order of discovery while reading left to right.",
+  "supportedIn": [
+    "rust"
+  ],
+  "notSupported": {
+    "csharp": "No SDK implements the structured primitive yet; it lands with the first migrated layout.",
+    "typescript": "No SDK implements the structured primitive yet; it lands with the first migrated layout."
+  },
+  "vectors": [
+    {
+      "name": "no fields",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": []
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001"
+      }
+    },
+    {
+      "name": "version 0",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 0,
+        "fields": []
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720000"
+      }
+    },
+    {
+      "name": "version 65535",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 65535,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "x"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72ffff0000000178"
+      }
+    },
+    {
+      "name": "empty string and empty bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": ""
+          },
+          {
+            "type": "bytes",
+            "hex": ""
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000000000000000"
+      }
+    },
+    {
+      "name": "plain ascii string",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "hello"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000000568656c6c6f"
+      }
+    },
+    {
+      "name": "string containing a colon",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "a:b"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000003613a62"
+      }
+    },
+    {
+      "name": "string containing a comma",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "a,b"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000003612c62"
+      }
+    },
+    {
+      "name": "string containing NUL",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "a\u0000b"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000003610062"
+      }
+    },
+    {
+      "name": "string of only NUL and delimiters",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": ":,\u0000:,"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000053a2c003a2c"
+      }
+    },
+    {
+      "name": "delimiter moved between fields (a)",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "a:b"
+          },
+          {
+            "type": "str",
+            "utf8": "c"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000003613a620000000163"
+      }
+    },
+    {
+      "name": "delimiter moved between fields (b)",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "a"
+          },
+          {
+            "type": "str",
+            "utf8": "b:c"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000016100000003623a63"
+      }
+    },
+    {
+      "name": "multi-byte UTF-8 length counts bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "héllo 世界 😀"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000001268c3a96c6c6f20e4b896e7958c20f09f9880"
+      }
+    },
+    {
+      "name": "bytes with NUL and 0xff",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "bytes",
+            "hex": "00ff00ff"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000000400ff00ff"
+      }
+    },
+    {
+      "name": "string of 255 bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "repeatUtf8": "a",
+            "count": 255
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000ff616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      }
+    },
+    {
+      "name": "string of 256 bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "repeatUtf8": "a",
+            "count": 256
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000010061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      }
+    },
+    {
+      "name": "string of 65535 bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "repeatUtf8": "a",
+            "count": 65535
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesLength": 65566,
+        "signingBytesSha256Hex": "8d9eba346d5bbbc01f67eb3e48621d7a95ef7d4d099bacc6c4119f990ddaa516"
+      }
+    },
+    {
+      "name": "string of 65536 bytes",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "repeatUtf8": ":",
+            "count": 65536
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesLength": 65567,
+        "signingBytesSha256Hex": "e78e9ad113c007f2be7660b63a60d6e310f8bcff70cad0b59c9f3725aaeef0ee"
+      }
+    },
+    {
+      "name": "bytes of 65536 NUL",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "bytes",
+            "repeatByteHex": "00",
+            "count": 65536
+          },
+          {
+            "type": "str",
+            "utf8": "tail"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesLength": 65575,
+        "signingBytesSha256Hex": "8c7dbb178b7d47462ef5dea9a50088d317e49e2b9f47f75ddf1a4aa7ebbd78c5"
+      }
+    },
+    {
+      "name": "integers at their minimum",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "u8",
+            "value": "0"
+          },
+          {
+            "type": "u16",
+            "value": "0"
+          },
+          {
+            "type": "u32",
+            "value": "0"
+          },
+          {
+            "type": "u64",
+            "value": "0"
+          },
+          {
+            "type": "i64",
+            "value": "-9223372036854775808"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000000000000000000000000000008000000000000000"
+      }
+    },
+    {
+      "name": "integers at their maximum",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "u8",
+            "value": "255"
+          },
+          {
+            "type": "u16",
+            "value": "65535"
+          },
+          {
+            "type": "u32",
+            "value": "4294967295"
+          },
+          {
+            "type": "u64",
+            "value": "18446744073709551615"
+          },
+          {
+            "type": "i64",
+            "value": "9223372036854775807"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001ffffffffffffffffffffffffffffff7fffffffffffffff"
+      }
+    },
+    {
+      "name": "negative i64",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "i64",
+            "value": "-1"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001ffffffffffffffff"
+      }
+    },
+    {
+      "name": "key, hash, fixed and uuid are raw",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "key",
+            "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+          },
+          {
+            "type": "hash",
+            "hex": "f1e1d1c1b1a191817161514131211101f0e0d0c0b0a090807060504030201000"
+          },
+          {
+            "type": "fixed",
+            "hex": "deadbeef"
+          },
+          {
+            "type": "uuid",
+            "value": "00112233-4455-6677-8899-aabbccddeeff"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1ff1e1d1c1b1a191817161514131211101f0e0d0c0b0a090807060504030201000deadbeef00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "name": "mixed layout in fixed order",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "version": 1,
+        "fields": [
+          {
+            "type": "str",
+            "utf8": "net"
+          },
+          {
+            "type": "str",
+            "utf8": "shard:1"
+          },
+          {
+            "type": "key",
+            "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+          },
+          {
+            "type": "i64",
+            "value": "1700000000"
+          },
+          {
+            "type": "u8",
+            "value": "2"
+          },
+          {
+            "type": "bytes",
+            "hex": "0102"
+          }
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000036e65740000000773686172643a31000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000000006553f10002000000020102"
+      }
+    }
+  ],
+  "rejectVectors": [
+    {
+      "name": "tag of another kind",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e696e7465726573745f636c61696d0001000000026162",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "tag_mismatch"
+      }
+    },
+    {
+      "name": "tag is a strict prefix of the message tag",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f0001",
+        "read": []
+      },
+      "expected": {
+        "error": "tag_mismatch"
+      }
+    },
+    {
+      "name": "empty message",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "",
+        "read": []
+      },
+      "expected": {
+        "error": "tag_mismatch"
+      }
+    },
+    {
+      "name": "message ends inside the version",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200",
+        "read": []
+      },
+      "expected": {
+        "error": "truncated"
+      }
+    },
+    {
+      "name": "message ends inside the length prefix",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "truncated"
+      }
+    },
+    {
+      "name": "declared length runs past the end",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f7200010000000261",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "truncated"
+      }
+    },
+    {
+      "name": "declared length is 4 GiB - 1",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001ffffffff78",
+        "read": [
+          "bytes"
+        ]
+      },
+      "expected": {
+        "error": "truncated"
+      }
+    },
+    {
+      "name": "fixed field cut short",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000",
+        "read": [
+          "u32"
+        ]
+      },
+      "expected": {
+        "error": "truncated"
+      }
+    },
+    {
+      "name": "bytes remain after the last field",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f720001000000026162",
+        "read": []
+      },
+      "expected": {
+        "error": "trailing_bytes"
+      }
+    },
+    {
+      "name": "extra byte after a complete field",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000002616200",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "trailing_bytes"
+      }
+    },
+    {
+      "name": "string is not UTF-8",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000002c328",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "invalid_utf8"
+      }
+    },
+    {
+      "name": "string is a lone surrogate encoding",
+      "input": {
+        "tag": "avalon.conformance.vector",
+        "messageHex": "6176616c6f6e2e636f6e666f726d616e63652e766563746f72000100000003eda080",
+        "read": [
+          "str"
+        ]
+      },
+      "expected": {
+        "error": "invalid_utf8"
+      }
+    }
+  ]
+}
