@@ -186,7 +186,7 @@ pub(crate) mod test_support {
             cosigs.push(dto);
         }
         let mut body =
-            serde_json::to_value(&crate::settlement::SignedTreeHeadResponse::from(sth)).unwrap();
+            serde_json::to_value(crate::settlement::SignedTreeHeadResponse::from(sth)).unwrap();
         body["cosignatures"] = serde_json::Value::Array(cosigs);
         Served {
             body,

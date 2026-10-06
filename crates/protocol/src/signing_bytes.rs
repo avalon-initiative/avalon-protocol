@@ -205,8 +205,6 @@ impl HashAlgo {
             Self::Sha256 => Sha256::digest(data).into(),
             #[cfg(test)]
             Self::SyntheticTest => Sha256::digest(data).into(),
-            #[cfg(test)]
-            Self::SyntheticTest => Sha256::digest(data).into(),
         }
     }
 }
