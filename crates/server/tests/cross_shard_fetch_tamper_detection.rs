@@ -86,6 +86,9 @@ fn real_entry() -> RealEntry {
             payload_hash: &payload_hash,
             timestamp,
             version,
+            envelope: &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+            ),
         },
     )
     .unwrap();

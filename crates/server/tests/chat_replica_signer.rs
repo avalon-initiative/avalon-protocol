@@ -289,6 +289,9 @@ async fn a_notification_must_announce_more_than_the_source_has_already_shown() {
         signing_key_id: "key".into(),
         created_at: OffsetDateTime::now_utc(),
         observed_at: OffsetDateTime::now_utc(),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     };
     insert_observation(&s.pool, &obs("http://src.test", "core", 10))
         .await

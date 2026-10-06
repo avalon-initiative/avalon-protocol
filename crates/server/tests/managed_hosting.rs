@@ -123,6 +123,10 @@ async fn prepare_then_finalize_over_http_commits_the_batch() {
         &network_id,
         "http-test-key-1",
         created_at,
+        &serde_json::from_value::<avalon_protocol::signing_bytes::EnvelopeWire>(preview.clone())
+            .unwrap()
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let signature = integrator_key.sign(&message);
@@ -193,6 +197,10 @@ async fn finalize_over_http_with_the_wrong_key_is_rejected() {
         &network_id,
         "wrong-key",
         created_at,
+        &serde_json::from_value::<avalon_protocol::signing_bytes::EnvelopeWire>(preview.clone())
+            .unwrap()
+            .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+            .unwrap(),
     )
     .unwrap();
     let signature = wrong_key.sign(&message);

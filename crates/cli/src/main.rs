@@ -784,18 +784,25 @@ struct RemoteSth {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: time::OffsetDateTime,
+    #[serde(flatten)]
+    envelope: avalon_protocol::signing_bytes::EnvelopeWire,
 }
 
-impl From<RemoteSth> for avalon_protocol::sth::SignedTreeHead {
-    fn from(r: RemoteSth) -> Self {
-        avalon_protocol::sth::SignedTreeHead {
+impl TryFrom<RemoteSth> for avalon_protocol::sth::SignedTreeHead {
+    type Error = avalon_protocol::signing_bytes::SigningBytesError;
+
+    fn try_from(r: RemoteSth) -> Result<Self, Self::Error> {
+        Ok(avalon_protocol::sth::SignedTreeHead {
             tree_size: r.tree_size,
             root_hash: r.root_hash,
             network_id: r.network_id,
             signing_key_id: r.signing_key_id,
             signature: r.signature,
             created_at: r.created_at,
-        }
+            envelope: r
+                .envelope
+                .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)?,
+        })
     }
 }
 
@@ -924,7 +931,10 @@ async fn check_switch_readiness(raw_args: &[String]) {
         .await
     {
         Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
-            Ok(sth) => Some(sth.into()),
+            Ok(sth) => sth
+                .try_into()
+                .map_err(|e| println!("old-host ({old_host}): needs a newer version — {e}"))
+                .ok(),
             Err(e) => {
                 println!("old-host ({old_host}): returned an unparseable response — {e}");
                 None
@@ -953,7 +963,10 @@ async fn check_switch_readiness(raw_args: &[String]) {
             .await
         {
             Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
-                Ok(sth) => report_sth("new-host", &sth.into()),
+                Ok(sth) => match sth.try_into() {
+                    Ok(sth) => report_sth("new-host", &sth),
+                    Err(e) => println!("new-host ({new_host}): needs a newer version — {e}"),
+                },
                 Err(e) => println!("new-host ({new_host}): returned an unparseable response — {e}"),
             },
             Ok(resp) => println!(
@@ -978,7 +991,10 @@ async fn check_switch_readiness(raw_args: &[String]) {
         .await
     {
         Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
-            Ok(sth) => Some(sth.into()),
+            Ok(sth) => sth
+                .try_into()
+                .map_err(|e| println!("new-host ({new_host}): needs a newer version — {e}"))
+                .ok(),
             Err(e) => {
                 println!("new-host ({new_host}): returned an unparseable response — {e}");
                 None
@@ -1474,7 +1490,7 @@ fn merkle_root_matches(
         .take(tree_size)
         .map(|e| e.entry_hash.clone())
         .collect();
-    avalon_chain::merkle::mth_of_hex_hashes(&hashes)
+    avalon_chain::merkle::mth_of_hex_hashes(sth.envelope.hash_algo, &hashes)
         .map(hex::encode)
         .map(|root| root == sth.root_hash)
         .unwrap_or(false)
@@ -1598,6 +1614,11 @@ mod tests {
                 prev_hash: "0".repeat(64),
                 entry_hash: hash.to_string(),
                 batch_id: Uuid::new_v4(),
+                envelope: avalon_protocol::signing_bytes::EnvelopeWire::from(
+                    &avalon_protocol::signing_bytes::Envelope::current(
+                        avalon_protocol::signing_bytes::tags::LEDGER_ENTRY,
+                    ),
+                ),
                 chain_intact: true,
             })
             .collect()
@@ -1611,7 +1632,10 @@ mod tests {
     fn inspect_ledger_reports_sth_signature_mismatch() {
         let entries = sample_entries(&["aa".repeat(32).as_str(), "bb".repeat(32).as_str()]);
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
-        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let root = hex::encode(
+            avalon_chain::merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
+                .unwrap(),
+        );
 
         let signing_key = SigningKey::generate(&mut rand::rng());
         let sth = sign_tree_head(
@@ -1647,7 +1671,10 @@ mod tests {
     fn merkle_root_matches_detects_a_tampered_entry() {
         let entries = sample_entries(&["aa".repeat(32).as_str(), "bb".repeat(32).as_str()]);
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
-        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let root = hex::encode(
+            avalon_chain::merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
+                .unwrap(),
+        );
         let signing_key = SigningKey::generate(&mut rand::rng());
         let sth = sign_tree_head(
             &signing_key,
@@ -1691,7 +1718,10 @@ mod tests {
         entries[2].seq = 5;
 
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
-        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let root = hex::encode(
+            avalon_chain::merkle::mth_of_hex_hashes(avalon_chain::ledger_hash_algo(), &hashes)
+                .unwrap(),
+        );
         let signing_key = SigningKey::generate(&mut rand::rng());
         // tree_size = 3: the true leaf count (three real rows), not 5 (the
         // highest raw seq value) — matching what `commit()` now signs.

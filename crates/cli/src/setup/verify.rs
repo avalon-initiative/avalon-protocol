@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use avalon_protocol::signing_bytes::{tags, EnvelopeWire};
 use avalon_protocol::sth::{verify_tree_head, SignedTreeHead};
 use ed25519_dalek::VerifyingKey;
 use serde_json::Value;
@@ -49,14 +50,26 @@ pub fn summarize_discover(body: &Value, expected_network: &str) -> Result<Discov
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadCheck {
-    Verified { tree_size: i64 },
+    Verified {
+        tree_size: i64,
+    },
     BadSignature,
     Malformed(String),
+    /// The head needs a layout, rules version or hash algorithm this binary does not know.
+    NeedsNewerVersion(String),
 }
 
 /// Verifies a `GET /ledger/sth/latest` body against a pinned verify key (lowercase hex).
 pub fn check_head(body: &Value, verify_key_hex: &str) -> HeadCheck {
     let text = |k: &str| body.get(k).and_then(Value::as_str).map(str::to_string);
+    let wire: Option<EnvelopeWire> = serde_json::from_value(body.clone()).ok();
+    let envelope = match wire.map(|w| w.to_envelope(tags::SETTLEMENT_STH)) {
+        Some(Ok(envelope)) => Some(envelope),
+        Some(Err(e)) if e.needs_newer_version().is_some() => {
+            return HeadCheck::NeedsNewerVersion(e.to_string())
+        }
+        _ => None,
+    };
     let parsed = (|| {
         let created_at = OffsetDateTime::parse(&text("created_at")?, &Rfc3339).ok()?;
         Some(SignedTreeHead {
@@ -66,6 +79,7 @@ pub fn check_head(body: &Value, verify_key_hex: &str) -> HeadCheck {
             signing_key_id: text("signing_key_id")?,
             signature: text("signature")?,
             created_at,
+            envelope: envelope?,
         })
     })();
     let Some(sth) = parsed else {
@@ -102,6 +116,11 @@ pub fn judge_join(
         }
         Some(HeadCheck::Malformed(e)) => {
             return Err(format!("the node's core head could not be read: {e}"))
+        }
+        Some(HeadCheck::NeedsNewerVersion(e)) => {
+            return Err(format!(
+                "the node's core head needs a newer version of this tool: {e}"
+            ))
         }
         _ => {}
     }
@@ -255,6 +274,7 @@ mod tests {
             "tree_size": sth.tree_size, "root_hash": sth.root_hash, "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id, "signature": sth.signature,
             "created_at": "2026-09-28T10:00:00Z",
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000",
         })
     }
 

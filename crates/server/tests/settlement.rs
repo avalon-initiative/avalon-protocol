@@ -187,6 +187,9 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
             &time::format_description::well_known::Rfc3339,
         )
         .unwrap(),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     };
 
     // Verify the STH's signature with only the public key — the only trust

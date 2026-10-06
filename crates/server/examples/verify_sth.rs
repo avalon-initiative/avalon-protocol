@@ -28,6 +28,8 @@ struct Response {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(flatten)]
+    envelope: avalon_protocol::signing_bytes::EnvelopeWire,
     #[serde(default)]
     cosignatures: Vec<WitnessCosignatureDto>,
 }
@@ -41,6 +43,10 @@ impl Response {
             signing_key_id: self.signing_key_id.clone(),
             signature: self.signature.clone(),
             created_at: self.created_at,
+            envelope: self
+                .envelope
+                .to_envelope(avalon_protocol::signing_bytes::tags::SETTLEMENT_STH)
+                .expect("a head this tool can read"),
         }
     }
 }
@@ -98,7 +104,10 @@ fn main() {
                             c.witness_key_id == dto.witness_key_id
                         },
                     ) {
-                        cosignatures.push(dto.to_witness_cosignature(&sth));
+                        cosignatures.push(
+                            dto.to_witness_cosignature(&sth)
+                                .expect("a cosignature this tool can read"),
+                        );
                     }
                 }
             }

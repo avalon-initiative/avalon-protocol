@@ -185,6 +185,9 @@ fn sth_from_json(v: &serde_json::Value) -> sth::SignedTreeHead {
             &time::format_description::well_known::Rfc3339,
         )
         .unwrap(),
+        envelope: avalon_protocol::signing_bytes::Envelope::current(
+            avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+        ),
     }
 }
 
