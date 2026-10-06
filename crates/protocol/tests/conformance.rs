@@ -406,31 +406,83 @@ fn witness_cosigned_tree_head_matches_shared_vectors() {
 /// rule, asserted for every ordering of each case's events.
 #[test]
 fn identity_chain_matches_shared_vectors() {
+    use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
     use avalon_protocol::identity_chain::{
-        apply_chain, compute_event_hash, ActionClass, ChainedEvent, EventAuthority, EventHash,
+        apply_chain, chain_event_signing_bytes, compute_event_hash, ActionClass, ChainHashInput,
+        ChainedEvent, EventAuthority, EventHash,
     };
+    use avalon_protocol::identity_chain_wire::{chain_owner, event_hash};
+    use avalon_protocol::identity_id::IdentityId;
 
     let doc = load("identity-chain.json");
     let hash_from_hex = |s: &str| -> EventHash { hex::decode(s).unwrap().try_into().unwrap() };
 
     for vector in doc["hashVectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
-        let nanos: i128 = vector["timestampNanos"].as_str().unwrap().parse().unwrap();
-        let prev = vector["prevHashHex"].as_str().map(hash_from_hex);
-        let got = compute_event_hash(
-            vector["kind"].as_str().unwrap(),
-            vector["issuer"].as_str().unwrap(),
-            vector["subject"].as_str().unwrap(),
-            vector["payloadJson"].as_str().unwrap(),
-            OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap(),
-            vector["seq"].as_u64().unwrap(),
-            prev.as_ref(),
+        let i = &vector["input"];
+        let want = &vector["expected"];
+        let payload: serde_json::Value =
+            serde_json::from_str(i["payloadJsonUtf8"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            avalon_protocol::canonical_payload::canonicalize(&payload).unwrap(),
+            want["payloadCanonicalUtf8"].as_str().unwrap(),
+            "[{name}] canonical payload"
+        );
+        let payload_hash = avalon_protocol::ledger_entry::payload_hash(&payload).unwrap();
+        assert_eq!(
+            hex::encode(payload_hash),
+            want["payloadHashHex"].as_str().unwrap()
+        );
+        let id = IdentityId::parse(i["identityIdHex"].as_str().unwrap()).unwrap();
+        let prev = i["prevHashHex"].as_str().map(hash_from_hex);
+        let micros: i64 = i["timestampUnixMicros"].as_str().unwrap().parse().unwrap();
+        let input = ChainHashInput {
+            identity_id: &id,
+            seq: i["seq"].as_str().unwrap().parse().unwrap(),
+            prev_hash: prev.as_ref(),
+            event_id: uuid::Uuid::parse_str(i["eventId"].as_str().unwrap()).unwrap(),
+            kind: i["kind"].as_str().unwrap(),
+            issuer: i["issuer"].as_str().unwrap(),
+            subject: i["subject"].as_str().unwrap(),
+            event_version: i["eventVersion"].as_u64().unwrap().try_into().unwrap(),
+            timestamp_micros: micros,
+            payload_hash: &payload_hash,
+        };
+        assert_eq!(
+            hex::encode(chain_event_signing_bytes(&input).unwrap()),
+            want["signingBytesHex"].as_str().unwrap(),
+            "[{name}] signing bytes"
         );
         assert_eq!(
-            hex::encode(got),
-            vector["expectedHashHex"].as_str().unwrap(),
-            "hash vector {name}"
+            hex::encode(compute_event_hash(&input).unwrap()),
+            want["eventHashHex"].as_str().unwrap(),
+            "[{name}] hash"
         );
+
+        // The same event built as a ProtocolEvent hashes identically wherever it can be represented.
+        let event = ProtocolEvent {
+            id: input.event_id,
+            kind: input.kind.to_string(),
+            issuer: serde_json::from_value(i["issuer"].clone()).unwrap(),
+            subject: serde_json::from_value(i["subject"].clone()).unwrap(),
+            payload,
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1000)
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            version: input.event_version,
+            identity_chain: Some(IdentityChainPosition {
+                seq: input.seq,
+                prev_hash: i["prevHashHex"].as_str().map(str::to_string),
+            }),
+        };
+        if chain_owner(&event) == Some(id)
+            && OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1000).is_ok()
+        {
+            assert_eq!(
+                hex::encode(event_hash(&event).unwrap()),
+                want["eventHashHex"].as_str().unwrap(),
+                "[{name}] via ProtocolEvent"
+            );
+        }
     }
 
     for case in doc["resolutionCases"].as_array().unwrap() {

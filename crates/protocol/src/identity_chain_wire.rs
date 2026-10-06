@@ -10,17 +10,18 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::canonical_payload::{canonicalize, CanonicalPayloadError};
+use crate::canonical_payload::CanonicalPayloadError;
 use crate::events::{IdentityChainPosition, ProtocolEvent, ProtocolEventKind};
 use crate::identity_chain::{
-    apply_chain, clamp_timestamp, compute_event_hash, ActionClass, ChainOutcome, ChainedEvent,
-    ClockSkewBounds, EventAuthority, EventHash, TimestampError,
+    apply_chain, clamp_timestamp, compute_event_hash, ActionClass, ChainHashInput, ChainOutcome,
+    ChainedEvent, ClockSkewBounds, EventAuthority, EventHash, TimestampError,
 };
 use crate::identity_id::IdentityId;
+use crate::ledger_entry::{floor_to_micros, payload_hash, timestamp_micros, EntryHashError};
+use crate::signing_bytes::SigningBytesError;
 
-/// Reserved top-level payload key a chain position is stored under inside a
-/// ledger entry, so the position is covered by the entry hash and travels
-/// with the entry through every mirror without a wire-format change.
+/// Reserved top-level payload key a chain position travels under inside a ledger entry, so a mirror
+/// can read it back. The chain hash itself never reads it: it takes the position from its own layout.
 pub const PAYLOAD_KEY: &str = "_identity_chain";
 
 /// Why an event could not be turned into a [`ChainedEvent`].
@@ -30,6 +31,9 @@ pub enum ChainEventError {
     Payload(CanonicalPayloadError),
     Timestamp(TimestampError),
     MalformedPrevHash,
+    /// The timestamp or version does not fit the hash layout.
+    OutOfRange,
+    Layout(SigningBytesError),
 }
 
 /// Returns `payload` with `position` embedded under [`PAYLOAD_KEY`]. A
@@ -84,33 +88,40 @@ pub fn authority_of(kind: &str) -> EventAuthority {
 /// Timestamps are hashed at microsecond precision, the resolution the
 /// ledger's timestamp column preserves.
 pub fn truncate_to_micros(ts: OffsetDateTime) -> OffsetDateTime {
-    let nanos = ts.unix_timestamp_nanos();
-    OffsetDateTime::from_unix_timestamp_nanos(nanos - nanos.rem_euclid(1000)).unwrap_or(ts)
+    floor_to_micros(ts).unwrap_or(ts)
 }
 
 pub fn parse_hash(hex_str: &str) -> Option<EventHash> {
     hex::decode(hex_str).ok()?.try_into().ok()
 }
 
-/// The chain hash of `event` given its own `identity_chain` position.
+/// The chain hash of `event`: the position comes from its `identity_chain` field and the owner from
+/// [`chain_owner`], never from the payload, which is covered through its canonical hash.
 pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
     let position = event
         .identity_chain
         .as_ref()
         .ok_or(ChainEventError::NotChained)?;
+    let owner = chain_owner(event).ok_or(ChainEventError::NotChained)?;
     let prev = match &position.prev_hash {
         Some(h) => Some(parse_hash(h).ok_or(ChainEventError::MalformedPrevHash)?),
         None => None,
     };
-    Ok(compute_event_hash(
-        &event.kind,
-        event.issuer.as_str(),
-        event.subject.as_str(),
-        &canonicalize(&event.payload).map_err(ChainEventError::Payload)?,
-        truncate_to_micros(event.timestamp),
-        position.seq,
-        prev.as_ref(),
-    ))
+    let payload = payload_hash(&event.payload).map_err(ChainEventError::Payload)?;
+    let out_of_range = |_: EntryHashError| ChainEventError::OutOfRange;
+    compute_event_hash(&ChainHashInput {
+        identity_id: &owner,
+        seq: position.seq,
+        prev_hash: prev.as_ref(),
+        event_id: event.id,
+        kind: &event.kind,
+        issuer: event.issuer.as_str(),
+        subject: event.subject.as_str(),
+        event_version: event.version,
+        timestamp_micros: timestamp_micros(event.timestamp).map_err(out_of_range)?,
+        payload_hash: &payload,
+    })
+    .map_err(ChainEventError::Layout)
 }
 
 /// Builds the rule's input for `event`, validating its timestamp against
@@ -214,6 +225,37 @@ mod tests {
         b.payload = json!({"a": {"y": 2, "z": 1}, "b": 1});
         b.timestamp += time::Duration::nanoseconds(500);
         assert_eq!(event_hash(&a).unwrap(), event_hash(&b).unwrap());
+    }
+
+    #[test]
+    fn hash_covers_event_id_version_position_and_payload_hash() {
+        let id = IdentityId::random_for_tests();
+        let a = event("profile.updated", id, 1, None);
+        let base = event_hash(&a).unwrap();
+        let mut b = a.clone();
+        b.id = Uuid::new_v4();
+        let mut c = a.clone();
+        c.version = 2;
+        let mut d = a.clone();
+        d.identity_chain.as_mut().unwrap().seq = 2;
+        let mut e = a.clone();
+        e.identity_chain.as_mut().unwrap().prev_hash = Some("00".repeat(32));
+        let mut f = a.clone();
+        f.timestamp += time::Duration::microseconds(1);
+        for (i, v) in [b, c, d, e, f].iter().enumerate() {
+            assert_ne!(event_hash(v).unwrap(), base, "variant {i}");
+        }
+    }
+
+    #[test]
+    fn hash_rejects_unchained_and_malformed_prev() {
+        let id = IdentityId::random_for_tests();
+        let mut a = event("profile.updated", id, 2, Some("zz".to_string()));
+        assert_eq!(event_hash(&a), Err(ChainEventError::MalformedPrevHash));
+        a.identity_chain = None;
+        assert_eq!(event_hash(&a), Err(ChainEventError::NotChained));
+        let b = event("achievement.issued", id, 1, None);
+        assert_eq!(event_hash(&b), Err(ChainEventError::NotChained));
     }
 
     #[test]

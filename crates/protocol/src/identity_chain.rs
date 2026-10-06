@@ -24,7 +24,11 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
+use uuid::Uuid;
+
 use crate::events::{ProtocolEventKind, ProtocolEventKindVariant};
+use crate::identity_id::IdentityId;
+use crate::signing_bytes::{tags, Builder, SigningBytesError};
 
 /// A sha256 digest identifying one chained event's content — the hash a
 /// later event's `prev_hash` points back to. Hex-encoded on the wire (see
@@ -32,46 +36,48 @@ use crate::events::{ProtocolEventKind, ProtocolEventKindVariant};
 /// since every comparison and tie-break in this module works on the bytes.
 pub type EventHash = [u8; 32];
 
-/// Hashes the exact fields that make an event what it is, for chaining
-/// purposes: `kind`, `issuer`, `subject`, `payload`, `timestamp`, the
-/// identity-chain `seq` and `prev_hash` themselves. Length-prefixed the
-/// same way `crate::sth::signing_message` and `crate::witness::
-/// witness_signing_message` are, so no field can bleed into its neighbor.
-///
-/// Two independently-built events with identical inputs always hash
-/// identically — the property the whole chain depends on, since every
-/// honest node must compute the same `event_hash` for the same event
-/// without coordinating on anything but the event's own bytes.
-#[allow(clippy::too_many_arguments)]
-pub fn compute_event_hash(
-    kind: &str,
-    issuer: &str,
-    subject: &str,
-    payload_json: &str,
-    timestamp: OffsetDateTime,
-    seq: u64,
-    prev_hash: Option<&EventHash>,
-) -> EventHash {
-    let mut hasher = Sha256::new();
-    hasher.update(b"avalon-identity-chain-v1");
-    hasher.update((kind.len() as u32).to_be_bytes());
-    hasher.update(kind.as_bytes());
-    hasher.update((issuer.len() as u32).to_be_bytes());
-    hasher.update(issuer.as_bytes());
-    hasher.update((subject.len() as u32).to_be_bytes());
-    hasher.update(subject.as_bytes());
-    hasher.update((payload_json.len() as u32).to_be_bytes());
-    hasher.update(payload_json.as_bytes());
-    hasher.update(timestamp.unix_timestamp_nanos().to_be_bytes());
-    hasher.update(seq.to_be_bytes());
-    match prev_hash {
-        Some(h) => {
-            hasher.update([1u8]);
-            hasher.update(h);
-        }
-        None => hasher.update([0u8]),
-    }
-    hasher.finalize().into()
+/// Every field the chain hash covers; `payload_hash` is the SHA-256 of the canonical payload
+/// (#1308), so the position never rides inside the hashed payload.
+pub struct ChainHashInput<'a> {
+    pub identity_id: &'a IdentityId,
+    pub seq: u64,
+    pub prev_hash: Option<&'a EventHash>,
+    pub event_id: Uuid,
+    pub kind: &'a str,
+    pub issuer: &'a str,
+    pub subject: &'a str,
+    pub event_version: u32,
+    pub timestamp_micros: i64,
+    pub payload_hash: &'a [u8; 32],
+}
+
+/// The exact bytes the chain hash is the SHA-256 of (#1226). Layout: tag `avalon.identity.chain_event`,
+/// layout version 1, identity id (32 raw), `seq` u64, `prev_hash` (u8 flag 0, or 1 then 32 raw), event
+/// id (16 raw), kind, issuer and subject `str`, the event's own version u32, event time as `i64` unix
+/// microseconds, payload hash (32 raw).
+pub fn chain_event_signing_bytes(input: &ChainHashInput<'_>) -> Result<Vec<u8>, SigningBytesError> {
+    let builder = Builder::new(tags::IDENTITY_CHAIN_EVENT, 1)
+        .fixed(input.identity_id.as_bytes())
+        .u64(input.seq);
+    let builder = match input.prev_hash {
+        Some(hash) => builder.u8(1).hash(hash),
+        None => builder.u8(0),
+    };
+    builder
+        .uuid(input.event_id)
+        .str(input.kind)
+        .str(input.issuer)
+        .str(input.subject)
+        .u32(input.event_version)
+        .i64(input.timestamp_micros)
+        .hash(input.payload_hash)
+        .finish()
+}
+
+/// The chain hash: SHA-256 of [`chain_event_signing_bytes`]. Every honest node computes the same value
+/// for the same event without coordinating on anything but the event's own bytes.
+pub fn compute_event_hash(input: &ChainHashInput<'_>) -> Result<EventHash, SigningBytesError> {
+    Ok(Sha256::digest(chain_event_signing_bytes(input)?).into())
 }
 
 /// How a layer-1 event kind participates in its identity's chain. Drives
@@ -465,23 +471,88 @@ mod tests {
 
     // --- compute_event_hash -------------------------------------------
 
+    fn chain_input<'a>(id: &'a IdentityId, payload: &'a [u8; 32]) -> ChainHashInput<'a> {
+        ChainHashInput {
+            identity_id: id,
+            seq: 2,
+            prev_hash: None,
+            event_id: Uuid::from_u128(7),
+            kind: "profile.updated",
+            issuer: "i:1",
+            subject: "i:1",
+            event_version: 1,
+            timestamp_micros: 1_000,
+            payload_hash: payload,
+        }
+    }
+
     #[test]
     fn compute_event_hash_is_deterministic_for_identical_inputs() {
-        let ts = t(1_000);
-        let a = compute_event_hash("profile.updated", "i:1", "i:1", "{}", ts, 2, None);
-        let b = compute_event_hash("profile.updated", "i:1", "i:1", "{}", ts, 2, None);
-        assert_eq!(a, b);
+        let (id, p) = (IdentityId::random_for_tests(), [3u8; 32]);
+        assert_eq!(
+            compute_event_hash(&chain_input(&id, &p)),
+            compute_event_hash(&chain_input(&id, &p))
+        );
     }
 
     #[test]
     fn compute_event_hash_differs_when_any_field_differs() {
-        let ts = t(1_000);
-        let base = compute_event_hash("profile.updated", "i:1", "i:1", "{}", ts, 2, None);
-        let different_payload =
-            compute_event_hash("profile.updated", "i:1", "i:1", "{\"a\":1}", ts, 2, None);
-        let different_seq = compute_event_hash("profile.updated", "i:1", "i:1", "{}", ts, 3, None);
-        assert_ne!(base, different_payload);
-        assert_ne!(base, different_seq);
+        let (id, p) = (IdentityId::random_for_tests(), [3u8; 32]);
+        let other_id = IdentityId::random_for_tests();
+        let (other_p, prev) = ([4u8; 32], [5u8; 32]);
+        let base = compute_event_hash(&chain_input(&id, &p)).unwrap();
+        let variants = [
+            ChainHashInput {
+                identity_id: &other_id,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                seq: 3,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                prev_hash: Some(&prev),
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                event_id: Uuid::from_u128(8),
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                kind: "profile.x",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                issuer: "i:2",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                subject: "i:2",
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                event_version: 2,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                timestamp_micros: 1_001,
+                ..chain_input(&id, &p)
+            },
+            ChainHashInput {
+                payload_hash: &other_p,
+                ..chain_input(&id, &p)
+            },
+        ];
+        for (i, v) in variants.iter().enumerate() {
+            assert_ne!(compute_event_hash(v).unwrap(), base, "variant {i}");
+        }
+    }
+
+    #[test]
+    fn chain_event_bytes_start_with_the_tag_and_layout_version() {
+        let (id, p) = (IdentityId::random_for_tests(), [3u8; 32]);
+        let bytes = chain_event_signing_bytes(&chain_input(&id, &p)).unwrap();
+        assert!(bytes.starts_with(b"avalon.identity.chain_event\x00\x01"));
     }
 
     // --- clamp_timestamp -------------------------------------------------
