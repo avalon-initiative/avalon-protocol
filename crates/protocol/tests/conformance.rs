@@ -166,6 +166,9 @@ fn signed_tree_head_signing_matches_shared_vectors() {
             input["networkId"].as_str().unwrap(),
             input["signingKeyId"].as_str().unwrap(),
             parse_offset(input, "createdAtUnixSeconds"),
+            &avalon_protocol::signing_bytes::Envelope::current(
+                avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+            ),
         )
         .unwrap();
         assert_eq!(
@@ -197,6 +200,9 @@ fn signed_tree_head_rejects_root_hashes_that_are_not_32_byte_lowercase_hex() {
                 input["networkId"].as_str().unwrap(),
                 input["signingKeyId"].as_str().unwrap(),
                 parse_offset(input, "createdAtUnixSeconds"),
+                &avalon_protocol::signing_bytes::Envelope::current(
+                    avalon_protocol::signing_bytes::tags::SETTLEMENT_STH,
+                ),
             )
             .is_err(),
             "[{name}] must not produce signing bytes"
@@ -438,6 +444,18 @@ fn witness_cosigned_tree_head_matches_shared_vectors() {
     }
 }
 
+fn extension_list(v: &Value) -> Vec<avalon_protocol::signing_bytes::Extension> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|e| avalon_protocol::signing_bytes::Extension {
+            ext_type: e["type"].as_u64().unwrap().try_into().unwrap(),
+            critical: e["critical"].as_bool().unwrap(),
+            value: hex::decode(e["valueHex"].as_str().unwrap()).unwrap(),
+        })
+        .collect()
+}
+
 /// `identity-chain.json`: event-hash bytes and the deterministic conflict
 /// rule, asserted for every ordering of each case's events.
 #[test]
@@ -449,6 +467,7 @@ fn identity_chain_matches_shared_vectors() {
     };
     use avalon_protocol::identity_chain_wire::{chain_owner, event_hash};
     use avalon_protocol::identity_id::IdentityId;
+    use avalon_protocol::signing_bytes::{tags, EnvelopeWire, Extensions};
 
     let doc = load("identity-chain.json");
     let hash_from_hex = |s: &str| -> EventHash { hex::decode(s).unwrap().try_into().unwrap() };
@@ -472,6 +491,19 @@ fn identity_chain_matches_shared_vectors() {
         let id = IdentityId::parse(i["identityIdHex"].as_str().unwrap()).unwrap();
         let prev = i["prevHashHex"].as_str().map(hash_from_hex);
         let micros: i64 = i["timestampUnixMicros"].as_str().unwrap().parse().unwrap();
+        let position_wire = EnvelopeWire {
+            layout_version: i["layoutVersion"].as_u64().unwrap().try_into().unwrap(),
+            rules_version: i["rulesVersion"].as_u64().unwrap().try_into().unwrap(),
+            hash_algo: i["hashAlgo"].as_u64().unwrap().try_into().unwrap(),
+            extensions: hex::encode(
+                Extensions::new(extension_list(&i["extensions"]), 1)
+                    .unwrap()
+                    .encode(),
+            ),
+        };
+        let envelope = position_wire
+            .to_envelope(tags::IDENTITY_CHAIN_EVENT)
+            .unwrap();
         let input = ChainHashInput {
             identity_id: &id,
             seq: i["seq"].as_str().unwrap().parse().unwrap(),
@@ -483,9 +515,7 @@ fn identity_chain_matches_shared_vectors() {
             event_version: i["eventVersion"].as_u64().unwrap().try_into().unwrap(),
             timestamp_micros: micros,
             payload_hash: &payload_hash,
-            envelope: &avalon_protocol::signing_bytes::Envelope::current(
-                avalon_protocol::signing_bytes::tags::IDENTITY_CHAIN_EVENT,
-            ),
+            envelope: &envelope,
         };
         assert_eq!(
             hex::encode(chain_event_signing_bytes(&input).unwrap()),
@@ -511,6 +541,10 @@ fn identity_chain_matches_shared_vectors() {
             identity_chain: Some(IdentityChainPosition {
                 seq: input.seq,
                 prev_hash: i["prevHashHex"].as_str().map(str::to_string),
+                layout_version: position_wire.layout_version,
+                rules_version: position_wire.rules_version,
+                hash_algo: position_wire.hash_algo,
+                extensions: position_wire.extensions.clone(),
             }),
         };
         if chain_owner(&event) == Some(id)
@@ -1066,74 +1100,180 @@ fn field_int(field: &Value) -> String {
     field["value"].as_str().unwrap().to_string()
 }
 
+fn extension_entries(v: &Value) -> Vec<avalon_protocol::signing_bytes::Extension> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|e| avalon_protocol::signing_bytes::Extension {
+                    ext_type: e["type"].as_u64().unwrap().try_into().unwrap(),
+                    critical: e["critical"].as_bool().unwrap(),
+                    value: hex::decode(e["valueHex"].as_str().unwrap()).unwrap(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_from_vector(name: &str, input: &Value) -> Vec<u8> {
+    use avalon_protocol::signing_bytes::{Builder, HashAlgo};
+    let tag = conformance_tag(input["tag"].as_str().unwrap());
+    let rules = input["rulesVersion"].as_u64().unwrap_or(1) as u32;
+    let mut builder =
+        Builder::with_rules(tag, input["layoutVersion"].as_u64().unwrap() as u16, rules);
+    for f in input["fields"].as_array().unwrap() {
+        let ty = f["type"].as_str().unwrap();
+        builder = match ty {
+            "str" => builder.str(std::str::from_utf8(&field_bytes(f)).unwrap()),
+            "bytes" => builder.bytes(&field_bytes(f)),
+            "key" => builder.key(&field_bytes(f).try_into().unwrap()),
+            "signature" => builder.signature(&field_bytes(f).try_into().unwrap()),
+            "hash" => builder.hash(&field_bytes(f).try_into().unwrap()),
+            "fixed" => builder.fixed::<4>(&field_bytes(f).try_into().unwrap()),
+            "hash_algo" => {
+                builder.hash_algo(HashAlgo::from_id(field_int(f).parse().unwrap()).unwrap())
+            }
+            "uuid" => builder.uuid(Uuid::parse_str(f["value"].as_str().unwrap()).unwrap()),
+            "u8" => builder.u8(field_int(f).parse().unwrap()),
+            "u16" => builder.u16(field_int(f).parse().unwrap()),
+            "u32" => builder.u32(field_int(f).parse().unwrap()),
+            "u64" => builder.u64(field_int(f).parse().unwrap()),
+            "i64" => builder.i64(field_int(f).parse().unwrap()),
+            other => panic!("[{name}] unknown field type {other}"),
+        };
+    }
+    for e in extension_entries(&input["extensions"]) {
+        builder = builder.extension(e.ext_type, e.critical, &e.value);
+    }
+    builder.finish().unwrap_or_else(|e| panic!("[{name}] {e}"))
+}
+
+fn assert_expected_bytes(name: &str, message: &[u8], expected: &Value) {
+    match expected["signingBytesHex"].as_str() {
+        Some(h) => assert_eq!(hex::encode(message), h, "[{name}] bytes diverged"),
+        None => {
+            use sha2::{Digest, Sha256};
+            assert_eq!(
+                message.len() as u64,
+                expected["signingBytesLength"].as_u64().unwrap(),
+                "[{name}] length diverged"
+            );
+            assert_eq!(
+                hex::encode(Sha256::digest(message)),
+                expected["signingBytesSha256Hex"].as_str().unwrap(),
+                "[{name}] digest diverged"
+            );
+        }
+    }
+}
+
+/// Reads `types` in order from `reader`; the values are returned for rebuilding.
+fn read_types<'a>(
+    reader: &mut avalon_protocol::signing_bytes::Reader<'a>,
+    types: &[Value],
+) -> Result<Vec<Vec<u8>>, avalon_protocol::signing_bytes::SigningBytesError> {
+    let mut out = Vec::new();
+    for ty in types {
+        out.push(match ty.as_str().unwrap() {
+            "str" => reader.str()?.as_bytes().to_vec(),
+            "bytes" => reader.bytes()?.to_vec(),
+            "u8" => vec![reader.u8()?],
+            "u16" => reader.u16()?.to_be_bytes().to_vec(),
+            "u32" => reader.u32()?.to_be_bytes().to_vec(),
+            "u64" => reader.u64()?.to_be_bytes().to_vec(),
+            "i64" => reader.i64()?.to_be_bytes().to_vec(),
+            "uuid" => reader.uuid()?.as_bytes().to_vec(),
+            "hash" => reader.hash()?.to_vec(),
+            "fixed" => reader.fixed::<4>()?.to_vec(),
+            "hash_algo" => vec![reader.hash_algo()?.id()],
+            "key" => reader.key()?.to_vec(),
+            "signature" => reader.signature()?.to_vec(),
+            other => panic!("unknown read type {other}"),
+        });
+    }
+    Ok(out)
+}
+
+fn error_json(e: &avalon_protocol::signing_bytes::SigningBytesError) -> Value {
+    use avalon_protocol::signing_bytes::{SigningBytesError as E, VersionKind};
+    let what = |k: &VersionKind| match k {
+        VersionKind::Layout => "layout",
+        VersionKind::Rules => "rules",
+        VersionKind::HashAlgo => "hash_algo",
+        VersionKind::SigAlgo => "sig_algo",
+        VersionKind::CriticalExtension => "critical_extension",
+    };
+    match e {
+        E::TagMismatch => serde_json::json!({"error": "tag_mismatch"}),
+        E::Truncated => serde_json::json!({"error": "truncated"}),
+        E::InvalidUtf8 => serde_json::json!({"error": "invalid_utf8"}),
+        E::TrailingBytes => serde_json::json!({"error": "trailing_bytes"}),
+        E::FieldTooLong => serde_json::json!({"error": "field_too_long"}),
+        E::NeedsNewerVersion { what: k, required } => {
+            serde_json::json!({"error": "needs_newer_version", "what": what(k), "required": required})
+        }
+        E::UnsupportedVersion { what: k, value } => {
+            serde_json::json!({"error": "unsupported_version", "what": what(k), "value": value})
+        }
+        E::ExtensionsUnsorted => serde_json::json!({"error": "extensions_unsorted"}),
+        E::ExtensionDuplicate(_) => serde_json::json!({"error": "extension_duplicate"}),
+        E::ExtensionReservedFlags(_) => serde_json::json!({"error": "extension_reserved_flags"}),
+        E::ExtensionsTooLarge => serde_json::json!({"error": "extensions_too_large"}),
+    }
+}
+
+fn read_all(
+    input: &Value,
+) -> Result<
+    (
+        u16,
+        u32,
+        avalon_protocol::signing_bytes::Extensions,
+        Vec<Vec<u8>>,
+    ),
+    avalon_protocol::signing_bytes::SigningBytesError,
+> {
+    use avalon_protocol::signing_bytes::Reader;
+    let message = hex::decode(input["messageHex"].as_str().unwrap()).unwrap();
+    let mut r = Reader::new(conformance_tag(input["tag"].as_str().unwrap()), &message)?;
+    let (layout, rules) = (r.layout_version(), r.rules_version());
+    let values = read_types(&mut r, input["read"].as_array().unwrap())?;
+    Ok((layout, rules, r.finish()?, values))
+}
+
 #[test]
 fn structured_signing_bytes_build_and_read_back_per_shared_vectors() {
-    use avalon_protocol::signing_bytes::{Builder, Reader};
+    use avalon_protocol::signing_bytes::Reader;
     let doc = load("structured-signing-bytes.json");
     for vector in doc["vectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let input = &vector["input"];
+        let message = build_from_vector(name, input);
+        assert_expected_bytes(name, &message, &vector["expected"]);
+
         let tag = conformance_tag(input["tag"].as_str().unwrap());
-        let version = input["version"].as_u64().unwrap() as u16;
         let fields = input["fields"].as_array().unwrap();
-
-        let mut builder = Builder::new(tag, version);
-        for f in fields {
-            let ty = f["type"].as_str().unwrap();
-            builder = match ty {
-                "str" => builder.str(std::str::from_utf8(&field_bytes(f)).unwrap()),
-                "bytes" => builder.bytes(&field_bytes(f)),
-                "key" => builder.key(&field_bytes(f).try_into().unwrap()),
-                "hash" => builder.hash(&field_bytes(f).try_into().unwrap()),
-                "fixed" => builder.fixed::<4>(&field_bytes(f).try_into().unwrap()),
-                "uuid" => builder.uuid(Uuid::parse_str(f["value"].as_str().unwrap()).unwrap()),
-                "u8" => builder.u8(field_int(f).parse().unwrap()),
-                "u16" => builder.u16(field_int(f).parse().unwrap()),
-                "u32" => builder.u32(field_int(f).parse().unwrap()),
-                "u64" => builder.u64(field_int(f).parse().unwrap()),
-                "i64" => builder.i64(field_int(f).parse().unwrap()),
-                other => panic!("[{name}] unknown field type {other}"),
-            };
-        }
-        let message = builder.finish().unwrap();
-
-        let expected = &vector["expected"];
-        match expected["signingBytesHex"].as_str() {
-            Some(h) => assert_eq!(hex::encode(&message), h, "[{name}] bytes diverged"),
-            None => {
-                use sha2::{Digest, Sha256};
-                assert_eq!(
-                    message.len() as u64,
-                    expected["signingBytesLength"].as_u64().unwrap(),
-                    "[{name}] length diverged"
-                );
-                assert_eq!(
-                    hex::encode(Sha256::digest(&message)),
-                    expected["signingBytesSha256Hex"].as_str().unwrap(),
-                    "[{name}] digest diverged"
-                );
-            }
-        }
-
         let mut reader = Reader::new(tag, &message).unwrap();
-        assert_eq!(reader.version(), version, "[{name}]");
-        for f in fields {
-            let ty = f["type"].as_str().unwrap();
-            match ty {
-                "str" => assert_eq!(reader.str().unwrap().as_bytes(), field_bytes(f), "[{name}]"),
-                "bytes" => assert_eq!(reader.bytes().unwrap(), field_bytes(f), "[{name}]"),
-                "key" | "hash" => {
-                    assert_eq!(reader.fixed::<32>().unwrap().to_vec(), field_bytes(f))
-                }
-                "fixed" => assert_eq!(reader.fixed::<4>().unwrap().to_vec(), field_bytes(f)),
-                "uuid" => assert_eq!(reader.uuid().unwrap().to_string(), f["value"]),
-                "u8" => assert_eq!(reader.u8().unwrap().to_string(), field_int(f)),
-                "u16" => assert_eq!(reader.u16().unwrap().to_string(), field_int(f)),
-                "u32" => assert_eq!(reader.u32().unwrap().to_string(), field_int(f)),
-                "u64" => assert_eq!(reader.u64().unwrap().to_string(), field_int(f)),
-                "i64" => assert_eq!(reader.i64().unwrap().to_string(), field_int(f)),
-                other => panic!("[{name}] unknown field type {other}"),
-            }
+        assert_eq!(
+            u64::from(reader.layout_version()),
+            input["layoutVersion"].as_u64().unwrap(),
+            "[{name}]"
+        );
+        let types: Vec<Value> = fields.iter().map(|f| f["type"].clone()).collect();
+        let read = read_types(&mut reader, &types).unwrap();
+        for (f, got) in fields.iter().zip(read) {
+            let want = match f["type"].as_str().unwrap() {
+                "uuid" => Uuid::parse_str(f["value"].as_str().unwrap())
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+                "u8" | "hash_algo" => vec![field_int(f).parse::<u8>().unwrap()],
+                "u16" => field_int(f).parse::<u16>().unwrap().to_be_bytes().to_vec(),
+                "u32" => field_int(f).parse::<u32>().unwrap().to_be_bytes().to_vec(),
+                "u64" => field_int(f).parse::<u64>().unwrap().to_be_bytes().to_vec(),
+                "i64" => field_int(f).parse::<i64>().unwrap().to_be_bytes().to_vec(),
+                _ => field_bytes(f),
+            };
+            assert_eq!(got, want, "[{name}]");
         }
         reader.finish().unwrap_or_else(|e| panic!("[{name}] {e}"));
     }
@@ -1141,37 +1281,104 @@ fn structured_signing_bytes_build_and_read_back_per_shared_vectors() {
 
 #[test]
 fn structured_signing_bytes_reject_per_shared_vectors() {
-    use avalon_protocol::signing_bytes::{Reader, SigningBytesError};
     let doc = load("structured-signing-bytes.json");
     let vectors = doc["rejectVectors"].as_array().unwrap();
     assert!(!vectors.is_empty());
     for vector in vectors {
         let name = vector["name"].as_str().unwrap();
-        let input = &vector["input"];
-        let message = hex::decode(input["messageHex"].as_str().unwrap()).unwrap();
-        let read = || -> Result<(), SigningBytesError> {
-            let mut r = Reader::new(conformance_tag(input["tag"].as_str().unwrap()), &message)?;
-            for ty in input["read"].as_array().unwrap() {
-                match ty.as_str().unwrap() {
-                    "str" => drop(r.str()?),
-                    "bytes" => drop(r.bytes()?),
-                    "u32" => drop(r.u32()?),
-                    other => panic!("[{name}] unknown read type {other}"),
-                }
-            }
-            r.finish()
-        };
-        let code = match read().unwrap_err() {
-            SigningBytesError::TagMismatch => "tag_mismatch",
-            SigningBytesError::Truncated => "truncated",
-            SigningBytesError::InvalidUtf8 => "invalid_utf8",
-            SigningBytesError::TrailingBytes => "trailing_bytes",
-            SigningBytesError::FieldTooLong => "field_too_long",
-        };
+        let err = read_all(&vector["input"]).unwrap_err();
+        assert_eq!(error_json(&err), vector["expected"], "[{name}]");
+    }
+}
+
+#[test]
+fn envelope_builds_per_shared_vectors() {
+    let doc = load("envelope.json");
+    for vector in doc["buildVectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap();
+        let message = build_from_vector(name, &vector["input"]);
+        assert_expected_bytes(name, &message, &vector["expected"]);
+    }
+}
+
+#[test]
+fn envelope_reads_preserve_and_rebuild_per_shared_vectors() {
+    use avalon_protocol::signing_bytes::{Builder, Envelope, HashAlgo};
+    let doc = load("envelope.json");
+    for vector in doc["readVectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap();
+        let (input, want) = (&vector["input"], &vector["expected"]);
+        let (layout, rules, extensions, values) =
+            read_all(input).unwrap_or_else(|e| panic!("[{name}] {e}"));
         assert_eq!(
-            code,
-            vector["expected"]["error"].as_str().unwrap(),
+            u64::from(layout),
+            want["layoutVersion"].as_u64().unwrap(),
             "[{name}]"
+        );
+        assert_eq!(
+            u64::from(rules),
+            want["rulesVersion"].as_u64().unwrap(),
+            "[{name}]"
+        );
+        let want_ext = extension_entries(&want["extensions"]);
+        assert_eq!(
+            extensions.entries(),
+            want_ext.as_slice(),
+            "[{name}] extensions"
+        );
+
+        // Rebuilding from the values read gives the received bytes back.
+        let tag = conformance_tag(input["tag"].as_str().unwrap());
+        let envelope = Envelope {
+            layout_version: layout,
+            rules_version: rules,
+            hash_algo: HashAlgo::Sha256,
+            extensions,
+        };
+        let mut builder = Builder::with_envelope(tag, &envelope);
+        for (ty, bytes) in input["read"].as_array().unwrap().iter().zip(values) {
+            builder = match ty.as_str().unwrap() {
+                "str" => builder.str(std::str::from_utf8(&bytes).unwrap()),
+                "bytes" => builder.bytes(&bytes),
+                "hash" => builder.hash(&bytes.try_into().unwrap()),
+                "hash_algo" => builder.hash_algo(HashAlgo::from_id(bytes[0]).unwrap()),
+                "key" => builder.key(&bytes.try_into().unwrap()),
+                "signature" => builder.signature(&bytes.try_into().unwrap()),
+                other => panic!("[{name}] cannot rebuild {other}"),
+            };
+        }
+        assert_eq!(
+            hex::encode(builder.finish().unwrap()),
+            want["rebuiltHex"].as_str().unwrap(),
+            "[{name}] rebuild"
+        );
+    }
+}
+
+#[test]
+fn envelope_rejects_per_shared_vectors() {
+    let doc = load("envelope.json");
+    let vectors = doc["rejectVectors"].as_array().unwrap();
+    assert!(vectors.len() > 20);
+    for vector in vectors {
+        let name = vector["name"].as_str().unwrap();
+        let err = read_all(&vector["input"])
+            .err()
+            .unwrap_or_else(|| panic!("[{name}] accepted"));
+        assert_eq!(error_json(&err), vector["expected"], "[{name}]");
+    }
+}
+
+#[test]
+fn envelope_caps_match_shared_vectors() {
+    let doc = load("envelope.json");
+    for vector in doc["capVectors"].as_array().unwrap() {
+        let caps = avalon_protocol::signing_bytes::caps_for(
+            vector["input"]["rulesVersion"].as_u64().unwrap() as u32,
+        );
+        assert_eq!(
+            caps.max_extension_bytes as u64,
+            vector["expected"]["maxExtensionBytes"].as_u64().unwrap()
         );
     }
 }
