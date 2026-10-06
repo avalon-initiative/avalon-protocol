@@ -147,6 +147,9 @@ pub async fn publish_instance(
     let root_message =
         proto_schema::parse_root_message_cached(schema_id.as_str(), &schema.proto_source)?;
     proto_schema::validate_instance_json(&root_message, &body.instance)?;
+    // Before the JSONB insert below, which would otherwise fail on U+0000 as a 500.
+    avalon_protocol::canonical_payload::validate(&body.instance)
+        .map_err(AppError::InvalidPayload)?;
 
     let mut tx = state.pool.begin().await?;
 

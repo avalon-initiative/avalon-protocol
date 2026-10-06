@@ -1934,6 +1934,16 @@ mod tests {
     }
 
     #[test]
+    fn payload_hash_rejects_nul_in_values_and_keys() {
+        for payload in [json!({"a": "x\u{0}"}), json!({"x\u{0}": 1})] {
+            assert_eq!(
+                payload_hash_hex(&payload),
+                Err(CanonicalPayloadError::NulCharacter)
+            );
+        }
+    }
+
+    #[test]
     fn every_entry_field_is_covered_by_the_hash() {
         let id = Uuid::from_u128(7);
         let p = ph(&json!({"a": 1}));
