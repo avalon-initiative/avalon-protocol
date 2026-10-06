@@ -18,6 +18,9 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import signing_envelope as env  # noqa: E402
+
 VECTORS = Path(__file__).resolve().parent.parent / "conformance" / "vectors"
 
 TAG_STH = b"avalon.settlement.sth"
@@ -138,33 +141,42 @@ def s(text):
 
 def sth_bytes(tree_size, root_hex, network_id, key_id, created):
     return (
-        TAG_STH
-        + struct.pack(">H", 1)
+        env.header(TAG_STH)
         + struct.pack(">q", tree_size)
-        + bytes.fromhex(root_hex)
         + s(network_id)
         + s(key_id)
         + struct.pack(">q", created)
+        + env.hash_algo()
+        + bytes.fromhex(root_hex)
+        + env.extension_region()
     )
 
 
-def cosign_bytes(sth, author_sig, witness_key_id, observed):
+def cosign_bytes(sth, author_sig, witness_key_id, observed, witness_public_key):
     return (
-        TAG_COSIGN
-        + struct.pack(">H", 1)
+        env.header(TAG_COSIGN)
         + struct.pack(">q", sth["treeSize"])
-        + bytes.fromhex(sth["rootHashHex"])
         + s(sth["networkId"])
         + struct.pack(">q", sth["createdAtUnixSeconds"])
         + s(sth["signingKeyId"])
-        + author_sig
+        + env.signature(author_sig)
         + s(witness_key_id)
+        + env.key(witness_public_key)
         + struct.pack(">q", observed)
+        + env.hash_algo()
+        + bytes.fromhex(sth["rootHashHex"])
+        + env.extension_region()
     )
 
 
 def announce_bytes(base_url, key_hex, announced):
-    return TAG_ANNOUNCE + struct.pack(">H", 1) + s(base_url) + bytes.fromhex(key_hex) + struct.pack(">q", announced)
+    return (
+        env.header(TAG_ANNOUNCE)
+        + s(base_url)
+        + env.key(bytes.fromhex(key_hex))
+        + struct.pack(">q", announced)
+        + env.extension_region()
+    )
 
 
 def unix(rfc3339):
@@ -197,9 +209,11 @@ def gen_signed_tree_head():
     doc["description"] = (
         "Signed Tree Head signing message (#39/#210/#531, decoupled per #774, structured layout #1226). "
         "A node signs the bytes of the structured signing-bytes layout with tag avalon.settlement.sth "
-        "(ASCII, no length prefix), version 1 as u16 BE, tree_size as i64 BE, the root hash as 32 raw "
-        "bytes, network_id and signing_key_id as u32-BE length plus UTF-8, and created_at as i64 BE unix "
-        "seconds. rootHashHex must be exactly 64 lowercase hex characters: any other root hash cannot be "
+        "(ASCII, no length prefix), layout version 1 as u16 BE, rules version 1 as u32 BE, tree_size as "
+        "i64 BE, network_id and signing_key_id as u32-BE length plus UTF-8, created_at as i64 BE unix "
+        "seconds, the hash algorithm byte 01 (the hash of the Merkle tree the root belongs to: SHA-256 "
+        "leaf and interior hashing and empty root), the root hash as 32 raw bytes, and the extensions "
+        "region (00 00 when empty). rootHashHex must be exactly 64 lowercase hex characters: any other root hash cannot be "
         "signed or verified (rejectedVectors). A client verifies a network's claimed identity by "
         "checking this signature against a pinned trust anchor, and a managed-hosting integrator signs a "
         "prepared tree head locally with a key the host never holds, so a client-side reimplementation "
@@ -388,8 +402,9 @@ def _generation_text():
         "Deterministic. signingKeySeedHex and otherKeySeedHex are the Ed25519 seeds of the two keys "
         "(signingPublicKeyHex / otherPublicKeyHex, ids selfCertifyingId / otherSelfCertifyingId). Each "
         "head's signatureHex is Ed25519 over the Signed Tree Head signing bytes (see signed-tree-head.json: "
-        "tag avalon.settlement.sth, version 1, i64 tree size, 32 raw root bytes, network id and signing key id "
-        "as u32-BE length plus UTF-8, i64 unix seconds); 'signed by a different key' vectors use the other "
+        "tag avalon.settlement.sth, layout version 1, rules version 1, i64 tree size, network id and signing key "
+        "id as u32-BE length plus UTF-8, i64 unix seconds, hash algorithm byte 01, 32 raw root bytes, empty "
+        "extensions); 'signed by a different key' vectors use the other "
         "seed, and tampered vectors reuse the original signature with one field changed. The non-curve key is "
         "0x01 0x7f followed by zeros, which fails point decompression. Never real credentials. Everything is "
         "reproducible from the seeds and the rules here by scripts/gen-sth-witness-vectors.py (a pure-Python "
@@ -443,10 +458,12 @@ def gen_cosigned():
         "the author's own SignedTreeHead verifies AND at least witness::majority_threshold(knownList.length) "
         "of its cosignatures are individually signature-valid against a key in the verifier's own known list "
         "and fresh (observedAt within [freshnessCutoff, now]). A cosignature signs, with tag "
-        "avalon.witness.cosign and version 1: tree_size as i64 BE, the root hash as 32 raw bytes, network_id "
-        "as u32-BE length plus UTF-8, the author's created_at as i64 BE unix seconds, the author's "
-        "signing_key_id as u32-BE length plus UTF-8, the author's 64 signature bytes raw, the witness key id "
-        "as u32-BE length plus UTF-8 and observed_at as i64 BE unix seconds. A cosignature only counts for "
+        "avalon.witness.cosign, layout version 1 (u16 BE) and rules version 1 (u32 BE): tree_size as i64 BE, "
+        "network_id as u32-BE length plus UTF-8, the author's created_at as i64 BE unix seconds, the "
+        "author's signing_key_id as u32-BE length plus UTF-8, the author's signature (algorithm byte 01 then "
+        "64 raw bytes), the witness key id as u32-BE length plus UTF-8, the witness's verifying key "
+        "(algorithm byte 01 then 32 raw bytes, derived from the witness seed), observed_at as i64 BE unix "
+        "seconds, the hash algorithm byte 01, the root hash as 32 raw bytes and the empty extensions region. A cosignature only counts for "
         "the head whose tree size, root hash, network id, created_at, signing key id and signature all match "
         "what it signed (the sth's signingKeyId is settlement-operator-1 throughout). Each vector's "
         "sth/cosignatures carry precomputed signatures (same fixed seeds throughout the file) so a "
@@ -464,7 +481,7 @@ def gen_cosigned():
         sig = bytes.fromhex(sth["signatureHex"])
         full = dict(sth, networkId=network)
         for c in head.get("cosignatures", []):
-            m = cosign_bytes(full, sig, c["witnessKeyId"], c["observedAtUnixSeconds"])
+            m = cosign_bytes(full, sig, c["witnessKeyId"], c["observedAtUnixSeconds"], public_key(seeds[c["witnessKeyId"]]))
             c["signatureHex"] = sign(seeds[c["witnessKeyId"]], m).hex()
 
     doc["vectors"] = doc["vectors"][:7]
@@ -493,13 +510,13 @@ def gen_cosigned():
     good = dict(first["cosignatures"][0])
     # witness-2 signs the same tuple but over another author key id, or another author signature.
     other_id = dict(full, signingKeyId="rotated-operator-key")
-    m = cosign_bytes(other_id, sig, "witness-2", 1790000600)
+    m = cosign_bytes(other_id, sig, "witness-2", 1790000600, public_key(seeds["witness-2"]))
     variant(
         "cosignature over another author signing key id does not count",
         [good, {"witnessKeyId": "witness-2", "observedAtUnixSeconds": 1790000600, "signatureHex": sign(seeds["witness-2"], m).hex()}],
     )
     other_sig = sign(author, head_bytes(dict(full, signingKeyId="rotated-operator-key")))
-    m = cosign_bytes(full, other_sig, "witness-2", 1790000600)
+    m = cosign_bytes(full, other_sig, "witness-2", 1790000600, public_key(seeds["witness-2"]))
     variant(
         "cosignature over another author signature on the same tuple does not count",
         [good, {"witnessKeyId": "witness-2", "observedAtUnixSeconds": 1790000600, "signatureHex": sign(seeds["witness-2"], m).hex()}],
@@ -520,10 +537,10 @@ def gen_announce():
     doc["description"] = (
         "Witness announce proof verification (avalon_protocol::witness::verify_witness_announce). A witness "
         "advertises a base url together with a proof: an Ed25519 signature by the advertised key over the "
-        "structured layout with tag avalon.witness.announce (ASCII, no length prefix), version 1 as u16 BE, "
-        "the base url as u32-BE length plus UTF-8 bytes (the audience stays the URL text; a node has no "
-        "protocol-level id to bind yet), the 32 raw bytes of the witness key and announced_at as unix "
-        "seconds big-endian i64. A proof is accepted only when the key id is exactly 64 lowercase hex "
+        "structured layout with tag avalon.witness.announce (ASCII, no length prefix), layout version 1 as "
+        "u16 BE, rules version 1 as u32 BE, the base url as u32-BE length plus UTF-8 bytes (the audience "
+        "stays the URL text; a node has no protocol-level id to bind yet), the witness key (algorithm byte "
+        "01 then 32 raw bytes), announced_at as unix seconds big-endian i64 and the empty extensions region. A proof is accepted only when the key id is exactly 64 lowercase hex "
         "characters (a 32-byte Ed25519 key), the proof is a 64-byte hex signature that verifies under that "
         "key, and announced_at is within one hour (inclusive, either direction) of the verifier's clock. "
         "messageHex is the exact signed message for the input's base url, key id and announcedAt, present "
