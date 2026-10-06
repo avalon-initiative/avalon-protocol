@@ -549,10 +549,12 @@ async fn a_row_the_store_leaves_untouched_is_not_counted_as_written() {
     let sth = a.commit_and_publish().await;
     let w = witness(None).await;
     // Same root, different author timestamp, older: the store accepts the call but keeps this row.
+    let mut older = sth.clone();
+    older.created_at -= time::Duration::seconds(1);
     let other = sign_witness_cosignature(
         &w.key,
         &w.id,
-        &sth,
+        &older,
         OffsetDateTime::now_utc() - time::Duration::seconds(300),
     )
     .unwrap();
