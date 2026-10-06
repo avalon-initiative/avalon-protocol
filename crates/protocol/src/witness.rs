@@ -13,13 +13,13 @@
 //! from the verifier's own known list have cosigned it.
 //!
 //! Both signed messages use the structured layout in [`crate::signing_bytes`]
-//! (tags `avalon.witness.cosign` and `avalon.witness.announce`, version 1).
+//! (tags `avalon.witness.cosign` and `avalon.witness.announce`, layout version 1).
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use time::OffsetDateTime;
 
 use crate::ledger_entry::parse_hash;
-use crate::signing_bytes::{tags, Builder, SigningBytesError};
+use crate::signing_bytes::{tags, Builder, Envelope, SigningBytesError};
 use crate::sth::SignedTreeHead;
 
 /// Why a witness message could not be built.
@@ -61,6 +61,9 @@ pub struct WitnessCosignature {
     pub observed_at: OffsetDateTime,
     /// Lowercase hex-encoded Ed25519 signature (64 bytes).
     pub signature: String,
+    /// This cosignature's own layout, rules version and extensions; its `hash_algo` is the
+    /// author head's Merkle hash algorithm, which names the root it covers.
+    pub envelope: Envelope,
 }
 
 fn decode_author_signature(hex_text: &str) -> Result<[u8; 64], WitnessSigningError> {
@@ -68,24 +71,33 @@ fn decode_author_signature(hex_text: &str) -> Result<[u8; 64], WitnessSigningErr
     <[u8; 64]>::try_from(bytes.as_slice()).map_err(|_| WitnessSigningError::InvalidAuthorSignature)
 }
 
-/// The exact bytes a witness cosignature covers (tag `avalon.witness.cosign`, version 1):
-/// `tree_size` `i64`, root hash (32 raw), `network_id` `str`, `author_created_at` `i64`
-/// unix seconds, `author_key_id` `str`, author signature (64 raw), `witness_key_id`
-/// `str`, `observed_at` `i64`. The `signature` field of `cosig` is not read.
-pub fn witness_signing_message(cosig: &WitnessCosignature) -> Result<Vec<u8>, WitnessSigningError> {
+/// The exact bytes a witness cosignature covers (tag `avalon.witness.cosign`, header and
+/// extensions as in [`crate::signing_bytes`]): `tree_size` `i64`, `network_id` `str`,
+/// `author_created_at` `i64` unix seconds, `author_key_id` `str`, author signature (alg `u8` + 64
+/// raw), `witness_key_id` `str`, the witness's verifying key (alg `u8` + 32 raw), `observed_at`
+/// `i64`, `hash_algo` `u8` of the author's tree, root hash (32 raw). The `signature` field of
+/// `cosig` is not read.
+pub fn witness_signing_message(
+    cosig: &WitnessCosignature,
+    witness_key: &[u8; 32],
+) -> Result<Vec<u8>, WitnessSigningError> {
     let root = parse_hash("root_hash", &cosig.root_hash)
         .map_err(|_| WitnessSigningError::InvalidRootHash)?;
     let author_signature = decode_author_signature(&cosig.author_signature)?;
-    Ok(Builder::new(tags::WITNESS_COSIGN, 1)
-        .i64(cosig.tree_size)
-        .hash(&root)
-        .str(&cosig.network_id)
-        .i64(cosig.author_created_at.unix_timestamp())
-        .str(&cosig.author_key_id)
-        .signature(&author_signature)
-        .str(&cosig.witness_key_id)
-        .i64(cosig.observed_at.unix_timestamp())
-        .finish()?)
+    Ok(
+        Builder::with_envelope(tags::WITNESS_COSIGN, &cosig.envelope)
+            .i64(cosig.tree_size)
+            .str(&cosig.network_id)
+            .i64(cosig.author_created_at.unix_timestamp())
+            .str(&cosig.author_key_id)
+            .signature(&author_signature)
+            .str(&cosig.witness_key_id)
+            .key(witness_key)
+            .i64(cosig.observed_at.unix_timestamp())
+            .hash_algo(cosig.envelope.hash_algo)
+            .hash(&root)
+            .finish()?,
+    )
 }
 
 fn sign_unsigned(
@@ -94,7 +106,7 @@ fn sign_unsigned(
 ) -> Result<WitnessCosignature, WitnessSigningError> {
     // Normalizes the author signature to lowercase hex so equal bytes compare equal.
     cosig.author_signature = hex::encode(decode_author_signature(&cosig.author_signature)?);
-    let message = witness_signing_message(&cosig)?;
+    let message = witness_signing_message(&cosig, &witness_signing_key.verifying_key().to_bytes())?;
     let signature: Signature = witness_signing_key.sign(&message);
     cosig.signature = hex::encode(signature.to_bytes());
     Ok(cosig)
@@ -119,6 +131,10 @@ pub fn sign_witness_cosignature(
             witness_key_id: witness_key_id.to_string(),
             observed_at,
             signature: String::new(),
+            envelope: Envelope {
+                hash_algo: head.envelope.hash_algo,
+                ..Envelope::current(tags::WITNESS_COSIGN)
+            },
         },
     )
 }
@@ -148,7 +164,7 @@ pub fn verify_witness_cosignature(
     witness_verifying_key: &VerifyingKey,
     cosig: &WitnessCosignature,
 ) -> bool {
-    let Ok(message) = witness_signing_message(cosig) else {
+    let Ok(message) = witness_signing_message(cosig, &witness_verifying_key.to_bytes()) else {
         return false;
     };
     let Ok(signature_bytes) = hex::decode(&cosig.signature) else {
@@ -165,9 +181,9 @@ pub fn verify_witness_cosignature(
 /// announce proof to be accepted.
 pub const WITNESS_ANNOUNCE_MAX_SKEW: time::Duration = time::Duration::hours(1);
 
-/// The exact bytes a witness announce proof covers (tag `avalon.witness.announce`,
-/// version 1): the base URL as `str`, the witness key (32 raw) and `announced_at` as
-/// `i64` unix seconds. The audience stays the URL text: a node has no protocol-level
+/// The exact bytes a witness announce proof covers (tag `avalon.witness.announce`, header and
+/// extensions as in [`crate::signing_bytes`]): the base URL as `str`, the witness key (alg `u8` +
+/// 32 raw) and `announced_at` as `i64` unix seconds. The audience stays the URL text: a node has no protocol-level
 /// id to bind yet. `witness_key_id` must be the lowercase hex of the key.
 pub fn witness_announce_message(
     base_url: &str,

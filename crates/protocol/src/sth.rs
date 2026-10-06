@@ -31,7 +31,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use time::OffsetDateTime;
 
 use crate::ledger_entry::parse_hash;
-use crate::signing_bytes::{tags, Builder, SigningBytesError};
+use crate::signing_bytes::{tags, Builder, Envelope, EnvelopeWire, SigningBytesError};
 
 /// Default `signing_key_id` when `AVALON_SETTLEMENT_SIGNING_KEY_ID` isn't
 /// set — fine for a single-operator milestone-1 deployment. A real key
@@ -54,6 +54,9 @@ pub struct PreparedTreeHead {
     pub network_id: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Layout, rules version, Merkle hash algorithm and extensions the head will be signed under.
+    #[serde(flatten)]
+    pub envelope: EnvelopeWire,
 }
 
 /// One row of `signed_tree_heads` — produced by [`sign_tree_head`] at
@@ -70,6 +73,9 @@ pub struct SignedTreeHead {
     /// Lowercase hex-encoded Ed25519 signature (64 bytes).
     pub signature: String,
     pub created_at: OffsetDateTime,
+    /// What the signature covers besides the fields above; `hash_algo` names the Merkle tree
+    /// (leaf, interior and empty-root hashing) the root belongs to.
+    pub envelope: Envelope,
 }
 
 /// Why an STH's signing bytes could not be built.
@@ -81,31 +87,35 @@ pub enum SthSigningError {
     Layout(#[from] SigningBytesError),
 }
 
-/// The exact bytes an STH's signature covers, in the structured layout (tag
-/// `avalon.settlement.sth`, version 1): `tree_size` `i64`, the root hash as 32 raw
-/// bytes, `network_id` and `signing_key_id` as `str`, then `created_at` as `i64` unix
-/// seconds. Public because a managed-hosting integrator signs these bytes locally,
-/// with a key this node never holds, so it must be able to build them itself.
+/// The exact bytes an STH's signature covers, in the structured layout (tag `avalon.settlement.sth`,
+/// header and extensions as in [`crate::signing_bytes`]): `tree_size` `i64`, `network_id` and
+/// `signing_key_id` as `str`, `created_at` as `i64` unix seconds, then `hash_algo` `u8` naming the
+/// hash of the Merkle tree and the root hash as 32 raw bytes. Public because a managed-hosting
+/// integrator signs these bytes locally, with a key this node never holds, so it must be able to
+/// build them itself.
 pub fn signing_message(
     tree_size: i64,
     root_hash_hex: &str,
     network_id: &str,
     signing_key_id: &str,
     created_at: OffsetDateTime,
+    envelope: &Envelope,
 ) -> Result<Vec<u8>, SthSigningError> {
     let root =
         parse_hash("root_hash", root_hash_hex).map_err(|_| SthSigningError::InvalidRootHash)?;
-    Ok(Builder::new(tags::SETTLEMENT_STH, 1)
+    Ok(Builder::with_envelope(tags::SETTLEMENT_STH, envelope)
         .i64(tree_size)
-        .hash(&root)
         .str(network_id)
         .str(signing_key_id)
         .i64(created_at.unix_timestamp())
+        .hash_algo(envelope.hash_algo)
+        .hash(&root)
         .finish()?)
 }
 
-/// Signs the head's fields (see [`signing_message`]) with `signing_key`, producing the
-/// [`SignedTreeHead`] `commit` stores. Fails when `root_hash_hex` is not a 32-byte hash.
+/// Signs the head's fields (see [`signing_message`]) under this node's current envelope with
+/// `signing_key`, producing the [`SignedTreeHead`] `commit` stores. Fails when `root_hash_hex` is
+/// not a 32-byte hash.
 pub fn sign_tree_head(
     signing_key: &SigningKey,
     signing_key_id: &str,
@@ -114,12 +124,34 @@ pub fn sign_tree_head(
     network_id: &str,
     created_at: OffsetDateTime,
 ) -> Result<SignedTreeHead, SthSigningError> {
+    sign_tree_head_with(
+        signing_key,
+        signing_key_id,
+        tree_size,
+        root_hash_hex,
+        network_id,
+        created_at,
+        Envelope::current(tags::SETTLEMENT_STH),
+    )
+}
+
+/// [`sign_tree_head`] with an explicit envelope, for signing a head whose bytes the caller prepared.
+pub fn sign_tree_head_with(
+    signing_key: &SigningKey,
+    signing_key_id: &str,
+    tree_size: i64,
+    root_hash_hex: &str,
+    network_id: &str,
+    created_at: OffsetDateTime,
+    envelope: Envelope,
+) -> Result<SignedTreeHead, SthSigningError> {
     let message = signing_message(
         tree_size,
         root_hash_hex,
         network_id,
         signing_key_id,
         created_at,
+        &envelope,
     )?;
     let signature: Signature = signing_key.sign(&message);
     Ok(SignedTreeHead {
@@ -129,6 +161,7 @@ pub fn sign_tree_head(
         signing_key_id: signing_key_id.to_string(),
         signature: hex::encode(signature.to_bytes()),
         created_at,
+        envelope,
     })
 }
 
@@ -142,6 +175,7 @@ pub fn verify_tree_head(verifying_key: &VerifyingKey, sth: &SignedTreeHead) -> b
         &sth.network_id,
         &sth.signing_key_id,
         sth.created_at,
+        &sth.envelope,
     ) else {
         return false;
     };

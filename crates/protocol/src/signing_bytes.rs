@@ -347,6 +347,42 @@ impl Envelope {
     }
 }
 
+/// An [`Envelope`] as it travels in JSON and sits in stored rows: plain integers and hex.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EnvelopeWire {
+    pub layout_version: u16,
+    pub rules_version: u32,
+    pub hash_algo: u8,
+    /// Hex of the extensions region; `0000` when there are none.
+    pub extensions: String,
+}
+
+impl From<&Envelope> for EnvelopeWire {
+    fn from(envelope: &Envelope) -> Self {
+        Self {
+            layout_version: envelope.layout_version,
+            rules_version: envelope.rules_version,
+            hash_algo: envelope.hash_algo.id(),
+            extensions: hex::encode(envelope.extensions.encode()),
+        }
+    }
+}
+
+impl EnvelopeWire {
+    /// Checks every part against this node's ranges; the typed "needs a newer version" result
+    /// for anything above them.
+    pub fn to_envelope(&self, tag: DomainTag) -> Result<Envelope, SigningBytesError> {
+        let extensions = hex::decode(&self.extensions).map_err(|_| SigningBytesError::Truncated)?;
+        Envelope::from_parts(
+            tag,
+            self.layout_version,
+            self.rules_version,
+            self.hash_algo,
+            &extensions,
+        )
+    }
+}
+
 /// Supported layout versions per tag. Lower versions stay verifiable forever; a tag's first
 /// version is 1. Every registered tag has a row (a test enforces it).
 pub fn layout_versions(tag: DomainTag) -> RangeInclusive<u16> {
