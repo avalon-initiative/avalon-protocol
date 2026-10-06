@@ -149,7 +149,7 @@ async fn mock_remote_node(
     Mock::given(method("GET"))
         .and(path("/ledger/sth/latest"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,

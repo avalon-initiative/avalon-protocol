@@ -3314,7 +3314,7 @@ mod tests {
         )
         .unwrap();
         serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": sth.root_hash,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,
@@ -3631,7 +3631,7 @@ mod tests {
                     .and(path("/ledger/sth/5"))
                     .and(query_param("witnesses", "1"))
                     .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                        "tree_size": 5, "root_hash": root, "network_id": network_id,
+                        "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": 5, "root_hash": root, "network_id": network_id,
                         "signing_key_id": sth.signing_key_id, "signature": sth.signature,
                         "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
                         "cosignatures": dtos,
@@ -3760,7 +3760,7 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path_regex(format!(r"^/ledger/sth/{}$", h.tree_size)))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "tree_size": h.tree_size, "root_hash": h.root_hash, "network_id": network_id,
+                    "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": h.tree_size, "root_hash": h.root_hash, "network_id": network_id,
                     "signing_key_id": h.signing_key_id, "signature": h.signature,
                     "created_at": created_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
                     "cosignatures": [WitnessCosignatureDto::from_witness_cosignature(&cosig)],
@@ -3990,7 +3990,7 @@ mod tests {
                 .and(query_param("shard_id", shard))
                 .and(query_param("witnesses", "1"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "tree_size": sth.tree_size, "root_hash": sth.root_hash,
+                    "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size, "root_hash": sth.root_hash,
                     "network_id": sth.network_id, "signing_key_id": sth.signing_key_id,
                     "signature": sth.signature, "created_at": fmt(sth.created_at),
                     "cosignatures": cosigs,

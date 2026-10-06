@@ -81,7 +81,7 @@ impl Respond for Cosigning {
         let observed = OffsetDateTime::now_utc() + self.opts.observed_offset.unwrap_or_default();
         let cosig = sign_witness_cosignature(&signer, &self.id, &sth, observed).unwrap();
         ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "tree_size": sth.tree_size,
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000", "tree_size": sth.tree_size,
             "root_hash": root,
             "network_id": sth.network_id,
             "signing_key_id": sth.signing_key_id,

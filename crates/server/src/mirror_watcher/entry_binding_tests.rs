@@ -64,6 +64,7 @@ fn genuine_ledger_at(network_id: &str, payloads: Vec<serde_json::Value>, seqs: &
             "subject": who, "payload": payload, "payload_hash": payload_hash, "payload_pruned": false, "version": 1,
             "event_timestamp": rfc3339(ts), "prev_hash": prev, "entry_hash": hash,
             "batch_id": Uuid::new_v4(),
+            "layout_version": 1, "rules_version": 1, "hash_algo": 1, "extensions": "0000",
         }));
         hashes.push(hash.clone());
         prev = hash;

@@ -2165,7 +2165,7 @@ mod tests {
                 ..entry(1, Uuid::nil(), &p)
             }
         )
-        .is_err());
+        .is_ok());
     }
 
     #[test]
@@ -2260,15 +2260,16 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_with_an_unrepresentable_version_is_rejected_up_front() {
+    fn a_batch_with_an_unstorable_version_is_rejected_up_front() {
+        let too_big = u32::try_from(i32::MAX).unwrap() + 1;
         let batch = EventBatch {
             id: Uuid::nil(),
-            events: vec![event_at(0, 1), event_at(0, 65536)],
+            events: vec![event_at(0, 1), event_at(0, 65536), event_at(0, too_big)],
             created_at: time::OffsetDateTime::UNIX_EPOCH,
         };
         assert!(matches!(
             check_batch(&batch),
-            Err(SettlementError::UnsupportedEntryVersion { version: 65536 })
+            Err(SettlementError::UnsupportedEntryVersion { version }) if version == too_big
         ));
     }
 
