@@ -159,9 +159,11 @@ impl<'a> PlanBuilder<'a> {
             return Err(PromotionError::BrokenLink { seq: entry.seq });
         }
         // The hash is recomputed from `payload_hash`, so a pruned entry verifies too.
+        // An envelope this node cannot read stays the typed result, not a hash mismatch.
+        let recomputed = entry.recomputed_hash()?;
         if entry.network_id != self.network_id
             || entry.shard_id != self.shard_id
-            || entry.recomputed_hash().ok().flatten().as_deref() != Some(entry.entry_hash.as_str())
+            || recomputed.as_deref() != Some(entry.entry_hash.as_str())
         {
             return Err(PromotionError::HashMismatch { seq: entry.seq });
         }

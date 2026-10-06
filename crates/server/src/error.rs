@@ -492,9 +492,18 @@ pub enum AppError {
     /// exact range, a duplicate key, or U+0000 in a string); the caller can fix and resubmit.
     #[error("payload cannot be canonically encoded: {0}")]
     InvalidPayload(avalon_protocol::canonical_payload::CanonicalPayloadError),
-    /// An event version the ledger entry layout cannot carry (above 65535).
-    #[error("event version {0} is not supported (maximum 65535)")]
+    /// An event version the stored `version` column cannot carry (above 2147483647).
+    #[error("event version {0} is not supported (maximum 2147483647)")]
     UnsupportedEntryVersion(u32),
+    /// A message or stored row needs a layout, rules version, hash algorithm or extension this node
+    /// lacks. Nothing was verified. Answered as 422 (the request is understood but cannot be
+    /// processed by this version, unlike 400 for malformed input) with code `NEEDS_NEWER_VERSION`;
+    /// never `LEDGER`/500.
+    #[error("needs a newer version: {what:?} {required}")]
+    NeedsNewerVersion {
+        what: avalon_protocol::signing_bytes::VersionKind,
+        required: u32,
+    },
     /// Deliberately hand-written rather than `#[from]`: an
     /// [`avalon_indexer::IndexError::RemoteUnreachable`] must map to
     /// [`Self::RemoteRoleUnreachable`] (a distinct 503, not a generic
@@ -509,6 +518,9 @@ impl From<avalon_chain::SettlementError> for AppError {
             avalon_chain::SettlementError::InvalidPayload(inner) => AppError::InvalidPayload(inner),
             avalon_chain::SettlementError::UnsupportedEntryVersion { version } => {
                 AppError::UnsupportedEntryVersion(version)
+            }
+            avalon_chain::SettlementError::NeedsNewerVersion { what, required } => {
+                AppError::NeedsNewerVersion { what, required }
             }
             other => AppError::Ledger(other),
         }
@@ -531,6 +543,15 @@ impl From<sqlx::Error> for AppError {
                 }) = inner.downcast_ref::<avalon_chain::SettlementError>()
                 {
                     AppError::UnsupportedEntryVersion(*version)
+                } else if let Some(avalon_chain::SettlementError::NeedsNewerVersion {
+                    what,
+                    required,
+                }) = inner.downcast_ref::<avalon_chain::SettlementError>()
+                {
+                    AppError::NeedsNewerVersion {
+                        what: *what,
+                        required: *required,
+                    }
                 } else {
                     AppError::Database(err)
                 }
@@ -769,6 +790,7 @@ impl AppError {
             AppError::Ledger(..) => "LEDGER",
             AppError::InvalidPayload(..) => "INVALID_PAYLOAD",
             AppError::UnsupportedEntryVersion(..) => "UNSUPPORTED_ENTRY_VERSION",
+            AppError::NeedsNewerVersion { .. } => "NEEDS_NEWER_VERSION",
             AppError::Index(..) => "INDEX",
         }
     }
@@ -1047,6 +1069,7 @@ impl IntoResponse for AppError {
             AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
             AppError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
             AppError::UnsupportedEntryVersion(_) => StatusCode::BAD_REQUEST,
+            AppError::NeedsNewerVersion { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             AppError::InvalidLogFilter => StatusCode::BAD_REQUEST,
             AppError::LogReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
             // 503, not 409/403: the request itself is fine and the
@@ -1233,5 +1256,28 @@ mod tests {
         assert_eq!(nul.code(), "INVALID_PAYLOAD");
         let other: AppError = sqlx::Error::Decode("x".into()).into();
         assert!(matches!(other, AppError::Database(_)));
+    }
+
+    #[test]
+    fn a_needs_newer_version_result_is_typed_422_never_ledger() {
+        use avalon_protocol::signing_bytes::VersionKind;
+        let settlement = avalon_chain::SettlementError::NeedsNewerVersion {
+            what: VersionKind::Rules,
+            required: 2,
+        };
+        let err: AppError = settlement.into();
+        assert!(matches!(err, AppError::NeedsNewerVersion { .. }));
+        assert_eq!(err.code(), "NEEDS_NEWER_VERSION");
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let via_sqlx: AppError =
+            sqlx::Error::Decode(Box::new(avalon_chain::SettlementError::NeedsNewerVersion {
+                what: VersionKind::HashAlgo,
+                required: 9,
+            }))
+            .into();
+        assert_eq!(via_sqlx.code(), "NEEDS_NEWER_VERSION");
     }
 }

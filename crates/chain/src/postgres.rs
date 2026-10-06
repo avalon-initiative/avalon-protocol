@@ -700,16 +700,14 @@ impl PostgresSettlementProvider {
 
         let mut heads = Vec::with_capacity(rows.len());
         for row in rows {
-            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
-            heads.push(SignedTreeHead {
-                tree_size: row.try_get("tree_size").map_err(get)?,
-                root_hash: row.try_get("root_hash").map_err(get)?,
-                network_id: row.try_get("network_id").map_err(get)?,
-                signing_key_id: row.try_get("signing_key_id").map_err(get)?,
-                signature: row.try_get("signature").map_err(get)?,
-                created_at: row.try_get("created_at").map_err(get)?,
-                envelope: EnvelopeRow::read(&row, "")?.to_envelope(tags::SETTLEMENT_STH)?,
-            });
+            match sth_from_row(row) {
+                Ok(head) => heads.push(head),
+                // One head this node cannot read must not hide the rest.
+                Err(err @ SettlementError::NeedsNewerVersion { .. }) => {
+                    tracing::warn!(error = %err, "skipping a stored tree head this node cannot read");
+                }
+                Err(other) => return Err(other),
+            }
         }
         Ok(heads)
     }
@@ -941,6 +939,15 @@ impl PostgresSettlementProvider {
         let mut cosigs = Vec::with_capacity(rows.len());
         for row in rows {
             let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            let envelope = match EnvelopeRow::read(&row, "")?.to_envelope(tags::WITNESS_COSIGN) {
+                Ok(envelope) => envelope,
+                // One cosignature this node cannot read is left out, never counted.
+                Err(err @ SettlementError::NeedsNewerVersion { .. }) => {
+                    tracing::warn!(error = %err, "skipping a stored cosignature this node cannot read");
+                    continue;
+                }
+                Err(other) => return Err(other),
+            };
             cosigs.push(WitnessCosignature {
                 tree_size: row.try_get("tree_size").map_err(get)?,
                 root_hash: row.try_get("root_hash").map_err(get)?,
@@ -951,7 +958,7 @@ impl PostgresSettlementProvider {
                 witness_key_id: row.try_get("witness_key_id").map_err(get)?,
                 observed_at: row.try_get("observed_at").map_err(get)?,
                 signature: row.try_get("signature").map_err(get)?,
-                envelope: EnvelopeRow::read(&row, "")?.to_envelope(tags::WITNESS_COSIGN)?,
+                envelope,
             });
         }
         Ok(cosigs)
