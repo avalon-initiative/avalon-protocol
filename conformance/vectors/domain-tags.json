@@ -2,12 +2,10 @@
   "$schema": "./SCHEMA.md#domain-tags",
   "description": "The registry of structured-signing-bytes domain tags (avalon_protocol::signing_bytes::tags), one per signed kind. A tag is ASCII [a-z0-9._], appears in the message with no length prefix, is never reused for another kind and no tag is a prefix of another. The conformance tag is reserved for vectors and never signed in production. A runner asserts its own registry holds exactly these tags (kind is the constant name, lowercased).",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
-  "notSupported": {
-    "csharp": "No SDK implements the structured primitive yet; it lands with the first migrated layout.",
-    "typescript": "No SDK implements the structured primitive yet; it lands with the first migrated layout."
-  },
   "tags": [
     {
       "kind": "identity_created",

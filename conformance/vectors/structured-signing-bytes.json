@@ -2,12 +2,10 @@
   "$schema": "./SCHEMA.md#structured-signing-bytes",
   "description": "Structured signing bytes (avalon_protocol::signing_bytes): domain tag (ASCII, no length), u16 big-endian version, then fields in a fixed order. str and bytes are a u32 big-endian length and the bytes; key, hash, fixed and uuid are raw bytes; u8, u16, u32, u64 and i64 are fixed-width big-endian. Every build vector uses the reserved conformance tag. A field object is {type: str, utf8} or {type: str, repeatUtf8, count} (count repetitions of a UTF-8 string), {type: bytes, hex} or {type: bytes, repeatByteHex, count}, {type: key|hash|fixed, hex}, {type: uuid, value} or {type: u8|u16|u32|u64|i64, value} with value a decimal string. A build vector's expected is signingBytesHex, or signingBytesLength plus signingBytesSha256Hex when the message is large. Every build vector must also read back, field by field in order, to its input fields and then have no bytes left. rejectVectors list messages that must fail with exactly expected.error when read as input.read (the field types in order) under input.tag: tag_mismatch (message does not start with the tag), truncated (the message ends inside the version, a length prefix, a field, or a declared length exceeds the remaining bytes, checked before any allocation), invalid_utf8 (str bytes are not valid UTF-8, no lossy decoding) and trailing_bytes (bytes remain after the last field). Errors are checked in that order of discovery while reading left to right.",
   "supportedIn": [
-    "rust"
+    "rust",
+    "csharp",
+    "typescript"
   ],
-  "notSupported": {
-    "csharp": "No SDK implements the structured primitive yet; it lands with the first migrated layout.",
-    "typescript": "No SDK implements the structured primitive yet; it lands with the first migrated layout."
-  },
   "vectors": [
     {
       "name": "no fields",
