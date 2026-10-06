@@ -38,7 +38,8 @@ pub enum CanonicalPayloadError {
     TooDeep,
 }
 
-/// Canonical encoding of `value`, or the first restriction it violates.
+/// Canonical encoding of `value`, or the first restriction it violates. Judges numbers by
+/// value (`1.0` hashes as `1`); only [`parse_strict`] checks the number text.
 pub fn canonicalize(value: &Value) -> Result<String, CanonicalPayloadError> {
     let mut out = String::new();
     write_value(value, &mut out, 0)?;
@@ -575,6 +576,16 @@ mod tests {
         assert_eq!(
             canonicalize(&json!({"b": [], "a": {}})).unwrap(),
             r#"{"a":{},"b":[]}"#
+        );
+    }
+
+    #[test]
+    fn value_path_parses_doubles_correctly_rounded() {
+        let w: Wrapper =
+            serde_json::from_str(r#"{"p":[1e-24,5e-304,9.32314010864547e-18]}"#).unwrap();
+        assert_eq!(
+            canonicalize(&w.p).unwrap(),
+            "[1e-24,5e-304,9.32314010864547e-18]"
         );
     }
 

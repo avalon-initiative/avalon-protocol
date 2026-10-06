@@ -494,6 +494,14 @@ impl From<sqlx::Error> for AppError {
             sqlx::Error::Protocol(msg) if msg == crate::replica::REFUSAL_MARKER => {
                 AppError::ReplicaOnly
             }
+            sqlx::Error::Decode(inner) => {
+                match inner
+                    .downcast_ref::<avalon_protocol::canonical_payload::CanonicalPayloadError>()
+                {
+                    Some(payload_err) => AppError::InvalidPayload(payload_err.clone()),
+                    None => AppError::Database(err),
+                }
+            }
             _ => AppError::Database(err),
         }
     }
@@ -1128,5 +1136,17 @@ mod tests {
         let err: AppError = avalon_indexer::IndexError::DisplayNameTaken.into();
         assert!(matches!(err, AppError::Index(_)));
         assert_eq!(err.code(), "INDEX");
+    }
+
+    #[test]
+    fn unhashable_payload_decode_error_maps_to_invalid_payload() {
+        let inner = avalon_protocol::canonical_payload::CanonicalPayloadError::InvalidNumber {
+            number: "1e300".into(),
+        };
+        let err: AppError = sqlx::Error::Decode(Box::new(inner)).into();
+        assert!(matches!(err, AppError::InvalidPayload(_)));
+        assert_eq!(err.code(), "INVALID_PAYLOAD");
+        let other: AppError = sqlx::Error::Decode("x".into()).into();
+        assert!(matches!(other, AppError::Database(_)));
     }
 }
