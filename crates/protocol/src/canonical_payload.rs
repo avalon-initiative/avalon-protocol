@@ -7,6 +7,14 @@
 //!   most 15 significant digits and written exactly as ECMAScript prints them
 //!   (so `1.0`, `1e2`, `-0` and `1E-7` are invalid). Anything else is a string.
 //! - Duplicate object keys are rejected.
+//! - U+0000 is rejected in every string and object key, written as `\u0000` or
+//!   (as any raw control character is) unescaped. PostgreSQL `JSONB` cannot
+//!   store it, and validity must not depend on the database.
+//!
+//! Permitted string characters: every Unicode scalar value except U+0000. U+0001
+//! to U+001F are valid only as escapes; lone surrogates (`\ud800`) are
+//! `malformed`. Noncharacters (U+FFFE, U+FFFF) and U+007F..U+009F are valid and
+//! round trip through `JSONB`.
 //!
 //! Object keys sort by UTF-16 code units, strings escape only `"`, `\`, and
 //! control characters below U+0020 (`\b \t \n \f \r`, else lowercase `\u00xx`).
@@ -32,10 +40,32 @@ pub enum CanonicalPayloadError {
     InvalidNumber { number: String },
     #[error("duplicate object key {key:?}")]
     DuplicateKey { key: String },
+    #[error("string or object key contains U+0000")]
+    NulCharacter,
     #[error("malformed JSON: {0}")]
     Malformed(String),
     #[error("payload nests deeper than {MAX_DEPTH} levels")]
     TooDeep,
+}
+
+impl CanonicalPayloadError {
+    /// Stable machine-readable code, shared with `conformance/vectors/canonical-payload.json`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidNumber { .. } => "invalid_number",
+            Self::DuplicateKey { .. } => "duplicate_key",
+            Self::NulCharacter => "nul_character",
+            Self::Malformed(_) => "malformed",
+            Self::TooDeep => "too_deep",
+        }
+    }
+}
+
+fn check_string(s: &str) -> Result<(), CanonicalPayloadError> {
+    if s.contains('\0') {
+        return Err(CanonicalPayloadError::NulCharacter);
+    }
+    Ok(())
 }
 
 /// Canonical encoding of `value`, or the first restriction it violates. Judges numbers by
@@ -89,7 +119,7 @@ fn write_value(value: &Value, out: &mut String, depth: usize) -> Result<(), Cano
         Value::Bool(true) => out.push_str("true"),
         Value::Bool(false) => out.push_str("false"),
         Value::Number(n) => out.push_str(&number_text(n)?),
-        Value::String(s) => write_string(s, out),
+        Value::String(s) => write_string(s, out)?,
         Value::Array(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
@@ -108,7 +138,7 @@ fn write_value(value: &Value, out: &mut String, depth: usize) -> Result<(), Cano
                 if i > 0 {
                     out.push(',');
                 }
-                write_string(key, out);
+                write_string(key, out)?;
                 out.push(':');
                 write_value(item, out, depth + 1)?;
             }
@@ -122,7 +152,8 @@ fn cmp_utf16(a: &str, b: &str) -> Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
-fn write_string(s: &str, out: &mut String) {
+fn write_string(s: &str, out: &mut String) -> Result<(), CanonicalPayloadError> {
+    check_string(s)?;
     out.push('"');
     for c in s.chars() {
         match c {
@@ -138,6 +169,7 @@ fn write_string(s: &str, out: &mut String) {
         }
     }
     out.push('"');
+    Ok(())
 }
 
 fn number_text(n: &Number) -> Result<String, CanonicalPayloadError> {
@@ -246,11 +278,13 @@ impl<'de> Visitor<'de> for StrictVisitor {
         Ok(Number::from_f64(v).map_or(Value::Null, Value::Number))
     }
 
-    fn visit_str<E>(self, v: &str) -> Result<Value, E> {
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
+        check_string(v).map_err(E::custom)?;
         Ok(Value::String(v.to_string()))
     }
 
-    fn visit_string<E>(self, v: String) -> Result<Value, E> {
+    fn visit_string<E: de::Error>(self, v: String) -> Result<Value, E> {
+        check_string(&v).map_err(E::custom)?;
         Ok(Value::String(v))
     }
 
@@ -273,6 +307,7 @@ impl<'de> Visitor<'de> for StrictVisitor {
     fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Value, A::Error> {
         let mut map = Map::new();
         while let Some(key) = access.next_key::<String>()? {
+            check_string(&key).map_err(de::Error::custom)?;
             let value = access.next_value_seed(StrictSeed)?;
             if map.insert(key.clone(), value).is_some() {
                 return Err(de::Error::custom(CanonicalPayloadError::DuplicateKey {
@@ -438,6 +473,9 @@ impl Parser<'_> {
                             } else {
                                 hi
                             };
+                            if code == 0 {
+                                return Err(CanonicalPayloadError::NulCharacter);
+                            }
                             out.push(
                                 char::from_u32(code)
                                     .ok_or_else(|| self.malformed("lone surrogate"))?,
@@ -590,6 +628,30 @@ mod tests {
     }
 
     #[test]
+    fn nul_is_rejected_in_values_and_keys_on_every_path() {
+        for text in [r#"["a\u0000b"]"#, r#"{"a\u0000":1}"#, r#"{"a":{"\u0000":1}}"#] {
+            assert_eq!(
+                canonicalize_str(text),
+                Err(CanonicalPayloadError::NulCharacter),
+                "{text}"
+            );
+            assert!(serde_json::from_str::<Wrapper>(&format!(r#"{{"p":{text}}}"#)).is_err());
+        }
+        assert_eq!(
+            validate(&json!({"k": ["x\0"]})),
+            Err(CanonicalPayloadError::NulCharacter)
+        );
+        assert_eq!(
+            validate(&json!({"k\0": 1})),
+            Err(CanonicalPayloadError::NulCharacter)
+        );
+        assert!(matches!(
+            canonicalize_str("[\"a\0b\"]"),
+            Err(CanonicalPayloadError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn nesting_is_bounded() {
         let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
         assert_eq!(canonicalize_str(&deep), Err(CanonicalPayloadError::TooDeep));
@@ -613,5 +675,6 @@ mod tests {
         let parse = |t: String| serde_json::from_str::<crate::events::ProtocolEvent>(&t);
         assert!(parse(with(r#"{"a":1}"#)).is_ok());
         assert!(parse(with(r#"{"a":1,"a":2}"#)).is_err());
+        assert!(parse(with(r#"{"a":"\u0000"}"#)).is_err());
     }
 }
