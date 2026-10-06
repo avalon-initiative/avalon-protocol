@@ -25,6 +25,8 @@
 //! table remains a valid future optimization if recompute cost ever matters
 //! at real ledger scale; it isn't required to close this ticket.
 
+use avalon_protocol::signing_bytes::HashAlgo;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 const LEAF_HASH_PREFIX: u8 = 0x00;
@@ -32,23 +34,16 @@ const NODE_HASH_PREFIX: u8 = 0x01;
 
 /// RFC 6962's root hash for a zero-leaf tree: `SHA-256()`, the hash of the
 /// empty string.
-pub fn empty_root() -> [u8; 32] {
-    Sha256::digest([]).into()
+pub fn empty_root(algo: HashAlgo) -> [u8; 32] {
+    algo.digest(&[])
 }
 
-pub(crate) fn leaf_hash(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update([LEAF_HASH_PREFIX]);
-    hasher.update(data);
-    hasher.finalize().into()
+pub(crate) fn leaf_hash(algo: HashAlgo, data: &[u8]) -> [u8; 32] {
+    algo.digest(&[&[LEAF_HASH_PREFIX], data].concat())
 }
 
-pub(crate) fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update([NODE_HASH_PREFIX]);
-    hasher.update(left);
-    hasher.update(right);
-    hasher.finalize().into()
+pub(crate) fn node_hash(algo: HashAlgo, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    algo.digest(&[&[NODE_HASH_PREFIX], left.as_slice(), right.as_slice()].concat())
 }
 
 /// The largest power of two strictly less than `n` (`n` must be >= 2) —
@@ -65,15 +60,15 @@ pub(crate) fn split_point(n: usize) -> usize {
 /// element of `leaves` is one leaf's *input data*; this function applies
 /// RFC 6962's domain-separated leaf hashing itself, so callers must not
 /// pre-hash their inputs before passing them in.
-pub fn mth<T: AsRef<[u8]>>(leaves: &[T]) -> [u8; 32] {
+pub fn mth<T: AsRef<[u8]>>(algo: HashAlgo, leaves: &[T]) -> [u8; 32] {
     match leaves.len() {
-        0 => empty_root(),
-        1 => leaf_hash(leaves[0].as_ref()),
+        0 => empty_root(algo),
+        1 => leaf_hash(algo, leaves[0].as_ref()),
         n => {
             let k = split_point(n);
-            let left = mth(&leaves[..k]);
-            let right = mth(&leaves[k..]);
-            node_hash(&left, &right)
+            let left = mth(algo, &leaves[..k]);
+            let right = mth(algo, &leaves[k..]);
+            node_hash(algo, &left, &right)
         }
     }
 }
@@ -83,12 +78,12 @@ pub fn mth<T: AsRef<[u8]>>(leaves: &[T]) -> [u8; 32] {
 /// first, so what actually gets leaf-hashed is `entry_hash`'s raw bytes
 /// (matching issue #210's "domain-separated leaf hash `SHA256(0x00 ||
 /// entry_hash_bytes)`"), not its hex text representation.
-pub fn mth_of_hex_hashes(hashes: &[String]) -> Result<[u8; 32], String> {
+pub fn mth_of_hex_hashes(algo: HashAlgo, hashes: &[String]) -> Result<[u8; 32], String> {
     let mut leaves = Vec::with_capacity(hashes.len());
     for hash in hashes {
         leaves.push(hex::decode(hash).map_err(|e| format!("invalid hex hash `{hash}`: {e}"))?);
     }
-    Ok(mth(&leaves))
+    Ok(mth(algo, &leaves))
 }
 
 fn decode_hex_leaves(hashes: &[String]) -> Result<Vec<Vec<u8>>, String> {
@@ -120,9 +115,9 @@ fn decode_hex_leaves(hashes: &[String]) -> Result<Vec<Vec<u8>>, String> {
 /// leaf's *input data*, not a pre-hashed value (same convention as [`mth`]).
 ///
 /// Combined with [`verify_inclusion_proof`] and the root this tree
-/// produces (`mth(leaves)`), this is everything a remote verifier needs —
+/// produces (`mth(algo, leaves)`), this is everything a remote verifier needs —
 /// it never has to see `leaves` itself.
-pub fn inclusion_proof<T: AsRef<[u8]>>(
+pub fn inclusion_proof<T: AsRef<[u8]>>(algo: HashAlgo, 
     leaf_index: usize,
     leaves: &[T],
 ) -> Result<Vec<[u8; 32]>, String> {
@@ -132,22 +127,22 @@ pub fn inclusion_proof<T: AsRef<[u8]>>(
             "leaf_index {leaf_index} out of range for tree size {n}"
         ));
     }
-    Ok(path(leaf_index, leaves))
+    Ok(path(algo, leaf_index, leaves))
 }
 
-fn path<T: AsRef<[u8]>>(m: usize, d: &[T]) -> Vec<[u8; 32]> {
+fn path<T: AsRef<[u8]>>(algo: HashAlgo, m: usize, d: &[T]) -> Vec<[u8; 32]> {
     let n = d.len();
     if n <= 1 {
         return Vec::new();
     }
     let k = split_point(n);
     if m < k {
-        let mut proof = path(m, &d[..k]);
-        proof.push(mth(&d[k..]));
+        let mut proof = path(algo, m, &d[..k]);
+        proof.push(mth(algo, &d[k..]));
         proof
     } else {
-        let mut proof = path(m - k, &d[k..]);
-        proof.push(mth(&d[..k]));
+        let mut proof = path(algo, m - k, &d[k..]);
+        proof.push(mth(algo, &d[..k]));
         proof
     }
 }
@@ -155,30 +150,29 @@ fn path<T: AsRef<[u8]>>(m: usize, d: &[T]) -> Vec<[u8; 32]> {
 /// [`inclusion_proof`] over hex-encoded `entry_hash` values, matching
 /// [`mth_of_hex_hashes`]'s decoding convention — what `server`'s
 /// `GET /ledger/proof/inclusion` actually calls.
-pub fn inclusion_proof_of_hex_hashes(
-    leaf_index: usize,
+pub fn inclusion_proof_of_hex_hashes(algo: HashAlgo, leaf_index: usize,
     hashes: &[String],
 ) -> Result<Vec<[u8; 32]>, String> {
     let leaves = decode_hex_leaves(hashes)?;
-    inclusion_proof(leaf_index, &leaves)
+    inclusion_proof(algo, leaf_index, &leaves)
 }
 
 /// Reconstructs a Merkle root from a leaf hash, its index, the claimed tree
 /// size, and an audit path — the direct inverse of [`path`]. `None` means
 /// the proof is malformed (wrong length for the claimed shape); the caller
 /// still must compare the returned hash against the expected root.
-fn verify_path(m: usize, n: usize, leaf: [u8; 32], proof: &[[u8; 32]]) -> Option<[u8; 32]> {
+fn verify_path(algo: HashAlgo, m: usize, n: usize, leaf: [u8; 32], proof: &[[u8; 32]]) -> Option<[u8; 32]> {
     if n <= 1 {
         return if proof.is_empty() { Some(leaf) } else { None };
     }
     let k = split_point(n);
     let (last, rest) = proof.split_last()?;
     if m < k {
-        let left = verify_path(m, k, leaf, rest)?;
-        Some(node_hash(&left, last))
+        let left = verify_path(algo, m, k, leaf, rest)?;
+        Some(node_hash(algo, &left, last))
     } else {
-        let right = verify_path(m - k, n - k, leaf, rest)?;
-        Some(node_hash(last, &right))
+        let right = verify_path(algo, m - k, n - k, leaf, rest)?;
+        Some(node_hash(algo, last, &right))
     }
 }
 
@@ -189,8 +183,7 @@ fn verify_path(m: usize, n: usize, leaf: [u8; 32], proof: &[[u8; 32]]) -> Option
 /// [`crate::postgres`] invariant that a wrong proof must never leave the
 /// process) runs, needing nothing but the leaf data, the claimed
 /// coordinates, the proof, and the root — never the rest of the tree.
-pub fn verify_inclusion_proof(
-    leaf_data: &[u8],
+pub fn verify_inclusion_proof(algo: HashAlgo, leaf_data: &[u8],
     leaf_index: usize,
     tree_size: usize,
     proof: &[[u8; 32]],
@@ -199,7 +192,7 @@ pub fn verify_inclusion_proof(
     if leaf_index >= tree_size {
         return false;
     }
-    match verify_path(leaf_index, tree_size, leaf_hash(leaf_data), proof) {
+    match verify_path(algo, leaf_index, tree_size, leaf_hash(algo, leaf_data), proof) {
         Some(reconstructed) => &reconstructed == root,
         None => false,
     }
@@ -230,7 +223,7 @@ pub fn verify_inclusion_proof(
 /// empty proof — callers should special-case it rather than calling this
 /// (this function still accepts it, returning `Ok(vec![])`, for callers
 /// that don't want to special-case it themselves).
-pub fn consistency_proof<T: AsRef<[u8]>>(
+pub fn consistency_proof<T: AsRef<[u8]>>(algo: HashAlgo, 
     first: usize,
     leaves: &[T],
 ) -> Result<Vec<[u8; 32]>, String> {
@@ -244,26 +237,26 @@ pub fn consistency_proof<T: AsRef<[u8]>>(
     if first == n {
         return Ok(Vec::new());
     }
-    Ok(subproof(first, leaves, true))
+    Ok(subproof(algo, first, leaves, true))
 }
 
-fn subproof<T: AsRef<[u8]>>(m: usize, d: &[T], b: bool) -> Vec<[u8; 32]> {
+fn subproof<T: AsRef<[u8]>>(algo: HashAlgo, m: usize, d: &[T], b: bool) -> Vec<[u8; 32]> {
     let n = d.len();
     if m == n {
         if b {
             Vec::new()
         } else {
-            vec![mth(d)]
+            vec![mth(algo, d)]
         }
     } else {
         let k = split_point(n);
         if m <= k {
-            let mut proof = subproof(m, &d[..k], b);
-            proof.push(mth(&d[k..]));
+            let mut proof = subproof(algo, m, &d[..k], b);
+            proof.push(mth(algo, &d[k..]));
             proof
         } else {
-            let mut proof = subproof(m - k, &d[k..], false);
-            proof.push(mth(&d[..k]));
+            let mut proof = subproof(algo, m - k, &d[k..], false);
+            proof.push(mth(algo, &d[..k]));
             proof
         }
     }
@@ -271,12 +264,11 @@ fn subproof<T: AsRef<[u8]>>(m: usize, d: &[T], b: bool) -> Vec<[u8; 32]> {
 
 /// [`consistency_proof`] over hex-encoded `entry_hash` values — what
 /// `server`'s `GET /ledger/proof/consistency` actually calls.
-pub fn consistency_proof_of_hex_hashes(
-    first: usize,
+pub fn consistency_proof_of_hex_hashes(algo: HashAlgo, first: usize,
     hashes: &[String],
 ) -> Result<Vec<[u8; 32]>, String> {
     let leaves = decode_hex_leaves(hashes)?;
-    consistency_proof(first, &leaves)
+    consistency_proof(algo, first, &leaves)
 }
 
 /// Direct inverse of [`subproof`]: reconstructs `(MTH(D[0:m]), MTH(D[0:n]))`
@@ -285,8 +277,7 @@ pub fn consistency_proof_of_hex_hashes(
 /// equals the first tree needs no proof element of its own — the verifier
 /// already knows its hash *is* `old_root`, that's the whole point of the
 /// proof).
-fn verify_subproof(
-    m: usize,
+fn verify_subproof(algo: HashAlgo, m: usize,
     n: usize,
     proof: &[[u8; 32]],
     b: bool,
@@ -308,11 +299,11 @@ fn verify_subproof(
         let k = split_point(n);
         let (last, rest) = proof.split_last()?;
         if m <= k {
-            let (old_l, new_l) = verify_subproof(m, k, rest, b, old_root)?;
-            Some((old_l, node_hash(&new_l, last)))
+            let (old_l, new_l) = verify_subproof(algo, m, k, rest, b, old_root)?;
+            Some((old_l, node_hash(algo, &new_l, last)))
         } else {
-            let (old_r, new_r) = verify_subproof(m - k, n - k, rest, false, old_root)?;
-            Some((node_hash(last, &old_r), node_hash(last, &new_r)))
+            let (old_r, new_r) = verify_subproof(algo, m - k, n - k, rest, false, old_root)?;
+            Some((node_hash(algo, last, &old_r), node_hash(algo, last, &new_r)))
         }
     } else {
         None
@@ -323,8 +314,7 @@ fn verify_subproof(
 /// tree at `second` leaves (root `new_root`) is a strict append-only
 /// extension of the tree at `first` leaves (root `old_root`)? Needs nothing
 /// but the two claimed sizes, the two claimed roots, and the proof.
-pub fn verify_consistency_proof(
-    first: usize,
+pub fn verify_consistency_proof(algo: HashAlgo, first: usize,
     second: usize,
     proof: &[[u8; 32]],
     old_root: &[u8; 32],
@@ -338,13 +328,13 @@ pub fn verify_consistency_proof(
         // so don't require one, but a non-empty proof is not itself an
         // error to tolerate silently — there's simply nothing to check
         // against `old_root` (the empty tree has exactly one root value,
-        // `empty_root()`, which this function doesn't have an opinion on).
+        // `empty_root(algo)`, which this function doesn't have an opinion on).
         return true;
     }
     if first == second {
         return proof.is_empty() && old_root == new_root;
     }
-    match verify_subproof(first, second, proof, true, old_root) {
+    match verify_subproof(algo, first, second, proof, true, old_root) {
         Some((old_h, new_h)) => &old_h == old_root && &new_h == new_root,
         None => false,
     }
@@ -402,7 +392,7 @@ mod tests {
 
     #[test]
     fn empty_root_matches_sha256_of_empty_string() {
-        assert_eq!(empty_root().to_vec(), expected_roots()[0]);
+        assert_eq!(empty_root(HashAlgo::Sha256).to_vec(), expected_roots()[0]);
         assert_eq!(mth::<Vec<u8>>(&[]).to_vec(), expected_roots()[0]);
     }
 
@@ -414,7 +404,7 @@ mod tests {
         let leaves = leaf_inputs();
         let roots = expected_roots();
         for size in 1..=leaves.len() {
-            let got = mth(&leaves[..size]);
+            let got = mth(HashAlgo::Sha256, &leaves[..size]);
             assert_eq!(
                 got.to_vec(),
                 roots[size],
@@ -432,8 +422,8 @@ mod tests {
         let leaves = leaf_inputs();
         let roots = expected_roots();
         for size in 1..leaves.len() {
-            let smaller = mth(&leaves[..size]);
-            let larger = mth(&leaves[..=size]);
+            let smaller = mth(HashAlgo::Sha256, &leaves[..size]);
+            let larger = mth(HashAlgo::Sha256, &leaves[..=size]);
             assert_eq!(smaller.to_vec(), roots[size]);
             assert_eq!(larger.to_vec(), roots[size + 1]);
             assert_ne!(smaller, larger, "appending a leaf must change the root");
@@ -445,9 +435,9 @@ mod tests {
         let leaves = leaf_inputs();
         let hex_hashes: Vec<String> = leaves.iter().map(hex::encode).collect();
         for size in 1..=leaves.len() {
-            let via_bytes = mth(&leaves[..size]);
+            let via_bytes = mth(HashAlgo::Sha256, &leaves[..size]);
             let via_hex =
-                mth_of_hex_hashes(&hex_hashes[..size]).expect("valid hex should never fail");
+                mth_of_hex_hashes(HashAlgo::Sha256, &hex_hashes[..size]).expect("valid hex should never fail");
             assert_eq!(via_bytes, via_hex);
         }
     }
@@ -455,7 +445,7 @@ mod tests {
     #[test]
     fn mth_of_hex_hashes_rejects_invalid_hex() {
         let bad = vec!["not-hex".to_string()];
-        assert!(mth_of_hex_hashes(&bad).is_err());
+        assert!(mth_of_hex_hashes(HashAlgo::Sha256, &bad).is_err());
     }
 
     /// Tampering with any single leaf changes the root — the property
@@ -463,12 +453,12 @@ mod tests {
     #[test]
     fn tampering_with_any_leaf_changes_the_root() {
         let leaves = leaf_inputs();
-        let original = mth(&leaves);
+        let original = mth(HashAlgo::Sha256, &leaves);
 
         for i in 0..leaves.len() {
             let mut tampered = leaves.clone();
             tampered[i] = hd("ff");
-            let tampered_root = mth(&tampered);
+            let tampered_root = mth(HashAlgo::Sha256, &tampered);
             assert_ne!(
                 original, tampered_root,
                 "tampering with leaf {i} should change the root"
@@ -481,8 +471,8 @@ mod tests {
         // A leaf hash and a node hash over the same-looking bytes must never
         // collide — RFC 6962's whole point in prefixing them differently.
         let data = b"same bytes either way";
-        let as_leaf = leaf_hash(data);
-        let as_node = node_hash(
+        let as_leaf = leaf_hash(HashAlgo::Sha256, data);
+        let as_node = node_hash(HashAlgo::Sha256, 
             &Sha256::digest(&data[..16]).into(),
             &Sha256::digest(&data[16..]).into(),
         );
@@ -528,13 +518,13 @@ mod tests {
     /// by pairing up `layers[i]`, carrying an unpaired last node straight
     /// up unchanged (RFC 6962's tree is not padded to a power of two).
     fn naive_layers(leaves: &[Vec<u8>]) -> Vec<Vec<[u8; 32]>> {
-        let mut layers = vec![leaves.iter().map(|l| leaf_hash(l)).collect::<Vec<_>>()];
+        let mut layers = vec![leaves.iter().map(|l| leaf_hash(HashAlgo::Sha256, l)).collect::<Vec<_>>()];
         while layers.last().unwrap().len() > 1 {
             let prev = layers.last().unwrap();
             let mut next = Vec::with_capacity(prev.len().div_ceil(2));
             let mut i = 0;
             while i + 1 < prev.len() {
-                next.push(node_hash(&prev[i], &prev[i + 1]));
+                next.push(node_hash(HashAlgo::Sha256, &prev[i], &prev[i + 1]));
                 i += 2;
             }
             if i < prev.len() {
@@ -573,7 +563,7 @@ mod tests {
         for size in 1..=12usize {
             let leaves: Vec<Vec<u8>> = (0..size).map(|i| vec![i as u8, 0xAB]).collect();
             for index in 0..size {
-                let got = inclusion_proof(index, &leaves).unwrap();
+                let got = inclusion_proof(HashAlgo::Sha256, index, &leaves).unwrap();
                 let want = naive_inclusion_proof(index, &leaves);
                 assert_eq!(
                     got, want,
@@ -590,9 +580,9 @@ mod tests {
         for size in 1..=leaves.len() {
             let root: [u8; 32] = roots[size].clone().try_into().unwrap();
             for index in 0..size {
-                let proof = inclusion_proof(index, &leaves[..size]).unwrap();
+                let proof = inclusion_proof(HashAlgo::Sha256, index, &leaves[..size]).unwrap();
                 assert!(
-                    verify_inclusion_proof(&leaves[index], index, size, &proof, &root),
+                    verify_inclusion_proof(HashAlgo::Sha256, &leaves[index], index, size, &proof, &root),
                     "inclusion proof for size={size} index={index} failed to verify against the reference root"
                 );
             }
@@ -602,8 +592,8 @@ mod tests {
     #[test]
     fn inclusion_proof_rejects_out_of_range_index() {
         let leaves = leaf_inputs();
-        assert!(inclusion_proof(7, &leaves[..7]).is_err());
-        assert!(inclusion_proof(100, &leaves).is_err());
+        assert!(inclusion_proof(HashAlgo::Sha256, 7, &leaves[..7]).is_err());
+        assert!(inclusion_proof(HashAlgo::Sha256, 100, &leaves).is_err());
     }
 
     #[test]
@@ -613,10 +603,10 @@ mod tests {
         let size = 7;
         let root: [u8; 32] = roots[size].clone().try_into().unwrap();
         let index = 3;
-        let proof = inclusion_proof(index, &leaves[..size]).unwrap();
+        let proof = inclusion_proof(HashAlgo::Sha256, index, &leaves[..size]).unwrap();
 
         // Wrong leaf data.
-        assert!(!verify_inclusion_proof(
+        assert!(!verify_inclusion_proof(HashAlgo::Sha256, 
             b"wrong data",
             index,
             size,
@@ -624,7 +614,7 @@ mod tests {
             &root
         ));
         // Wrong index.
-        assert!(!verify_inclusion_proof(
+        assert!(!verify_inclusion_proof(HashAlgo::Sha256, 
             &leaves[index],
             index + 1,
             size,
@@ -638,7 +628,7 @@ mod tests {
         // wouldn't actually exercise this, since a size-8 recursion happens
         // to share this leaf's entire left-subtree structure with size 7.
         let root8: [u8; 32] = roots[size + 1].clone().try_into().unwrap();
-        assert!(!verify_inclusion_proof(
+        assert!(!verify_inclusion_proof(HashAlgo::Sha256, 
             &leaves[index],
             index,
             size + 1,
@@ -650,12 +640,12 @@ mod tests {
             let mut tampered = proof.clone();
             tampered[i] = [0xFFu8; 32];
             assert!(
-                !verify_inclusion_proof(&leaves[index], index, size, &tampered, &root),
+                !verify_inclusion_proof(HashAlgo::Sha256, &leaves[index], index, size, &tampered, &root),
                 "tampering with proof node {i} should fail verification"
             );
         }
         // Wrong root.
-        assert!(!verify_inclusion_proof(
+        assert!(!verify_inclusion_proof(HashAlgo::Sha256, 
             &leaves[index],
             index,
             size,
@@ -670,8 +660,8 @@ mod tests {
         let hex_hashes: Vec<String> = leaves.iter().map(hex::encode).collect();
         for size in 1..=leaves.len() {
             for index in 0..size {
-                let via_bytes = inclusion_proof(index, &leaves[..size]).unwrap();
-                let via_hex = inclusion_proof_of_hex_hashes(index, &hex_hashes[..size]).unwrap();
+                let via_bytes = inclusion_proof(HashAlgo::Sha256, index, &leaves[..size]).unwrap();
+                let via_hex = inclusion_proof_of_hex_hashes(HashAlgo::Sha256, index, &hex_hashes[..size]).unwrap();
                 assert_eq!(via_bytes, via_hex);
             }
         }
@@ -685,9 +675,9 @@ mod tests {
             for second in first..=leaves.len() {
                 let old_root: [u8; 32] = roots[first].clone().try_into().unwrap();
                 let new_root: [u8; 32] = roots[second].clone().try_into().unwrap();
-                let proof = consistency_proof(first, &leaves[..second]).unwrap();
+                let proof = consistency_proof(HashAlgo::Sha256, first, &leaves[..second]).unwrap();
                 assert!(
-                    verify_consistency_proof(first, second, &proof, &old_root, &new_root),
+                    verify_consistency_proof(HashAlgo::Sha256, first, second, &proof, &old_root, &new_root),
                     "consistency proof from {first} to {second} failed to verify against reference roots"
                 );
             }
@@ -698,10 +688,10 @@ mod tests {
     fn consistency_proof_trivial_cases() {
         let leaves = leaf_inputs();
         // first == 0: trivially consistent, empty proof.
-        let proof = consistency_proof(0, &leaves).unwrap();
+        let proof = consistency_proof(HashAlgo::Sha256, 0, &leaves).unwrap();
         assert!(proof.is_empty());
         let root: [u8; 32] = expected_roots()[leaves.len()].clone().try_into().unwrap();
-        assert!(verify_consistency_proof(
+        assert!(verify_consistency_proof(HashAlgo::Sha256, 
             0,
             leaves.len(),
             &proof,
@@ -711,17 +701,17 @@ mod tests {
 
         // first == second: also trivially empty, and the two roots must
         // actually match.
-        let proof = consistency_proof(5, &leaves[..5]).unwrap();
+        let proof = consistency_proof(HashAlgo::Sha256, 5, &leaves[..5]).unwrap();
         assert!(proof.is_empty());
         let root5: [u8; 32] = expected_roots()[5].clone().try_into().unwrap();
-        assert!(verify_consistency_proof(5, 5, &proof, &root5, &root5));
-        assert!(!verify_consistency_proof(5, 5, &proof, &root5, &root));
+        assert!(verify_consistency_proof(HashAlgo::Sha256, 5, 5, &proof, &root5, &root5));
+        assert!(!verify_consistency_proof(HashAlgo::Sha256, 5, 5, &proof, &root5, &root));
     }
 
     #[test]
     fn consistency_proof_rejects_first_greater_than_tree_size() {
         let leaves = leaf_inputs();
-        assert!(consistency_proof(6, &leaves[..5]).is_err());
+        assert!(consistency_proof(HashAlgo::Sha256, 6, &leaves[..5]).is_err());
     }
 
     #[test]
@@ -731,25 +721,25 @@ mod tests {
         let (first, second) = (3, 8);
         let old_root: [u8; 32] = roots[first].clone().try_into().unwrap();
         let new_root: [u8; 32] = roots[second].clone().try_into().unwrap();
-        let proof = consistency_proof(first, &leaves[..second]).unwrap();
+        let proof = consistency_proof(HashAlgo::Sha256, first, &leaves[..second]).unwrap();
         assert!(!proof.is_empty());
 
         for i in 0..proof.len() {
             let mut tampered = proof.clone();
             tampered[i] = [0xFFu8; 32];
             assert!(
-                !verify_consistency_proof(first, second, &tampered, &old_root, &new_root),
+                !verify_consistency_proof(HashAlgo::Sha256, first, second, &tampered, &old_root, &new_root),
                 "tampering with consistency proof node {i} should fail verification"
             );
         }
         // Wrong old root, wrong new root, swapped sizes.
-        assert!(!verify_consistency_proof(
+        assert!(!verify_consistency_proof(HashAlgo::Sha256, 
             first, second, &proof, &[0u8; 32], &new_root
         ));
-        assert!(!verify_consistency_proof(
+        assert!(!verify_consistency_proof(HashAlgo::Sha256, 
             first, second, &proof, &old_root, &[0u8; 32]
         ));
-        assert!(!verify_consistency_proof(
+        assert!(!verify_consistency_proof(HashAlgo::Sha256, 
             second, first, &proof, &new_root, &old_root
         ));
     }
@@ -760,9 +750,9 @@ mod tests {
         let hex_hashes: Vec<String> = leaves.iter().map(hex::encode).collect();
         for first in 1..=leaves.len() {
             for second in first..=leaves.len() {
-                let via_bytes = consistency_proof(first, &leaves[..second]).unwrap();
+                let via_bytes = consistency_proof(HashAlgo::Sha256, first, &leaves[..second]).unwrap();
                 let via_hex =
-                    consistency_proof_of_hex_hashes(first, &hex_hashes[..second]).unwrap();
+                    consistency_proof_of_hex_hashes(HashAlgo::Sha256, first, &hex_hashes[..second]).unwrap();
                 assert_eq!(via_bytes, via_hex);
             }
         }
