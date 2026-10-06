@@ -161,11 +161,13 @@ fn signed_tree_head_signing_matches_shared_vectors() {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
         let input = &vector["input"];
         let bytes = sth_signing_message(
-            input["treeSize"].as_i64().unwrap(),
+            tree_size(&input["treeSize"]),
             input["rootHashHex"].as_str().unwrap(),
             input["networkId"].as_str().unwrap(),
+            input["signingKeyId"].as_str().unwrap(),
             parse_offset(input, "createdAtUnixSeconds"),
-        );
+        )
+        .unwrap();
         assert_eq!(
             hex::encode(&bytes),
             vector["expected"]["signingBytesHex"].as_str().unwrap(),
@@ -176,6 +178,28 @@ fn signed_tree_head_signing_matches_shared_vectors() {
             &signing_key,
             &bytes,
             vector["expected"]["signatureHex"].as_str().unwrap(),
+        );
+    }
+}
+
+#[test]
+fn signed_tree_head_rejects_root_hashes_that_are_not_32_byte_lowercase_hex() {
+    let doc = load("signed-tree-head.json");
+    let rejected = doc["rejectedVectors"].as_array().unwrap();
+    assert!(!rejected.is_empty());
+    for vector in rejected {
+        let name = vector["name"].as_str().unwrap_or("<unnamed>");
+        let input = &vector["input"];
+        assert!(
+            sth_signing_message(
+                tree_size(&input["treeSize"]),
+                input["rootHashHex"].as_str().unwrap(),
+                input["networkId"].as_str().unwrap(),
+                input["signingKeyId"].as_str().unwrap(),
+                parse_offset(input, "createdAtUnixSeconds"),
+            )
+            .is_err(),
+            "[{name}] must not produce signing bytes"
         );
     }
 }
@@ -261,15 +285,19 @@ fn verifying_key_from_hex(hex_value: &str) -> VerifyingKey {
     VerifyingKey::from_bytes(&bytes).expect("valid Ed25519 verifying key")
 }
 
+fn tree_size(v: &Value) -> i64 {
+    match v {
+        Value::String(decimal) => decimal.parse().unwrap(),
+        number => number.as_i64().unwrap(),
+    }
+}
+
 fn sth_from_json(v: &Value, network_id: &str) -> SignedTreeHead {
     SignedTreeHead {
-        tree_size: match &v["treeSize"] {
-            Value::String(decimal) => decimal.parse().unwrap(),
-            number => number.as_i64().unwrap(),
-        },
+        tree_size: tree_size(&v["treeSize"]),
         root_hash: v["rootHashHex"].as_str().unwrap().to_string(),
         network_id: network_id.to_string(),
-        signing_key_id: "settlement-operator-1".to_string(),
+        signing_key_id: v["signingKeyId"].as_str().unwrap().to_string(),
         signature: v["signatureHex"].as_str().unwrap().to_string(),
         created_at: parse_offset(v, "createdAtUnixSeconds"),
     }
@@ -281,6 +309,8 @@ fn cosignature_from_json(v: &Value, sth: &SignedTreeHead) -> WitnessCosignature 
         root_hash: sth.root_hash.clone(),
         network_id: sth.network_id.clone(),
         author_created_at: sth.created_at,
+        author_key_id: sth.signing_key_id.clone(),
+        author_signature: sth.signature.clone(),
         witness_key_id: v["witnessKeyId"].as_str().unwrap().to_string(),
         observed_at: parse_offset(v, "observedAtUnixSeconds"),
         signature: v["signatureHex"].as_str().unwrap().to_string(),
@@ -558,7 +588,7 @@ fn witness_announce_matches_shared_vectors() {
         );
         if let Some(message_hex) = input.get("messageHex").and_then(|m| m.as_str()) {
             assert_eq!(
-                hex::encode(witness_announce_message(base_url, key_id, announced_at)),
+                hex::encode(witness_announce_message(base_url, key_id, announced_at).unwrap()),
                 message_hex,
                 "{name}: signed message bytes"
             );
