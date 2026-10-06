@@ -201,6 +201,7 @@ use utoipa::OpenApi;
         crate::topology_trace::trace,
     ),
     components(schemas(
+        crate::error::ChainPositionStaleBody,
         crate::topology::TopologyResponse,
         crate::topology::SelfView,
         crate::topology::ShardHead,

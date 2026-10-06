@@ -4633,8 +4633,18 @@
               }
             }
           },
+          "400": {
+            "description": "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"
+          },
           "409": {
-            "description": "IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head; the body carries head_seq and head_hash to sign against"
+            "description": "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against) or IDENTITY_CHAIN_FORKED (generic error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainPositionStaleBody"
+                }
+              }
+            }
           }
         }
       }
@@ -4713,8 +4723,18 @@
           "200": {
             "description": "Signing key revoked"
           },
+          "400": {
+            "description": "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"
+          },
           "409": {
-            "description": "LAST_SIGNING_KEY: the last active signing key cannot be revoked; IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head, the body carries head_seq and head_hash to sign against"
+            "description": "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against), IDENTITY_CHAIN_FORKED or LAST_SIGNING_KEY (generic error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainPositionStaleBody"
+                }
+              }
+            }
           }
         }
       }
@@ -6495,6 +6515,36 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ChainPositionStaleBody": {
+        "type": "object",
+        "description": "Body of a 409 `IDENTITY_CHAIN_POSITION_STALE`: the head a signer re-signs against\n(`head_seq` 0 and no `head_hash` for a chain with no events yet).",
+        "required": [
+          "error",
+          "code",
+          "head_seq"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Always `IDENTITY_CHAIN_POSITION_STALE`."
+          },
+          "error": {
+            "type": "string"
+          },
+          "head_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lowercase hex event hash of the chain head; null when the chain is empty."
+          },
+          "head_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

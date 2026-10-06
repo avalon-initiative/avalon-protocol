@@ -4,6 +4,8 @@
 //! `identity.signing_key_revoked`) are checked against the signature they carry and the identity's
 //! own key chain; the check does not depend on which shard delivered the event. Kinds that carry
 //! no proof are accepted only from an authoritative origin (see [`EventOrigin::is_authoritative`]).
+//! Residual: the inception `signing_key_added` id is not bound by any signature or checked against the
+//! creation ticket (not stored), so only home shards, core and the local shard may deliver it.
 //! Anything refused is returned as [`IndexError::Rejected`] before any table is touched.
 
 use avalon_protocol::ed25519_key::{parse_ed25519_public_key, verify_strict_signature};
@@ -231,7 +233,8 @@ async fn signer_key(
 /// Key events change what authenticates as the identity. The signatures cover key ids and chain
 /// position, but the chain hash also covers unsigned fields (timestamp, label), so a delivering
 /// shard could still fork the chain; only a shard the identity itself created on, the core shard
-/// or this node's own shard may deliver them.
+/// or this node's own shard may deliver them. Residual: the inception key's id is not signed or
+/// checked at projection, so a hostile home shard could deliver it under a fresh `signing_key_id`.
 async fn require_key_authority(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,

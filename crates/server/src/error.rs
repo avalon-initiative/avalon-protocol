@@ -3,6 +3,18 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+/// Body of a 409 `IDENTITY_CHAIN_POSITION_STALE`: the head a signer re-signs against
+/// (`head_seq` 0 and no `head_hash` for a chain with no events yet).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ChainPositionStaleBody {
+    pub error: String,
+    /// Always `IDENTITY_CHAIN_POSITION_STALE`.
+    pub code: String,
+    pub head_seq: u64,
+    /// Lowercase hex event hash of the chain head; null when the chain is empty.
+    pub head_hash: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("unauthorized")]
@@ -1079,8 +1091,12 @@ impl IntoResponse for AppError {
             head_hash,
         } = &self
         {
-            body["head_seq"] = json!(head_seq);
-            body["head_hash"] = json!(head_hash);
+            body = json!(ChainPositionStaleBody {
+                error: message.clone(),
+                code: self.code().to_string(),
+                head_seq: *head_seq,
+                head_hash: head_hash.clone(),
+            });
         }
         let mut response = (status, Json(body)).into_response();
         let retry_after_secs = match &self {

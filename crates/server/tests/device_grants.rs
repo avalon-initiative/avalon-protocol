@@ -738,3 +738,88 @@ async fn a_revocation_signed_at_a_stale_position_is_refused_with_the_head() {
     assert!(ok.status().is_success(), "{:?}", ok.status());
     let _ = a;
 }
+
+/// Splits two concurrent responses into the one success and the 409 stale-position body.
+async fn one_wins_one_stale(first: reqwest::Response, second: reqwest::Response) {
+    let mut stale = None;
+    let mut wins = 0;
+    for response in [first, second] {
+        if response.status().is_success() {
+            wins += 1;
+        } else {
+            assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+            stale = Some(response.json::<serde_json::Value>().await.unwrap());
+        }
+    }
+    assert_eq!(
+        wins, 1,
+        "exactly one concurrent event may take the position"
+    );
+    let body = stale.unwrap();
+    assert_eq!(body["code"], "IDENTITY_CHAIN_POSITION_STALE");
+    assert_eq!(body["head_seq"], 1);
+    assert_eq!(body["head_hash"].as_str().unwrap().len(), 64);
+}
+
+#[tokio::test]
+#[ignore]
+async fn two_concurrent_approvals_at_the_same_head_leave_one_and_a_stale_refusal() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (trusted_id, trusted) = seed_signing_key(&pool, identity_id).await;
+    let keys = [
+        SigningKey::generate(&mut rand::rng())
+            .verifying_key()
+            .to_bytes(),
+        SigningKey::generate(&mut rand::rng())
+            .verifying_key()
+            .to_bytes(),
+    ];
+    let grants = [
+        request_grant(&http, &token, &keys[0]).await,
+        request_grant(&http, &token, &keys[1]).await,
+    ];
+    let send = |i: usize| {
+        let body = approve_body_at(
+            grants[i],
+            identity_id,
+            (trusted_id, &trusted),
+            &keys[i],
+            1,
+            None,
+        );
+        auth(
+            http.post(format!("{base}/me/devices/grants/{}/approve", grants[i])),
+            &token,
+        )
+        .json(&body)
+        .send()
+    };
+    let (a, b) = tokio::join!(send(0), send(1));
+    one_wins_one_stale(a.unwrap(), b.unwrap()).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn two_concurrent_revocations_at_the_same_head_leave_one_and_a_stale_refusal() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (a_id, _a) = seed_signing_key(&pool, identity_id).await;
+    let (b_id, _b) = seed_signing_key(&pool, identity_id).await;
+    let (c_id, c) = seed_signing_key(&pool, identity_id).await;
+    let send = |target: Uuid| {
+        let body = revoke_body_at(identity_id, target, c_id, &c, 1, None);
+        auth(
+            http.post(format!("{base}/me/devices/{target}/revoke")),
+            &token,
+        )
+        .json(&body)
+        .send()
+    };
+    let (first, second) = tokio::join!(send(a_id), send(b_id));
+    one_wins_one_stale(first.unwrap(), second.unwrap()).await;
+}

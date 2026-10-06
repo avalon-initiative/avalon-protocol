@@ -327,7 +327,8 @@ pub struct DeviceResponse {
     request_body = ApproveDeviceGrantRequest,
     responses(
         (status = 200, description = "The resulting device", body = DeviceResponse),
-        (status = 409, description = "IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head; the body carries head_seq and head_hash to sign against"),
+        (status = 400, description = "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"),
+        (status = 409, description = "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against) or IDENTITY_CHAIN_FORKED (generic error body)", body = crate::error::ChainPositionStaleBody),
     ),
 )]
 pub async fn approve_device_grant(
@@ -573,7 +574,8 @@ async fn lock_active_signing_keys(
     request_body = RevokeDeviceRequest,
     responses(
         (status = 200, description = "Signing key revoked"),
-        (status = 409, description = "LAST_SIGNING_KEY: the last active signing key cannot be revoked; IDENTITY_CHAIN_POSITION_STALE: the signed position is not the chain head, the body carries head_seq and head_hash to sign against"),
+        (status = 400, description = "INVALID_CHAIN_POSITION: prev_hash is not 64 lowercase hex characters"),
+        (status = 409, description = "IDENTITY_CHAIN_POSITION_STALE (typed body: head_seq and head_hash to sign against), IDENTITY_CHAIN_FORKED or LAST_SIGNING_KEY (generic error body)", body = crate::error::ChainPositionStaleBody),
     ),
 )]
 pub async fn revoke_device(
