@@ -78,8 +78,8 @@ fn event(
     }
 }
 
-fn created(who: &TestIdentity, shard: &str, name: &str) -> ProtocolEvent {
-    let payload = who.created_payload_for(TEST_NETWORK_ID, shard, Uuid::new_v4(), name);
+fn created(who: &TestIdentity, name: &str) -> ProtocolEvent {
+    let payload = who.created_payload_for(TEST_NETWORK_ID, Uuid::new_v4(), name);
     event(
         who,
         "identity.created",
@@ -134,6 +134,7 @@ fn grant(
     let grant_id = key_id;
     let (seq, prev) = next_position(after);
     let bytes = device_grant_approval_signing_bytes(
+        TEST_NETWORK_ID,
         grant_id,
         &who.id,
         approver_key_id,
@@ -167,8 +168,14 @@ fn revoke(
     after: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
     let (seq, prev) = next_position(after);
-    let bytes =
-        signing_key_revoked_signing_bytes(&who.id, key_id, signer_key_id, seq, prev.as_ref());
+    let bytes = signing_key_revoked_signing_bytes(
+        TEST_NETWORK_ID,
+        &who.id,
+        key_id,
+        signer_key_id,
+        seq,
+        prev.as_ref(),
+    );
     let event = event(
         who,
         "identity.signing_key_revoked",
@@ -227,7 +234,7 @@ async fn profile_name(pool: &PgPool, who: &TestIdentity) -> Option<String> {
 
 /// Creates `who` (valid, on the home shard) and its inception key; returns the inception key id.
 async fn register(pool: &PgPool, who: &TestIdentity) -> Uuid {
-    apply(pool, &created(who, HOME, &unique_name("reg")), &game())
+    apply(pool, &created(who, &unique_name("reg")), &game())
         .await
         .unwrap();
     let key_id = Uuid::new_v4();
@@ -248,25 +255,25 @@ async fn a_forged_or_misbound_creation_leaves_nothing_behind() {
     let pool = pool().await;
     let (victim, attacker) = (TestIdentity::new(), TestIdentity::new());
 
-    let mut forged = created(&victim, TEST_SHARD_ID, &unique_name("forged"));
-    forged.payload["signature"] =
-        created(&attacker, TEST_SHARD_ID, "x").payload["signature"].clone();
+    let mut forged = created(&victim, &unique_name("forged"));
+    forged.payload["signature"] = created(&attacker, "x").payload["signature"].clone();
     assert!(matches!(
         apply(&pool, &forged, &core()).await,
         Err(IndexError::Rejected(_))
     ));
     nothing_left(&pool, &victim, &forged).await;
 
-    // Signed for shard `core`, delivered as if from a game shard.
-    let replayed = created(&victim, TEST_SHARD_ID, &unique_name("replayed"));
+    // Signed for this network, delivered as if from another network.
+    let replayed = created(&victim, &unique_name("replayed"));
+    let foreign = EventOrigin::mirrored("another-network", TEST_SHARD_ID);
     assert!(matches!(
-        apply(&pool, &replayed, &game()).await,
+        apply(&pool, &replayed, &foreign).await,
         Err(IndexError::Rejected(_))
     ));
     nothing_left(&pool, &victim, &replayed).await;
 
-    // The same creation, signed for the shard it comes from, projects from any shard.
-    let honest = created(&victim, "game:slug/1", &unique_name("honest"));
+    // The same creation projects from any shard of its network.
+    let honest = created(&victim, &unique_name("honest"));
     apply(&pool, &honest, &game()).await.unwrap();
     assert!(profile_name(&pool, &victim).await.is_some());
 }
@@ -277,10 +284,10 @@ async fn a_second_creation_never_changes_an_existing_profile() {
     let pool = pool().await;
     let who = TestIdentity::new();
     let name = unique_name("first");
-    let first = created(&who, TEST_SHARD_ID, &name);
+    let first = created(&who, &name);
     apply(&pool, &first, &core()).await.unwrap();
 
-    let renamed = created(&who, TEST_SHARD_ID, &unique_name("second"));
+    let renamed = created(&who, &unique_name("second"));
     assert!(matches!(
         apply(&pool, &renamed, &core()).await,
         Err(IndexError::Rejected(_))
@@ -288,9 +295,7 @@ async fn a_second_creation_never_changes_an_existing_profile() {
     assert_eq!(profile_name(&pool, &who).await, Some(name.clone()));
 
     // A re-creation naming the same name changes nothing.
-    apply(&pool, &created(&who, TEST_SHARD_ID, &name), &core())
-        .await
-        .unwrap();
+    apply(&pool, &created(&who, &name), &core()).await.unwrap();
     assert_eq!(profile_name(&pool, &who).await, Some(name));
 }
 
@@ -566,12 +571,8 @@ async fn a_contested_name_stays_with_its_first_holder_and_the_newcomer_is_suffix
     let pool = pool().await;
     let (x, y) = (TestIdentity::new(), TestIdentity::new());
     let name = unique_name("contested");
-    apply(&pool, &created(&x, HOME, &name), &game())
-        .await
-        .unwrap();
-    apply(&pool, &created(&y, "core", &name), &core())
-        .await
-        .unwrap();
+    apply(&pool, &created(&x, &name), &game()).await.unwrap();
+    apply(&pool, &created(&y, &name), &core()).await.unwrap();
     assert_eq!(profile_name(&pool, &x).await, Some(name.clone()));
     let suffixed = profile_name(&pool, &y).await.unwrap();
     assert_eq!(suffixed, format!("{name}~{}", &y.id.to_string()[..12]));
@@ -584,7 +585,7 @@ async fn a_mirrored_creation_never_displaces_a_local_holder_whatever_its_id() {
     let local_holder = TestIdentity::new();
     let name = unique_name("local-holder");
     let local = EventOrigin::local(TEST_NETWORK_ID, TEST_SHARD_ID);
-    apply(&pool, &created(&local_holder, TEST_SHARD_ID, &name), &local)
+    apply(&pool, &created(&local_holder, &name), &local)
         .await
         .unwrap();
     // An identity with a smaller id than the holder's (ids are cheap to grind).
@@ -592,7 +593,7 @@ async fn a_mirrored_creation_never_displaces_a_local_holder_whatever_its_id() {
     while grinder.id >= local_holder.id {
         grinder = TestIdentity::new();
     }
-    apply(&pool, &created(&grinder, HOME, &name), &game())
+    apply(&pool, &created(&grinder, &name), &game())
         .await
         .unwrap();
     assert_eq!(profile_name(&pool, &local_holder).await, Some(name.clone()));
@@ -609,15 +610,15 @@ async fn a_taken_suffixed_name_moves_on_to_a_longer_prefix() {
         TestIdentity::new(),
     );
     let name = unique_name("suffix");
-    apply(&pool, &created(&holder, HOME, &name), &game())
+    apply(&pool, &created(&holder, &name), &game())
         .await
         .unwrap();
     // Someone claims exactly the name the newcomer would be given.
     let taken = format!("{name}~{}", &newcomer.id.to_string()[..12]);
-    apply(&pool, &created(&squatter, HOME, &taken), &game())
+    apply(&pool, &created(&squatter, &taken), &game())
         .await
         .unwrap();
-    apply(&pool, &created(&newcomer, HOME, &name), &game())
+    apply(&pool, &created(&newcomer, &name), &game())
         .await
         .unwrap();
     assert_eq!(
@@ -632,10 +633,10 @@ async fn a_local_name_clash_is_refused_and_leaves_no_identity_row() {
     let pool = pool().await;
     let (holder, newcomer) = (TestIdentity::new(), TestIdentity::new());
     let name = unique_name("local");
-    apply(&pool, &created(&holder, TEST_SHARD_ID, &name), &core())
+    apply(&pool, &created(&holder, &name), &core())
         .await
         .unwrap();
-    let clash = created(&newcomer, TEST_SHARD_ID, &name);
+    let clash = created(&newcomer, &name);
     let local = EventOrigin::local(TEST_NETWORK_ID, TEST_SHARD_ID);
     assert!(matches!(
         apply(&pool, &clash, &local).await,
@@ -789,14 +790,10 @@ async fn the_home_shard_is_recorded_from_the_verified_creation_only() {
     let pool = pool().await;
     let (victim, other) = (TestIdentity::new(), TestIdentity::new());
     let inception_id = register(&pool, &victim).await;
-    // A creation signed for the evil shard by another identity makes that shard no home of the victim.
-    apply(
-        &pool,
-        &created(&other, "game:evil/1", &unique_name("o")),
-        &evil(),
-    )
-    .await
-    .unwrap();
+    // A creation of another identity delivered by the evil shard makes that shard no home of the victim.
+    apply(&pool, &created(&other, &unique_name("o")), &evil())
+        .await
+        .unwrap();
     let device = TestIdentity::new();
     let from_evil = grant(
         &victim,
@@ -808,8 +805,8 @@ async fn the_home_shard_is_recorded_from_the_verified_creation_only() {
     );
     assert!(apply(&pool, &from_evil, &evil()).await.is_err());
     // A forged creation of the victim on the evil shard records nothing either.
-    let mut forged = created(&victim, "game:evil/1", &unique_name("f"));
-    forged.payload["signature"] = created(&other, "game:evil/1", "x").payload["signature"].clone();
+    let mut forged = created(&victim, &unique_name("f"));
+    forged.payload["signature"] = created(&other, "x").payload["signature"].clone();
     assert!(apply(&pool, &forged, &evil()).await.is_err());
     assert!(apply(&pool, &from_evil, &evil()).await.is_err());
 }
@@ -823,13 +820,9 @@ async fn a_grant_or_revocation_ahead_of_its_signing_key_is_deferred_then_applies
         TestIdentity::new(),
         TestIdentity::new(),
     );
-    apply(
-        &pool,
-        &created(&victim, HOME, &unique_name("late")),
-        &game(),
-    )
-    .await
-    .unwrap();
+    apply(&pool, &created(&victim, &unique_name("late")), &game())
+        .await
+        .unwrap();
     // The approving key arrives later (another shard's ordering).
     let approver_key = Uuid::new_v4();
     let device_key = Uuid::new_v4();
@@ -888,13 +881,9 @@ async fn a_child_event_for_an_unknown_identity_is_deferred_not_refused() {
     );
     let err = apply(&pool, &passkey, &core()).await.unwrap_err();
     assert!(err.is_deferred() && !err.is_transient(), "{err:?}");
-    apply(
-        &pool,
-        &created(&ghost, TEST_SHARD_ID, &unique_name("g")),
-        &core(),
-    )
-    .await
-    .unwrap();
+    apply(&pool, &created(&ghost, &unique_name("g")), &core())
+        .await
+        .unwrap();
     apply(&pool, &passkey, &core()).await.unwrap();
 }
 
@@ -1008,7 +997,7 @@ async fn pre_claiming_every_candidate_name_cannot_keep_an_identity_out() {
     let pool = pool().await;
     let (holder, newcomer) = (TestIdentity::new(), TestIdentity::new());
     let name = unique_name("squat");
-    apply(&pool, &created(&holder, HOME, &name), &game())
+    apply(&pool, &created(&holder, &name), &game())
         .await
         .unwrap();
     // Every name the newcomer could be given, claimed ahead of its creation.
@@ -1023,15 +1012,11 @@ async fn pre_claiming_every_candidate_name_cannot_keep_an_identity_out() {
         );
     }
     for candidate in &taken {
-        apply(
-            &pool,
-            &created(&TestIdentity::new(), HOME, candidate),
-            &game(),
-        )
-        .await
-        .unwrap();
+        apply(&pool, &created(&TestIdentity::new(), candidate), &game())
+            .await
+            .unwrap();
     }
-    apply(&pool, &created(&newcomer, HOME, &name), &game())
+    apply(&pool, &created(&newcomer, &name), &game())
         .await
         .unwrap();
     assert_eq!(

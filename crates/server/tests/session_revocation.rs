@@ -16,6 +16,10 @@ use uuid::Uuid;
 
 type Identity = avalon_protocol::ids::IdentityId;
 
+fn network_id() -> String {
+    std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
+}
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -181,7 +185,6 @@ async fn create_identity_with_one_passkey(
         .unwrap();
     let signing_bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
         start["network_id"].as_str().unwrap(),
-        start["shard_id"].as_str().unwrap(),
         ticket_id.parse().unwrap(),
         &identity_id,
         &signing_key.verifying_key().to_bytes(),
@@ -468,6 +471,7 @@ async fn revoking_a_signing_key_ends_the_sessions_it_approved_and_no_others() {
     .await;
 
     let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+        &network_id(),
         &identity_id,
         stolen_key,
         keep_key,
@@ -796,6 +800,7 @@ async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
     .await;
 
     let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+        &network_id(),
         &identity_id,
         stolen_key,
         keep_key,

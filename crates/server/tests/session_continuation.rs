@@ -23,6 +23,10 @@ use uuid::Uuid;
 
 use avalon_protocol::continuation::{signing_bytes, ContinuationToken, DEFAULT_TTL_SECONDS};
 
+fn network_id() -> String {
+    std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
+}
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -91,7 +95,6 @@ async fn create_identity_and_log_in(
 
     let signing_bytes_for_creation = avalon_protocol::identity_id::identity_created_signing_bytes(
         start["network_id"].as_str().unwrap(),
-        start["shard_id"].as_str().unwrap(),
         ticket_id.parse().unwrap(),
         &identity_id,
         &signing_key.verifying_key().to_bytes(),
@@ -391,6 +394,7 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
         .unwrap();
     let grant_id: uuid::Uuid = grant["id"].as_str().unwrap().parse().unwrap();
     let approval = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+        &network_id(),
         grant_id,
         &identity_id,
         signing_key_id,
@@ -417,6 +421,7 @@ async fn a_continuation_token_signed_by_a_revoked_key_is_rejected() {
 
     let revoke_at = |seq: u64, prev: Option<[u8; 32]>| {
         let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+            &network_id(),
             &identity_id,
             signing_key_id,
             signing_key_id,

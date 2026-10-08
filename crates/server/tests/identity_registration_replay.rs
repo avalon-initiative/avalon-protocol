@@ -25,7 +25,6 @@ fn rp_origin() -> url::Url {
 struct Started {
     ticket_id: Uuid,
     network_id: String,
-    shard_id: String,
     challenge: Value,
 }
 
@@ -48,17 +47,15 @@ async fn start(http: &reqwest::Client, key: &SigningKey, display_name: &str) -> 
     Started {
         ticket_id: response["ticket_id"].as_str().unwrap().parse().unwrap(),
         network_id: response["network_id"].as_str().unwrap().to_string(),
-        shard_id: response["shard_id"].as_str().unwrap().to_string(),
         challenge: response["challenge"].clone(),
     }
 }
 
-fn sign(key: &SigningKey, network_id: &str, shard_id: &str, ticket_id: Uuid, name: &str) -> String {
+fn sign(key: &SigningKey, network_id: &str, ticket_id: Uuid, name: &str) -> String {
     let public_key = key.verifying_key().to_bytes();
     let id = avalon_protocol::identity_id::derive_identity_id(&public_key);
     let bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
         network_id,
-        shard_id,
         ticket_id,
         &id,
         &public_key,
@@ -112,13 +109,7 @@ async fn a_signature_from_another_ticket_does_not_complete_a_registration() {
 
     // The victim's own, honestly signed ceremony (its signature is public once it reaches a ledger).
     let victim = start(&http, &key, &name).await;
-    let copied = sign(
-        &key,
-        &victim.network_id,
-        &victim.shard_id,
-        victim.ticket_id,
-        &name,
-    );
+    let copied = sign(&key, &victim.network_id, victim.ticket_id, &name);
 
     // An attacker starts their own ceremony for the same id and key, with their own passkey.
     let attacker = start(&http, &key, &name).await;
@@ -143,25 +134,13 @@ async fn a_signature_for_another_network_is_refused_and_the_right_one_passes() {
 
     let wrong_network = start(&http, &key, &name).await;
     let passkey_a = passkey(&wrong_network).await;
-    let bad = sign(
-        &key,
-        "some-other-network",
-        &wrong_network.shard_id,
-        wrong_network.ticket_id,
-        &name,
-    );
+    let bad = sign(&key, "some-other-network", wrong_network.ticket_id, &name);
     let refused = finish(&http, &wrong_network, &passkey_a, &bad).await;
     assert_eq!(refused.status().as_u16(), 401);
 
     let honest = start(&http, &key, &name).await;
     let passkey_b = passkey(&honest).await;
-    let good = sign(
-        &key,
-        &honest.network_id,
-        &honest.shard_id,
-        honest.ticket_id,
-        &name,
-    );
+    let good = sign(&key, &honest.network_id, honest.ticket_id, &name);
     let accepted = finish(&http, &honest, &passkey_b, &good).await;
     assert!(accepted.status().is_success(), "{:?}", accepted.status());
 
@@ -185,7 +164,6 @@ async fn a_bad_signature_and_a_signature_by_another_key_are_refused() {
     let by_other_key = sign(
         &SigningKey::generate(&mut rand::rng()),
         &started.network_id,
-        &started.shard_id,
         started.ticket_id,
         &name,
     );
@@ -193,13 +171,7 @@ async fn a_bad_signature_and_a_signature_by_another_key_are_refused() {
     assert_eq!(refused.status().as_u16(), 401);
 
     // The ceremony row is consumed by the failed attempt, so even the right signature now fails.
-    let good = sign(
-        &key,
-        &started.network_id,
-        &started.shard_id,
-        started.ticket_id,
-        &name,
-    );
+    let good = sign(&key, &started.network_id, started.ticket_id, &name);
     let after = finish(&http, &started, &credential, &good).await;
     assert_eq!(after.status().as_u16(), 400);
     let body: Value = after.json().await.unwrap();
@@ -208,25 +180,5 @@ async fn a_bad_signature_and_a_signature_by_another_key_are_refused() {
     let garbage = start(&http, &key, &name).await;
     let credential = passkey(&garbage).await;
     let refused = finish(&http, &garbage, &credential, "not base64!!").await;
-    assert_eq!(refused.status().as_u16(), 401);
-}
-
-#[tokio::test]
-#[ignore]
-async fn a_signature_for_another_shard_is_refused() {
-    let http = reqwest::Client::new();
-    let key = SigningKey::generate(&mut rand::rng());
-    let id = avalon_protocol::identity_id::derive_identity_id(&key.verifying_key().to_bytes());
-    let name = format!("shard-{id}");
-    let started = start(&http, &key, &name).await;
-    let credential = passkey(&started).await;
-    let other_shard = sign(
-        &key,
-        &started.network_id,
-        "game:other/1",
-        started.ticket_id,
-        &name,
-    );
-    let refused = finish(&http, &started, &credential, &other_shard).await;
     assert_eq!(refused.status().as_u16(), 401);
 }

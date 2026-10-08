@@ -71,7 +71,6 @@ def created_bytes(i):
     return (
         header("avalon.identity.created")
         + st(i["networkId"])
-        + st(i["shardId"])
         + uid(i["ticketId"])
         + identity_id_of(pubkey(SIGNER_SEED))
         + env.key(pubkey(SIGNER_SEED))
@@ -83,6 +82,7 @@ def created_bytes(i):
 def grant_bytes(i):
     return (
         header("avalon.device_grant.approved")
+        + st(i["networkId"])
         + uid(i["grantId"])
         + bytes.fromhex(i["identityId"])
         + uid(i["approverSigningKeyId"])
@@ -95,6 +95,7 @@ def grant_bytes(i):
 def revoked_bytes(i):
     return (
         header("avalon.identity.signing_key_revoked")
+        + st(i["networkId"])
         + bytes.fromhex(i["identityId"])
         + uid(i["signingKeyId"])
         + uid(i["revokedBySigningKeyId"])
@@ -107,7 +108,7 @@ def legacy_created(i):
     pk = pubkey(SIGNER_SEED).hex()
     return (
         f"avalon:identity.created:v2:{len(i['networkId'].encode())}:{i['networkId']}:"
-        f"{len(i['shardId'].encode())}:{i['shardId']}:{i['ticketId']}:"
+        f"{len('core'.encode())}:core:{i['ticketId']}:"
         f"{identity_id_of(pubkey(SIGNER_SEED)).hex()}:{pk}:{i['displayName']}"
     )
 
@@ -205,6 +206,7 @@ REASON = (
 IDENTITY = identity_id_of(pubkey(SIGNER_SEED)).hex()
 DEVICE_KEY = pubkey(DEVICE_SEED).hex()
 SECOND_KEY = pubkey(SECOND_SEED).hex()
+NETWORK = "avalon-dev-local"
 KEY_A = "3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f"
 KEY_B = "a1b2c3d4-e5f6-4789-8abc-def012345678"
 HEAD = hashlib.sha256(b"identity chain head").hexdigest()
@@ -214,43 +216,42 @@ OTHER_HEAD = hashlib.sha256(b"another head").hexdigest()
 def write_created():
     t = "0b7a2c1e-5d4f-4a3b-9c8d-1e2f3a4b5c6d"
 
-    def inp(net, shard, ticket, name):
-        return {"networkId": net, "shardId": shard, "ticketId": ticket, "displayName": name}
+    def inp(net, ticket, name):
+        return {"networkId": net, "ticketId": ticket, "displayName": name}
 
-    base = inp("avalon-dev-local", "core", t, "Alice")
+    base = inp("avalon-dev-local", t, "Alice")
     vectors = [
-        vector('display name "Alice" on avalon-dev-local/core', base, created_bytes),
-        vector('display name "a:b:c" on avalon-dev-local/core', inp("avalon-dev-local", "core", t, "a:b:c"), created_bytes),
+        vector('display name "Alice" on avalon-dev-local', base, created_bytes),
+        vector('display name "a:b:c" on avalon-dev-local', inp("avalon-dev-local", t, "a:b:c"), created_bytes),
         vector(
             "multi-byte display name with a trailing colon",
-            inp("avalon-int-1", "game:wow-demo/3", "6f1d0c9a-2b3e-4c5d-8e7f-0a1b2c3d4e5f", "Zoë 日本語 🎮 :end"),
+            inp("avalon-int-1", "6f1d0c9a-2b3e-4c5d-8e7f-0a1b2c3d4e5f", "Zoë 日本語 🎮 :end"),
             created_bytes,
         ),
         vector(
-            "multi-byte UTF-8 network and shard ids use byte lengths (11 and 13)",
-            inp("avalon-é-1", "game:wow-é/3", "3c1f5a7e-9b2d-4e6f-8a0b-1c2d3e4f5a6b", "Alice"),
+            "a multi-byte UTF-8 network id uses its byte length (11)",
+            inp("avalon-é-1", "3c1f5a7e-9b2d-4e6f-8a0b-1c2d3e4f5a6b", "Alice"),
             created_bytes,
         ),
-        vector("empty display name", inp("avalon-dev-local", "core", t, ""), created_bytes),
-        vector("NUL in the display name", inp("avalon-dev-local", "core", t, "a\u0000b"), created_bytes),
+        vector("empty display name", inp("avalon-dev-local", t, ""), created_bytes),
+        vector("NUL in the display name", inp("avalon-dev-local", t, "a\u0000b"), created_bytes),
     ]
     t2 = "11111111-1111-4111-8111-111111111111"
     replays = [
         replay("signature for ticket A is not valid for ticket B", base, dict(base, ticketId=t2), created_bytes),
         replay("signature for network A is not valid for network B", base, dict(base, networkId="avalon-int-1"), created_bytes),
-        replay("signature for shard A is not valid for shard B", base, dict(base, shardId="game:other/1"), created_bytes),
-        replay("a ':' moved across the network and shard boundary", inp("avalon-dev-local", "core", t, "Alice"), inp("avalon-dev-local:core", "", t, "Alice"), created_bytes),
-        replay("bytes moved from the shard into the display name", inp("net", "ab", t, "c"), inp("net", "a", t, "bc"), created_bytes),
-        replay("bytes moved from the network into the shard", inp("ab", "c", t, "n"), inp("a", "bc", t, "n"), created_bytes),
+        replay("bytes moved from the network into the display name", inp("ab", t, "n"), inp("a", t, "bn"), created_bytes),
+        replay("a ':' moved across the network and display name boundary", inp("a", t, "b:n"), inp("a:b", t, "n"), created_bytes),
     ]
     legacy_vectors = [legacy("the old text layout does not verify", base, legacy_created)]
     doc = header_fields(
         "identity.created signing bytes (avalon_protocol::identity_id::identity_created_signing_bytes): "
-        "tag avalon.identity.created, layout version 1, fields network_id (str), shard_id (str), ticket_id "
+        "tag avalon.identity.created, layout version 1, fields network_id (str), ticket_id "
         "(uuid), identity_id (32 raw bytes), inception public key (algorithm byte + 32 raw bytes), display_name (str). "
         "The ticket is the server-issued register/start ticket and is also the id of the inception "
-        "signing key; network_id and shard_id bind the ledger stream, so a copied signature does not "
-        "verify for another ticket, network or shard (replayVectors). The event is unchained, so it "
+        "signing key; network_id binds the network, so a copied signature does not "
+        "verify for another ticket or network (replayVectors). The shard id is not signed: it is "
+        "best-effort metadata on the record. The event is unchained, so it "
         "signs no chain position. " + STRUCTURED +
         " legacyLayoutVectors carry a signature over the retired colon-delimited text layout; it must not verify.",
         GEN,
@@ -261,6 +262,7 @@ def write_created():
 
 def write_grant():
     base = {
+        "networkId": NETWORK,
         "grantId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
         "identityId": IDENTITY,
         "approverSigningKeyId": KEY_A,
@@ -276,6 +278,7 @@ def write_grant():
         vector("an all-zero prev_hash is not the same as no prev_hash", dict(base, prevHashHex="00" * 32), grant_bytes),
     ]
     replays = [
+        replay("signed for another network", mid, dict(mid, networkId="avalon-int-1"), grant_bytes),
         replay("signed under another approver key id", mid, dict(mid, approverSigningKeyId=KEY_B), grant_bytes),
         replay("signed at another seq", mid, dict(mid, seq="5"), grant_bytes),
         replay("signed on another chain head", mid, dict(mid, prevHashHex=OTHER_HEAD), grant_bytes),
@@ -287,7 +290,7 @@ def write_grant():
     legacy_vectors = [legacy("the old text layout does not verify", base, legacy_grant)]
     doc = header_fields(
         "Device grant approval signing bytes (avalon_protocol::identity_id::device_grant_approval_signing_bytes): "
-        "tag avalon.device_grant.approved, layout version 1, fields grant_id (uuid), identity_id (32 raw bytes), "
+        "tag avalon.device_grant.approved, layout version 1, fields network_id (str), grant_id (uuid), identity_id (32 raw bytes), "
         "approver_signing_key_id (uuid), requested device public key (algorithm byte + 32 raw bytes), seq (u64), hash algorithm byte, prev_hash "
         "(flag byte, then 32 bytes when present). The approver signs the chain position the approval will "
         "occupy: seq is the identity chain head seq plus one and prev_hash the head event hash, absent for "
@@ -308,6 +311,7 @@ def write_grant():
 
 def write_revoked():
     base = {
+        "networkId": NETWORK,
         "identityId": IDENTITY,
         "signingKeyId": KEY_A,
         "revokedBySigningKeyId": KEY_B,
@@ -323,6 +327,7 @@ def write_revoked():
         vector("no prev_hash", dict(base, seq="1", prevHashHex=None), revoked_bytes),
     ]
     replays = [
+        replay("signed for another network", base, dict(base, networkId="avalon-int-1"), revoked_bytes),
         replay("signed for another revoked key id", base, dict(base, signingKeyId="3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e60"), revoked_bytes),
         replay("signed under another revoker key id", base, dict(base, revokedBySigningKeyId="a1b2c3d4-e5f6-4789-8abc-def012345679"), revoked_bytes),
         replay("signed at another seq", base, dict(base, seq="3"), revoked_bytes),
@@ -333,7 +338,7 @@ def write_revoked():
     legacy_vectors = [legacy("the old text layout does not verify", base, legacy_revoked)]
     doc = header_fields(
         "Signing-key revocation signing bytes (avalon_protocol::identity_id::signing_key_revoked_signing_bytes): "
-        "tag avalon.identity.signing_key_revoked, layout version 1, fields identity_id (32 raw bytes), "
+        "tag avalon.identity.signing_key_revoked, layout version 1, fields network_id (str), identity_id (32 raw bytes), "
         "signing_key_id (uuid, the revoked key), revoked_by_signing_key_id (uuid), seq (u64), hash algorithm byte, prev_hash "
         "(flag byte, then 32 bytes when present). seq is the identity chain head seq plus one and prev_hash "
         "the head event hash, absent for the first chained event. " + STRUCTURED +

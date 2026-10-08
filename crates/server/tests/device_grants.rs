@@ -17,6 +17,10 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+fn network_id() -> String {
+    std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
+}
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -112,6 +116,7 @@ fn approve_body_at(
     prev_hash: Option<&str>,
 ) -> serde_json::Value {
     let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+        &network_id(),
         grant_id,
         &identity_id,
         approver.0,
@@ -137,6 +142,7 @@ fn revoke_body_at(
     prev_hash: Option<&str>,
 ) -> serde_json::Value {
     let bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+        &network_id(),
         &identity_id,
         target_key_id,
         revoker_key_id,

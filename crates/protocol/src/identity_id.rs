@@ -301,19 +301,18 @@ impl TestIdentity {
         self.signing_key.verifying_key().to_bytes()
     }
 
-    /// A correctly self-signed `identity.created` v2 payload for [`TEST_NETWORK_ID`], [`TEST_SHARD_ID`] and a fresh ticket.
+    /// A correctly self-signed `identity.created` v2 payload for [`TEST_NETWORK_ID`] and a fresh ticket.
     pub fn created_payload(
         &self,
         display_name: &str,
     ) -> crate::event_payloads::IdentityCreatedPayload {
-        self.created_payload_for(TEST_NETWORK_ID, TEST_SHARD_ID, Uuid::new_v4(), display_name)
+        self.created_payload_for(TEST_NETWORK_ID, Uuid::new_v4(), display_name)
     }
 
-    /// A correctly self-signed `identity.created` v2 payload bound to a network, shard and ticket.
+    /// A correctly self-signed `identity.created` v2 payload bound to a network and ticket.
     pub fn created_payload_for(
         &self,
         network_id: &str,
-        shard_id: &str,
         ticket_id: Uuid,
         display_name: &str,
     ) -> crate::event_payloads::IdentityCreatedPayload {
@@ -321,7 +320,6 @@ impl TestIdentity {
         use ed25519_dalek::Signer as _;
         let bytes = identity_created_signing_bytes(
             network_id,
-            shard_id,
             ticket_id,
             &self.id,
             &self.public_key(),
@@ -346,13 +344,13 @@ impl Default for TestIdentity {
 }
 
 /// Bytes signed for `identity.created`: tag `avalon.identity.created`, layout version 1 (header and extensions as in `signing_bytes`), then
-/// `network_id` str, `shard_id` str, `ticket_id` uuid, `identity_id` 32 raw bytes, inception
-/// `public_key` 32 raw bytes, `display_name` str. The ticket binds one registration ceremony and
-/// the network and shard one ledger stream. The ticket id is also the id of the inception signing
-/// key, and the event is unchained, so no key id or position is signed separately.
+/// `network_id` str, `ticket_id` uuid, `identity_id` 32 raw bytes, inception `public_key` 32 raw
+/// bytes, `display_name` str. The ticket binds one registration ceremony and the network one
+/// ledger. The shard is not signed: it is best-effort metadata on the record. The ticket id is
+/// also the id of the inception signing key, and the event is unchained, so no key id or position
+/// is signed separately.
 pub fn identity_created_signing_bytes(
     network_id: &str,
-    shard_id: &str,
     ticket_id: Uuid,
     identity_id: &IdentityId,
     public_key: &[u8; 32],
@@ -360,7 +358,6 @@ pub fn identity_created_signing_bytes(
 ) -> Vec<u8> {
     Builder::new(tags::IDENTITY_CREATED, 1)
         .str(network_id)
-        .str(shard_id)
         .uuid(ticket_id)
         .fixed(identity_id.as_bytes())
         .key(public_key)
@@ -380,10 +377,11 @@ fn with_position(builder: Builder, seq: u64, prev_hash: Option<&[u8; 32]>) -> Bu
 }
 
 /// Bytes the approving device signs for a grant: tag `avalon.device_grant.approved`, layout version 1,
-/// then `grant_id` uuid, `identity_id` 32 raw bytes, `approver_signing_key_id` uuid, the requested
+/// then `network_id` str, `grant_id` uuid, `identity_id` 32 raw bytes, `approver_signing_key_id` uuid, the requested
 /// `public_key` 32 raw bytes, the chain position `seq` u64, `hash_algo` u8 and `prev_hash` (u8 flag 0, or 1 then
 /// 32 raw bytes). The grant id is also the id of the key the grant creates.
 pub fn device_grant_approval_signing_bytes(
+    network_id: &str,
     grant_id: Uuid,
     identity_id: &IdentityId,
     approver_signing_key_id: Uuid,
@@ -392,6 +390,7 @@ pub fn device_grant_approval_signing_bytes(
     prev_hash: Option<&[u8; 32]>,
 ) -> Vec<u8> {
     let builder = Builder::new(tags::DEVICE_GRANT_APPROVED, 1)
+        .str(network_id)
         .uuid(grant_id)
         .fixed(identity_id.as_bytes())
         .uuid(approver_signing_key_id)
@@ -402,9 +401,10 @@ pub fn device_grant_approval_signing_bytes(
 }
 
 /// Bytes a signing-key revocation signs: tag `avalon.identity.signing_key_revoked`, layout version 1,
-/// then `identity_id` 32 raw bytes, `signing_key_id` uuid, `revoked_by_signing_key_id` uuid, and
+/// then `network_id` str, `identity_id` 32 raw bytes, `signing_key_id` uuid, `revoked_by_signing_key_id` uuid, and
 /// the chain position `seq` u64, `hash_algo` u8 and `prev_hash` encoded as for a device grant.
 pub fn signing_key_revoked_signing_bytes(
+    network_id: &str,
     identity_id: &IdentityId,
     signing_key_id: Uuid,
     revoked_by_signing_key_id: Uuid,
@@ -412,6 +412,7 @@ pub fn signing_key_revoked_signing_bytes(
     prev_hash: Option<&[u8; 32]>,
 ) -> Vec<u8> {
     let builder = Builder::new(tags::IDENTITY_SIGNING_KEY_REVOKED, 1)
+        .str(network_id)
         .fixed(identity_id.as_bytes())
         .uuid(signing_key_id)
         .uuid(revoked_by_signing_key_id);
@@ -598,30 +599,28 @@ mod tests {
     }
 
     #[test]
-    fn network_and_shard_boundaries_are_unambiguous() {
+    fn network_and_name_boundaries_are_unambiguous() {
         let (key, id) = test_identity(7);
         let pk = key.verifying_key().to_bytes();
         let t = Uuid::nil();
-        let a = identity_created_signing_bytes("a:b", "c", t, &id, &pk, "n");
-        let b = identity_created_signing_bytes("a", "b:c", t, &id, &pk, "n");
-        let c = identity_created_signing_bytes("a", "b", t, &id, &pk, "c:n");
-        let d = identity_created_signing_bytes("a", "bc", t, &id, &pk, ":n");
-        let e = identity_created_signing_bytes("ab", "c", t, &id, &pk, ":n");
-        for (x, y) in [(&a, &b), (&a, &c), (&b, &c), (&d, &e)] {
+        let a = identity_created_signing_bytes("a:b", t, &id, &pk, "n");
+        let b = identity_created_signing_bytes("a", t, &id, &pk, "b:n");
+        let c = identity_created_signing_bytes("ab", t, &id, &pk, ":n");
+        let d = identity_created_signing_bytes("a", t, &id, &pk, "b:n");
+        for (x, y) in [(&a, &b), (&a, &c), (&b, &c)] {
             assert_ne!(x, y);
         }
+        assert_eq!(b, d);
     }
 
     #[test]
     fn identity_created_has_the_documented_layout() {
         let (key, id) = test_identity(7);
         let pk = key.verifying_key().to_bytes();
-        let bytes = identity_created_signing_bytes("net", "game:x/1", Uuid::nil(), &id, &pk, "a:b");
+        let bytes = identity_created_signing_bytes("net", Uuid::nil(), &id, &pk, "a:b");
         let mut expected = b"avalon.identity.created".to_vec();
         expected.extend_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0, 0, 3]);
         expected.extend_from_slice(b"net");
-        expected.extend_from_slice(&[0, 0, 0, 8]);
-        expected.extend_from_slice(b"game:x/1");
         expected.extend_from_slice(&[0; 16]);
         expected.extend_from_slice(id.as_bytes());
         expected.push(1);
@@ -639,9 +638,13 @@ mod tests {
         let (g, a, b) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
         let head = [9u8; 32];
         let grant = |approver, seq, prev: Option<&[u8; 32]>| {
-            device_grant_approval_signing_bytes(g, &id, approver, &pk, seq, prev)
+            device_grant_approval_signing_bytes("net", g, &id, approver, &pk, seq, prev)
         };
         let base = grant(a, 2, Some(&head));
+        assert_ne!(
+            base,
+            device_grant_approval_signing_bytes("other", g, &id, a, &pk, 2, Some(&head))
+        );
         assert_ne!(base, grant(b, 2, Some(&head)));
         assert_ne!(base, grant(a, 3, Some(&head)));
         assert_ne!(base, grant(a, 2, Some(&[8u8; 32])));
@@ -650,9 +653,13 @@ mod tests {
         assert!(base.starts_with(b"avalon.device_grant.approved\x00\x01\x00\x00\x00\x01"));
 
         let revoked = |signing, by, seq, prev: Option<&[u8; 32]>| {
-            signing_key_revoked_signing_bytes(&id, signing, by, seq, prev)
+            signing_key_revoked_signing_bytes("net", &id, signing, by, seq, prev)
         };
         let base = revoked(a, b, 2, Some(&head));
+        assert_ne!(
+            base,
+            signing_key_revoked_signing_bytes("other", &id, a, b, 2, Some(&head))
+        );
         assert_ne!(base, revoked(b, a, 2, Some(&head)));
         assert_ne!(base, revoked(a, b, 3, Some(&head)));
         assert_ne!(base, revoked(a, b, 2, None));

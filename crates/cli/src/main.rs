@@ -515,32 +515,21 @@ async fn rebuild_index() {
         .await
         .expect("failed to read genesis")
         .unwrap_or_else(|| "(no genesis set)".to_string());
-    let configured_shard = std::env::var("AVALON_OWN_SHARD_ID").ok();
-    let own_shard_id = configured_shard
-        .clone()
-        .unwrap_or_else(|| "core".to_string());
+    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
     let chain = PostgresSettlementProvider::new_core_shard(pool.clone(), network_id)
         .with_shard_id(&own_shard_id);
 
     let ledger = avalon_server::rebuild::load_ledger_events(&chain)
         .await
         .expect("failed to read the ledger");
-    // Before anything is truncated: creations that do not verify for this shard would be
-    // refused, silently losing the node's own history.
-    let unverifiable = avalon_server::rebuild::unverifiable_creations(
-        &ledger.events,
-        chain.network_id(),
-        &own_shard_id,
-    );
+    // Before anything is truncated: creations signed for another network would be refused,
+    // silently losing the node's own history.
+    let unverifiable =
+        avalon_server::rebuild::unverifiable_creations(&ledger.events, chain.network_id());
     if unverifiable > 0 {
-        let source = if configured_shard.is_some() {
-            "AVALON_OWN_SHARD_ID"
-        } else {
-            "AVALON_OWN_SHARD_ID is unset, so `core`"
-        };
         eprintln!(
-            "error: {unverifiable} identity creations in the ledger were not made on `{own_shard_id}` \
-             ({source}). Set AVALON_OWN_SHARD_ID to this node's shard and run again; nothing was changed."
+            "error: {unverifiable} identity creations in the ledger were not signed for network `{}`; nothing was changed.",
+            chain.network_id()
         );
         std::process::exit(1);
     }
