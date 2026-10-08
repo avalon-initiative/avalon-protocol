@@ -14,6 +14,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros, revoke_bytes};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -154,25 +157,6 @@ async fn auth_headers(
     headers
 }
 
-fn attestation_signing_bytes(
-    claim_kind: &str,
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
-}
-
-fn revocation_signing_bytes(
-    claim_kind: &str,
-    issuer_ref: &str,
-    attestation_id: Uuid,
-    reason_code: &str,
-) -> Vec<u8> {
-    format!("avalon:{claim_kind}.revoked:v1:{issuer_ref}:{attestation_id}:{reason_code}")
-        .into_bytes()
-}
-
 /// Full setup shared by every test below: register an integrator, define an
 /// achievement, connect + grant, issue it. Returns the integrator and the new
 /// attestation's id.
@@ -218,8 +202,15 @@ async fn issue_one(
         .unwrap();
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(http, base, &integrator).await;
@@ -236,6 +227,7 @@ async fn issue_one(
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -270,8 +262,14 @@ async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
     assert_eq!(before["history"].as_array().unwrap().len(), 1);
 
     let reason_code = "cheating_detected";
-    let signing_bytes =
-        revocation_signing_bytes("achievement", &issuer_ref, attestation_id, reason_code);
+    let signing_bytes = revoke_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id,
+        attestation_id,
+        reason_code,
+        "User used unauthorized tooling",
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let headers = auth_headers(&http, &base, &integrator).await;
@@ -324,8 +322,14 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
         let signing_key_bytes = integrator.signing_key.to_bytes();
         async move {
             let signing_key = SigningKey::from_bytes(&signing_key_bytes);
-            let signing_bytes =
-                revocation_signing_bytes("achievement", &issuer_ref, attestation_id, reason_code);
+            let signing_bytes = revoke_bytes(
+                "achievement",
+                &issuer_ref,
+                &key_id,
+                attestation_id,
+                reason_code,
+                "test",
+            );
             let signature = signing_key.sign(&signing_bytes);
             let challenge: serde_json::Value = http
                 .post(format!(

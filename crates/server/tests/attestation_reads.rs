@@ -22,6 +22,9 @@ use reqwest::header::HeaderMap;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -96,15 +99,6 @@ async fn auth_headers(
         BASE64.encode(signature.to_bytes()).parse().unwrap(),
     );
     headers
-}
-
-fn attestation_signing_bytes(
-    claim_kind: &str,
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
 async fn seed_identity_session(pool: &sqlx::PgPool) -> (avalon_protocol::ids::IdentityId, String) {
@@ -211,8 +205,15 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .unwrap();
 
     let issuer_ref = format!("game:{}", integrator_c.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator_c.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator_c.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(&http, &base, &integrator_c).await;
@@ -229,6 +230,7 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .json(&serde_json::json!({
             "key_id": integrator_c.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
