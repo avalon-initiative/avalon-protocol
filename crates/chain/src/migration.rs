@@ -1,14 +1,11 @@
 //! Tooling for a deliberate
-//! `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset. Since
-//! attestation/event signatures deliberately never bind `network_id`
-//! (`crates/protocol/src/achievements.rs`'s `attestation_signing_bytes`),
-//! nothing about a signature needs to change across a migration — this
-//! module only has to carry forward the two things that *are*
-//! network-scoped: the outgoing network's final ledger checkpoint (so the
+//! `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset. Attestation
+//! signatures bind `network_id` (#1416 supersedes #476's network-agnostic note), so
+//! attestations do not carry over: issuers re-issue on the new network. This module
+//! carries forward the two things that *are* network-scoped: the outgoing network's final ledger checkpoint (so the
 //! new network's history is auditable as a continuation, not "started from
 //! nothing") and its issuer admission registry (`issuer_network_registrations`),
-//! so no issuer — including ones no longer reachable — has to
-//! re-register, let alone re-sign anything.
+//! so no issuer — including ones no longer reachable — has to re-register.
 //!
 //! This is deliberately a rare, operator-run migration (`avalon
 //! migrate-network` in `crates/cli`), not a routine sync mechanism —
@@ -184,9 +181,8 @@ pub async fn migrate_network(
 }
 
 /// Bulk-carries every issuer registration from `source_pool` onto
-/// `target_pool` — no re-registration, no re-signing (#476's decision that
-/// signatures stay network-agnostic; admission is the only network-scoped
-/// concept). `ON CONFLICT DO NOTHING` on `issuer_pubkey` (its primary key
+/// `target_pool` — no re-registration (attestations are not carried over: their
+/// signatures bind the network). `ON CONFLICT DO NOTHING` on `issuer_pubkey` (its primary key
 /// in `issuer_network_registrations`) makes repeated calls safe.
 async fn carry_over_issuer_registrations(
     source_pool: &PgPool,

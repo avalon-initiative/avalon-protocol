@@ -1008,9 +1008,13 @@ async fn issue_attestation(
         },
     };
     let signing_key = resolve_issuing_key(&issuer_keys, body.key_id, issued_at, now)?;
-    let Authenticity::Authentic { .. } =
-        verify_authenticity(&candidate, claim_kind, &issuer_str, &issuer_keys)
-    else {
+    let Authenticity::Authentic { .. } = verify_authenticity(
+        &candidate,
+        state.chain.network_id(),
+        claim_kind,
+        &issuer_str,
+        &issuer_keys,
+    ) else {
         return Err(AppError::InvalidAttestationSignature);
     };
 
@@ -1302,6 +1306,7 @@ async fn bulk_issue_attestation(
     let issued_at = signed_issued_at(body.issued_at_micros, now)?;
 
     let signer = AttestationSigner {
+        network_id: state.chain.network_id(),
         claim_kind,
         issuer_ref: &issuer_str,
         signing_key_id: body.key_id,

@@ -2,8 +2,8 @@
 #![allow(dead_code)]
 
 use avalon_protocol::achievements::{
-    attestation_signing_bytes, bulk_attestation_signing_bytes, revocation_signing_bytes,
-    AttestationSigner,
+    attestation_signing_bytes, bulk_attestation_signing_bytes, reason_hash,
+    revocation_signing_bytes, AttestationSigner,
 };
 use avalon_protocol::ids::{AttestationId, IdentityId};
 use uuid::Uuid;
@@ -13,8 +13,19 @@ pub fn now_micros() -> i64 {
     avalon_protocol::achievements::issued_at_micros(time::OffsetDateTime::now_utc())
 }
 
-fn signer<'a>(claim_kind: &'a str, issuer_ref: &'a str, key_id: &str) -> AttestationSigner<'a> {
+/// The network the live node signs for: the node's own, as the other live tests assume.
+pub fn network_id() -> String {
+    std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
+}
+
+fn signer<'a>(
+    network_id: &'a str,
+    claim_kind: &'a str,
+    issuer_ref: &'a str,
+    key_id: &str,
+) -> AttestationSigner<'a> {
     AttestationSigner {
+        network_id,
         claim_kind,
         issuer_ref,
         signing_key_id: key_id.parse::<Uuid>().expect("key id is a uuid"),
@@ -29,7 +40,8 @@ pub fn issue_bytes(
     achievement: &str,
     issued_at: i64,
 ) -> Vec<u8> {
-    let signer = signer(claim_kind, issuer_ref, key_id);
+    let network = network_id();
+    let signer = signer(&network, claim_kind, issuer_ref, key_id);
     attestation_signing_bytes(&signer, subject, achievement, issued_at)
 }
 
@@ -41,7 +53,8 @@ pub fn bulk_bytes(
     achievements: &[String],
     issued_at: i64,
 ) -> Vec<u8> {
-    let signer = signer(claim_kind, issuer_ref, key_id);
+    let network = network_id();
+    let signer = signer(&network, claim_kind, issuer_ref, key_id);
     bulk_attestation_signing_bytes(&signer, subject, achievements, issued_at)
 }
 
@@ -53,6 +66,12 @@ pub fn revoke_bytes(
     reason_code: &str,
     reason: &str,
 ) -> Vec<u8> {
-    let signer = signer(claim_kind, issuer_ref, key_id);
-    revocation_signing_bytes(&signer, AttestationId(attestation_id), reason_code, reason)
+    let network = network_id();
+    let signer = signer(&network, claim_kind, issuer_ref, key_id);
+    revocation_signing_bytes(
+        &signer,
+        AttestationId(attestation_id),
+        reason_code,
+        &reason_hash(reason),
+    )
 }

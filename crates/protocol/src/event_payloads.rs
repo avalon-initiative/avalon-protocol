@@ -744,6 +744,10 @@ pub struct ClaimRevokedPayload {
     /// is not a breaking change to the event's stored shape.
     pub reason_code: crate::revocation::RevocationReasonCode,
     pub reason: String,
+    /// Lowercase hex SHA-256 of `reason`; the signature covers this hash, not the text.
+    pub reason_hash: String,
+    /// The issuer key's signature over `revocation_signing_bytes`, so a mirror can verify the revocation.
+    pub proof: ClaimProofPayload,
 }
 
 // --- integrator.recognition_* -----------------------------------------------
@@ -1936,6 +1940,18 @@ mod tests {
     }
 
     #[test]
+    fn a_revocation_without_a_proof_does_not_decode() {
+        let json = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "attestation_id": "00000000-0000-0000-0000-000000000000",
+            "issuer": "game:ashen-realms",
+            "reason_code": "cheating",
+            "reason": "r",
+        });
+        assert!(serde_json::from_value::<ClaimRevokedPayload>(json).is_err());
+    }
+
+    #[test]
     fn claim_revoked_round_trips() {
         // Issue #534: exercised with a pre-#534 free-text reason_code
         // ("cheating_detected" — real historical ledger entries recorded
@@ -1951,6 +1967,8 @@ mod tests {
                 "cheating_detected".to_string(),
             ),
             reason: "unauthorized tooling".to_string(),
+            reason_hash: "ab".repeat(32),
+            proof: sample_proof(),
         };
         let json = serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000000",
@@ -1958,6 +1976,12 @@ mod tests {
             "issuer": "game:ashen-realms",
             "reason_code": "cheating_detected",
             "reason": "unauthorized tooling",
+            "reason_hash": "ab".repeat(32),
+            "proof": {
+                "key_id": "00000000-0000-0000-0000-000000000000",
+                "algorithm": "ed25519",
+                "bytes": "base64sig",
+            },
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
