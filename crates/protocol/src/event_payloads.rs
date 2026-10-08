@@ -694,6 +694,8 @@ pub struct ClaimIssuedPayload {
     pub issuer: String,
     pub subject: IdentityId,
     pub achievement: String,
+    /// The `issued_at` the issuer signed (unix microseconds), so a reader can rebuild the signed bytes.
+    pub issued_at_micros: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<serde_json::Value>,
     pub proof: ClaimProofPayload,
@@ -708,6 +710,7 @@ impl ClaimIssuedPayload {
         issuer: String,
         subject: IdentityId,
         achievement: String,
+        issued_at_micros: i64,
         evidence: Option<serde_json::Value>,
         proof: ClaimProofPayload,
     ) -> Result<Self, EvidenceTooLarge> {
@@ -723,6 +726,7 @@ impl ClaimIssuedPayload {
             issuer,
             subject,
             achievement,
+            issued_at_micros,
             evidence,
             proof,
         })
@@ -1840,6 +1844,7 @@ mod tests {
             issuer: "game:ashen-realms".to_string(),
             subject: test_id(),
             achievement: "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            issued_at_micros: 1_700_000_000_000_000,
             evidence: None,
             proof: ClaimProofPayload {
                 key_id: Uuid::nil(),
@@ -1852,6 +1857,7 @@ mod tests {
             "issuer": "game:ashen-realms",
             "subject": test_id().to_string(),
             "achievement": "game:ashen-realms:achievement:dragon_slayer",
+            "issued_at_micros": 1_700_000_000_000_000_i64,
             "proof": {
                 "key_id": "00000000-0000-0000-0000-000000000000",
                 "algorithm": "ed25519",
@@ -1891,6 +1897,7 @@ mod tests {
             "game:ashen-realms".to_string(),
             test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            0,
             Some(evidence_of_size(MAX_EVIDENCE_BYTES + 1)),
             sample_proof(),
         )
@@ -1906,6 +1913,7 @@ mod tests {
             "game:ashen-realms".to_string(),
             test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            0,
             Some(evidence_of_size(MAX_EVIDENCE_BYTES)),
             sample_proof(),
         )
@@ -1920,6 +1928,7 @@ mod tests {
             "game:ashen-realms".to_string(),
             test_id(),
             "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            0,
             None,
             sample_proof(),
         )

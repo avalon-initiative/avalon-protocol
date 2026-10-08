@@ -18,6 +18,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros, revoke_bytes};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -158,19 +161,6 @@ async fn auth_headers(
     headers
 }
 
-fn attestation_signing_bytes(
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:achievement.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
-}
-
-fn revocation_signing_bytes(issuer_ref: &str, attestation_id: Uuid, reason_code: &str) -> Vec<u8> {
-    format!("avalon:achievement.revoked:v1:{issuer_ref}:{attestation_id}:{reason_code}")
-        .into_bytes()
-}
-
 /// Registers an integrator, seeds a subject identity/session, defines and
 /// issues one achievement, and connects the integrator to the subject —
 /// everything `revoke_with_reason` and `GET /me/achievements` need.
@@ -226,7 +216,15 @@ async fn issue_one(
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = attestation_signing_bytes(&issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id,
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(http, base, &integrator).await;
@@ -243,6 +241,7 @@ async fn issue_one(
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -265,7 +264,15 @@ async fn revoke_with_reason(
     reason_code: &str,
 ) {
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = revocation_signing_bytes(&issuer_ref, attestation_id, reason_code);
+    let reason = format!("test revocation ({reason_code})");
+    let signing_bytes = revoke_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id,
+        attestation_id,
+        reason_code,
+        &reason,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let headers = auth_headers(http, base, integrator).await;
@@ -276,7 +283,7 @@ async fn revoke_with_reason(
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
             "reason_code": reason_code,
-            "reason": format!("test revocation ({reason_code})"),
+            "reason": reason,
         }))
         .send()
         .await

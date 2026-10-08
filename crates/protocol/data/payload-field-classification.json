@@ -1359,6 +1359,10 @@
           "class": "pseudonymous_identifier",
           "disposition": "none"
         },
+        "issued_at_micros": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
         "evidence": {
           "class": "personal_data",
           "disposition": "inline_redactable",

@@ -45,12 +45,15 @@ pub fn decode(event: &ProtocolEvent) -> Option<AttestationWrite> {
             let issuer = event.payload.get("issuer")?.as_str()?.to_string();
             let subject = super::identity_field(&event.payload, "subject")?;
             let achievement = event.payload.get("achievement")?.as_str()?.to_string();
+            let micros = event.payload.get("issued_at_micros")?.as_i64()?;
+            let issued_at =
+                OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1000).ok()?;
             Some(AttestationWrite::Issue {
                 id,
                 issuer,
                 subject,
                 achievement,
-                issued_at: event.timestamp,
+                issued_at,
             })
         }
         "achievement.revoked" => {
@@ -266,6 +269,7 @@ mod tests {
                 "issuer": "game:ashen-realms",
                 "subject": subject,
                 "achievement": "game:ashen-realms:achievement:dragon_slayer",
+                "issued_at_micros": 1_700_000_000_123_456_i64,
             }),
         );
         let write = decode(&source_event).unwrap();
@@ -276,9 +280,24 @@ mod tests {
                 issuer: "game:ashen-realms".to_string(),
                 subject,
                 achievement: "game:ashen-realms:achievement:dragon_slayer".to_string(),
-                issued_at: source_event.timestamp,
+                issued_at: OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_123_456_000)
+                    .unwrap(),
             }
         );
+    }
+
+    #[test]
+    fn an_issued_event_without_the_signed_issued_at_is_not_decoded() {
+        let source_event = event(
+            "achievement.issued",
+            serde_json::json!({
+                "id": Uuid::new_v4(),
+                "issuer": "game:ashen-realms",
+                "subject": IdentityId::random_for_tests(),
+                "achievement": "game:ashen-realms:achievement:dragon_slayer",
+            }),
+        );
+        assert_eq!(decode(&source_event), None);
     }
 
     #[test]
@@ -331,6 +350,7 @@ mod tests {
                     "issuer": issuer,
                     "subject": subject,
                     "achievement": "game:ashen-realms:achievement:dragon_slayer",
+                    "issued_at_micros": 1_700_000_000_000_000_i64,
                 }),
             )
         };
@@ -384,6 +404,7 @@ mod tests {
                 "issuer": issuer,
                 "subject": subject,
                 "achievement": "game:ashen-realms:achievement:dragon_slayer",
+                "issued_at_micros": 1_700_000_000_000_000_i64,
             }),
         );
         let mut revoke_event = event(
@@ -421,6 +442,7 @@ mod tests {
                 "issuer": issuer,
                 "subject": subject,
                 "achievement": "game:ashen-realms:achievement:dragon_slayer",
+                "issued_at_micros": 1_700_000_000_000_000_i64,
             }),
         )];
 

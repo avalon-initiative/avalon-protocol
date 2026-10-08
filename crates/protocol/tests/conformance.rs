@@ -96,26 +96,21 @@ fn assert_signature_matches(name: &str, key: &SigningKey, bytes: &[u8], expected
 
 #[test]
 fn attestation_signing_matches_shared_vectors() {
-    let doc = load("attestation-signing.json");
-    let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
-    assert_eq!(
-        hex::encode(signing_key.verifying_key().as_bytes()),
-        doc["signingPublicKeyHex"].as_str().unwrap(),
-        "the shared test keypair's derived public key must match the vector file"
-    );
+    use avalon_protocol::achievements::AttestationSigner;
 
-    for vector in doc["vectors"].as_array().unwrap() {
-        let name = vector["name"].as_str().unwrap_or("<unnamed>");
-        let input = &vector["input"];
-        let claim_kind = input["claimKind"].as_str().unwrap();
-        let issuer_ref = input["issuerRef"].as_str().unwrap();
-
-        let bytes = match input["operation"].as_str().unwrap() {
+    assert_identity_signing_vectors("attestation-signing.json", |_, input| {
+        let signer = AttestationSigner {
+            claim_kind: input["claimKind"].as_str().unwrap(),
+            issuer_ref: input["issuerRef"].as_str().unwrap(),
+            signing_key_id: parse_uuid(input, "signingKeyId"),
+        };
+        let issued_at = || input["issuedAtMicros"].as_i64().unwrap();
+        match input["operation"].as_str().unwrap() {
             "issue" => attestation_signing_bytes(
-                claim_kind,
-                issuer_ref,
+                &signer,
                 parse_identity_id(input, "subject"),
                 input["achievement"].as_str().unwrap(),
+                issued_at(),
             ),
             "bulk_issue" => {
                 let achievements: Vec<String> = input["achievements"]
@@ -125,33 +120,21 @@ fn attestation_signing_matches_shared_vectors() {
                     .map(|v| v.as_str().unwrap().to_string())
                     .collect();
                 bulk_attestation_signing_bytes(
-                    claim_kind,
-                    issuer_ref,
+                    &signer,
                     parse_identity_id(input, "subject"),
                     &achievements,
+                    issued_at(),
                 )
             }
             "revoke" => revocation_signing_bytes(
-                claim_kind,
-                issuer_ref,
+                &signer,
                 AttestationId(parse_uuid(input, "attestationId")),
                 input["reasonCode"].as_str().unwrap(),
+                input["reason"].as_str().unwrap(),
             ),
-            other => panic!("[{name}] unknown operation {other}"),
-        };
-
-        assert_eq!(
-            hex::encode(&bytes),
-            vector["expected"]["signingBytesHex"].as_str().unwrap(),
-            "[{name}] signing bytes diverged from the shared vector"
-        );
-        assert_signature_matches(
-            name,
-            &signing_key,
-            &bytes,
-            vector["expected"]["signatureHex"].as_str().unwrap(),
-        );
-    }
+            other => panic!("unknown operation {other}"),
+        }
+    });
 }
 
 #[test]

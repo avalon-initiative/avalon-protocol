@@ -309,6 +309,8 @@ pub enum AppError {
         "attestation signature does not verify against any of the issuer's currently-valid keys"
     )]
     InvalidAttestationSignature,
+    #[error("the signed issued_at is outside the {max}-second window around this node's clock", max = avalon_protocol::achievements::ISSUED_AT_MAX_SKEW_SECS)]
+    AttestationIssuedAtOutOfRange,
     #[error("a bulk issuance call must carry between 1 and {max} claims", max = crate::achievements::MAX_BULK_CLAIMS)]
     InvalidBulkAttestationRequest,
     #[error("this issuer has written too many attestations about this subject recently")]
@@ -719,6 +721,7 @@ impl AppError {
             AppError::InvalidAchievementIconUrl => "INVALID_ACHIEVEMENT_ICON_URL",
             AppError::AttestationDefinitionRetired => "ATTESTATION_DEFINITION_RETIRED",
             AppError::InvalidAttestationSignature => "INVALID_ATTESTATION_SIGNATURE",
+            AppError::AttestationIssuedAtOutOfRange => "ATTESTATION_ISSUED_AT_OUT_OF_RANGE",
             AppError::InvalidBulkAttestationRequest => "INVALID_BULK_ATTESTATION_REQUEST",
             AppError::AttestationWriteQuotaExceeded => "ATTESTATION_WRITE_QUOTA_EXCEEDED",
             AppError::AttestationEvidenceTooLarge { .. } => "ATTESTATION_EVIDENCE_TOO_LARGE",
@@ -974,6 +977,7 @@ impl IntoResponse for AppError {
             }
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
+            AppError::AttestationIssuedAtOutOfRange => StatusCode::BAD_REQUEST,
             AppError::InvalidBulkAttestationRequest => StatusCode::BAD_REQUEST,
             AppError::AttestationWriteQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
             AppError::AttestationEvidenceTooLarge { .. } => StatusCode::BAD_REQUEST,

@@ -15,6 +15,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -153,15 +156,6 @@ async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIss
     headers
 }
 
-fn attestation_signing_bytes(
-    claim_kind: &str,
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
-}
-
 /// Full attestation-issuance flow, mirroring
 /// `attestations.rs::a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user`
 /// — used here as the vehicle to exercise the write-path registration gate,
@@ -208,8 +202,15 @@ async fn issue_achievement_attestation(
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let issuer_ref = format!("game:{}", issuer.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &issuer.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = issuer.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(http, base, issuer).await;
@@ -225,6 +226,7 @@ async fn issue_achievement_attestation(
     .json(&serde_json::json!({
         "key_id": issuer.key_id,
         "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
     }))
     .send()
     .await

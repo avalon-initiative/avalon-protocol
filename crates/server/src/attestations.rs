@@ -44,7 +44,9 @@ use uuid::Uuid;
 
 use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenticity};
 use avalon_protocol::achievements::validity as compute_validity;
-use avalon_protocol::achievements::{attestation_status_at, revocation_signing_bytes};
+use avalon_protocol::achievements::{
+    attestation_status_at, revocation_signing_bytes, AttestationSigner,
+};
 use avalon_protocol::ids::AttestationId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
 use avalon_protocol::revocation::RevocationReasonCode;
@@ -648,11 +650,16 @@ pub async fn revoke_attestation(
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
-    let signing_bytes = revocation_signing_bytes(
+    let signer = AttestationSigner {
         claim_kind,
-        &issuer,
+        issuer_ref: &issuer,
+        signing_key_id: body.key_id,
+    };
+    let signing_bytes = revocation_signing_bytes(
+        &signer,
         AttestationId(id),
         body.reason_code.as_str(),
+        &body.reason,
     );
 
     let issuer_keys = fetch_issuer_keys(&state, integrator_id).await?;

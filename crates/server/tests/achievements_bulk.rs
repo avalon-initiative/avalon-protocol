@@ -16,6 +16,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{bulk_bytes, issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -232,21 +235,6 @@ async fn connect(
     assert!(response.status().is_success(), "{:?}", response.status());
 }
 
-fn bulk_signing_bytes(
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievements: &[String],
-) -> Vec<u8> {
-    let mut message =
-        format!("avalon:achievement.issued.bulk:v1:{issuer_ref}:{subject}:").into_bytes();
-    message.extend_from_slice(&(achievements.len() as u32).to_be_bytes());
-    for achievement in achievements {
-        message.extend_from_slice(&(achievement.len() as u32).to_be_bytes());
-        message.extend_from_slice(achievement.as_bytes());
-    }
-    message
-}
-
 struct BulkCall {
     integrator: RegisteredIntegrator,
     subject: avalon_protocol::ids::IdentityId,
@@ -276,7 +264,15 @@ async fn bulk_issue(
         .map(|key| format!("game:{}:achievement:{key}", call.integrator.slug))
         .collect();
     let issuer_ref = format!("game:{}", call.integrator.slug);
-    let signing_bytes = bulk_signing_bytes(&issuer_ref, call.subject, &achievements);
+    let issued_at = now_micros();
+    let signing_bytes = bulk_bytes(
+        "achievement",
+        &issuer_ref,
+        &call.integrator.key_id.to_string(),
+        call.subject,
+        &achievements,
+        issued_at,
+    );
     let signature = call.integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(http, base, &call.integrator).await;
@@ -299,6 +295,7 @@ async fn bulk_issue(
     .json(&serde_json::json!({
         "key_id": call.integrator.key_id,
         "signature": BASE64.encode(signature.to_bytes()),
+        "issued_at_micros": issued_at,
         "claims": keys.iter().map(|key| serde_json::json!({ "key": key })).collect::<Vec<_>>(),
     }))
     .send()
@@ -307,8 +304,8 @@ async fn bulk_issue(
 }
 
 /// Same as [`bulk_issue`], but each claim carries its own `evidence` —
-/// evidence is never part of what's signed (`bulk_signing_bytes` above
-/// only folds in the achievement refs), so the signature math is unchanged.
+/// evidence is never part of what's signed (`bulk_bytes` only
+/// folds in the achievement refs), so the signature math is unchanged.
 async fn bulk_issue_with_evidence(
     http: &reqwest::Client,
     base: &str,
@@ -321,7 +318,15 @@ async fn bulk_issue_with_evidence(
         .map(|key| format!("game:{}:achievement:{key}", call.integrator.slug))
         .collect();
     let issuer_ref = format!("game:{}", call.integrator.slug);
-    let signing_bytes = bulk_signing_bytes(&issuer_ref, call.subject, &achievements);
+    let issued_at = now_micros();
+    let signing_bytes = bulk_bytes(
+        "achievement",
+        &issuer_ref,
+        &call.integrator.key_id.to_string(),
+        call.subject,
+        &achievements,
+        issued_at,
+    );
     let signature = call.integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(http, base, &call.integrator).await;
@@ -344,6 +349,7 @@ async fn bulk_issue_with_evidence(
     .json(&serde_json::json!({
         "key_id": call.integrator.key_id,
         "signature": BASE64.encode(signature.to_bytes()),
+        "issued_at_micros": issued_at,
         "claims": claims
             .iter()
             .map(|(key, evidence)| serde_json::json!({ "key": key, "evidence": evidence }))
@@ -442,7 +448,15 @@ async fn bulk_issue_rejects_a_signature_from_a_different_key() {
         call.integrator.slug
     )];
     let issuer_ref = format!("game:{}", call.integrator.slug);
-    let signing_bytes = bulk_signing_bytes(&issuer_ref, call.subject, &achievements);
+    let issued_at = now_micros();
+    let signing_bytes = bulk_bytes(
+        "achievement",
+        &issuer_ref,
+        &call.integrator.key_id.to_string(),
+        call.subject,
+        &achievements,
+        issued_at,
+    );
     let forged_signature = impostor_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(&http, &base, &call.integrator).await;
@@ -466,6 +480,7 @@ async fn bulk_issue_rejects_a_signature_from_a_different_key() {
         .json(&serde_json::json!({
             "key_id": call.integrator.key_id,
             "signature": BASE64.encode(forged_signature.to_bytes()),
+            "issued_at_micros": issued_at,
             "claims": [{ "key": "dragon_slayer" }],
         }))
         .send()
@@ -491,7 +506,15 @@ async fn bulk_issue_rejects_a_claim_list_tampered_after_signing() {
         call.integrator.slug
     )];
     let issuer_ref = format!("game:{}", call.integrator.slug);
-    let signing_bytes = bulk_signing_bytes(&issuer_ref, call.subject, &achievements);
+    let issued_at = now_micros();
+    let signing_bytes = bulk_bytes(
+        "achievement",
+        &issuer_ref,
+        &call.integrator.key_id.to_string(),
+        call.subject,
+        &achievements,
+        issued_at,
+    );
     let signature = call.integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(&http, &base, &call.integrator).await;
@@ -515,6 +538,7 @@ async fn bulk_issue_rejects_a_claim_list_tampered_after_signing() {
         .json(&serde_json::json!({
             "key_id": call.integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
             "claims": [{ "key": "dragon_slayer" }, { "key": "lost_city" }],
         }))
         .send()
@@ -610,11 +634,15 @@ async fn single_claim_issuance_is_unaffected_by_the_bulk_endpoint() {
 
     let achievement = format!("game:{}:achievement:dragon_slayer", call.integrator.slug);
     let issuer_ref = format!("game:{}", call.integrator.slug);
-    let signing_bytes = format!(
-        "avalon:achievement.issued:v1:{issuer_ref}:{}:{achievement}",
-        call.subject
-    )
-    .into_bytes();
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &call.integrator.key_id.to_string(),
+        call.subject,
+        &achievement,
+        issued_at,
+    );
     let signature = call.integrator.signing_key.sign(&signing_bytes);
 
     let response = http
@@ -635,6 +663,7 @@ async fn single_claim_issuance_is_unaffected_by_the_bulk_endpoint() {
         .json(&serde_json::json!({
             "key_id": call.integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+        "issued_at_micros": issued_at,
         }))
         .send()
         .await

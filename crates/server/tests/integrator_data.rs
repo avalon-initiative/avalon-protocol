@@ -14,6 +14,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -856,9 +859,15 @@ async fn cross_integrator_write_isolation_is_total() {
         .to_string();
 
     let issuer_ref_str = format!("game:{}", issuer.slug);
-    let signing_bytes =
-        format!("avalon:achievement.issued:v1:{issuer_ref_str}:{identity_id}:{achievement_id}")
-            .into_bytes();
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref_str,
+        &issuer.key_id,
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = issuer.signing_key.sign(&signing_bytes);
     let mut headers = integrator_auth_headers(&http, &base, &issuer).await;
     headers.insert(
@@ -874,6 +883,7 @@ async fn cross_integrator_write_isolation_is_total() {
         .json(&serde_json::json!({
             "key_id": issuer.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -933,6 +943,7 @@ async fn cross_integrator_write_isolation_is_total() {
         .json(&serde_json::json!({
             "key_id": issuer.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
