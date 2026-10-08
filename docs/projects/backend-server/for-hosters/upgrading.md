@@ -329,3 +329,7 @@ delivered a key event no longer decides whether it is accepted.
   chain hashes for key events.
 - **Clients:** the signed bytes of key events are unchanged; the signed position's `prev_hash` is
   the new hash of the head event, as the server reports it.
+- **Unauthenticated metadata:** a key event's device label, event time (`added_at`, `revoked_at`) and
+  the shard that delivered it are not covered by any signature. They are best-effort: the first
+  delivery wins and a redelivery never overwrites them. Only key ids, keys, signatures and the chain
+  position are authenticated.
