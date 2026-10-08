@@ -22,6 +22,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -218,11 +221,15 @@ async fn issue_and_get_ledger_subject(
     key: &str,
 ) -> String {
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = format!(
-        "avalon:achievement.issued:v1:{issuer_ref}:{subject_id}:game:{}:achievement:{key}",
-        integrator.slug
-    )
-    .into_bytes();
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        subject_id,
+        &format!("game:{}:achievement:{key}", integrator.slug),
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(http, base, integrator).await;
@@ -243,6 +250,7 @@ async fn issue_and_get_ledger_subject(
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await

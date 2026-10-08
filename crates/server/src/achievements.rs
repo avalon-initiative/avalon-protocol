@@ -7,7 +7,8 @@
 
 use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenticity};
 use avalon_protocol::achievements::{
-    bulk_attestation_signing_bytes, AchievementAttestation, Issuer, Signature,
+    bulk_attestation_signing_bytes, AchievementAttestation, AttestationSigner, Issuer, Signature,
+    ISSUED_AT_MAX_SKEW_SECS,
 };
 use avalon_protocol::event_payloads::{
     evidence_byte_size, ClaimDefinedPayload, ClaimDefinitionRetiredPayload,
@@ -15,7 +16,7 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
-use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory};
+use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory, IssuerKey};
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -116,6 +117,29 @@ fn guard_evidence_size(evidence: &Option<serde_json::Value>) -> Result<(), AppEr
         });
     }
     Ok(())
+}
+
+/// The signed `issued_at`, refused when it sits outside the skew window around `now`.
+fn signed_issued_at(micros: i64, now: OffsetDateTime) -> Result<OffsetDateTime, AppError> {
+    let issued_at = OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1000)
+        .map_err(|_| AppError::AttestationIssuedAtOutOfRange)?;
+    if (issued_at - now).abs() > time::Duration::seconds(ISSUED_AT_MAX_SKEW_SECS) {
+        return Err(AppError::AttestationIssuedAtOutOfRange);
+    }
+    Ok(issued_at)
+}
+
+/// The issuer key an issuance may use: valid both now and at the signed `issued_at`, so a key
+/// revoked or not yet valid can neither backdate nor post-date a claim.
+fn resolve_issuing_key(
+    keys: &[IssuerKey],
+    key_id: Uuid,
+    issued_at: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Result<&IssuerKey, AppError> {
+    resolve_valid_signing_key(keys, key_id, issued_at)
+        .and_then(|_| resolve_valid_signing_key(keys, key_id, now))
+        .ok_or(AppError::InvalidAttestationSignature)
 }
 
 /// How many attestations `issuer_str` has written about `subject_id`
@@ -832,6 +856,9 @@ pub struct IssueAttestationRequest {
     /// Standard-base64-encoded detached Ed25519 signature over
     /// [`attestation_signing_bytes`].
     pub signature: String,
+    /// The `issued_at` the issuer signed, as unix microseconds; it must be within
+    /// `ISSUED_AT_MAX_SKEW_SECS` of this node's clock and becomes the attestation's `issued_at`.
+    pub issued_at_micros: i64,
     /// An optional, unverified pointer to supporting evidence (a replay
     /// id, a screenshot ref, whatever the issuer wants to attach) — carried
     /// through into the emitted event's payload only; not itself part of
@@ -959,6 +986,7 @@ async fn issue_attestation(
 
     let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
+    let issued_at = signed_issued_at(body.issued_at_micros, now)?;
     let attestation_id = Uuid::new_v4();
     let issuer_enum = match category {
         IntegratorCategory::Game => Issuer::Game(IntegratorId(integrator_id)),
@@ -970,7 +998,7 @@ async fn issue_attestation(
         issuer: issuer_enum,
         subject: subject_id,
         achievement: definition_ref(category, slug, &key),
-        issued_at: now,
+        issued_at,
         proof: Signature {
             key_id: body.key_id.to_string(),
             // The only algorithm registration accepts today (integrators::SUPPORTED_KEY_ALGORITHM);
@@ -979,13 +1007,12 @@ async fn issue_attestation(
             bytes: signature_bytes,
         },
     };
+    let signing_key = resolve_issuing_key(&issuer_keys, body.key_id, issued_at, now)?;
     let Authenticity::Authentic { .. } =
         verify_authenticity(&candidate, claim_kind, &issuer_str, &issuer_keys)
     else {
         return Err(AppError::InvalidAttestationSignature);
     };
-    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
-        .expect("verify_authenticity already resolved this key successfully");
 
     let mut tx = state.pool.begin().await?;
 
@@ -1014,7 +1041,7 @@ async fn issue_attestation(
     .bind(&issuer_str)
     .bind(subject_id)
     .bind(&definition.id)
-    .bind(now)
+    .bind(issued_at)
     .bind(body.key_id)
     .bind(&signing_key.algorithm)
     .bind(&candidate.proof.bytes)
@@ -1042,6 +1069,7 @@ async fn issue_attestation(
                 issuer_str.clone(),
                 subject_id,
                 definition.id.clone(),
+                body.issued_at_micros,
                 body.evidence.clone(),
                 ClaimProofPayload {
                     key_id: body.key_id,
@@ -1065,7 +1093,7 @@ async fn issue_attestation(
         issuer: issuer_str,
         subject: subject_id,
         achievement: definition.id,
-        issued_at: now,
+        issued_at,
         proof: AttestationSignatureResponse {
             key_id: body.key_id,
             algorithm: signing_key.algorithm.clone(),
@@ -1149,6 +1177,9 @@ pub struct BulkIssueAttestationRequest {
     /// Standard-base64-encoded detached Ed25519 signature over
     /// [`bulk_attestation_signing_bytes`] of `claims`, in order.
     pub signature: String,
+    /// The `issued_at` the issuer signed for every claim, as unix microseconds; same window as
+    /// a single issuance.
+    pub issued_at_micros: i64,
     pub claims: Vec<BulkClaimRequest>,
 }
 
@@ -1268,20 +1299,29 @@ async fn bulk_issue_attestation(
         .map_err(|_| AppError::InvalidAttestationSignature)?;
     let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
+    let issued_at = signed_issued_at(body.issued_at_micros, now)?;
 
-    let signing_bytes =
-        bulk_attestation_signing_bytes(claim_kind, &issuer_str, subject_id, &achievement_refs);
+    let signer = AttestationSigner {
+        claim_kind,
+        issuer_ref: &issuer_str,
+        signing_key_id: body.key_id,
+    };
+    let signing_bytes = bulk_attestation_signing_bytes(
+        &signer,
+        subject_id,
+        &achievement_refs,
+        body.issued_at_micros,
+    );
+    let signing_key = resolve_issuing_key(&issuer_keys, body.key_id, issued_at, now)?;
     let Authenticity::Authentic { .. } = verify_signature(
         &body.key_id.to_string(),
         &signing_bytes,
         &signature_bytes,
-        now,
+        issued_at,
         &issuer_keys,
     ) else {
         return Err(AppError::InvalidAttestationSignature);
     };
-    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
-        .expect("verify_signature already resolved this key successfully");
 
     let mut tx = state.pool.begin().await?;
 
@@ -1334,7 +1374,7 @@ async fn bulk_issue_attestation(
         .bind(&issuer_str)
         .bind(subject_id)
         .bind(&definition.id)
-        .bind(now)
+        .bind(issued_at)
         .bind(body.key_id)
         .bind(&signing_key.algorithm)
         .bind(&signature_bytes)
@@ -1362,6 +1402,7 @@ async fn bulk_issue_attestation(
                     issuer_str.clone(),
                     subject_id,
                     definition.id.clone(),
+                    body.issued_at_micros,
                     claim.evidence.clone(),
                     ClaimProofPayload {
                         key_id: body.key_id,
@@ -1385,7 +1426,7 @@ async fn bulk_issue_attestation(
                 issuer: issuer_str.clone(),
                 subject: subject_id,
                 achievement: achievement_ref.clone(),
-                issued_at: now,
+                issued_at,
                 proof: AttestationSignatureResponse {
                     key_id: body.key_id,
                     algorithm: signing_key.algorithm.clone(),
@@ -1524,6 +1565,62 @@ mod tests {
     //! `crates/server/tests/achievements.rs`, gated `--ignored`.
 
     use super::*;
+
+    fn test_key(
+        id: Uuid,
+        valid_from: OffsetDateTime,
+        revoked_at: Option<OffsetDateTime>,
+    ) -> IssuerKey {
+        IssuerKey {
+            key_id: id,
+            algorithm: "ed25519".to_string(),
+            public_key: vec![0; 32],
+            role: avalon_protocol::integrators::KeyRole::Root,
+            purpose: avalon_protocol::integrators::KeyPurpose::Attestation,
+            valid_from,
+            valid_until: None,
+            revoked_at,
+        }
+    }
+
+    #[test]
+    fn issuing_key_must_be_valid_now_and_at_the_signed_time() {
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let secs = time::Duration::seconds;
+        let id = Uuid::new_v4();
+        let ok = [test_key(id, now - secs(1000), None)];
+        assert!(resolve_issuing_key(&ok, id, now - secs(100), now).is_ok());
+
+        // Revoked 60 s ago: an issued_at before the revocation must not backdate past it.
+        let revoked = [test_key(id, now - secs(1000), Some(now - secs(60)))];
+        assert!(resolve_issuing_key(&revoked, id, now - secs(120), now).is_err());
+
+        // Not valid for another 100 s: an issued_at after valid_from must not post-date it.
+        let future = [test_key(id, now + secs(100), None)];
+        assert!(resolve_issuing_key(&future, id, now + secs(200), now).is_err());
+
+        // Valid now but not yet at the signed time.
+        let recent = [test_key(id, now - secs(10), None)];
+        assert!(resolve_issuing_key(&recent, id, now - secs(100), now).is_err());
+        assert!(resolve_issuing_key(&ok, Uuid::new_v4(), now, now).is_err());
+    }
+
+    #[test]
+    fn signed_issued_at_accepts_only_the_skew_window() {
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let micros = |offset_secs: i64| (1_800_000_000 + offset_secs) * 1_000_000 + 123;
+        let accepted = signed_issued_at(micros(0) + 5, now).unwrap();
+        assert_eq!(
+            avalon_protocol::achievements::issued_at_micros(accepted),
+            micros(0) + 5
+        );
+        assert!(signed_issued_at(micros(ISSUED_AT_MAX_SKEW_SECS - 1), now).is_ok());
+        assert!(signed_issued_at(micros(-(ISSUED_AT_MAX_SKEW_SECS - 1)), now).is_ok());
+        assert!(signed_issued_at(micros(ISSUED_AT_MAX_SKEW_SECS + 1), now).is_err());
+        assert!(signed_issued_at(micros(-(ISSUED_AT_MAX_SKEW_SECS + 1)), now).is_err());
+        assert!(signed_issued_at(i64::MAX, now).is_err());
+        assert!(signed_issued_at(0, now).is_err());
+    }
 
     #[test]
     fn validate_key_accepts_lowercase_alphanumeric_and_underscore() {

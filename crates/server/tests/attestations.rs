@@ -16,6 +16,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -161,19 +164,6 @@ async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIss
     headers
 }
 
-/// The exact canonical bytes `attestation_signing_bytes` produces —
-/// duplicated here (not imported, this test crate can't see protocol
-/// internals it doesn't depend on) so the test itself proves the wire
-/// format, not just that some string round-trips.
-fn attestation_signing_bytes(
-    claim_kind: &str,
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
-}
-
 /// A JSON `evidence` object whose serialized form is exactly `total_bytes`
 /// long — padded with an ASCII string value so no escaping shifts the count.
 fn evidence_of_size(total_bytes: usize) -> serde_json::Value {
@@ -235,8 +225,15 @@ async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
 
     // Sign and issue the attestation.
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(&http, &base, &integrator).await;
@@ -253,6 +250,7 @@ async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -319,8 +317,15 @@ async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_user() {
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let issuer_ref = format!("app:{}", app.slug);
-    let signing_bytes =
-        attestation_signing_bytes("milestone", &issuer_ref, identity_id, &milestone_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "milestone",
+        &issuer_ref,
+        &app.key_id.to_string(),
+        identity_id,
+        &milestone_id,
+        issued_at,
+    );
     let signature = app.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(&http, &base, &app).await;
@@ -337,6 +342,7 @@ async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_user() {
         .json(&serde_json::json!({
             "key_id": app.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -398,6 +404,7 @@ async fn a_tampered_signature_is_rejected() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode([0u8; 64]),
+            "issued_at_micros": now_micros(),
         }))
         .send()
         .await
@@ -431,11 +438,14 @@ async fn issuance_to_a_non_bound_identity_is_forbidden() {
     // Deliberately never connects/grants.
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = attestation_signing_bytes(
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
         "achievement",
         &issuer_ref,
+        &integrator.key_id.to_string(),
         identity_id,
         &format!("game:{}:achievement:dragon_slayer", integrator.slug),
+        issued_at,
     );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
@@ -453,6 +463,7 @@ async fn issuance_to_a_non_bound_identity_is_forbidden() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -509,11 +520,14 @@ async fn issuance_against_a_retired_definition_conflicts() {
     .unwrap();
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = attestation_signing_bytes(
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
         "achievement",
         &issuer_ref,
+        &integrator.key_id.to_string(),
         identity_id,
         &format!("game:{}:achievement:dragon_slayer", integrator.slug),
+        issued_at,
     );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
@@ -531,6 +545,7 @@ async fn issuance_against_a_retired_definition_conflicts() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
         }))
         .send()
         .await
@@ -582,8 +597,15 @@ async fn evidence_over_the_byte_cap_is_rejected() {
         .unwrap();
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(&http, &base, &integrator).await;
@@ -600,6 +622,7 @@ async fn evidence_over_the_byte_cap_is_rejected() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
             "evidence": evidence_of_size(MAX_EVIDENCE_BYTES + 1),
         }))
         .send()
@@ -669,8 +692,15 @@ async fn evidence_at_the_byte_cap_is_accepted() {
         .unwrap();
 
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes =
-        attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        identity_id,
+        &achievement_id,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let mut headers = auth_headers(&http, &base, &integrator).await;
@@ -687,6 +717,7 @@ async fn evidence_at_the_byte_cap_is_accepted() {
         .json(&serde_json::json!({
             "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
+            "issued_at_micros": issued_at,
             "evidence": evidence_of_size(MAX_EVIDENCE_BYTES),
         }))
         .send()

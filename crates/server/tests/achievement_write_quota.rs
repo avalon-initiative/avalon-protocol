@@ -17,6 +17,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod attestation_support;
+use attestation_support::{bulk_bytes, issue_bytes, now_micros};
+
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -209,32 +212,6 @@ async fn connect(
     assert!(response.status().is_success(), "{:?}", response.status());
 }
 
-fn bulk_signing_bytes(
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievements: &[String],
-) -> Vec<u8> {
-    let mut message =
-        format!("avalon:achievement.issued.bulk:v1:{issuer_ref}:{subject}:").into_bytes();
-    message.extend_from_slice(&(achievements.len() as u32).to_be_bytes());
-    for achievement in achievements {
-        message.extend_from_slice(&(achievement.len() as u32).to_be_bytes());
-        message.extend_from_slice(achievement.as_bytes());
-    }
-    message
-}
-
-/// `achievement` here must be the definition's full ref
-/// (`game:<slug>:achievement:<key>`, matching the server's own
-/// `achievements::definition_ref` format), not the bare key.
-fn single_signing_bytes(
-    issuer_ref: &str,
-    subject: avalon_protocol::ids::IdentityId,
-    achievement: &str,
-) -> Vec<u8> {
-    format!("avalon:achievement.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
-}
-
 /// Bulk-issues `key` `count` times (the same definition, repeated — the
 /// endpoint doesn't dedupe claim keys within a call) in one signed
 /// envelope, returning the raw response.
@@ -250,7 +227,15 @@ async fn bulk_issue_repeated(
         .map(|_| format!("game:{}:achievement:{key}", integrator.slug))
         .collect();
     let issuer_ref = format!("game:{}", integrator.slug);
-    let signing_bytes = bulk_signing_bytes(&issuer_ref, subject, &achievements);
+    let issued_at = now_micros();
+    let signing_bytes = bulk_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        subject,
+        &achievements,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(http, base, integrator).await;
@@ -270,6 +255,7 @@ async fn bulk_issue_repeated(
     .json(&serde_json::json!({
         "key_id": integrator.key_id,
         "signature": BASE64.encode(signature.to_bytes()),
+        "issued_at_micros": issued_at,
         "claims": (0..count).map(|_| serde_json::json!({ "key": key })).collect::<Vec<_>>(),
     }))
     .send()
@@ -287,7 +273,15 @@ async fn issue_once(
 ) -> reqwest::Response {
     let issuer_ref = format!("game:{}", integrator.slug);
     let achievement_ref = format!("game:{}:achievement:{key}", integrator.slug);
-    let signing_bytes = single_signing_bytes(&issuer_ref, subject, &achievement_ref);
+    let issued_at = now_micros();
+    let signing_bytes = issue_bytes(
+        "achievement",
+        &issuer_ref,
+        &integrator.key_id.to_string(),
+        subject,
+        &achievement_ref,
+        issued_at,
+    );
     let signature = integrator.signing_key.sign(&signing_bytes);
 
     let (challenge_id, nonce) = integrator_challenge(http, base, integrator).await;
@@ -307,6 +301,7 @@ async fn issue_once(
     .json(&serde_json::json!({
         "key_id": integrator.key_id,
         "signature": BASE64.encode(signature.to_bytes()),
+        "issued_at_micros": issued_at,
     }))
     .send()
     .await

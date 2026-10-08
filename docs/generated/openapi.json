@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.13.2"
+    "version": "0.13.3"
   },
   "paths": {
     "/attestations/{id}": {
@@ -6472,6 +6472,7 @@
         "required": [
           "key_id",
           "signature",
+          "issued_at_micros",
           "claims"
         ],
         "properties": {
@@ -6480,6 +6481,11 @@
             "items": {
               "$ref": "#/components/schemas/BulkClaimRequest"
             }
+          },
+          "issued_at_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `issued_at` the issuer signed for every claim, as unix microseconds; same window as\na single issuance."
           },
           "key_id": {
             "type": "string",
@@ -8494,7 +8500,8 @@
         "type": "object",
         "required": [
           "key_id",
-          "signature"
+          "signature",
+          "issued_at_micros"
         ],
         "properties": {
           "evidence": {
@@ -8503,6 +8510,11 @@
               "null"
             ],
             "description": "An optional, unverified pointer to supporting evidence (a replay\nid, a screenshot ref, whatever the issuer wants to attach) — carried\nthrough into the emitted event's payload only; not itself part of\nwhat's signed or stored as a column, since it's descriptive\nmetadata, not something verification depends on."
+          },
+          "issued_at_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `issued_at` the issuer signed, as unix microseconds; it must be within\n`ISSUED_AT_MAX_SKEW_SECS` of this node's clock and becomes the attestation's `issued_at`."
           },
           "key_id": {
             "type": "string",

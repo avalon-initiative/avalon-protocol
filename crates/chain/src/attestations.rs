@@ -14,7 +14,9 @@
 //! ([`avalon_protocol::achievements::revocation_signing_bytes`]), the same
 //! "resolve the key at this point in time, then check the signature" logic.
 
-use avalon_protocol::achievements::{attestation_signing_bytes, AchievementAttestation};
+use avalon_protocol::achievements::{
+    attestation_signing_bytes, issued_at_micros, AchievementAttestation, AttestationSigner,
+};
 use avalon_protocol::integrators::{resolve_valid_signing_key, IssuerKey};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use time::OffsetDateTime;
@@ -101,11 +103,21 @@ pub fn verify_authenticity(
     issuer_ref: &str,
     issuer_keys: &[IssuerKey],
 ) -> Authenticity {
-    let signing_bytes = attestation_signing_bytes(
+    let Ok(signing_key_id) = attestation.proof.key_id.parse::<Uuid>() else {
+        return Authenticity::NotAuthentic {
+            reason: "key_id is not a valid key id".to_string(),
+        };
+    };
+    let signer = AttestationSigner {
         claim_kind,
         issuer_ref,
+        signing_key_id,
+    };
+    let signing_bytes = attestation_signing_bytes(
+        &signer,
         attestation.subject,
         attestation.achievement.as_str(),
+        issued_at_micros(attestation.issued_at),
     );
     verify_signature(
         &attestation.proof.key_id,
@@ -135,8 +147,17 @@ mod tests {
         achievement: GlobalId,
         issued_at: OffsetDateTime,
     ) -> AchievementAttestation {
-        let bytes =
-            attestation_signing_bytes(claim_kind, issuer_ref, subject, achievement.as_str());
+        let signer = AttestationSigner {
+            claim_kind,
+            issuer_ref,
+            signing_key_id: key_id,
+        };
+        let bytes = attestation_signing_bytes(
+            &signer,
+            subject,
+            achievement.as_str(),
+            issued_at_micros(issued_at),
+        );
         let signature = signing_key.sign(&bytes);
         AchievementAttestation {
             id: AttestationId(Uuid::new_v4()),
@@ -352,12 +373,12 @@ mod tests {
         let revoked_at = OffsetDateTime::now_utc();
         let attestation_id = AttestationId(Uuid::new_v4());
 
-        let bytes = revocation_signing_bytes(
-            "achievement",
-            "game:ashen-realms",
-            attestation_id,
-            "issuer_error",
-        );
+        let signer = AttestationSigner {
+            claim_kind: "achievement",
+            issuer_ref: "game:ashen-realms",
+            signing_key_id: key_id,
+        };
+        let bytes = revocation_signing_bytes(&signer, attestation_id, "issuer_error", "r");
         let signature = signing_key.sign(&bytes);
         let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
 
@@ -376,12 +397,8 @@ mod tests {
 
         // A different reason code produces different bytes, so a signature
         // for one reason can't be replayed to claim a different one.
-        let other_bytes = revocation_signing_bytes(
-            "achievement",
-            "game:ashen-realms",
-            attestation_id,
-            "different_reason",
-        );
+        let other_bytes =
+            revocation_signing_bytes(&signer, attestation_id, "different_reason", "r");
         assert!(matches!(
             verify_signature(
                 &key_id.to_string(),
@@ -390,6 +407,29 @@ mod tests {
                 revoked_at,
                 &keys,
             ),
+            Authenticity::NotAuthentic { .. }
+        ));
+    }
+
+    #[test]
+    fn a_signature_replayed_with_another_issued_at_is_not_authentic() {
+        let signing_key = SigningKey::generate(&mut rand::rng());
+        let key_id = Uuid::new_v4();
+        let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
+        let mut attestation = signed_attestation(
+            &signing_key,
+            key_id,
+            "achievement",
+            "game:ashen-realms",
+            IdentityId::random_for_tests(),
+            achievement,
+            OffsetDateTime::now_utc(),
+        );
+        let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
+
+        attestation.issued_at += time::Duration::seconds(1);
+        assert!(matches!(
+            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
             Authenticity::NotAuthentic { .. }
         ));
     }
