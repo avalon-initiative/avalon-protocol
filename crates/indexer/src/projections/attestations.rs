@@ -21,6 +21,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::identity_proof::EventOrigin;
 use crate::IndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,10 +68,14 @@ pub fn decode(event: &ProtocolEvent) -> Option<AttestationWrite> {
     }
 }
 
+/// Applies `write`. An attestation belongs to the stream that first delivered it: a later issue
+/// with the same id changes nothing, and only that stream's revocation is applied.
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &AttestationWrite,
+    origin: Option<&EventOrigin>,
 ) -> Result<(), IndexError> {
+    let (network_id, shard_id) = origin.map_or(("", ""), |o| (&o.network_id, &o.shard_id));
     match write {
         AttestationWrite::Issue {
             id,
@@ -80,27 +85,31 @@ pub async fn apply(
             issued_at,
         } => {
             sqlx::query(
-                "INSERT INTO indexer_attestations (id, issuer, subject, achievement, issued_at) \
-                 VALUES ($1, $2, $3, $4, $5) \
-                 ON CONFLICT (id) DO UPDATE SET \
-                     issuer = EXCLUDED.issuer, \
-                     subject = EXCLUDED.subject, \
-                     achievement = EXCLUDED.achievement",
+                "INSERT INTO indexer_attestations \
+                 (id, issuer, subject, achievement, issued_at, network_id, shard_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
             )
             .bind(id)
             .bind(issuer)
             .bind(subject)
             .bind(achievement)
             .bind(issued_at)
+            .bind(network_id)
+            .bind(shard_id)
             .execute(&mut **tx)
             .await?;
         }
         AttestationWrite::Revoke { id, revoked_at } => {
-            sqlx::query("UPDATE indexer_attestations SET revoked_at = $2 WHERE id = $1")
-                .bind(id)
-                .bind(revoked_at)
-                .execute(&mut **tx)
-                .await?;
+            sqlx::query(
+                "UPDATE indexer_attestations SET revoked_at = $2 \
+                 WHERE id = $1 AND network_id = $3 AND shard_id = $4 AND revoked_at IS NULL",
+            )
+            .bind(id)
+            .bind(revoked_at)
+            .bind(network_id)
+            .bind(shard_id)
+            .execute(&mut **tx)
+            .await?;
         }
     }
     Ok(())

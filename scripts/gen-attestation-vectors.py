@@ -4,6 +4,7 @@
 A structured-bytes encoder that shares no code with the Rust one, so the committed
 expectations are an independent check of it. Requires the `cryptography` package.
 """
+import hashlib
 import json
 import struct
 import sys
@@ -83,7 +84,8 @@ def revoke_bytes(i):
         head("avalon.attestation.revoke", i)
         + uuid.UUID(i["attestationId"]).bytes
         + st(i["reasonCode"])
-        + st(i["reason"])
+        + bytes([1])
+        + hashlib.sha256(i["reason"].encode("utf-8")).digest()
         + tail()
     )
 
@@ -240,8 +242,8 @@ DESC = (
     "full global id) and issued_at (i64 BE unix microseconds, signed by the issuer and accepted "
     "only within 300 seconds of the verifying node's clock). Bulk issue adds subject, issued_at "
     "(one for every claim), count (u32 BE) and each achievement (str) in order. Revoke adds "
-    "attestation_id (uuid), reason_code (str; an unrecognised code is signed as its own string) and "
-    "reason (str). The layout is the structured signing-bytes encoding "
+    "attestation_id (uuid), reason_code (str; an unrecognised code is signed as its own string), "
+    "hash_algo (u8, 01 = SHA-256) and the 32-byte SHA-256 of the UTF-8 reason, so the reason text can be redacted while the signature stays valid. The layout is the structured signing-bytes encoding "
     "(avalon_protocol::signing_bytes): the ASCII domain tag with no length, a u16 big-endian layout "
     "version (1) and a u32 big-endian rules version (1), then the fields in the order listed, then "
     "the extensions region (count u16 = 0: 00 00). str is a u32 big-endian byte length and the "

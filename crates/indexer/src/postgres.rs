@@ -330,13 +330,13 @@ impl PostgresIndexer {
             }
             "achievement.issued" => {
                 if let Some(write) = attestations::decode(event) {
-                    attestations::apply(tx, &write).await?;
+                    attestations::apply(tx, &write, origin).await?;
                 }
             }
             "achievement.revoked" => {
                 attestation_proof::verify_revocation(tx, event, origin).await?;
                 if let Some(write) = attestations::decode(event) {
-                    attestations::apply(tx, &write).await?;
+                    attestations::apply(tx, &write, origin).await?;
                 }
             }
             "milestone.revoked" => {

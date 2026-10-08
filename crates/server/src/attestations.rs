@@ -45,7 +45,7 @@ use uuid::Uuid;
 use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenticity};
 use avalon_protocol::achievements::validity as compute_validity;
 use avalon_protocol::achievements::{
-    attestation_status_at, revocation_signing_bytes, AttestationSigner,
+    attestation_status_at, reason_hash, revocation_signing_bytes, AttestationSigner,
 };
 use avalon_protocol::ids::AttestationId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
@@ -675,7 +675,7 @@ pub async fn revoke_attestation(
         &signer,
         AttestationId(id),
         body.reason_code.as_str(),
-        &body.reason,
+        &reason_hash(&body.reason),
     );
 
     let issuer_keys = fetch_issuer_keys(&state, integrator_id).await?;
@@ -742,6 +742,7 @@ pub async fn revoke_attestation(
             issuer: issuer.clone(),
             reason_code: body.reason_code.clone(),
             reason: body.reason.clone(),
+            reason_hash: hex::encode(reason_hash(&body.reason)),
             proof: ClaimProofPayload {
                 key_id: body.key_id,
                 algorithm: "ed25519".to_string(),

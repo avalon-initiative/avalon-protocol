@@ -4,7 +4,7 @@
 use avalon_indexer::identity_proof::EventOrigin;
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::IndexError;
-use avalon_protocol::achievements::{revocation_signing_bytes, AttestationSigner};
+use avalon_protocol::achievements::{reason_hash, revocation_signing_bytes, AttestationSigner};
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -109,13 +109,18 @@ fn revoked(
         issuer_ref: &issuer.issuer_ref(),
         signing_key_id: issuer.key_id,
     };
-    let bytes = revocation_signing_bytes(&signer, AttestationId(attestation), "cheating", "r");
+    let bytes = revocation_signing_bytes(
+        &signer,
+        AttestationId(attestation),
+        "cheating",
+        &reason_hash("r"),
+    );
     event(
         "achievement.revoked",
         at,
         serde_json::json!({
             "id": Uuid::new_v4(), "attestation_id": attestation, "issuer": issuer.issuer_ref(),
-            "reason_code": "cheating", "reason": "r",
+            "reason_code": "cheating", "reason": "r", "reason_hash": hex::encode(reason_hash("r")),
             "proof": {
                 "key_id": issuer.key_id, "algorithm": "ed25519",
                 "bytes": BASE64.encode(issuer.key.sign(&bytes).to_bytes()),
@@ -265,4 +270,128 @@ async fn a_key_revoked_before_the_revocation_cannot_sign_it() {
         Err(IndexError::Rejected(_))
     ));
     assert!(!is_revoked(&pool, attestation).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_hostile_shard_cannot_revoke_or_reissue_another_shards_attestation() {
+    let pool = test_pool().await;
+    let victim_stream = EventOrigin::mirrored(NET, "game:victim/1");
+    let hostile_stream = EventOrigin::mirrored(NET, "game:hostile/1");
+    let (issuer, attestation) = seeded(&pool, &victim_stream).await;
+
+    // The hostile shard registers the same issuer name with its own key and signs a revocation.
+    let impostor = Issuer {
+        id: Uuid::new_v4(),
+        slug: issuer.slug.clone(),
+        key_id: Uuid::new_v4(),
+        key: SigningKey::from_bytes(&[9u8; 32]),
+    };
+    let before = OffsetDateTime::now_utc() - time::Duration::minutes(1);
+    apply(&pool, &registered(&impostor, before), &hostile_stream)
+        .await
+        .unwrap();
+    let forged = revoked(&impostor, attestation, NET, OffsetDateTime::now_utc());
+    assert!(matches!(
+        apply(&pool, &forged, &hostile_stream).await,
+        Err(IndexError::Rejected(_))
+    ));
+
+    // Re-issuing the same id from the hostile shard changes nothing.
+    let reissue = issued(
+        &impostor,
+        subject_of(&pool, attestation).await,
+        attestation,
+        before,
+    );
+    apply(&pool, &reissue, &hostile_stream).await.unwrap();
+    let owner: String =
+        sqlx::query_scalar("SELECT shard_id FROM indexer_attestations WHERE id = $1")
+            .bind(attestation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(owner, "game:victim/1");
+    assert!(matches!(
+        apply(&pool, &forged, &hostile_stream).await,
+        Err(IndexError::Rejected(_))
+    ));
+    assert!(!is_revoked(&pool, attestation).await);
+
+    // The genuine issuer on the genuine stream still can.
+    apply(
+        &pool,
+        &revoked(&issuer, attestation, NET, OffsetDateTime::now_utc()),
+        &victim_stream,
+    )
+    .await
+    .unwrap();
+    assert!(is_revoked(&pool, attestation).await);
+}
+
+async fn subject_of(pool: &PgPool, attestation: Uuid) -> IdentityId {
+    sqlx::query_scalar("SELECT subject FROM indexer_attestations WHERE id = $1")
+        .bind(attestation)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_revocation_that_arrives_before_its_issuance_waits_and_then_applies() {
+    let pool = test_pool().await;
+    let origin = EventOrigin::mirrored(NET, "core");
+    let (issuer, attestation) = (Issuer::new(), Uuid::new_v4());
+    let before = OffsetDateTime::now_utc() - time::Duration::minutes(1);
+    apply(&pool, &registered(&issuer, before), &origin)
+        .await
+        .unwrap();
+
+    let early = revoked(&issuer, attestation, NET, OffsetDateTime::now_utc());
+    assert!(matches!(
+        apply(&pool, &early, &origin).await,
+        Err(IndexError::AwaitingKey(_))
+    ));
+
+    let who = avalon_protocol::identity_id::TestIdentity::new();
+    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
+        .bind(who.id)
+        .bind(who.public_key().to_vec())
+        .execute(&pool)
+        .await
+        .unwrap();
+    apply(
+        &pool,
+        &issued(&issuer, who.id, attestation, before),
+        &origin,
+    )
+    .await
+    .unwrap();
+    apply(&pool, &early, &origin).await.unwrap();
+    assert!(is_revoked(&pool, attestation).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_key_revoked_after_the_event_time_still_cannot_sign() {
+    let pool = test_pool().await;
+    let origin = EventOrigin::mirrored(NET, "core");
+    let (issuer, attestation) = seeded(&pool, &origin).await;
+    let at = OffsetDateTime::now_utc();
+    let later = at + time::Duration::hours(1);
+    let key_revoked = event(
+        "issuer.key_revoked",
+        at,
+        serde_json::json!({
+            "game_id": issuer.id, "slug": issuer.slug, "key_id": issuer.key_id,
+            "revoked_at": later.format(&time::format_description::well_known::Rfc3339).unwrap(),
+        }),
+    );
+    apply(&pool, &key_revoked, &origin).await.unwrap();
+    let event = revoked(&issuer, attestation, NET, at);
+    assert!(matches!(
+        apply(&pool, &event, &origin).await,
+        Err(IndexError::Rejected(_))
+    ));
 }

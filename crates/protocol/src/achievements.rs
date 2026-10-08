@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::signing_bytes::{tags, Builder, DomainTag};
+use sha2::{Digest, Sha256};
+
+use crate::signing_bytes::{tags, Builder, DomainTag, HashAlgo};
 
 use crate::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
 
@@ -178,21 +180,28 @@ pub fn bulk_attestation_signing_bytes(
         .expect("attestation fields fit a u32 length")
 }
 
+/// SHA-256 of a revocation reason's UTF-8 bytes, the form the revocation signature covers.
+pub fn reason_hash(reason: &str) -> [u8; 32] {
+    Sha256::digest(reason.as_bytes()).into()
+}
+
 /// Bytes an issuer key signs to revoke an attestation (#85: an appended entry, never a mutation):
 /// tag `avalon.attestation.revoke`, layout version 1, the shared header fields, then
-/// `attestation_id` uuid, `reason_code` str and `reason` str. The reason code is a plain
-/// length-prefixed string, so an unrecognised code still has exactly one encoding.
+/// `attestation_id` uuid, `reason_code` str, then `hash_algo` and the 32-byte SHA-256 of the
+/// UTF-8 `reason` ([`reason_hash`]), so the text can be redacted while the proof stays valid. The
+/// reason code is a plain length-prefixed string, so an unrecognised code has one encoding.
 pub fn revocation_signing_bytes(
     signer: &AttestationSigner<'_>,
     attestation_id: AttestationId,
     reason_code: &str,
-    reason: &str,
+    reason_hash: &[u8; 32],
 ) -> Vec<u8> {
     signer
         .builder(tags::ATTESTATION_REVOKE)
         .uuid(attestation_id.0)
         .str(reason_code)
-        .str(reason)
+        .hash_algo(HashAlgo::Sha256)
+        .hash(reason_hash)
         .finish()
         .expect("revocation fields fit a u32 length")
 }
@@ -323,8 +332,8 @@ mod issuer_tests {
             bulk_attestation_signing_bytes(&b, subject, &list, T)
         );
         assert_ne!(
-            revocation_signing_bytes(&a, id, "c", "r"),
-            revocation_signing_bytes(&b, id, "c", "r")
+            revocation_signing_bytes(&a, id, "c", &reason_hash("r")),
+            revocation_signing_bytes(&b, id, "c", &reason_hash("r"))
         );
     }
 
@@ -366,21 +375,37 @@ mod issuer_tests {
     fn revocation_bytes_cover_reason_code_reason_and_key() {
         let s = signer("achievement", "game:a", 5);
         let id = AttestationId(Uuid::from_u128(9));
-        let base = revocation_signing_bytes(&s, id, "cheating", "r");
+        let base = revocation_signing_bytes(&s, id, "cheating", &reason_hash("r"));
         assert!(base.starts_with(b"avalon.attestation.revoke\x00\x01"));
-        assert_ne!(base, revocation_signing_bytes(&s, id, "mistake", "r"));
-        assert_ne!(base, revocation_signing_bytes(&s, id, "cheating", "s"));
         assert_ne!(
             base,
-            revocation_signing_bytes(&s, AttestationId(Uuid::from_u128(8)), "cheating", "r")
+            revocation_signing_bytes(&s, id, "mistake", &reason_hash("r"))
         );
         assert_ne!(
             base,
-            revocation_signing_bytes(&signer("achievement", "game:a", 6), id, "cheating", "r")
+            revocation_signing_bytes(&s, id, "cheating", &reason_hash("s"))
         );
         assert_ne!(
-            revocation_signing_bytes(&s, id, "a", "b:c"),
-            revocation_signing_bytes(&s, id, "a:b", "c")
+            base,
+            revocation_signing_bytes(
+                &s,
+                AttestationId(Uuid::from_u128(8)),
+                "cheating",
+                &reason_hash("r")
+            )
+        );
+        assert_ne!(
+            base,
+            revocation_signing_bytes(
+                &signer("achievement", "game:a", 6),
+                id,
+                "cheating",
+                &reason_hash("r")
+            )
+        );
+        assert_ne!(
+            revocation_signing_bytes(&s, id, "a", &reason_hash("b:c")),
+            revocation_signing_bytes(&s, id, "a:b", &reason_hash("c"))
         );
     }
 

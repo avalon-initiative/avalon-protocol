@@ -33,3 +33,8 @@ CREATE TABLE indexer_issuer_key_revocations (
     revoked_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (network_id, shard_id, key_id)
 );
+
+-- The stream that first delivered an attestation; only that stream can revoke it.
+ALTER TABLE indexer_attestations
+    ADD COLUMN network_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN shard_id TEXT NOT NULL DEFAULT '';

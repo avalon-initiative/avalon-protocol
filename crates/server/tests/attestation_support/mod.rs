@@ -2,8 +2,8 @@
 #![allow(dead_code)]
 
 use avalon_protocol::achievements::{
-    attestation_signing_bytes, bulk_attestation_signing_bytes, revocation_signing_bytes,
-    AttestationSigner,
+    attestation_signing_bytes, bulk_attestation_signing_bytes, reason_hash,
+    revocation_signing_bytes, AttestationSigner,
 };
 use avalon_protocol::ids::{AttestationId, IdentityId};
 use uuid::Uuid;
@@ -68,5 +68,10 @@ pub fn revoke_bytes(
 ) -> Vec<u8> {
     let network = network_id();
     let signer = signer(&network, claim_kind, issuer_ref, key_id);
-    revocation_signing_bytes(&signer, AttestationId(attestation_id), reason_code, reason)
+    revocation_signing_bytes(
+        &signer,
+        AttestationId(attestation_id),
+        reason_code,
+        &reason_hash(reason),
+    )
 }

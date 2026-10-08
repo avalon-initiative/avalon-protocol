@@ -744,6 +744,8 @@ pub struct ClaimRevokedPayload {
     /// is not a breaking change to the event's stored shape.
     pub reason_code: crate::revocation::RevocationReasonCode,
     pub reason: String,
+    /// Lowercase hex SHA-256 of `reason`; the signature covers this hash, not the text.
+    pub reason_hash: String,
     /// The issuer key's signature over `revocation_signing_bytes`, so a mirror can verify the revocation.
     pub proof: ClaimProofPayload,
 }
@@ -1965,6 +1967,7 @@ mod tests {
                 "cheating_detected".to_string(),
             ),
             reason: "unauthorized tooling".to_string(),
+            reason_hash: "ab".repeat(32),
             proof: sample_proof(),
         };
         let json = serde_json::json!({
@@ -1973,6 +1976,7 @@ mod tests {
             "issuer": "game:ashen-realms",
             "reason_code": "cheating_detected",
             "reason": "unauthorized tooling",
+            "reason_hash": "ab".repeat(32),
             "proof": {
                 "key_id": "00000000-0000-0000-0000-000000000000",
                 "algorithm": "ed25519",

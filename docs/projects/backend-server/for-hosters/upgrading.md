@@ -317,15 +317,17 @@ silently.
 - **Attestations:** issuance, bulk issuance and revocation signatures use new structured bytes that
   cover the network id, the issuer key id and (for issuance) a signed `issued_at`. The issue and
   bulk-issue requests take a required `issued_at_micros` (unix microseconds, within five minutes of
-  the node's clock); the revoke signature covers `reason_code` and `reason`. Because the network id
+  the node's clock); the revoke signature covers `reason_code` and the SHA-256 of `reason` (hash algorithm byte, then the hash), so the text can be redacted later. Because the network id
   is signed, an attestation made for one network never verifies on another and attestations do not
   carry over a network reset: issuers re-issue on the new network. Attestations stored under the
   old bytes stop verifying as authentic, and `achievement.issued` events without
   `issued_at_micros` are skipped by the indexer, so reset development databases with the node update.
 - **Revocations:** the `achievement.revoked` and `milestone.revoked` ledger payload carries a required
-  `proof` (`key_id`, `algorithm`, base64 `bytes`: the issuer key's signature over the revocation
-  bytes). The indexer verifies it against the issuer's keys and the network of the stream that
-  delivered the event, and refuses an unsigned or mis-signed revocation. Mirrors project issuer keys
+  `reason_hash` (hex SHA-256 of `reason`) and `proof` (`key_id`, `algorithm`, base64 `bytes`: the issuer
+  key's signature over the revocation bytes). The indexer verifies it against the issuer's keys and the network of the stream that
+  delivered the event, and refuses an unsigned or mis-signed revocation, one from an issuer key that has any revocation, and one
+  that does not come from the same network and shard stream that first delivered the attestation (the
+  first delivery of an attestation id wins). A revocation that arrives before its issuance waits. Mirrors project issuer keys
   from `game.registered`, `issuer.key_added` and `issuer.key_revoked` for this; old revocation events
   have no proof and are refused, so reset development databases with the node update.
 

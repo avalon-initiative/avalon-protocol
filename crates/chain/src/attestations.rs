@@ -401,7 +401,7 @@ mod tests {
     /// crypto.
     #[test]
     fn verify_signature_backs_revocation_verification_too() {
-        use avalon_protocol::achievements::revocation_signing_bytes;
+        use avalon_protocol::achievements::{reason_hash, revocation_signing_bytes};
         use avalon_protocol::ids::AttestationId;
 
         let signing_key = SigningKey::generate(&mut rand::rng());
@@ -415,7 +415,8 @@ mod tests {
             issuer_ref: "game:ashen-realms",
             signing_key_id: key_id,
         };
-        let bytes = revocation_signing_bytes(&signer, attestation_id, "issuer_error", "r");
+        let bytes =
+            revocation_signing_bytes(&signer, attestation_id, "issuer_error", &reason_hash("r"));
         let signature = signing_key.sign(&bytes);
         let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
 
@@ -434,8 +435,12 @@ mod tests {
 
         // A different reason code produces different bytes, so a signature
         // for one reason can't be replayed to claim a different one.
-        let other_bytes =
-            revocation_signing_bytes(&signer, attestation_id, "different_reason", "r");
+        let other_bytes = revocation_signing_bytes(
+            &signer,
+            attestation_id,
+            "different_reason",
+            &reason_hash("r"),
+        );
         assert!(matches!(
             verify_signature(
                 &key_id.to_string(),

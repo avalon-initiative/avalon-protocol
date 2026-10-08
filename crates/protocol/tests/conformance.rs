@@ -131,7 +131,7 @@ fn attestation_signing_matches_shared_vectors() {
                 &signer,
                 AttestationId(parse_uuid(input, "attestationId")),
                 input["reasonCode"].as_str().unwrap(),
-                input["reason"].as_str().unwrap(),
+                &avalon_protocol::achievements::reason_hash(input["reason"].as_str().unwrap()),
             ),
             other => panic!("unknown operation {other}"),
         }

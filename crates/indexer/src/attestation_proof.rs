@@ -1,7 +1,7 @@
 //! Projection-time proof that an attestation revocation was signed by the issuer, for the network of
 //! the delivering stream. A missing or wrong signature is refused before any table is touched.
 
-use avalon_protocol::achievements::{revocation_signing_bytes, AttestationSigner};
+use avalon_protocol::achievements::{reason_hash, revocation_signing_bytes, AttestationSigner};
 use avalon_protocol::ed25519_key::{parse_ed25519_public_key, verify_strict_signature};
 use avalon_protocol::event_payloads::ClaimRevokedPayload;
 use avalon_protocol::events::ProtocolEvent;
@@ -60,6 +60,16 @@ pub fn verify_signed_revocation(
     }
     let key = resolve_valid_signing_key(keys, revoked.proof.key_id, at)
         .ok_or_else(|| reject("revocation signing key is not valid for the issuer at this time"))?;
+    if key.revoked_at.is_some() {
+        return Err(reject("revocation signing key has been revoked"));
+    }
+    let signed_hash: [u8; 32] = hex::decode(&revoked.reason_hash)
+        .ok()
+        .and_then(|raw| raw.try_into().ok())
+        .ok_or_else(|| reject("reason_hash is not 32 bytes of hex"))?;
+    if reason_hash(&revoked.reason) != signed_hash {
+        return Err(reject("reason does not match its signed hash"));
+    }
     let public_key: [u8; 32] = key
         .public_key
         .as_slice()
@@ -77,7 +87,7 @@ pub fn verify_signed_revocation(
         &signer,
         AttestationId(revoked.attestation_id),
         revoked.reason_code.as_str(),
-        &revoked.reason,
+        &signed_hash,
     );
     if verify_strict_signature(&public_key, &bytes, &signature) {
         Ok(())
@@ -116,17 +126,31 @@ pub async fn verify_revocation(
         &keys,
         event.timestamp,
     )?;
-    let issued_by: Option<String> =
-        sqlx::query_scalar("SELECT issuer FROM indexer_attestations WHERE id = $1")
-            .bind(revoked.attestation_id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    if issued_by.is_some_and(|issuer| issuer != revoked.issuer) {
-        return Err(reject(
-            "revocation is signed by an issuer other than the attestation's",
-        ));
+    // Milestone claims are not projected, so there is no row to bind them to.
+    if claim_kind != "achievement" {
+        return Ok(());
     }
-    Ok(())
+    let issued: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT issuer, network_id, shard_id FROM indexer_attestations WHERE id = $1",
+    )
+    .bind(revoked.attestation_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match issued {
+        None => Err(IndexError::AwaitingKey(
+            "the revoked attestation is not projected from this stream yet".to_string(),
+        )),
+        Some((issuer, network, shard))
+            if issuer != revoked.issuer
+                || network != origin.network_id
+                || shard != origin.shard_id =>
+        {
+            Err(reject(
+                "revocation is not from the stream and issuer that issued the attestation",
+            ))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -163,14 +187,19 @@ mod tests {
             issuer_ref: "game:ashen-realms",
             signing_key_id: key_id,
         };
-        let bytes =
-            revocation_signing_bytes(&signer, AttestationId(attestation_id), "cheating", "r");
+        let bytes = revocation_signing_bytes(
+            &signer,
+            AttestationId(attestation_id),
+            "cheating",
+            &reason_hash("r"),
+        );
         ClaimRevokedPayload {
             id: Uuid::new_v4(),
             attestation_id,
             issuer: "game:ashen-realms".to_string(),
             reason_code: RevocationReasonCode::from("cheating".to_string()),
             reason: "r".to_string(),
+            reason_hash: hex::encode(reason_hash("r")),
             proof: ClaimProofPayload {
                 key_id,
                 algorithm: "ed25519".to_string(),
@@ -238,6 +267,32 @@ mod tests {
             verify_signed_revocation(NET, "achievement", &revoked, &[future], at),
             Err(IndexError::Rejected(_))
         ));
+    }
+
+    #[test]
+    fn a_key_that_was_ever_revoked_cannot_sign_even_after_the_fact() {
+        let (signing, key_id) = (SigningKey::from_bytes(&[3u8; 32]), Uuid::new_v4());
+        let at = OffsetDateTime::now_utc();
+        let revoked = signed(&signing, key_id, NET);
+        let mut later = key(&signing, key_id, at - time::Duration::hours(1));
+        later.revoked_at = Some(at + time::Duration::hours(1));
+        assert!(matches!(
+            verify_signed_revocation(NET, "achievement", &revoked, &[later], at),
+            Err(IndexError::Rejected(_))
+        ));
+    }
+
+    #[test]
+    fn a_reason_that_does_not_match_its_signed_hash_is_refused() {
+        let (signing, key_id) = (SigningKey::from_bytes(&[3u8; 32]), Uuid::new_v4());
+        let at = OffsetDateTime::now_utc();
+        let keys = [key(&signing, key_id, at - time::Duration::hours(1))];
+        let mut revoked = signed(&signing, key_id, NET);
+        revoked.reason = "edited".to_string();
+        assert!(verify_signed_revocation(NET, "achievement", &revoked, &keys, at).is_err());
+        revoked.reason = "r".to_string();
+        revoked.reason_hash = "zz".to_string();
+        assert!(verify_signed_revocation(NET, "achievement", &revoked, &keys, at).is_err());
     }
 
     #[test]

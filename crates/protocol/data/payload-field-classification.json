@@ -1400,6 +1400,11 @@
           "reason": "Free-text revocation reason about a person's claim; inline and removable.",
           "ref": "#1316"
         },
+        "reason_hash": {
+          "class": "authority_state",
+          "disposition": "none",
+          "reason": "SHA-256 of the reason; the signature covers it, so the text can be redacted."
+        },
         "proof": {
           "class": "authority_state",
           "disposition": "none",
