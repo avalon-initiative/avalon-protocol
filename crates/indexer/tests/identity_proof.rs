@@ -924,10 +924,12 @@ async fn a_grant_or_revocation_ahead_of_its_signing_key_is_deferred_then_applies
 async fn a_child_event_for_an_unknown_identity_is_deferred_not_refused() {
     let pool = pool().await;
     let ghost = TestIdentity::new();
-    let passkey = event(
+    let creation = created(&ghost, &unique_name("g"));
+    let key_id = ticket_of(&creation);
+    let passkey = authored(
         &ghost,
+        key_id,
         "identity.passkey_registered",
-        1,
         serde_json::json!({
             "passkey_id": Uuid::new_v4(), "identity_id": ghost.id,
             "credential_id": b64(Uuid::new_v4().as_bytes()),
@@ -935,8 +937,10 @@ async fn a_child_event_for_an_unknown_identity_is_deferred_not_refused() {
         }),
     );
     let err = apply(&pool, &passkey, &core()).await.unwrap_err();
+    assert!(matches!(err, IndexError::AwaitingKey(_)), "{err:?}");
     assert!(err.is_deferred() && !err.is_transient(), "{err:?}");
-    apply(&pool, &created(&ghost, &unique_name("g")), &core())
+    apply(&pool, &creation, &core()).await.unwrap();
+    apply(&pool, &inception(&ghost, key_id), &core())
         .await
         .unwrap();
     apply(&pool, &passkey, &core()).await.unwrap();
