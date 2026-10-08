@@ -447,6 +447,7 @@ pub const BUILT_LAYOUT_VERSIONS: &[(DomainTag, u16)] = &[
     (tags::LEDGER_ENTRY, 1),
     (tags::IDENTITY_CHAIN_EVENT, 1),
     (tags::IDENTITY_KEY_EVENT, 1),
+    (tags::IDENTITY_CHAIN_SIGNATURE, 1),
     (tags::SETTLEMENT_STH, 1),
     (tags::WITNESS_COSIGN, 1),
     (tags::WITNESS_ANNOUNCE, 1),
@@ -508,6 +509,8 @@ pub mod tags {
     pub const LEDGER_ENTRY: DomainTag = DomainTag::new("avalon.ledger.entry");
     pub const IDENTITY_CHAIN_EVENT: DomainTag = DomainTag::new("avalon.identity.chain_event");
     pub const IDENTITY_KEY_EVENT: DomainTag = DomainTag::new("avalon.identity.key_event");
+    pub const IDENTITY_CHAIN_SIGNATURE: DomainTag =
+        DomainTag::new("avalon.identity.chain_signature");
     pub const SETTLEMENT_STH: DomainTag = DomainTag::new("avalon.settlement.sth");
     pub const WITNESS_COSIGN: DomainTag = DomainTag::new("avalon.witness.cosign");
     pub const WITNESS_ANNOUNCE: DomainTag = DomainTag::new("avalon.witness.announce");
@@ -534,6 +537,7 @@ pub mod tags {
         SETTLEMENT_STH,
         WITNESS_COSIGN,
         WITNESS_ANNOUNCE,
+        IDENTITY_CHAIN_SIGNATURE,
         CONFORMANCE,
     ];
 }

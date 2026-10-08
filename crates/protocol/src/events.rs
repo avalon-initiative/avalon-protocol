@@ -328,6 +328,13 @@ pub struct IdentityChainPosition {
     pub hash_algo: u8,
     /// Hex of the extensions region the chain hash covers; `0000` when there are none.
     pub extensions: String,
+    /// The identity key that signed this event over its content and position; absent on the
+    /// owner-signed key events, which carry their own signature in the payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key_id: Option<Uuid>,
+    /// Base64 Ed25519 signature by `signing_key_id` over `chain_event_signature_bytes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl IdentityChainPosition {
@@ -341,7 +348,16 @@ impl IdentityChainPosition {
             rules_version: envelope.rules_version,
             hash_algo: envelope.hash_algo.id(),
             extensions: hex::encode(envelope.extensions.encode()),
+            signing_key_id: None,
+            signature: None,
         }
+    }
+
+    /// This position carrying the author's key id and signature.
+    pub fn signed(mut self, signing_key_id: Uuid, signature: String) -> Self {
+        self.signing_key_id = Some(signing_key_id);
+        self.signature = Some(signature);
+        self
     }
 
     /// The envelope this position records, or the typed "needs a newer version" result.

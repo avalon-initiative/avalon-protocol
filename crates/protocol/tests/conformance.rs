@@ -629,6 +629,8 @@ fn identity_chain_matches_shared_vectors() {
                 rules_version: position_wire.rules_version,
                 hash_algo: position_wire.hash_algo,
                 extensions: position_wire.extensions.clone(),
+                signing_key_id: None,
+                signature: None,
             }),
         };
         if chain_owner(&event) == Some(id)
@@ -1090,7 +1092,10 @@ fn assert_identity_signing_vectors(file: &str, build: impl Fn(&Value, &Value) ->
     // A signature made for other bytes, or over the retired text layout, never verifies.
     for group in ["replayVectors", "legacyLayoutVectors"] {
         let cases = doc[group].as_array().expect(group);
-        assert!(!cases.is_empty(), "{file} {group}");
+        assert!(
+            !cases.is_empty() || group == "legacyLayoutVectors",
+            "{file} {group}"
+        );
         for r in cases {
             let name = r["name"].as_str().unwrap();
             let bytes = build(&doc, &r["input"]);
@@ -1259,6 +1264,22 @@ fn signing_key_revoked_matches_shared_vectors() {
             parse_uuid(input, "revokedBySigningKeyId"),
             parse_seq(input),
             parse_prev_hash(input).as_ref(),
+        )
+    });
+}
+
+#[test]
+fn chain_event_signature_matches_shared_vectors() {
+    use avalon_protocol::identity_id::chain_event_signature_bytes;
+    assert_identity_signing_vectors("identity-chain-signature.json", |_, input| {
+        chain_event_signature_bytes(
+            input["networkId"].as_str().unwrap(),
+            &identity_id_of(input, "identityId"),
+            parse_uuid(input, "signingKeyId"),
+            &hex::decode(input["eventHashHex"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap(),
         )
     });
 }

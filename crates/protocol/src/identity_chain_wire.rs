@@ -20,7 +20,7 @@ use crate::identity_chain::{
     ChainHashInput, ChainOutcome, ChainedEvent, ClockSkewBounds, EventAuthority, EventHash,
     KeyEventContent, KeyEventHashInput, TimestampError,
 };
-use crate::identity_id::IdentityId;
+use crate::identity_id::{chain_event_signature_bytes, IdentityId};
 use crate::ledger_entry::{floor_to_micros, payload_hash, timestamp_micros, EntryHashError};
 use crate::signing_bytes::SigningBytesError;
 
@@ -40,6 +40,8 @@ pub enum ChainEventError {
     Layout(SigningBytesError),
     /// A key event whose payload is not a well-formed signed key event of its owner.
     KeyEvent,
+    /// The position carries no well-formed author key id and signature.
+    Unsigned,
 }
 
 /// Returns `payload` with `position` embedded under [`PAYLOAD_KEY`]. A
@@ -70,15 +72,70 @@ pub fn split_position(mut payload: Value) -> (Value, Option<IdentityChainPositio
 /// unchained or the relevant `GlobalId` is not in the `identity` namespace.
 pub fn chain_owner(event: &ProtocolEvent) -> Option<IdentityId> {
     ActionClass::classify(&ProtocolEventKind::from(event.kind.as_str()))?;
-    let id = match event.kind.as_str() {
+    embedded_identity(match event.kind.as_str() {
         "identity.recovery_approved" | "identity.recovery_cancelled" => &event.subject,
         _ => &event.issuer,
-    };
+    })
+}
+
+fn embedded_identity(id: &crate::ids::GlobalId) -> Option<IdentityId> {
     let mut parts = id.as_str().splitn(4, ':');
     if parts.next()? != "identity" {
         return None;
     }
     parts.next()?.parse().ok()
+}
+
+/// The identity that authored `event` and whose key must sign it: the issuer's identity. For a
+/// guardian's recovery approval or cancellation that is the guardian, not the chain owner.
+pub fn signer_of(event: &ProtocolEvent) -> Option<IdentityId> {
+    embedded_identity(&event.issuer)
+}
+
+/// Whether the event's chain position must carry an author signature: every chained kind except
+/// the owner-signed key events, which carry their own signature in the payload.
+pub fn needs_author_signature(kind: &str) -> bool {
+    ActionClass::classify(&ProtocolEventKind::from(kind)).is_some()
+        && authority_of(kind) != EventAuthority::OwnerSigned
+}
+
+/// The bytes the author's key signs for `event` on `network_id`; the position must carry the
+/// signing key id.
+pub fn author_signing_bytes(
+    event: &ProtocolEvent,
+    network_id: &str,
+) -> Result<Vec<u8>, ChainEventError> {
+    let owner = chain_owner(event).ok_or(ChainEventError::NotChained)?;
+    let key_id = event
+        .identity_chain
+        .as_ref()
+        .and_then(|p| p.signing_key_id)
+        .ok_or(ChainEventError::Unsigned)?;
+    Ok(chain_event_signature_bytes(
+        network_id,
+        &owner,
+        key_id,
+        &event_hash(event)?,
+    ))
+}
+
+/// Whether the position's signature is a valid author signature of `event` under `public_key`.
+pub fn verify_author_signature(
+    event: &ProtocolEvent,
+    network_id: &str,
+    public_key: &[u8; 32],
+) -> Result<bool, ChainEventError> {
+    use base64::Engine as _;
+    let bytes = author_signing_bytes(event, network_id)?;
+    let signature: [u8; 64] = event
+        .identity_chain
+        .as_ref()
+        .and_then(|p| p.signature.as_deref())
+        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+        .and_then(|raw| raw.try_into().ok())
+        .ok_or(ChainEventError::Unsigned)?;
+    Ok(crate::ed25519_key::parse_ed25519_public_key(public_key)
+        .is_some_and(|key| crate::ed25519_key::verify_strict_signature(&key, &bytes, &signature)))
 }
 
 /// How the event's authority is classified for the conflict rule.
@@ -477,5 +534,69 @@ mod tests {
         for e in [inception, other_owner, short_key, unsigned] {
             assert_eq!(event_hash(&e), Err(ChainEventError::KeyEvent));
         }
+    }
+
+    fn author_signed(mut e: ProtocolEvent, key: &ed25519_dalek::SigningKey) -> ProtocolEvent {
+        use base64::Engine as _;
+        use ed25519_dalek::Signer as _;
+        let key_id = Uuid::from_u128(9);
+        let position = e.identity_chain.take().unwrap();
+        e.identity_chain = Some(position.signed(key_id, String::new()));
+        let bytes = author_signing_bytes(&e, "net").unwrap();
+        let sig = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
+        e.identity_chain.as_mut().unwrap().signature = Some(sig);
+        e
+    }
+
+    #[test]
+    fn an_author_signature_binds_the_event_the_network_and_the_key() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3; 32]);
+        let public = key.verifying_key().to_bytes();
+        let id = IdentityId::random_for_tests();
+        let e = author_signed(event("friend.requested", id, 1, None), &key);
+        assert_eq!(verify_author_signature(&e, "net", &public), Ok(true));
+        assert_eq!(verify_author_signature(&e, "other", &public), Ok(false));
+        let other = ed25519_dalek::SigningKey::from_bytes(&[4; 32]);
+        assert_eq!(
+            verify_author_signature(&e, "net", &other.verifying_key().to_bytes()),
+            Ok(false)
+        );
+        let mut variants = Vec::new();
+        let mut v = e.clone();
+        v.payload = json!({"other": 1});
+        variants.push(v);
+        let mut v = e.clone();
+        v.identity_chain.as_mut().unwrap().seq = 2;
+        variants.push(v);
+        let mut v = e.clone();
+        v.timestamp += time::Duration::seconds(1);
+        variants.push(v);
+        let mut v = e.clone();
+        v.identity_chain.as_mut().unwrap().signing_key_id = Some(Uuid::from_u128(10));
+        variants.push(v);
+        for (i, v) in variants.iter().enumerate() {
+            assert_eq!(verify_author_signature(v, "net", &public), Ok(false), "{i}");
+        }
+        let mut unsigned = e;
+        unsigned.identity_chain.as_mut().unwrap().signature = None;
+        assert_eq!(
+            verify_author_signature(&unsigned, "net", &public),
+            Err(ChainEventError::Unsigned)
+        );
+    }
+
+    #[test]
+    fn a_guardian_signs_on_the_owners_chain_and_key_events_need_no_author_signature() {
+        let owner = IdentityId::random_for_tests();
+        let guardian = IdentityId::random_for_tests();
+        let mut e = event("identity.recovery_approved", guardian, 1, None);
+        e.subject = GlobalId::new("identity", &owner.to_string(), "self", "x");
+        assert_eq!(chain_owner(&e), Some(owner));
+        assert_eq!(signer_of(&e), Some(guardian));
+        assert!(needs_author_signature("identity.recovery_approved"));
+        assert!(needs_author_signature("profile.updated"));
+        assert!(!needs_author_signature("identity.signing_key_added"));
+        assert!(!needs_author_signature("identity.signing_key_revoked"));
+        assert!(!needs_author_signature("achievement.issued"));
     }
 }

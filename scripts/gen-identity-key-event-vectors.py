@@ -104,6 +104,18 @@ def revoked_bytes(i):
     )
 
 
+def chain_signature_bytes(i):
+    return (
+        header("avalon.identity.chain_signature")
+        + st(i["networkId"])
+        + bytes.fromhex(i["identityId"])
+        + uid(i["signingKeyId"])
+        + env.hash_algo()
+        + bytes.fromhex(i["eventHashHex"])
+        + tail()
+    )
+
+
 def legacy_created(i):
     pk = pubkey(SIGNER_SEED).hex()
     return (
@@ -350,7 +362,45 @@ def write_revoked():
     finish("signing-key-revoked.json", "signing-key-revoked", doc, REASON)
 
 
+def write_chain_signature():
+    base = {
+        "networkId": NETWORK,
+        "identityId": IDENTITY,
+        "signingKeyId": KEY_A,
+        "eventHashHex": HEAD,
+    }
+    vectors = [
+        vector("an event hash on avalon-dev-local", base, chain_signature_bytes),
+        vector("another event hash", dict(base, eventHashHex=OTHER_HEAD), chain_signature_bytes),
+        vector("an all-ones event hash", dict(base, eventHashHex="ff" * 32), chain_signature_bytes),
+        vector("a multi-byte UTF-8 network id uses its byte length", dict(base, networkId="avalon-é-1"), chain_signature_bytes),
+    ]
+    replays = [
+        replay("signed for another network", base, dict(base, networkId="avalon-int-1"), chain_signature_bytes),
+        replay("signed under another key id", base, dict(base, signingKeyId=KEY_B), chain_signature_bytes),
+        replay("signed for another event hash", base, dict(base, eventHashHex=OTHER_HEAD), chain_signature_bytes),
+        replay("signed on another identity chain", base, dict(base, identityId=identity_id_of(pubkey(SECOND_SEED)).hex()), chain_signature_bytes),
+    ]
+    doc = header_fields(
+        "Author signature of a chained event (avalon_protocol::identity_id::chain_event_signature_bytes): "
+        "tag avalon.identity.chain_signature, layout version 1, fields network_id (str), the chain owner's identity_id "
+        "(32 raw bytes), signing_key_id (uuid, the signer's key), the hash algorithm byte and event_hash (32 raw bytes). "
+        "event_hash is the identity-chain.json event hash, which already covers the event id, kind, issuer, subject, "
+        "version, time, payload hash and the chain position (seq, prev_hash), so the signature binds all of them. "
+        "Every chained kind except the owner-signed key events carries this signature in its chain position "
+        "(signing_key_id and a base64 signature); the signer is the identity named by the event issuer, which for a "
+        "guardian's recovery approval or cancellation is the guardian while the position belongs to the owner's chain. "
+        + STRUCTURED +
+        " replayVectors offer a signature made for one input with another input's bytes; it must not verify. "
+        "There is no legacy layout.",
+        GEN,
+        {"replayVectors": replays, "legacyLayoutVectors": [], "vectors": vectors},
+    )
+    finish("identity-chain-signature.json", "identity-chain-signature", doc, REASON)
+
+
 if __name__ == "__main__":
+    write_chain_signature()
     write_created()
     write_grant()
     write_revoked()

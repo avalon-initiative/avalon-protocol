@@ -80,6 +80,10 @@
       "tag": "avalon.witness.announce"
     },
     {
+      "kind": "identity_chain_signature",
+      "tag": "avalon.identity.chain_signature"
+    },
+    {
       "kind": "conformance",
       "tag": "avalon.conformance.vector"
     }

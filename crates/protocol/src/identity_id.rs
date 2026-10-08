@@ -421,6 +421,26 @@ pub fn signing_key_revoked_signing_bytes(
         .expect("signing key revocation fields fit a u32 length")
 }
 
+/// Bytes an identity key signs to author a chained event: tag `avalon.identity.chain_signature`,
+/// layout version 1, then `network_id` str, the owner's `identity_id` 32 raw bytes, `signing_key_id`
+/// uuid, the `hash_algo` u8 and the 32-byte chain `event_hash`. The event hash already covers the
+/// event id, kind, issuer, subject, version, time, payload hash and chain position.
+pub fn chain_event_signature_bytes(
+    network_id: &str,
+    owner: &IdentityId,
+    signing_key_id: Uuid,
+    event_hash: &[u8; 32],
+) -> Vec<u8> {
+    Builder::new(tags::IDENTITY_CHAIN_SIGNATURE, 1)
+        .str(network_id)
+        .fixed(owner.as_bytes())
+        .uuid(signing_key_id)
+        .hash_algo(HashAlgo::Sha256)
+        .hash(event_hash)
+        .finish()
+        .expect("chain event signature fields fit a u32 length")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
