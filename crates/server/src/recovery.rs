@@ -1133,6 +1133,82 @@ pub async fn cancel_request(
     }))
 }
 
+/// The `identity.recovered` payload for a request: its new key and the guardian approvals
+/// collected so far, ordered by guardian id so every party derives the same bytes.
+async fn recovered_payload(
+    conn: &mut sqlx::PgConnection,
+    request_id: Uuid,
+) -> Result<IdentityRecoveredPayload, AppError> {
+    let request = sqlx::query(
+        "SELECT pending_device_label, new_signing_public_key FROM recovery_requests WHERE id = $1",
+    )
+    .bind(request_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or(AppError::RecoveryRequestNotFound)?;
+    let new_signing_public_key: Option<String> = request.try_get("new_signing_public_key")?;
+    let rows = sqlx::query(
+        "SELECT guardian_identity_id, signing_key_id, signature FROM recovery_approvals \
+         WHERE request_id = $1 AND signing_key_id IS NOT NULL AND signature IS NOT NULL \
+         ORDER BY guardian_identity_id",
+    )
+    .bind(request_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut approvals = Vec::with_capacity(rows.len());
+    for row in &rows {
+        approvals.push(RecoveryApprovalProof {
+            guardian_id: row.try_get("guardian_identity_id")?,
+            signing_key_id: row.try_get("signing_key_id")?,
+            signature: row.try_get("signature")?,
+        });
+    }
+    Ok(IdentityRecoveredPayload {
+        request_id,
+        device_label: request.try_get("pending_device_label")?,
+        new_signing_public_key: new_signing_public_key.ok_or(AppError::InvalidRecoveryKey)?,
+        approvals,
+    })
+}
+
+/// The `identity.recovered` event the holder of the new key signs to finalize a recovery.
+#[derive(Serialize, ToSchema)]
+pub struct RecoveredDraft {
+    pub kind: String,
+    pub version: u32,
+    pub issuer: String,
+    pub subject: String,
+    #[schema(value_type = Object)]
+    pub payload: serde_json::Value,
+}
+
+/// `GET /recovery/requests/{id}/recovered-draft` — public: exactly the event `finalize` will
+/// author, so the holder of the new key can sign it.
+#[utoipa::path(
+    get,
+    path = "/recovery/requests/{id}/recovered-draft",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, description = "The event to sign", body = RecoveredDraft)),
+)]
+pub async fn recovered_draft(
+    State(state): State<AppState>,
+    Path(request_id): Path<Uuid>,
+) -> Result<Json<RecoveredDraft>, AppError> {
+    let request = fetch_request(&state, request_id).await?;
+    let mut conn = state.pool.acquire().await?;
+    let payload = recovered_payload(&mut conn, request_id).await?;
+    Ok(Json(RecoveredDraft {
+        kind: ProtocolEventKindVariant::IdentityRecovered
+            .as_str()
+            .to_string(),
+        version: 1,
+        issuer: identity_ref(request.identity_id, "recovered").to_string(),
+        subject: identity_ref(request.identity_id, "recovered").to_string(),
+        payload: serde_json::to_value(payload).expect("IdentityRecoveredPayload should serialize"),
+    }))
+}
+
 /// `POST /recovery/requests/:id/finalize` — deliberately public and
 /// idempotent (see module docs): it grants nothing beyond what
 /// `approve_request`/the elapsed delay already durably authorized, so
@@ -1214,22 +1290,7 @@ pub async fn finalize_request(
     .bind(&pending_device_label)
     .execute(&mut *tx)
     .await?;
-    let approval_rows = sqlx::query(
-        "SELECT guardian_identity_id, signing_key_id, signature FROM recovery_approvals \
-         WHERE request_id = $1 AND signing_key_id IS NOT NULL AND signature IS NOT NULL \
-         ORDER BY approved_at",
-    )
-    .bind(request_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut approvals = Vec::with_capacity(approval_rows.len());
-    for row in &approval_rows {
-        approvals.push(RecoveryApprovalProof {
-            guardian_id: row.try_get("guardian_identity_id")?,
-            signing_key_id: row.try_get("signing_key_id")?,
-            signature: row.try_get("signature")?,
-        });
-    }
+    let recovered_payload = recovered_payload(&mut tx, request_id).await?;
 
     sqlx::query(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data, label) VALUES ($1, $2, $3, $4)",
@@ -1260,13 +1321,8 @@ pub async fn finalize_request(
             .to_string(),
         issuer: identity_ref(request.identity_id, "recovered"),
         subject: identity_ref(request.identity_id, "recovered"),
-        payload: serde_json::to_value(IdentityRecoveredPayload {
-            request_id,
-            device_label: pending_device_label.clone(),
-            new_signing_public_key: BASE64.encode(new_key),
-            approvals,
-        })
-        .expect("IdentityRecoveredPayload should serialize"),
+        payload: serde_json::to_value(&recovered_payload)
+            .expect("IdentityRecoveredPayload should serialize"),
         timestamp: completed_at,
         version: 1,
         identity_chain: None,

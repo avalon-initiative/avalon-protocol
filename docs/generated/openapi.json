@@ -5932,6 +5932,38 @@
         }
       }
     },
+    "/recovery/requests/{id}/recovered-draft": {
+      "get": {
+        "tags": [
+          "recovery"
+        ],
+        "summary": "`GET /recovery/requests/{id}/recovered-draft` — public: exactly the event `finalize` will\nauthor, so the holder of the new key can sign it.",
+        "operationId": "recovered_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event to sign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveredDraft"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sessions/finish": {
       "post": {
         "tags": [
@@ -10082,6 +10114,36 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "RecoveredDraft": {
+        "type": "object",
+        "description": "The `identity.recovered` event the holder of the new key signs to finalize a recovery.",
+        "required": [
+          "kind",
+          "version",
+          "issuer",
+          "subject",
+          "payload"
+        ],
+        "properties": {
+          "issuer": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

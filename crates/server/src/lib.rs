@@ -620,6 +620,10 @@ fn full_routes(state: AppState) -> Router {
             post(recovery::finalize_request),
         )
         .route(
+            "/recovery/requests/{id}/recovered-draft",
+            get(recovery::recovered_draft),
+        )
+        .route(
             "/identities/{id}/recovery/status",
             get(recovery::identity_recovery_status),
         )
