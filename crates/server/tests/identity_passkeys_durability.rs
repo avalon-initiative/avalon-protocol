@@ -6,6 +6,8 @@
 //! Gated `--ignored`, same convention as `crates/server/tests/passkeys.rs`,
 //! which this file borrows its WebAuthn-ceremony helpers' shape from.
 
+mod chain_sign;
+
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
@@ -60,6 +62,7 @@ fn new_virtual_client(expected_ceremonies: usize) -> VirtualClient {
 /// caller will also log in with the returned client afterward, `1` if
 /// registration is the only ceremony it will ever perform.
 async fn create_identity_with_one_passkey(
+    pool: &PgPool,
     http: &reqwest::Client,
     base: &str,
     expected_ceremonies: usize,
@@ -120,8 +123,21 @@ async fn create_identity_with_one_passkey(
         .unwrap()
         .error_for_status()
         .expect("register/finish should succeed");
+    chain_sign::remember_registered(pool, identity_id, &signing_key).await;
 
     (identity_id, client)
+}
+
+async fn seed_session(pool: &PgPool, identity_id: avalon_protocol::ids::IdentityId) -> String {
+    let token = format!("durability-{}", uuid::Uuid::new_v4());
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
+        .bind(&token)
+        .bind(identity_id)
+        .bind(time::OffsetDateTime::now_utc() + time::Duration::hours(1))
+        .execute(pool)
+        .await
+        .unwrap();
+    token
 }
 
 async fn active_mirrored_passkey_count(
@@ -150,7 +166,16 @@ async fn the_first_passkey_at_registration_populates_the_mirror_projection() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (identity_id, _client) = create_identity_with_one_passkey(&http, &base, 1).await;
+    let (identity_id, _client) = create_identity_with_one_passkey(&pool, &http, &base, 1).await;
+    let token = seed_session(&pool, identity_id).await;
+    let passkey_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let announced = chain_sign::announce_passkey(&http, &token, identity_id, passkey_id).await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
 
     let live_row =
         sqlx::query("SELECT credential_id, passkey_data FROM identity_keys WHERE identity_id = $1")
@@ -194,8 +219,9 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (identity_id, mut client_a) = create_identity_with_one_passkey(&http, &base, 2).await;
-    assert_eq!(active_mirrored_passkey_count(&pool, identity_id).await, 1);
+    let (identity_id, mut client_a) =
+        create_identity_with_one_passkey(&pool, &http, &base, 2).await;
+    assert_eq!(active_mirrored_passkey_count(&pool, identity_id).await, 0);
 
     // Log in with the first passkey to get a session, then register a
     // second — same authenticated flow `passkeys.rs`'s own test drives.
@@ -232,6 +258,16 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
         .await
         .unwrap();
     let token = finish["token"].as_str().unwrap().to_string();
+    let first_passkey_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let announced =
+        chain_sign::announce_passkey(&http, &token, identity_id, first_passkey_id).await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
+    assert_eq!(active_mirrored_passkey_count(&pool, identity_id).await, 1);
 
     let start: serde_json::Value = http
         .post(format!("{base}/me/passkeys/register/start"))
@@ -268,6 +304,14 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
         .await
         .unwrap();
     let second_passkey_id = added["id"].as_str().unwrap().to_string();
+    let announced = chain_sign::announce_passkey(
+        &http,
+        &token,
+        identity_id,
+        second_passkey_id.parse().unwrap(),
+    )
+    .await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
 
     assert_eq!(
         active_mirrored_passkey_count(&pool, identity_id).await,
@@ -278,7 +322,9 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
     let revoke = http
         .post(format!("{base}/me/passkeys/{second_passkey_id}/revoke"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({
+            "chain_event": chain_sign::passkey_revoked(identity_id, second_passkey_id.parse().unwrap()).await,
+        }))
         .send()
         .await
         .unwrap();
@@ -302,8 +348,8 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
     assert!(revoked_at.is_some(), "revoked_at must be set once revoked");
 }
 
-/// A registration's `identity.created` must be ledgered ahead of the passkey
-/// and signing-key events that reference the identity.
+/// A registration's `identity.created` must be ledgered ahead of the signing-key event; the
+/// passkey is announced separately by its owner.
 #[tokio::test]
 #[ignore]
 async fn registration_ledgers_identity_created_before_its_child_events() {
@@ -311,7 +357,7 @@ async fn registration_ledgers_identity_created_before_its_child_events() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (identity_id, _client) = create_identity_with_one_passkey(&http, &base, 1).await;
+    let (identity_id, _client) = create_identity_with_one_passkey(&pool, &http, &base, 1).await;
 
     let pattern = format!("identity:{identity_id}:%");
     let mut kinds: Vec<String> = Vec::new();
@@ -323,17 +369,13 @@ async fn registration_ledgers_identity_created_before_its_child_events() {
         .fetch_all(&pool)
         .await
         .unwrap();
-        if kinds.len() >= 3 {
+        if kinds.len() >= 2 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     assert_eq!(
         kinds,
-        vec![
-            "identity.created",
-            "identity.passkey_registered",
-            "identity.signing_key_added"
-        ]
+        vec!["identity.created", "identity.signing_key_added"]
     );
 }
