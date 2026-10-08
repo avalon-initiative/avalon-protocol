@@ -112,10 +112,11 @@ pub struct AchievementAttestation {
 /// How far a signed `issued_at` may sit from the verifying node's clock before issuance is refused.
 pub const ISSUED_AT_MAX_SKEW_SECS: i64 = 300;
 
-/// What every attestation signature binds besides its own fields: the issuer and the exact issuer
-/// key that signed. The network is deliberately not bound (#476): attestations stay portable.
+/// What every attestation signature binds besides its own fields: the network, the issuer and the
+/// exact issuer key that signed. An attestation signed for one network never verifies on another.
 #[derive(Debug, Clone, Copy)]
 pub struct AttestationSigner<'a> {
+    pub network_id: &'a str,
     /// `"achievement"` or `"milestone"` ([`Issuer::claim_kind`]).
     pub claim_kind: &'a str,
     /// `"<namespace>:<slug>"`.
@@ -126,6 +127,7 @@ pub struct AttestationSigner<'a> {
 impl AttestationSigner<'_> {
     fn builder(&self, tag: DomainTag) -> Builder {
         Builder::new(tag, 1)
+            .str(self.network_id)
             .str(self.claim_kind)
             .str(self.issuer_ref)
             .uuid(self.signing_key_id)
@@ -138,7 +140,7 @@ pub fn issued_at_micros(issued_at: OffsetDateTime) -> i64 {
 }
 
 /// Bytes an issuer key signs to issue one attestation: tag `avalon.attestation.issue`, layout
-/// version 1, then `claim_kind`, `issuer_ref` str, `signing_key_id` uuid, `subject`
+/// version 1, then `network_id`, `claim_kind`, `issuer_ref` str, `signing_key_id` uuid, `subject`
 /// 32 raw bytes, `achievement` str (the claim's full [`GlobalId`]) and `issued_at` i64 microseconds.
 pub fn attestation_signing_bytes(
     signer: &AttestationSigner<'_>,
@@ -250,6 +252,7 @@ mod issuer_tests {
 
     fn signer<'a>(claim_kind: &'a str, issuer_ref: &'a str, key: u128) -> AttestationSigner<'a> {
         AttestationSigner {
+            network_id: "net",
             claim_kind,
             issuer_ref,
             signing_key_id: Uuid::from_u128(key),
@@ -263,7 +266,7 @@ mod issuer_tests {
             attestation_signing_bytes(&signer("achievement", "game:a", 5), subject, "g:x", T);
         let mut expected = b"avalon.attestation.issue".to_vec();
         expected.extend_from_slice(&[0, 1, 0, 0, 0, 1]);
-        for text in ["achievement", "game:a"] {
+        for text in ["net", "achievement", "game:a"] {
             expected.extend_from_slice(&(text.len() as u32).to_be_bytes());
             expected.extend_from_slice(text.as_bytes());
         }
@@ -296,6 +299,33 @@ mod issuer_tests {
         for variant in variants {
             assert_ne!(base, variant);
         }
+    }
+
+    #[test]
+    fn every_layout_binds_the_network() {
+        let subject = IdentityId::random_for_tests();
+        let (a, b) = (
+            signer("achievement", "game:a", 5),
+            signer("achievement", "game:a", 5),
+        );
+        let b = AttestationSigner {
+            network_id: "other",
+            ..b
+        };
+        let id = AttestationId(Uuid::from_u128(9));
+        let list = ["x".to_string()];
+        assert_ne!(
+            attestation_signing_bytes(&a, subject, "x", T),
+            attestation_signing_bytes(&b, subject, "x", T)
+        );
+        assert_ne!(
+            bulk_attestation_signing_bytes(&a, subject, &list, T),
+            bulk_attestation_signing_bytes(&b, subject, &list, T)
+        );
+        assert_ne!(
+            revocation_signing_bytes(&a, id, "c", "r"),
+            revocation_signing_bytes(&b, id, "c", "r")
+        );
     }
 
     #[test]

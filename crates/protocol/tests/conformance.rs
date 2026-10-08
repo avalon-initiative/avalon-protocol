@@ -100,6 +100,7 @@ fn attestation_signing_matches_shared_vectors() {
 
     assert_identity_signing_vectors("attestation-signing.json", |_, input| {
         let signer = AttestationSigner {
+            network_id: input["networkId"].as_str().unwrap(),
             claim_kind: input["claimKind"].as_str().unwrap(),
             issuer_ref: input["issuerRef"].as_str().unwrap(),
             signing_key_id: parse_uuid(input, "signingKeyId"),

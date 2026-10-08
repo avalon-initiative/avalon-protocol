@@ -219,6 +219,7 @@ fn revocation_data_from_row(row: &PgRow) -> Result<RevocationData, AppError> {
 /// through once its inputs are in hand — no I/O here, so this is the piece
 /// a future test can exercise directly without a database.
 fn assemble_attestation_response(
+    network_id: &str,
     data: AttestationRowData,
     category: IntegratorCategory,
     status: IntegratorStatus,
@@ -250,6 +251,7 @@ fn assemble_attestation_response(
 
     let authenticity = verify_authenticity(
         &attestation,
+        network_id,
         category.claim_kind(),
         &data.issuer,
         issuer_keys,
@@ -312,7 +314,14 @@ async fn build_attestation_response(
         .map(revocation_data_from_row)
         .transpose()?;
 
-    assemble_attestation_response(data, category, status, &issuer_keys, revocation)
+    assemble_attestation_response(
+        state.chain.network_id(),
+        data,
+        category,
+        status,
+        &issuer_keys,
+        revocation,
+    )
 }
 
 const DEFAULT_ACHIEVEMENTS_PAGE_SIZE: i64 = 50;
@@ -527,8 +536,14 @@ pub async fn list_my_achievements(
         let hidden = revocation
             .as_ref()
             .is_some_and(|r| r.reason_code.hides_after_revocation());
-        let response =
-            assemble_attestation_response(data, category, status, issuer_keys, revocation)?;
+        let response = assemble_attestation_response(
+            state.chain.network_id(),
+            data,
+            category,
+            status,
+            issuer_keys,
+            revocation,
+        )?;
         if !hidden {
             achievements.push(response);
         }
@@ -651,6 +666,7 @@ pub async fn revoke_attestation(
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
     let signer = AttestationSigner {
+        network_id: state.chain.network_id(),
         claim_kind,
         issuer_ref: &issuer,
         signing_key_id: body.key_id,

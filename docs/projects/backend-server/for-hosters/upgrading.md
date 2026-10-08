@@ -315,10 +315,12 @@ silently.
   device revocation requires a signature. SDKs and the Hub must be updated before they can register
   identities against a migrated node.
 - **Attestations:** issuance, bulk issuance and revocation signatures use new structured bytes that
-  cover the issuer key id and (for issuance) a signed `issued_at`; the network is still not signed. The issue and
+  cover the network id, the issuer key id and (for issuance) a signed `issued_at`. The issue and
   bulk-issue requests take a required `issued_at_micros` (unix microseconds, within five minutes of
-  the node's clock); the revoke signature covers `reason_code` and `reason`. Attestations stored
-  under the old bytes stop verifying as authentic, and `achievement.issued` events without
+  the node's clock); the revoke signature covers `reason_code` and `reason`. Because the network id
+  is signed, an attestation made for one network never verifies on another and attestations do not
+  carry over a network reset: issuers re-issue on the new network. Attestations stored under the
+  old bytes stop verifying as authentic, and `achievement.issued` events without
   `issued_at_micros` are skipped by the indexer, so reset development databases with the node update.
 
 ## Migrations 0089 and 0090: key event chain hash, no home shards (destructive)
