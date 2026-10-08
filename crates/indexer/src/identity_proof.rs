@@ -229,11 +229,9 @@ async fn signer_key(
     }
 }
 
-/// Key events change what authenticates as the identity. The signatures cover the network, key ids and chain
-/// position, but the chain hash also covers unsigned fields (timestamp, label), so a delivering
-/// shard could still fork the chain; only a shard the identity itself created on, the core shard
-/// or this node's own shard may deliver them. Residual: the inception key's id is not signed or
-/// checked at projection, so a hostile home shard could deliver it under a fresh `signing_key_id`.
+/// Key events change what authenticates as the identity. The signatures cover the network, key ids and
+/// chain position, not the unsigned fields the chain hash covers (#1354). A home shard is no longer
+/// proven by the creation signature; the home concept is being removed (#1305).
 async fn require_key_authority<'a>(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
