@@ -16,7 +16,7 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
-use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory};
+use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory, IssuerKey};
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -127,6 +127,19 @@ fn signed_issued_at(micros: i64, now: OffsetDateTime) -> Result<OffsetDateTime, 
         return Err(AppError::AttestationIssuedAtOutOfRange);
     }
     Ok(issued_at)
+}
+
+/// The issuer key an issuance may use: valid both now and at the signed `issued_at`, so a key
+/// revoked or not yet valid can neither backdate nor post-date a claim.
+fn resolve_issuing_key(
+    keys: &[IssuerKey],
+    key_id: Uuid,
+    issued_at: OffsetDateTime,
+    now: OffsetDateTime,
+) -> Result<&IssuerKey, AppError> {
+    resolve_valid_signing_key(keys, key_id, issued_at)
+        .and_then(|_| resolve_valid_signing_key(keys, key_id, now))
+        .ok_or(AppError::InvalidAttestationSignature)
 }
 
 /// How many attestations `issuer_str` has written about `subject_id`
@@ -994,13 +1007,12 @@ async fn issue_attestation(
             bytes: signature_bytes,
         },
     };
+    let signing_key = resolve_issuing_key(&issuer_keys, body.key_id, issued_at, now)?;
     let Authenticity::Authentic { .. } =
         verify_authenticity(&candidate, claim_kind, &issuer_str, &issuer_keys)
     else {
         return Err(AppError::InvalidAttestationSignature);
     };
-    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
-        .expect("verify_authenticity already resolved this key successfully");
 
     let mut tx = state.pool.begin().await?;
 
@@ -1300,17 +1312,16 @@ async fn bulk_issue_attestation(
         &achievement_refs,
         body.issued_at_micros,
     );
+    let signing_key = resolve_issuing_key(&issuer_keys, body.key_id, issued_at, now)?;
     let Authenticity::Authentic { .. } = verify_signature(
         &body.key_id.to_string(),
         &signing_bytes,
         &signature_bytes,
-        now,
+        issued_at,
         &issuer_keys,
     ) else {
         return Err(AppError::InvalidAttestationSignature);
     };
-    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
-        .expect("verify_signature already resolved this key successfully");
 
     let mut tx = state.pool.begin().await?;
 
@@ -1554,6 +1565,45 @@ mod tests {
     //! `crates/server/tests/achievements.rs`, gated `--ignored`.
 
     use super::*;
+
+    fn test_key(
+        id: Uuid,
+        valid_from: OffsetDateTime,
+        revoked_at: Option<OffsetDateTime>,
+    ) -> IssuerKey {
+        IssuerKey {
+            key_id: id,
+            algorithm: "ed25519".to_string(),
+            public_key: vec![0; 32],
+            role: avalon_protocol::integrators::KeyRole::Root,
+            purpose: avalon_protocol::integrators::KeyPurpose::Attestation,
+            valid_from,
+            valid_until: None,
+            revoked_at,
+        }
+    }
+
+    #[test]
+    fn issuing_key_must_be_valid_now_and_at_the_signed_time() {
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let secs = time::Duration::seconds;
+        let id = Uuid::new_v4();
+        let ok = [test_key(id, now - secs(1000), None)];
+        assert!(resolve_issuing_key(&ok, id, now - secs(100), now).is_ok());
+
+        // Revoked 60 s ago: an issued_at before the revocation must not backdate past it.
+        let revoked = [test_key(id, now - secs(1000), Some(now - secs(60)))];
+        assert!(resolve_issuing_key(&revoked, id, now - secs(120), now).is_err());
+
+        // Not valid for another 100 s: an issued_at after valid_from must not post-date it.
+        let future = [test_key(id, now + secs(100), None)];
+        assert!(resolve_issuing_key(&future, id, now + secs(200), now).is_err());
+
+        // Valid now but not yet at the signed time.
+        let recent = [test_key(id, now - secs(10), None)];
+        assert!(resolve_issuing_key(&recent, id, now - secs(100), now).is_err());
+        assert!(resolve_issuing_key(&ok, Uuid::new_v4(), now, now).is_err());
+    }
 
     #[test]
     fn signed_issued_at_accepts_only_the_skew_window() {
