@@ -37,6 +37,8 @@
 //! constructing an SDK client around credentials this step doesn't have or
 //! need — the same reasoning `hub_side` is raw-HTTP-only in #65 already.
 
+mod chain_sign;
+
 mod hub_side {
     //! Everything the Hub would do, over raw HTTP — no `avalon_sdk`.
     //! Identical to #65's own `hub_side` module.
@@ -214,11 +216,25 @@ mod hub_side {
         )
     }
 
-    pub async fn become_friends(http: &reqwest::Client, base: &str, a: &Player, b: &Player) {
+    pub async fn become_friends(
+        http: &reqwest::Client,
+        base: &str,
+        a: (&Player, &PlayerKey),
+        b: (&Player, &PlayerKey),
+    ) {
+        let net = crate::chain_sign::network_id();
+        let a_kid = a.1.signing_key_id.to_string();
+        let b_kid = b.1.signing_key_id.to_string();
+        let a_chain = (a.0.identity_id, &a.1.signing_key, a_kid.as_str());
+        let b_chain = (b.0.identity_id, &b.1.signing_key, b_kid.as_str());
+        let (a, b) = (a.0, b.0);
         let create = http
             .post(format!("{base}/friends/requests"))
             .bearer_auth(&a.token)
-            .json(&json!({ "to": b.identity_id }))
+            .json(&json!({
+                "to": b.identity_id,
+                "chain_event": crate::chain_sign::friend_requested(http, base, &net, a_chain, b.identity_id).await,
+            }))
             .send()
             .await
             .expect("friend request failed");
@@ -233,6 +249,9 @@ mod hub_side {
         let accept = http
             .post(format!("{base}/friends/requests/{request_id}/accept"))
             .bearer_auth(&b.token)
+            .json(&json!({
+                "chain_event": crate::chain_sign::friend_accepted(http, base, &net, b_chain, a.identity_id).await,
+            }))
             .send()
             .await
             .expect("friend accept failed");
@@ -273,9 +292,16 @@ mod hub_side {
         http: &reqwest::Client,
         base: &str,
         owner: &Player,
-        joiner: &Player,
+        joiner: (&Player, &PlayerKey),
         guild_id: Uuid,
     ) {
+        let joiner_kid = joiner.1.signing_key_id.to_string();
+        let joiner_chain = (
+            joiner.0.identity_id,
+            &joiner.1.signing_key,
+            joiner_kid.as_str(),
+        );
+        let joiner = joiner.0;
         let invite = http
             .post(format!("{base}/guilds/{guild_id}/invites"))
             .bearer_auth(&owner.token)
@@ -296,6 +322,16 @@ mod hub_side {
                 "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
             ))
             .bearer_auth(&joiner.token)
+            .json(&json!({
+                "chain_event": crate::chain_sign::invite_accepted(
+                    http,
+                    base,
+                    &crate::chain_sign::network_id(),
+                    joiner_chain,
+                    guild_id,
+                )
+                .await,
+            }))
             .send()
             .await
             .expect("accept invite failed");
@@ -825,7 +861,7 @@ async fn identity_has_no_operational_home_node_across_real_separate_infrastructu
 
     // Step 2: Player B registers on Node 2 — a genuinely separate node
     // with its own database, never touched by step 1.
-    let (bob, _bob_key) =
+    let (bob, bob_key) =
         hub_side::create_identity_and_login(&http, &node2, &format!("m3n-bob-{run_id}")).await;
 
     // Real DHT propagation: Node 2 has to actually learn (via #635's
@@ -871,10 +907,17 @@ async fn identity_has_no_operational_home_node_across_real_separate_infrastructu
 
     // Step 4: with a real Node-2 session, Alice friends Bob and they form
     // a guild together — entirely on Node 2, both genuinely local there.
-    hub_side::become_friends(&http, &node2, &alice_on_node2, &bob).await;
+    hub_side::become_friends(
+        &http,
+        &node2,
+        (&alice_on_node2, &alice_key),
+        (&bob, &bob_key),
+    )
+    .await;
     let tag = format!("M{}", &run_id[..4]).to_uppercase();
     let guild_id = hub_side::create_guild(&http, &node2, &alice_on_node2, &tag).await;
-    hub_side::join_guild_via_invite(&http, &node2, &alice_on_node2, &bob, guild_id).await;
+    hub_side::join_guild_via_invite(&http, &node2, &alice_on_node2, (&bob, &bob_key), guild_id)
+        .await;
 
     // Step 5: a game registers on Node 2 as well and issues Alice the
     // achievement, using her real Node-2 session.

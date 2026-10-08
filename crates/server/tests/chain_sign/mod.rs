@@ -288,3 +288,67 @@ pub async fn recovery_configured(
     )
     .await
 }
+
+/// The `chain_event` for reversing a friendship (`friend.relationship_reversed`).
+pub async fn friendship_reversed(
+    identity: IdentityId,
+    counterparty: IdentityId,
+    reverses_event_id: Uuid,
+    recovery_request_id: Uuid,
+) -> serde_json::Value {
+    sign(
+        identity,
+        "friend.relationship_reversed",
+        identity_ref(identity, "friend_relationship_reversed"),
+        identity_ref(counterparty, "friend_relationship_reversed"),
+        serde_json::to_value(
+            avalon_protocol::event_payloads::FriendRelationshipReversedPayload {
+                reverses_event_id,
+                recovery_request_id,
+                identity_id: identity,
+                counterparty_id: counterparty,
+                effect: "friendship_removed".to_string(),
+            },
+        )
+        .unwrap(),
+    )
+    .await
+}
+
+/// The `chain_event` for reversing a guild membership change (removed, or restored when `restored`).
+pub async fn membership_reversed(
+    identity: IdentityId,
+    guild_id: Uuid,
+    reverses_event_id: Uuid,
+    recovery_request_id: Uuid,
+    restored: bool,
+) -> serde_json::Value {
+    sign(
+        identity,
+        "guild.membership_reversed",
+        identity_ref(identity, "guild_membership_reversed"),
+        guild_ref(guild_id, "guild_membership_reversed"),
+        serde_json::to_value(
+            avalon_protocol::event_payloads::GuildMembershipReversedPayload {
+                reverses_event_id,
+                recovery_request_id,
+                guild_id,
+                identity_id: identity,
+                effect: if restored {
+                    "membership_restored"
+                } else {
+                    "membership_removed"
+                }
+                .to_string(),
+                role_index: MEMBER_ROLE_INDEX,
+            },
+        )
+        .unwrap(),
+    )
+    .await
+}
+
+/// Remembers the key of an identity registered through the real ceremony.
+pub fn remember(id: IdentityId, key: ed25519_dalek::SigningKey, key_id: Uuid) {
+    KEYS.lock().unwrap().insert(id, (key, key_id));
+}

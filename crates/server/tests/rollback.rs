@@ -6,6 +6,8 @@
 //! the real HTTP handlers so the ledger rows are genuine. The completed
 //! recovery is seeded directly since only its `completed_at` matters here.
 
+mod chain_sign;
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -58,26 +60,23 @@ async fn seed_actor(pool: &PgPool) -> Actor {
         .execute(pool)
         .await
         .unwrap();
-    let key = SigningKey::generate(&mut rand::rng());
-    let row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(id)
-    .bind(key.verifying_key().to_bytes().as_slice())
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let key_id = chain_sign::register(pool, &who).await;
     Actor {
         id,
         token,
-        key_id: row.try_get("id").unwrap(),
-        key,
+        key_id,
+        key: who.signing_key.clone(),
     }
 }
 
 fn sign_reverse(actor: &Actor, event_id: &str, since: &str) -> String {
     let message = format!("avalon:rollback.reverse:v1:{event_id}:{}:{since}", actor.id);
     BASE64.encode(actor.key.sign(message.as_bytes()).to_bytes())
+}
+
+/// A signed reversal the handler will refuse before placing it (wrong window, event or kind).
+async fn unplaced(owner: &Actor, recovery_id: Uuid) -> serde_json::Value {
+    chain_sign::friendship_reversed(owner.id, owner.id, Uuid::new_v4(), recovery_id).await
 }
 
 async fn wait_for_outbox_drain(pool: &PgPool) {
@@ -135,7 +134,10 @@ async fn befriend(http: &reqwest::Client, base: &str, requester: &Actor, accepto
     let request: serde_json::Value = http
         .post(format!("{base}/friends/requests"))
         .bearer_auth(&requester.token)
-        .json(&serde_json::json!({ "to": acceptor.id }))
+        .json(&serde_json::json!({
+            "to": acceptor.id,
+            "chain_event": chain_sign::friend_requested(requester.id, acceptor.id).await,
+        }))
         .send()
         .await
         .unwrap()
@@ -147,6 +149,9 @@ async fn befriend(http: &reqwest::Client, base: &str, requester: &Actor, accepto
     let request_id = request["id"].as_str().unwrap();
     http.post(format!("{base}/friends/requests/{request_id}/accept"))
         .bearer_auth(&acceptor.token)
+        .json(&serde_json::json!({
+            "chain_event": chain_sign::friend_accepted(acceptor.id, requester.id, acceptor.id).await,
+        }))
         .send()
         .await
         .unwrap()
@@ -180,8 +185,9 @@ async fn reverse(
     event_id: &str,
     since: &str,
     signed: bool,
+    chain_event: serde_json::Value,
 ) -> (u16, serde_json::Value) {
-    let mut body = serde_json::json!({ "since": since });
+    let mut body = serde_json::json!({ "since": since, "chain_event": chain_event });
     if signed {
         body["signing_key_id"] = serde_json::json!(owner.key_id);
         body["signature"] = serde_json::json!(sign_reverse(owner, event_id, since));
@@ -211,20 +217,20 @@ fn of_kind<'a>(listing: &'a serde_json::Value, kind: &str) -> Vec<&'a serde_json
 async fn insert_completed_recovery(
     pool: &PgPool,
     identity_id: avalon_protocol::ids::IdentityId,
-) -> OffsetDateTime {
+) -> (OffsetDateTime, Uuid) {
     let completed_at = OffsetDateTime::now_utc();
-    sqlx::query(
+    let request_id = sqlx::query_scalar(
         "INSERT INTO recovery_requests \
          (identity_id, pending_passkey_data, pending_credential_id, threshold_at_request, status, completed_at) \
-         VALUES ($1, '{}'::jsonb, $2, 1, 'completed', $3)",
+         VALUES ($1, '{}'::jsonb, $2, 1, 'completed', $3) RETURNING id",
     )
     .bind(identity_id)
     .bind(Uuid::new_v4().as_bytes().as_slice())
     .bind(completed_at)
-    .execute(pool)
+    .fetch_one(pool)
     .await
     .unwrap();
-    completed_at
+    (completed_at, request_id)
 }
 
 async fn is_friend(
@@ -277,6 +283,9 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
     befriend(&http, &base, &other_two, &owner).await;
     http.delete(format!("{base}/friends/{}", other_two.id))
         .bearer_auth(&owner.token)
+        .json(&serde_json::json!({
+            "chain_event": chain_sign::friend_removed(owner.id, other_two.id).await,
+        }))
         .send()
         .await
         .unwrap()
@@ -289,6 +298,9 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
     for guild in [joined_guild, left_guild, invite_only_guild] {
         http.post(format!("{base}/guilds/{guild}/join"))
             .bearer_auth(&owner.token)
+            .json(&serde_json::json!({
+                "chain_event": chain_sign::joined(owner.id, guild, "join").await,
+            }))
             .send()
             .await
             .unwrap()
@@ -298,6 +310,9 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
     for guild in [left_guild, invite_only_guild] {
         http.post(format!("{base}/guilds/{guild}/leave"))
             .bearer_auth(&owner.token)
+            .json(&serde_json::json!({
+                "chain_event": chain_sign::guild_member_removed(owner.id, guild, owner.id, "left").await,
+            }))
             .send()
             .await
             .unwrap()
@@ -313,7 +328,7 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
     assert_eq!(status, 409);
     assert_eq!(body["code"], "ROLLBACK_NO_COMPLETED_RECOVERY");
 
-    let completed_at = insert_completed_recovery(&pool, owner.id).await;
+    let (completed_at, recovery_id) = insert_completed_recovery(&pool, owner.id).await;
 
     // An inverted window is a validation error, not an empty list.
     let after_recovery = (completed_at + time::Duration::seconds(1))
@@ -373,12 +388,24 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
 
     // Signature is required.
     let accepted_id = accepted["event_id"].as_str().unwrap();
-    let (status, body) = reverse(&http, &base, &owner, accepted_id, &before_attack, false).await;
+    let dummy = unplaced(&owner, recovery_id).await;
+    let (status, body) = reverse(
+        &http,
+        &base,
+        &owner,
+        accepted_id,
+        &before_attack,
+        false,
+        dummy,
+    )
+    .await;
     assert_eq!(status, 401);
     assert_eq!(body["code"], "FRESH_SIGNATURE_REQUIRED");
 
     // An event outside the window is not eligible.
-    let (status, body) = reverse(&http, &base, &owner, accepted_id, &just_before, true).await;
+    let dummy = unplaced(&owner, recovery_id).await;
+    let (status, body) =
+        reverse(&http, &base, &owner, accepted_id, &just_before, true, dummy).await;
     assert_eq!(status, 404);
     assert_eq!(body["code"], "ROLLBACK_EVENT_NOT_ELIGIBLE");
 
@@ -390,6 +417,7 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
         &Uuid::new_v4().to_string(),
         &before_attack,
         true,
+        unplaced(&owner, recovery_id).await,
     )
     .await;
     assert_eq!(status, 404);
@@ -402,6 +430,7 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
         removed_friend["event_id"].as_str().unwrap(),
         &before_attack,
         true,
+        unplaced(&owner, recovery_id).await,
     )
     .await;
     assert_eq!(status, 409);
@@ -409,13 +438,39 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
 
     // Undo the friendship.
     assert!(is_friend(&pool, owner.id, other.id).await);
-    let (status, body) = reverse(&http, &base, &owner, accepted_id, &before_attack, true).await;
+    let chain_event = chain_sign::friendship_reversed(
+        owner.id,
+        other.id,
+        accepted_id.parse().unwrap(),
+        recovery_id,
+    )
+    .await;
+    let (status, body) = reverse(
+        &http,
+        &base,
+        &owner,
+        accepted_id,
+        &before_attack,
+        true,
+        chain_event,
+    )
+    .await;
     assert_eq!(status, 200, "{body}");
     assert!(body["reversal_event_id"].is_string());
     assert!(!is_friend(&pool, owner.id, other.id).await);
 
     // A second reversal of the same event is refused.
-    let (status, body) = reverse(&http, &base, &owner, accepted_id, &before_attack, true).await;
+    let dummy = unplaced(&owner, recovery_id).await;
+    let (status, body) = reverse(
+        &http,
+        &base,
+        &owner,
+        accepted_id,
+        &before_attack,
+        true,
+        dummy,
+    )
+    .await;
     assert_eq!(status, 409);
     assert_eq!(body["code"], "ROLLBACK_ALREADY_REVERSED");
 
@@ -430,13 +485,23 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
         })
         .unwrap();
     assert_eq!(role_index(&pool, joined_guild, owner.id).await, Some(2));
+    let joined_event_id = joined_event["event_id"].as_str().unwrap();
+    let chain_event = chain_sign::membership_reversed(
+        owner.id,
+        joined_guild,
+        joined_event_id.parse().unwrap(),
+        recovery_id,
+        false,
+    )
+    .await;
     let (status, body) = reverse(
         &http,
         &base,
         &owner,
-        joined_event["event_id"].as_str().unwrap(),
+        joined_event_id,
         &before_attack,
         true,
+        chain_event,
     )
     .await;
     assert_eq!(status, 200, "{body}");
@@ -452,13 +517,23 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
         .unwrap()
         .contains(&left_guild.to_string()));
     assert_eq!(role_index(&pool, left_guild, owner.id).await, None);
+    let restorable_id = restorable["event_id"].as_str().unwrap();
+    let chain_event = chain_sign::membership_reversed(
+        owner.id,
+        left_guild,
+        restorable_id.parse().unwrap(),
+        recovery_id,
+        true,
+    )
+    .await;
     let (status, body) = reverse(
         &http,
         &base,
         &owner,
-        restorable["event_id"].as_str().unwrap(),
+        restorable_id,
         &before_attack,
         true,
+        chain_event,
     )
     .await;
     assert_eq!(status, 200, "{body}");
@@ -476,6 +551,7 @@ async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
         invite_only_leave["event_id"].as_str().unwrap(),
         &before_attack,
         true,
+        unplaced(&owner, recovery_id).await,
     )
     .await;
     assert_eq!(status, 409);
