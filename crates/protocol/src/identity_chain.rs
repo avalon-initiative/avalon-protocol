@@ -235,24 +235,15 @@ impl ActionClass {
     }
 }
 
-/// Who is authoritative over the fields that made this event, for the
-/// purpose of this rule. Distinct from "who signed the wire bytes" — see
-/// this module's own report for what the codebase actually does today
-/// (most layer-1 events are network-attributed, not identity-signed, per
-/// `docs/projects/backend-server/architecture/protocol-events.md`); this
-/// enum documents which case a chained event is, not how it got verified.
+/// How a chained event proves its author: both cases are signed by an active key of the identity
+/// that owns the chain (a guardian's key never signs on another identity's chain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventAuthority {
-    /// Signed by the identity's own Ed25519 event-signing key. Only
-    /// `identity.created` and the signing-key add/revoke events currently
-    /// do this.
+    /// A signing-key add or revoke: the signature in its payload covers the key ids, keys and
+    /// chain position, and the chain hash covers only those.
     OwnerSigned,
-    /// Attributed to the identity by the node that accepted it, after the
-    /// identity's *session* (WebAuthn-authenticated) requested the action.
-    /// The node never invents the request, but the identity's own key never
-    /// touches these bytes either — session hijack is the relevant threat
-    /// model, not a forged signature. Friend and guild-membership events
-    /// are this case today.
+    /// Every other chained kind: the chain position carries the author's key id and an Ed25519
+    /// signature over the event's chain hash (`identity_id::chain_event_signature_bytes`).
     AuthenticatedSession,
 }
 

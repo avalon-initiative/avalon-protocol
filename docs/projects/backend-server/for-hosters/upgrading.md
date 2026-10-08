@@ -349,3 +349,29 @@ delivered a key event no longer decides whether it is accepted.
   the shard that delivered it are not covered by any signature. They are best-effort: the first
   delivery wins and a redelivery never overwrites them. Only key ids, keys, signatures and the chain
   position are authenticated.
+
+## Migration 0092: every chained event is signed by its author (destructive for clients)
+
+Every event in an identity's chain (profile, friend, guild membership, passkey and recovery
+configuration events, and `identity.recovered`) now carries its author's key id and an Ed25519
+signature in its chain position, and every node verifies it against the author's active key
+whichever shard or node delivered the event. The old rule that unsigned identity state is accepted
+from the core shard or the local shard is gone. Old events carry no signature, so reset
+development databases with the node update. All nodes of a network update together.
+
+- **Endpoints:** the endpoints that author these events take a `chain_event` object (`event_id`,
+  `timestamp`, `seq`, `prev_hash`, `signing_key_id`, `signature`): friend request, accept and remove,
+  guild join, invite accept, join-request approve, leave and member removal, profile update,
+  passkey revoke, recovery guardian configuration, recovery finalize and rollback reversal. A stale
+  position answers 409 `IDENTITY_CHAIN_POSITION_STALE` with the head to sign against;
+  `GET /identities/{id}/chain-head` returns it too.
+- **Passkeys:** registering a passkey no longer authors an event. The owner announces it with
+  `GET /me/passkeys/{id}/announcement` and a signed `POST /me/passkeys/{id}/announce`.
+- **Recovery:** `identity.recovery_requested`, `identity.recovery_approved` and
+  `identity.recovery_cancelled` are public markers outside the owner's chain. A request names a new
+  Ed25519 key, each guardian signs an approval of exactly that request and key with their own key,
+  and `identity.recovered` embeds the approvals and is signed by the new key. Mirrors accept it only
+  with at least the threshold of valid approvals from the guardians in the owner's signed
+  `identity.recovery_configured`. Recovery revokes every earlier passkey and signing key.
+- **Not covered by mirrors:** the recovery delay and a veto (cancel) are enforced by the node that
+  finalizes, not provable by a mirror.
