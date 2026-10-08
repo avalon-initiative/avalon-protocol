@@ -8,11 +8,10 @@
 
 use std::collections::BTreeSet;
 
-use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
+use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::identity_chain::{ChainOutcome, ChainedEvent, ClockSkewBounds, EventHash};
 use avalon_protocol::identity_chain_wire::{
-    chain_owner, event_hash, resolve_identity_chain, to_chained_event, truncate_to_micros,
-    ChainEventError,
+    chain_owner, event_hash, resolve_identity_chain, to_chained_event, ChainEventError,
 };
 use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
@@ -187,28 +186,29 @@ async fn persist_state(
     Ok(())
 }
 
-/// Assigns `event` its position in its identity's chain (the next `seq`
-/// after the resolved head, `prev_hash` = head) and records it. Leaves the
-/// event unchained when its kind is not chained, or when the identity is
-/// forked and the event is not the recovery completion that resolves it.
-pub async fn assign_local(
+/// The events of the identity's resolved chain, in chain order.
+pub async fn accepted_events(
     tx: &mut Transaction<'_, Postgres>,
-    event: &mut ProtocolEvent,
-) -> Result<(), sqlx::Error> {
+    identity_id: IdentityId,
+) -> Result<Vec<ProtocolEvent>, sqlx::Error> {
+    let stored = load(tx, identity_id).await?;
+    let outcome = outcome_of(&stored);
+    Ok(accepted_of(&stored, &outcome)
+        .into_iter()
+        .map(|s| s.event.clone())
+        .collect())
+}
+
+/// Records a locally authored event at the position its author signed. The caller has locked the
+/// identity's head ([`lock_head`]) and checked that the position extends it.
+pub async fn record_local(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+) -> Result<Recorded, sqlx::Error> {
     let Some(owner) = chain_owner(event) else {
-        return Ok(());
+        return Ok(Recorded::Unchained);
     };
-    let head = lock_state(tx, owner).await?;
-    if head.forked_at_seq.is_some() && event.kind != "identity.recovered" {
-        return Ok(());
-    }
-    event.timestamp = truncate_to_micros(event.timestamp);
-    event.identity_chain = Some(IdentityChainPosition::current(
-        head.seq as u64 + 1,
-        head.head_hash,
-    ));
-    record_locked(tx, owner, event, OffsetDateTime::now_utc()).await?;
-    Ok(())
+    record_locked(tx, owner, event, OffsetDateTime::now_utc()).await
 }
 
 /// Records a chained event (local or mirrored) and re-resolves its

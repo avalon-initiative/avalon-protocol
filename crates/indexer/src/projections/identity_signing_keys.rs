@@ -79,6 +79,44 @@ pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
     }
 }
 
+/// Applies a verified `identity.recovered`: every earlier signing key and passkey of the identity
+/// is revoked and the recovery's new key (id `request_id`) becomes its active key.
+pub async fn apply_recovered(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    identity_id: IdentityId,
+) -> Result<(), IndexError> {
+    let payload: avalon_protocol::event_payloads::IdentityRecoveredPayload =
+        serde_json::from_value(event.payload.clone())
+            .map_err(|_| IndexError::Rejected("identity.recovered payload is malformed".into()))?;
+    let public_key = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &payload.new_signing_public_key,
+    )
+    .map_err(|_| IndexError::Rejected("new signing key is not base64".into()))?;
+    for sql in [
+        "UPDATE indexer_identity_signing_keys SET revoked_at = $2 WHERE identity_id = $1 AND revoked_at IS NULL",
+        "UPDATE indexer_identity_passkeys SET revoked_at = $2 WHERE identity_id = $1 AND revoked_at IS NULL",
+    ] {
+        sqlx::query(sql)
+            .bind(identity_id)
+            .bind(event.timestamp)
+            .execute(&mut **tx)
+            .await?;
+    }
+    apply(
+        tx,
+        &SigningKeyWrite::Added {
+            signing_key_id: payload.request_id,
+            identity_id,
+            public_key,
+            label: payload.device_label,
+            added_at: event.timestamp,
+        },
+    )
+    .await
+}
+
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &SigningKeyWrite,

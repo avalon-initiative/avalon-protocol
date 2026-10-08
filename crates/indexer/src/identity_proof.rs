@@ -3,29 +3,34 @@
 //! Self-authenticating kinds (`identity.created`, `identity.signing_key_added`,
 //! `identity.signing_key_revoked`) are checked against the signature they carry and the identity's
 //! own key chain; the check does not depend on which shard delivered the event. The inception key
-//! event is bound to the creation ticket's key id. Kinds that carry no proof are accepted only from
-//! an authoritative origin (see [`EventOrigin::is_authoritative`]). Anything refused is returned as
-//! [`IndexError::Rejected`] before any table is touched.
+//! event is bound to the creation ticket's key id. Every other chained kind carries its author's
+//! signature in its chain position and is verified against the author's active key, whichever shard
+//! or node delivered it. Anything refused is returned as [`IndexError::Rejected`] before any table
+//! is touched.
 
 use avalon_protocol::ed25519_key::{parse_ed25519_public_key, verify_strict_signature};
 use avalon_protocol::event_payloads::{
-    IdentityCreatedPayload, IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload,
+    IdentityCreatedPayload, IdentityRecoveredPayload, IdentityRecoveryConfiguredPayload,
+    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload,
     SIGNING_KEY_KIND_DEVICE_GRANT, SIGNING_KEY_KIND_INCEPTION,
 };
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::identity_chain_wire::parse_hash;
+use avalon_protocol::identity_chain_wire::{
+    chain_owner, needs_author_signature, parse_hash, signer_of, verify_author_signature,
+};
 use avalon_protocol::identity_id::{
     device_grant_approval_signing_bytes, display_name_permitted, identity_created_signing_bytes,
-    signing_key_revoked_signing_bytes, IdentityId,
+    recovery_approval_signing_bytes, signing_key_revoked_signing_bytes, IdentityId,
 };
 use avalon_protocol::ids::GlobalId;
-use avalon_protocol::shard::CORE_SHARD_ID;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
-use crate::IndexError;
+use std::collections::BTreeSet;
+
+use crate::{identity_chain_store, IndexError};
 
 /// Where an event came from: the ledger stream (network and shard) it was read from, and whether
 /// this node authored that stream itself.
@@ -53,13 +58,6 @@ impl EventOrigin {
             shard_id: shard_id.into(),
             local: false,
         }
-    }
-
-    /// Whether this origin may author identity-state events that carry no proof: this node's own
-    /// stream, or the core shard of this node's own network (`local_network`). Every other
-    /// shard is limited to events that prove themselves.
-    pub fn is_authoritative(&self, local_network: Option<&str>) -> bool {
-        self.local || (self.shard_id == CORE_SHARD_ID && local_network == Some(&self.network_id))
     }
 }
 
@@ -380,15 +378,109 @@ async fn verify_key_revoked(
     Ok(())
 }
 
-/// Kinds that change an identity's keys, credentials, recovery state or profile but carry no
-/// signature a mirror can check.
-fn is_unproven_identity_state(kind: &str) -> bool {
-    kind == "profile.updated"
-        || (kind.starts_with("identity.")
-            && !matches!(
-                kind,
-                "identity.created" | "identity.signing_key_added" | "identity.signing_key_revoked"
-            ))
+/// Checks a chained event's author signature: the event names its signer (the issuer's identity)
+/// and key, the key is active in the signer's key chain, and its signature covers the event and
+/// its chain position on this network. An unknown key defers the event.
+async fn verify_author(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    origin: Option<&EventOrigin>,
+) -> Result<(), IndexError> {
+    let network_id = key_event_network(origin)?;
+    let signer = signer_of(event).ok_or_else(|| reject("issuer is not an identity"))?;
+    let key_id = event
+        .identity_chain
+        .as_ref()
+        .and_then(|p| p.signing_key_id)
+        .ok_or_else(|| reject(format!("{} carries no author signature", event.kind)))?;
+    let key = signer_key(tx, signer, key_id, "authoring").await?;
+    match verify_author_signature(event, network_id, &key) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(reject(format!(
+            "{} author signature does not verify under the authoring key",
+            event.kind
+        ))),
+        Err(_) => Err(reject(format!(
+            "{} author signature is malformed",
+            event.kind
+        ))),
+    }
+}
+
+/// Checks `identity.recovered`: it is signed by the new key it introduces (key id = the request
+/// id), and embeds valid approvals of exactly this request and key from at least the threshold of
+/// the guardians in the owner's accepted `identity.recovery_configured`. Guardians sign only
+/// these approvals, never an event of the owner's chain.
+async fn verify_recovered(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    origin: Option<&EventOrigin>,
+) -> Result<(), IndexError> {
+    let network_id = key_event_network(origin)?;
+    let owner = chain_owner(event).ok_or_else(|| reject("issuer is not an identity"))?;
+    let payload: IdentityRecoveredPayload = serde_json::from_value(event.payload.clone())
+        .map_err(|_| reject("identity.recovered payload is malformed"))?;
+    let new_key = decode_key(&payload.new_signing_public_key)?;
+    let signed_by = event.identity_chain.as_ref().and_then(|p| p.signing_key_id);
+    if signed_by != Some(payload.request_id) {
+        return Err(reject("identity.recovered is not signed by the new key"));
+    }
+    if !matches!(
+        verify_author_signature(event, network_id, &new_key),
+        Ok(true)
+    ) {
+        return Err(reject(
+            "identity.recovered does not verify under the new key",
+        ));
+    }
+
+    let accepted = identity_chain_store::accepted_events(tx, owner).await?;
+    let configured: IdentityRecoveryConfiguredPayload = accepted
+        .iter()
+        .rev()
+        .find(|e| e.kind == "identity.recovery_configured")
+        .and_then(|e| serde_json::from_value(e.payload.clone()).ok())
+        .ok_or_else(|| {
+            IndexError::AwaitingKey("the recovery configuration is not projected yet".to_string())
+        })?;
+    let mut approved = BTreeSet::new();
+    let mut awaiting_key = false;
+    for approval in &payload.approvals {
+        if !configured.guardian_ids.contains(&approval.guardian_id)
+            || approved.contains(&approval.guardian_id)
+        {
+            continue;
+        }
+        let key = match key_state(tx, approval.guardian_id, approval.signing_key_id).await? {
+            KeyState::Active(key) => key,
+            KeyState::Revoked => continue,
+            KeyState::Unknown => {
+                awaiting_key = true;
+                continue;
+            }
+        };
+        let bytes = recovery_approval_signing_bytes(
+            network_id,
+            &owner,
+            payload.request_id,
+            &approval.guardian_id,
+            approval.signing_key_id,
+            &new_key,
+        );
+        let valid = decode_signature(&approval.signature)
+            .is_ok_and(|signature| verify_with_key(&key, &bytes, &signature));
+        if valid {
+            approved.insert(approval.guardian_id);
+        }
+    }
+    if (approved.len() as i64) < i64::from(configured.threshold.max(1)) {
+        return Err(if awaiting_key {
+            IndexError::AwaitingKey("a guardian key is not projected yet".to_string())
+        } else {
+            reject("identity.recovered carries fewer valid guardian approvals than the threshold")
+        });
+    }
+    Ok(())
 }
 
 /// Verifies `event` before any table (including the identity chain) is touched.
@@ -398,7 +490,6 @@ pub async fn verify(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
     origin: Option<&EventOrigin>,
-    local_network: Option<&str>,
 ) -> Result<Verified, IndexError> {
     match event.kind.as_str() {
         "identity.created" => {
@@ -411,15 +502,12 @@ pub async fn verify(
         "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin)
             .await
             .map(|()| Verified::Other),
-        kind if is_unproven_identity_state(kind) => {
-            if origin.is_some_and(|o| o.is_authoritative(local_network)) {
-                Ok(Verified::Other)
-            } else {
-                Err(reject(format!(
-                    "{kind} carries no proof and is accepted only from the core shard or this node's own shard"
-                )))
-            }
-        }
+        "identity.recovered" => verify_recovered(tx, event, origin)
+            .await
+            .map(|()| Verified::Other),
+        kind if needs_author_signature(kind) => verify_author(tx, event, origin)
+            .await
+            .map(|()| Verified::Other),
         _ => Ok(Verified::Other),
     }
 }
@@ -509,40 +597,5 @@ mod tests {
         let mut event = created_event(&who, who.created_payload("Ada"));
         event.issuer = GlobalId::new("identity", &victim.id.to_string(), "self", "created");
         assert!(verify_created(&event, TEST_NETWORK_ID).is_err());
-    }
-
-    #[test]
-    fn only_core_and_the_local_shard_are_authoritative() {
-        let net = Some("n");
-        assert!(EventOrigin::mirrored("n", "core").is_authoritative(net));
-        assert!(EventOrigin::local("n", "game:slug/1").is_authoritative(net));
-        assert!(!EventOrigin::mirrored("n", "game:slug/1").is_authoritative(net));
-        assert!(!EventOrigin::mirrored("n", "service:x").is_authoritative(net));
-        // Another network's core shard, or no local network at all, is not authoritative.
-        assert!(!EventOrigin::mirrored("other", "core").is_authoritative(net));
-        assert!(!EventOrigin::mirrored("n", "core").is_authoritative(None));
-    }
-
-    #[test]
-    fn unproven_kinds_are_identified() {
-        for kind in [
-            "profile.updated",
-            "identity.passkey_registered",
-            "identity.passkey_revoked",
-            "identity.recovered",
-            "identity.recovery_configured",
-            "identity.something_new",
-        ] {
-            assert!(is_unproven_identity_state(kind), "{kind}");
-        }
-        for kind in [
-            "identity.created",
-            "identity.signing_key_added",
-            "identity.signing_key_revoked",
-            "friend.requested",
-            "guild.created",
-        ] {
-            assert!(!is_unproven_identity_state(kind), "{kind}");
-        }
     }
 }

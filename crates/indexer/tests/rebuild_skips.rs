@@ -124,17 +124,28 @@ async fn children_ahead_of_their_creation_are_applied_once_it_arrives() {
         identity_chain: None,
     };
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut passkey = child(
+        "identity.passkey_registered",
+        "passkey_registered",
+        1,
+        serde_json::json!({
+            "passkey_id": Uuid::new_v4(), "identity_id": who.id,
+            "credential_id": b64(Uuid::new_v4().as_bytes()),
+            "passkey_data": {"k": 1}, "label": null,
+        }),
+    );
+    passkey.identity_chain = Some(avalon_protocol::events::IdentityChainPosition::current(
+        1, None,
+    ));
+    avalon_protocol::identity_chain_wire::author_sign(
+        &mut passkey,
+        "avalon-test-network",
+        key_id,
+        &who.signing_key,
+    )
+    .unwrap();
     let events = vec![
-        child(
-            "identity.passkey_registered",
-            "passkey_registered",
-            1,
-            serde_json::json!({
-                "passkey_id": Uuid::new_v4(), "identity_id": who.id,
-                "credential_id": b64(Uuid::new_v4().as_bytes()),
-                "passkey_data": {"k": 1}, "label": null,
-            }),
-        ),
+        passkey,
         child(
             "identity.signing_key_added",
             "signing_key_added",

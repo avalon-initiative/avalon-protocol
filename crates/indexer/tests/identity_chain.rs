@@ -4,10 +4,11 @@
 //! comparing the resulting state.
 
 use avalon_indexer::identity_chain_store;
+use avalon_indexer::identity_proof::EventOrigin;
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
-use avalon_protocol::identity_chain_wire::event_hash;
+use avalon_protocol::identity_chain_wire::{event_hash, needs_author_signature};
 use avalon_protocol::identity_id::{
     device_grant_approval_signing_bytes, TestIdentity, TEST_NETWORK_ID,
 };
@@ -29,8 +30,10 @@ fn gid(identity_id: IdentityId, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn chained(
-    identity_id: IdentityId,
+    who: &TestIdentity,
+    key_id: Uuid,
     kind: &str,
     verb: &str,
     payload: serde_json::Value,
@@ -38,6 +41,7 @@ fn chained(
     seq: u64,
     prev: Option<&ProtocolEvent>,
 ) -> ProtocolEvent {
+    let identity_id = who.id;
     let mut event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: kind.to_string(),
@@ -52,6 +56,9 @@ fn chained(
         seq,
         prev.map(|p| hex::encode(event_hash(p).unwrap())),
     ));
+    if needs_author_signature(kind) {
+        who.sign_event(&mut event, key_id);
+    }
     event
 }
 
@@ -104,7 +111,8 @@ async fn add_inception_key(pool: &PgPool, indexer: &PostgresIndexer, who: &TestI
     .await
     .unwrap();
     let mut event = chained(
-        who.id,
+        who,
+        key_id,
         "identity.signing_key_added",
         "signing_key_added",
         serde_json::json!({
@@ -185,10 +193,13 @@ async fn profile(pool: &PgPool, identity_id: IdentityId) -> (Option<String>, Opt
 async fn conflicting_profile_edits_converge_in_any_arrival_order() {
     let pool = test_pool().await;
     let indexer = indexer(&pool);
-    let id = seed_identity(&pool).await.id;
+    let who = seed_identity(&pool).await;
+    let id = who.id;
+    let key = add_inception_key(&pool, &indexer, &who).await;
 
     let root = chained(
-        id,
+        &who,
+        key,
         "profile.updated",
         "profile_updated",
         serde_json::json!({"bio": "root"}),
@@ -199,7 +210,8 @@ async fn conflicting_profile_edits_converge_in_any_arrival_order() {
     // Concurrent at seq 2: the later timestamp (b) wins; a also set pronouns,
     // which must not survive its displacement.
     let a = chained(
-        id,
+        &who,
+        key,
         "profile.updated",
         "profile_updated",
         serde_json::json!({"bio": "A", "pronouns": "pA"}),
@@ -208,7 +220,8 @@ async fn conflicting_profile_edits_converge_in_any_arrival_order() {
         Some(&root),
     );
     let b = chained(
-        id,
+        &who,
+        key,
         "profile.updated",
         "profile_updated",
         serde_json::json!({"bio": "B"}),
@@ -257,7 +270,8 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
     let inception = add_inception_key(&pool, &indexer, &who).await;
 
     let mut a = chained(
-        id,
+        &who,
+        inception,
         "identity.signing_key_added",
         "signing_key_added",
         device_grant_payload(&who, inception, 7),
@@ -266,7 +280,8 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
         None,
     );
     let mut b = chained(
-        id,
+        &who,
+        inception,
         "identity.signing_key_added",
         "signing_key_added",
         device_grant_payload(&who, inception, 8),
@@ -277,7 +292,8 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
     a.version = 2;
     b.version = 2;
     let recovered = chained(
-        id,
+        &who,
+        inception,
         "identity.recovered",
         "recovered",
         serde_json::json!({"request_id": Uuid::nil()}),
@@ -308,53 +324,80 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
 
 #[tokio::test]
 #[ignore]
-async fn local_assignment_chains_events_and_freezes_on_fork() {
+async fn a_chained_event_without_a_valid_author_signature_cannot_take_a_chain_position() {
     let pool = test_pool().await;
-    let id = seed_identity(&pool).await.id;
+    let indexer = indexer(&pool);
+    let who = seed_identity(&pool).await;
+    let id = who.id;
+    let inception = add_inception_key(&pool, &indexer, &who).await;
 
-    let mut tx = pool.begin().await.unwrap();
-    let mut first = chained(
-        id,
-        "profile.updated",
-        "profile_updated",
-        serde_json::json!({"bio": "1"}),
-        0,
+    let mut forged = chained(
+        &who,
+        inception,
+        "friend.requested",
+        "friend_requested",
+        serde_json::json!({"from": id, "to": IdentityId::random_for_tests()}),
+        100,
         1,
         None,
     );
-    first.identity_chain = None;
-    first.timestamp = OffsetDateTime::now_utc();
-    identity_chain_store::assign_local(&mut tx, &mut first)
-        .await
-        .unwrap();
-    let mut second = first.clone();
-    second.id = Uuid::new_v4();
-    second.payload = serde_json::json!({"bio": "2"});
-    second.identity_chain = None;
-    identity_chain_store::assign_local(&mut tx, &mut second)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    let origin = EventOrigin::mirrored(TEST_NETWORK_ID, "game:evil/1");
+    // Signed by a key that is not the identity's, then unsigned: neither takes the position.
+    let attacker = TestIdentity::new();
+    attacker.sign_event(&mut forged, inception);
+    let unsigned = {
+        let mut e = forged.clone();
+        e.identity_chain = Some(IdentityChainPosition::current(1, None));
+        e
+    };
+    for event in [&forged, &unsigned] {
+        let mut tx = pool.begin().await.unwrap();
+        let applied = indexer.apply_in_tx_from(&mut tx, event, &origin).await;
+        tx.commit().await.unwrap();
+        assert!(applied.is_err(), "the forged event was accepted");
+    }
 
-    let p1 = first.identity_chain.clone().unwrap();
-    let p2 = second.identity_chain.clone().unwrap();
-    assert_eq!((p1.seq, p1.prev_hash.clone()), (1, None));
-    assert_eq!(p2.seq, 2);
-    assert_eq!(p2.prev_hash, Some(hex::encode(event_hash(&first).unwrap())));
-
-    // A forked identity gets no position for ordinary local events.
-    sqlx::query("UPDATE identity_chain_state SET forked_at_seq = 3 WHERE identity_id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    let mut grant = chained(
+        &who,
+        inception,
+        "identity.signing_key_added",
+        "signing_key_added",
+        device_grant_payload(&who, inception, 7),
+        200,
+        1,
+        None,
+    );
+    grant.version = 2;
+    let origin = EventOrigin::mirrored(TEST_NETWORK_ID, "game:honest/1");
     let mut tx = pool.begin().await.unwrap();
-    let mut third = second.clone();
-    third.id = Uuid::new_v4();
-    third.identity_chain = None;
-    identity_chain_store::assign_local(&mut tx, &mut third)
+    indexer
+        .apply_in_tx_from(&mut tx, &grant, &origin)
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert!(third.identity_chain.is_none());
+    assert!(!identity_chain_store::is_forked(&pool, id).await.unwrap());
+
+    // A properly signed event extends the chain from whichever shard delivers it.
+    let next = chained(
+        &who,
+        inception,
+        "friend.requested",
+        "friend_requested",
+        serde_json::json!({"from": id, "to": IdentityId::random_for_tests()}),
+        300,
+        2,
+        Some(&grant),
+    );
+    let origin = EventOrigin::mirrored(TEST_NETWORK_ID, "game:other/1");
+    let mut tx = pool.begin().await.unwrap();
+    indexer
+        .apply_in_tx_from(&mut tx, &next, &origin)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let state = identity_chain_store::state(&pool, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((state.seq, state.forked_at_seq), (2, None));
 }

@@ -8,10 +8,10 @@ use avalon_indexer::IndexError;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
 use avalon_protocol::identity_id::{
-    device_grant_approval_signing_bytes, signing_key_revoked_signing_bytes, TestIdentity,
-    TEST_NETWORK_ID, TEST_SHARD_ID,
+    device_grant_approval_signing_bytes, recovery_approval_signing_bytes,
+    signing_key_revoked_signing_bytes, TestIdentity, TEST_NETWORK_ID, TEST_SHARD_ID,
 };
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::ids::{GlobalId, IdentityId};
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use sqlx::postgres::PgPoolOptions;
@@ -116,6 +116,18 @@ fn next_position(after: Option<&ProtocolEvent>) -> (u64, Option<[u8; 32]>) {
 fn positioned(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> ProtocolEvent {
     event.identity_chain = Some(IdentityChainPosition::current(seq, prev.map(hex::encode)));
     event
+}
+
+/// A chained event authored by `who` with key `key_id` at the first chain position.
+fn authored(
+    who: &TestIdentity,
+    key_id: Uuid,
+    kind: &str,
+    payload: serde_json::Value,
+) -> ProtocolEvent {
+    let mut e = positioned(event(who, kind, 1, payload), 1, None);
+    who.sign_event(&mut e, key_id);
+    e
 }
 
 /// A grant adding `device`'s key to `who` as `key_id` (the grant id), signed by `signer`, naming
@@ -500,50 +512,47 @@ async fn a_revoked_key_cannot_return_under_a_new_key_id() {
 
 #[tokio::test]
 #[ignore]
-async fn unproven_identity_state_is_accepted_only_from_core_or_the_local_shard() {
+async fn a_chained_event_is_accepted_from_any_shard_only_with_the_authors_signature() {
     let pool = pool().await;
-    let who = TestIdentity::new();
-    register(&pool, &who).await;
+    let (who, other_identity) = (TestIdentity::new(), TestIdentity::new());
+    let key = register(&pool, &who).await;
     let passkey = |label: &str| {
-        event(
-            &who,
-            "identity.passkey_registered",
-            1,
-            serde_json::json!({
-                "passkey_id": Uuid::new_v4(), "identity_id": who.id,
-                "credential_id": b64(Uuid::new_v4().as_bytes()),
-                "passkey_data": {"k": 1}, "label": label,
-            }),
-        )
+        let payload = serde_json::json!({
+            "passkey_id": Uuid::new_v4(), "identity_id": who.id,
+            "credential_id": b64(Uuid::new_v4().as_bytes()),
+            "passkey_data": {"k": 1}, "label": label,
+        });
+        authored(&who, key, "identity.passkey_registered", payload)
     };
-    let from_game = passkey("game");
-    assert!(matches!(
-        apply(&pool, &from_game, &game()).await,
-        Err(IndexError::Rejected(_))
-    ));
-    let profile_from_game = event(
-        &who,
-        "profile.updated",
-        1,
-        serde_json::json!({ "bio": "owned" }),
-    );
-    assert!(apply(&pool, &profile_from_game, &game()).await.is_err());
-    let recovered = event(
-        &who,
-        "identity.recovered",
-        1,
-        serde_json::json!({ "request_id": Uuid::nil() }),
-    );
-    assert!(apply(&pool, &recovered, &game()).await.is_err());
-    assert_eq!(
+    let count_passkeys = || {
         count(
             &pool,
             "SELECT count(*) FROM indexer_identity_passkeys WHERE identity_id = $1",
-            who.id
+            who.id,
         )
-        .await,
-        0
+    };
+
+    // Unsigned, signed by another identity's key, or signed for another event: refused.
+    let mut unsigned = passkey("unsigned");
+    unsigned.identity_chain = Some(IdentityChainPosition::current(1, None));
+    let mut foreign_signer = passkey("foreign");
+    other_identity.sign_event(&mut foreign_signer, key);
+    let mut tampered = passkey("tampered");
+    tampered.payload["label"] = serde_json::json!("changed");
+    for forged in [&unsigned, &foreign_signer, &tampered] {
+        assert!(matches!(
+            apply(&pool, forged, &game()).await,
+            Err(IndexError::Rejected(_))
+        ));
+    }
+    let recovered = authored(
+        &who,
+        Uuid::new_v4(),
+        "identity.recovered",
+        serde_json::json!({ "request_id": Uuid::nil() }),
     );
+    assert!(apply(&pool, &recovered, &game()).await.is_err());
+    assert_eq!(count_passkeys().await, 0);
     assert_eq!(
         count(
             &pool,
@@ -555,6 +564,8 @@ async fn unproven_identity_state_is_accepted_only_from_core_or_the_local_shard()
         "a refused event never reaches the identity chain"
     );
 
+    // The authored event is accepted from a game shard, core and the local shard alike.
+    apply(&pool, &passkey("game"), &game()).await.unwrap();
     apply(&pool, &passkey("core"), &core()).await.unwrap();
     apply(
         &pool,
@@ -563,15 +574,7 @@ async fn unproven_identity_state_is_accepted_only_from_core_or_the_local_shard()
     )
     .await
     .unwrap();
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT count(*) FROM indexer_identity_passkeys WHERE identity_id = $1",
-            who.id
-        )
-        .await,
-        2
-    );
+    assert_eq!(count_passkeys().await, 3);
 }
 
 #[tokio::test]
@@ -983,14 +986,14 @@ async fn database_rule_violations_are_classified_not_parked_as_storage_faults() 
 
 #[tokio::test]
 #[ignore]
-async fn another_networks_core_shard_is_not_authoritative() {
+async fn a_signature_made_for_another_network_is_refused() {
     let pool = pool().await;
     let who = TestIdentity::new();
-    register(&pool, &who).await;
-    let passkey = event(
+    let key = register(&pool, &who).await;
+    let passkey = authored(
         &who,
+        key,
         "identity.passkey_registered",
-        1,
         serde_json::json!({
             "passkey_id": Uuid::new_v4(), "identity_id": who.id,
             "credential_id": b64(Uuid::new_v4().as_bytes()),
@@ -1010,11 +1013,11 @@ async fn another_networks_core_shard_is_not_authoritative() {
 async fn one_shards_copy_of_an_event_id_does_not_suppress_another_shards() {
     let pool = pool().await;
     let who = TestIdentity::new();
-    register(&pool, &who).await;
-    let update = event(
+    let key = register(&pool, &who).await;
+    let update = authored(
         &who,
+        key,
         "profile.updated",
-        1,
         serde_json::json!({ "bio": "first" }),
     );
     let local_game = EventOrigin::local(TEST_NETWORK_ID, "game:slug/1");
@@ -1149,4 +1152,219 @@ async fn a_redelivered_inception_event_keeps_the_first_label() {
     .await
     .unwrap();
     assert_eq!(label.as_deref(), Some("first"));
+}
+
+/// An owner with three registered guardians and a signed 2-of-3 `identity.recovery_configured`.
+struct RecoveryFixture {
+    owner: TestIdentity,
+    owner_key: Uuid,
+    guardians: Vec<(TestIdentity, Uuid)>,
+    configured: ProtocolEvent,
+}
+
+async fn recovery_fixture(pool: &PgPool) -> RecoveryFixture {
+    let owner = TestIdentity::new();
+    let owner_key = register(pool, &owner).await;
+    let mut guardians = Vec::new();
+    for _ in 0..3 {
+        let g = TestIdentity::new();
+        let key = register(pool, &g).await;
+        guardians.push((g, key));
+    }
+    let configured = authored(
+        &owner,
+        owner_key,
+        "identity.recovery_configured",
+        serde_json::json!({
+            "guardian_ids": guardians.iter().map(|(g, _)| g.id).collect::<Vec<_>>(),
+            "threshold": 2,
+        }),
+    );
+    apply(pool, &configured, &game()).await.unwrap();
+    RecoveryFixture {
+        owner,
+        owner_key,
+        guardians,
+        configured,
+    }
+}
+
+fn approval(
+    owner: &IdentityId,
+    request_id: Uuid,
+    guardian: &(TestIdentity, Uuid),
+    new_key: &TestIdentity,
+) -> serde_json::Value {
+    let bytes = recovery_approval_signing_bytes(
+        TEST_NETWORK_ID,
+        owner,
+        request_id,
+        &guardian.0.id,
+        guardian.1,
+        &new_key.public_key(),
+    );
+    serde_json::json!({
+        "guardian_id": guardian.0.id,
+        "signing_key_id": guardian.1,
+        "signature": b64(&guardian.0.signing_key.sign(&bytes).to_bytes()),
+    })
+}
+
+fn recovered(
+    f: &RecoveryFixture,
+    request_id: Uuid,
+    new_key: &TestIdentity,
+    approvals: Vec<serde_json::Value>,
+) -> ProtocolEvent {
+    let mut e = positioned(
+        event(
+            &f.owner,
+            "identity.recovered",
+            1,
+            serde_json::json!({
+                "request_id": request_id,
+                "device_label": null,
+                "new_signing_public_key": b64(&new_key.public_key()),
+                "approvals": approvals,
+            }),
+        ),
+        2,
+        Some(event_hash(&f.configured).unwrap()),
+    );
+    new_key.sign_event(&mut e, request_id);
+    e
+}
+
+#[tokio::test]
+#[ignore]
+async fn recovered_needs_the_threshold_of_valid_guardian_approvals_for_this_request() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let (new_key, request_id) = (TestIdentity::new(), Uuid::new_v4());
+    let owner = f.owner.id;
+    let good = |i: usize| approval(&owner, request_id, &f.guardians[i], &new_key);
+
+    // Below the threshold.
+    let one = recovered(&f, request_id, &new_key, vec![good(0)]);
+    assert!(matches!(
+        apply(&pool, &one, &game()).await,
+        Err(IndexError::Rejected(_))
+    ));
+    // The same guardian twice is one approval.
+    let twice = recovered(&f, request_id, &new_key, vec![good(0), good(0)]);
+    assert!(apply(&pool, &twice, &game()).await.is_err());
+    // Approvals of a different request.
+    let other_request = Uuid::new_v4();
+    let wrong_request = recovered(
+        &f,
+        request_id,
+        &new_key,
+        (0..2)
+            .map(|i| approval(&owner, other_request, &f.guardians[i], &new_key))
+            .collect(),
+    );
+    assert!(apply(&pool, &wrong_request, &game()).await.is_err());
+    // Approvals of a recovery to another key.
+    let other_key = TestIdentity::new();
+    let wrong_key = recovered(
+        &f,
+        request_id,
+        &new_key,
+        (0..2)
+            .map(|i| approval(&owner, request_id, &f.guardians[i], &other_key))
+            .collect(),
+    );
+    assert!(apply(&pool, &wrong_key, &game()).await.is_err());
+    // Approvals replayed from the recovery of another identity.
+    let victim_of_replay = TestIdentity::new();
+    let replayed = recovered(
+        &f,
+        request_id,
+        &new_key,
+        (0..2)
+            .map(|i| approval(&victim_of_replay.id, request_id, &f.guardians[i], &new_key))
+            .collect(),
+    );
+    assert!(apply(&pool, &replayed, &game()).await.is_err());
+    // A signer that is not one of the configured guardians.
+    let stranger_identity = TestIdentity::new();
+    let stranger_key = register(&pool, &stranger_identity).await;
+    let stranger = (stranger_identity, stranger_key);
+    let not_a_guardian = recovered(
+        &f,
+        request_id,
+        &new_key,
+        vec![good(0), approval(&owner, request_id, &stranger, &new_key)],
+    );
+    assert!(apply(&pool, &not_a_guardian, &game()).await.is_err());
+    // Not signed by the new key it introduces.
+    let mut not_pop = recovered(&f, request_id, &new_key, vec![good(0), good(1)]);
+    f.owner.sign_event(&mut not_pop, f.owner_key);
+    assert!(apply(&pool, &not_pop, &game()).await.is_err());
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM identity_chain_events WHERE identity_id = $1 AND seq = 2",
+            owner
+        )
+        .await,
+        0,
+        "no refused recovery reaches the chain"
+    );
+
+    // Two valid approvals recover the identity from any shard: the new key replaces the old.
+    let ok = recovered(&f, request_id, &new_key, vec![good(0), good(2)]);
+    apply(&pool, &ok, &game()).await.unwrap();
+    assert!(
+        avalon_indexer::projections::identity_signing_keys::find_active_by_id(
+            &pool, owner, request_id
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    assert!(!active(&pool, &f.owner, f.owner_key).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_guardian_key_cannot_sign_anything_on_the_owners_chain() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let guardian = &f.guardians[0];
+    for (kind, payload) in [
+        (
+            "friend.requested",
+            serde_json::json!({"from": f.owner.id, "to": guardian.0.id, "actor": f.owner.id}),
+        ),
+        (
+            "guild.member_added",
+            serde_json::json!({"guild_id": Uuid::new_v4(), "identity_id": f.owner.id}),
+        ),
+        ("profile.updated", serde_json::json!({"bio": "hijacked"})),
+        (
+            "identity.recovery_configured",
+            serde_json::json!({"guardian_ids": [guardian.0.id], "threshold": 1}),
+        ),
+    ] {
+        let mut e = positioned(
+            event(&f.owner, kind, 1, payload),
+            2,
+            Some(event_hash(&f.configured).unwrap()),
+        );
+        // Under the guardian's own key id, and under the owner's key id.
+        for key_id in [guardian.1, f.owner_key] {
+            guardian.0.sign_event(&mut e, key_id);
+            assert!(apply(&pool, &e, &game()).await.is_err(), "{kind}");
+        }
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM identity_chain_events WHERE identity_id = $1 AND seq = 2",
+            f.owner.id
+        )
+        .await,
+        0
+    );
 }

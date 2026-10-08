@@ -185,6 +185,29 @@ async fn seed_identity(pool: &PgPool) -> TestIdentity {
     who
 }
 
+/// Registers `who`'s inception key as an active key and returns its id.
+async fn seed_key(pool: &PgPool, who: &TestIdentity) -> Uuid {
+    let key_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(key_id)
+    .bind(who.id)
+    .bind(who.public_key().to_vec())
+    .execute(pool)
+    .await
+    .expect("failed to seed key");
+    key_id
+}
+
+/// `event` placed first in `who`'s chain and signed by `who` with `key_id`.
+fn authored(who: &TestIdentity, key_id: Uuid, mut event: ProtocolEvent) -> ProtocolEvent {
+    event.identity_chain = Some(IdentityChainPosition::current(1, None));
+    who.sign_event(&mut event, key_id);
+    event
+}
+
 fn identity_created_event(who: &TestIdentity) -> ProtocolEvent {
     let identity_id = who.id;
     ProtocolEvent {
@@ -259,7 +282,7 @@ async fn unknown_kind_is_skipped_not_error() {
         .expect("an unrecognized event kind must be skipped, never returned as an error");
 }
 
-/// #678: the 14 kinds that were uninvestigated as of #669 and got the same
+/// #678: the 9 kinds that were uninvestigated as of #669 and got the same
 /// server-owned no-op treatment. Not asserting anything about their
 /// payload shape (that's each handler's own concern) — just that
 /// `apply_in_tx`'s dispatch treats them as a deliberate no-op rather than
@@ -279,11 +302,6 @@ async fn server_owned_kinds_from_678_are_a_noop_not_an_error() {
     let indexer = indexer(&pool);
 
     let kinds = [
-        "identity.recovery_configured",
-        "identity.recovery_requested",
-        "identity.recovery_approved",
-        "identity.recovery_cancelled",
-        "identity.recovered",
         "issuer.registered",
         "guild.updated",
         "guild.role_defined",
@@ -399,38 +417,51 @@ async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
     let pool = test_pool().await;
     let indexer = indexer(&pool);
     let (a, b) = (seed_identity(&pool).await, seed_identity(&pool).await);
+    let (key_a, key_b) = (seed_key(&pool, &a).await, seed_key(&pool, &b).await);
     let passkey_id = Uuid::new_v4();
     let credential = base64::engine::general_purpose::STANDARD.encode(Uuid::new_v4().as_bytes());
-    let registered = |who: &TestIdentity, credential: &str| ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: "identity.passkey_registered".to_string(),
-        issuer: GlobalId::new(
-            "identity",
-            &who.id.to_string(),
-            "self",
-            "passkey_registered",
-        ),
-        subject: GlobalId::new(
-            "identity",
-            &who.id.to_string(),
-            "self",
-            "passkey_registered",
-        ),
-        payload: serde_json::json!({
-            "passkey_id": passkey_id,
-            "identity_id": who.id,
-            "credential_id": credential,
-            "passkey_data": {"k": 1},
-            "label": null,
-        }),
-        timestamp: OffsetDateTime::now_utc(),
-        version: 1,
-        identity_chain: None,
+    let registered = |who: &TestIdentity, key: Uuid, credential: &str| {
+        authored(
+            who,
+            key,
+            ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: "identity.passkey_registered".to_string(),
+                issuer: GlobalId::new(
+                    "identity",
+                    &who.id.to_string(),
+                    "self",
+                    "passkey_registered",
+                ),
+                subject: GlobalId::new(
+                    "identity",
+                    &who.id.to_string(),
+                    "self",
+                    "passkey_registered",
+                ),
+                payload: serde_json::json!({
+                    "passkey_id": passkey_id,
+                    "identity_id": who.id,
+                    "credential_id": credential,
+                    "passkey_data": {"k": 1},
+                    "label": null,
+                }),
+                timestamp: OffsetDateTime::now_utc(),
+                version: 1,
+                identity_chain: None,
+            },
+        )
     };
-    indexer.apply(&registered(&a, &credential)).await.unwrap();
+    indexer
+        .apply(&registered(&a, key_a, &credential))
+        .await
+        .unwrap();
     // The same registration delivered again (new event id) stays idempotent.
-    indexer.apply(&registered(&a, &credential)).await.unwrap();
-    let to_other_identity = indexer.apply(&registered(&b, &credential)).await;
+    indexer
+        .apply(&registered(&a, key_a, &credential))
+        .await
+        .unwrap();
+    let to_other_identity = indexer.apply(&registered(&b, key_b, &credential)).await;
     assert!(
         matches!(
             to_other_identity,
@@ -440,7 +471,9 @@ async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
     );
     let other_credential =
         base64::engine::general_purpose::STANDARD.encode(Uuid::new_v4().as_bytes());
-    let to_other_credential = indexer.apply(&registered(&a, &other_credential)).await;
+    let to_other_credential = indexer
+        .apply(&registered(&a, key_a, &other_credential))
+        .await;
     assert!(
         matches!(
             to_other_credential,
@@ -449,17 +482,23 @@ async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
         "{to_other_credential:?}"
     );
 
-    let revoke = |who: &TestIdentity| ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: "identity.passkey_revoked".to_string(),
-        issuer: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
-        subject: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
-        payload: serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id }),
-        timestamp: OffsetDateTime::now_utc(),
-        version: 1,
-        identity_chain: None,
+    let revoke = |who: &TestIdentity, key: Uuid| {
+        authored(
+            who,
+            key,
+            ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: "identity.passkey_revoked".to_string(),
+                issuer: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
+                subject: GlobalId::new("identity", &who.id.to_string(), "self", "passkey_revoked"),
+                payload: serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id }),
+                timestamp: OffsetDateTime::now_utc(),
+                version: 1,
+                identity_chain: None,
+            },
+        )
     };
-    indexer.apply(&revoke(&b)).await.unwrap();
+    indexer.apply(&revoke(&b, key_b)).await.unwrap();
     let revoked: Option<OffsetDateTime> = sqlx::query_scalar(
         "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
     )
@@ -471,7 +510,7 @@ async fn a_passkey_row_cannot_be_repointed_or_revoked_by_another_identity() {
         revoked.is_none(),
         "another identity must not revoke the passkey"
     );
-    indexer.apply(&revoke(&a)).await.unwrap();
+    indexer.apply(&revoke(&a, key_a)).await.unwrap();
     let revoked: Option<OffsetDateTime> = sqlx::query_scalar(
         "SELECT revoked_at FROM indexer_identity_passkeys WHERE passkey_id = $1",
     )
@@ -534,17 +573,24 @@ async fn an_early_passkey_revocation_sticks_and_a_repeat_keeps_the_first_time() 
     let pool = test_pool().await;
     let indexer = indexer(&pool);
     let a = seed_identity(&pool).await;
+    let key_a = seed_key(&pool, &a).await;
     let passkey_id = Uuid::new_v4();
     let at = |secs: i64| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(secs);
-    let event = |kind: &str, payload: serde_json::Value, ts: OffsetDateTime| ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: kind.to_string(),
-        issuer: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
-        subject: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
-        payload,
-        timestamp: ts,
-        version: 1,
-        identity_chain: None,
+    let event = |kind: &str, payload: serde_json::Value, ts: OffsetDateTime| {
+        authored(
+            &a,
+            key_a,
+            ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: kind.to_string(),
+                issuer: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
+                subject: GlobalId::new("identity", &a.id.to_string(), "self", "x"),
+                payload,
+                timestamp: ts,
+                version: 1,
+                identity_chain: None,
+            },
+        )
     };
     let revoke = serde_json::json!({ "passkey_id": passkey_id, "identity_id": a.id });
     indexer

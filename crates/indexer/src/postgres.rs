@@ -252,8 +252,7 @@ impl PostgresIndexer {
         }
 
         // Proof comes before the identity chain: a refused event must not reach it either.
-        let local_network = self.local_origin.as_ref().map(|o| o.network_id.as_str());
-        let verified = identity_proof::verify(tx, event, origin, local_network).await?;
+        let verified = identity_proof::verify(tx, event, origin).await?;
 
         // Chained events are recorded and resolved first; only `profile.updated`
         // is projected through the resolved chain (see `apply_profile_chained`).
@@ -299,6 +298,11 @@ impl PostgresIndexer {
             "identity.passkey_registered" | "identity.passkey_revoked" => {
                 if let Some(write) = identity_passkeys::decode(event) {
                     identity_passkeys::apply(tx, &write).await?;
+                }
+            }
+            "identity.recovered" => {
+                if let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(event) {
+                    identity_signing_keys::apply_recovered(tx, event, owner).await?;
                 }
             }
             "identity.signing_key_added" | "identity.signing_key_revoked" => {
@@ -401,7 +405,6 @@ impl PostgresIndexer {
             | "identity.recovery_requested"
             | "identity.recovery_approved"
             | "identity.recovery_cancelled"
-            | "identity.recovered"
             | "issuer.registered"
             | "guild.updated"
             | "guild.role_defined"
