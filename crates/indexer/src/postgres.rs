@@ -21,12 +21,13 @@ use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use crate::attestation_proof;
 use crate::identity_chain_store::{self, Recorded};
 use crate::identity_proof::{self, EventOrigin, Verified};
 use crate::projections::{
     attestations, friendships, guild_rosters, identity_passkeys, identity_signing_keys,
     integrator_bindings, integrator_data_instances, integrator_recognitions,
-    integrator_schema_mappings, integrator_schemas, profiles,
+    integrator_schema_mappings, integrator_schemas, issuer_keys, profiles,
 };
 use crate::{IndexError, Indexer};
 use time::OffsetDateTime;
@@ -55,6 +56,9 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
     "indexer_identity_passkey_revocations",
+    "indexer_issuers",
+    "indexer_issuer_keys",
+    "indexer_issuer_key_revocations",
     "identity_chain_events",
     "identity_chain_state",
 ];
@@ -319,10 +323,24 @@ impl PostgresIndexer {
                     guild_rosters::apply(tx, &write).await?;
                 }
             }
-            "achievement.issued" | "achievement.revoked" => {
-                if let Some(write) = attestations::decode(event) {
-                    attestations::apply(tx, &write).await?;
+            "game.registered" | "issuer.key_added" | "issuer.key_revoked" => {
+                if let (Some(write), Some(origin)) = (issuer_keys::decode(event), origin) {
+                    issuer_keys::apply(tx, origin, &write).await?;
                 }
+            }
+            "achievement.issued" => {
+                if let Some(write) = attestations::decode(event) {
+                    attestations::apply(tx, &write, origin).await?;
+                }
+            }
+            "achievement.revoked" => {
+                attestation_proof::verify_revocation(tx, event, origin).await?;
+                if let Some(write) = attestations::decode(event) {
+                    attestations::apply(tx, &write, origin).await?;
+                }
+            }
+            "milestone.revoked" => {
+                attestation_proof::verify_revocation(tx, event, origin).await?;
             }
             "game_schema.published" => {
                 if let Some(write) = integrator_schemas::decode(event) {
@@ -366,10 +384,7 @@ impl PostgresIndexer {
             // `avalon-docs/architecture/query-and-indexing.md`'s
             // "Events with their own source of truth" section for the full
             // table-by-kind mapping and why each one is scoped this way.
-            "game.registered"
-            | "issuer.key_added"
-            | "issuer.key_revoked"
-            | "guild.channel_created"
+            "guild.channel_created"
             | "permission.granted"
             | "permission.revoked"
             | "achievement.defined"
@@ -379,7 +394,6 @@ impl PostgresIndexer {
             | "milestone.definition_updated"
             | "milestone.definition_retired"
             | "milestone.issued"
-            | "milestone.revoked"
             // #678: the other half of #669's sweep, verified the same way —
             // each writes its own direct table synchronously, never through
             // the indexer. See query-and-indexing.md's table for specifics.

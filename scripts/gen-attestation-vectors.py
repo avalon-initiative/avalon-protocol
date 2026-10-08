@@ -4,6 +4,7 @@
 A structured-bytes encoder that shares no code with the Rust one, so the committed
 expectations are an independent check of it. Requires the `cryptography` package.
 """
+import hashlib
 import json
 import struct
 import sys
@@ -22,6 +23,8 @@ SEED = bytes.fromhex("9a8b7c6d5e4f30211203344556677889aabbccddeeff00112233445566
 SUBJECT = "82bb722ef3822f3019fe5abd77f2d33c4a9ab52c2f4f6932635a6d1a9e5815e6"
 KEY_A = "3f2b8c1a-9d4e-4f6a-8b7c-0a1b2c3d4e5f"
 KEY_B = "a1b2c3d4-e5f6-4789-8abc-def012345678"
+NETWORK = "avalon-dev-local"
+OTHER_NETWORK = "avalon-mainnet-1"
 ATTESTATION = "55555555-5555-4555-8555-555555555555"
 T = 1_790_000_000_123_456
 
@@ -44,6 +47,7 @@ def st(text):
 def head(tag, i):
     return (
         env.header(tag.encode("ascii"), 1, env.RULES_VERSION)
+        + st(i["networkId"])
         + st(i["claimKind"])
         + st(i["issuerRef"])
         + uuid.UUID(i["signingKeyId"]).bytes
@@ -80,7 +84,8 @@ def revoke_bytes(i):
         head("avalon.attestation.revoke", i)
         + uuid.UUID(i["attestationId"]).bytes
         + st(i["reasonCode"])
-        + st(i["reason"])
+        + bytes([1])
+        + hashlib.sha256(i["reason"].encode("utf-8")).digest()
         + tail()
     )
 
@@ -109,6 +114,7 @@ def legacy(i):
 def issue(kind, ref, achievement, **kw):
     i = {
         "operation": "issue",
+        "networkId": NETWORK,
         "claimKind": kind,
         "issuerRef": ref,
         "signingKeyId": KEY_A,
@@ -131,6 +137,7 @@ def bulk(kind, ref, achievements, **kw):
 def revoke(kind, ref, code, reason, **kw):
     i = {
         "operation": "revoke",
+        "networkId": NETWORK,
         "claimKind": kind,
         "issuerRef": ref,
         "signingKeyId": KEY_A,
@@ -178,6 +185,8 @@ vectors = [
     vector("issued_at at the epoch", issue(G, GREF, ACH, issuedAtMicros=0)),
     vector("issued_at before the epoch", issue(G, GREF, ACH, issuedAtMicros=-1)),
     vector("colon-bearing issuer ref and achievement id keep their boundaries", issue(M, "service:a:b", "service:a:b:milestone:c:d")),
+    vector("issuance on another network", issue(G, GREF, ACH, networkId=OTHER_NETWORK)),
+    vector("multi-byte network id uses its byte length", issue(G, GREF, ACH, networkId="avalon-dev-lán-日本")),
     vector("multi-byte achievement id uses its byte length", issue(G, GREF, "game:ashen-realms:achievement:drachen_töter_日本")),
     vector("game bulk issuance", bulk_base),
     vector("service bulk issuance, single claim", bulk(M, "service:ledger-watch", ["service:ledger-watch:milestone:first_report"])),
@@ -192,6 +201,7 @@ vectors = [
 ]
 
 replays = [
+    replay("issuance signed for another network", single, dict(single, networkId=OTHER_NETWORK)),
     replay("issuance signed under another claim kind", single, dict(single, claimKind=M)),
     replay("issuance signed for another issuer", single, dict(single, issuerRef="game:other")),
     replay("issuance signed under another signing key id", single, dict(single, signingKeyId=KEY_B)),
@@ -199,12 +209,14 @@ replays = [
     replay("issuance signed for another achievement", single, dict(single, achievement=LOST)),
     replay("issuance signed at another issued_at", single, dict(single, issuedAtMicros=T + 1)),
     replay("a ':' moved between the issuer ref and the achievement", issue(M, "app:w:x", "y"), issue(M, "app:w", "x:y")),
+    replay("bulk signed for another network", bulk_base, dict(bulk_base, networkId=OTHER_NETWORK)),
     replay("bulk signed under another signing key id", bulk_base, dict(bulk_base, signingKeyId=KEY_B)),
     replay("bulk signed at another issued_at", bulk_base, dict(bulk_base, issuedAtMicros=T + 1)),
     replay("bulk signed in another claim order", bulk_base, dict(bulk_base, achievements=[LOST, ACH])),
     replay("bulk signed with a claim dropped", bulk_base, dict(bulk_base, achievements=[ACH])),
     replay("bulk split-boundary replay", bulk(G, GREF, ["ab", "c"]), bulk(G, GREF, ["a", "bc"])),
     replay("a bulk signature offered as a single issuance", bulk(G, GREF, [ACH]), single),
+    replay("revocation signed for another network", rev, dict(rev, networkId=OTHER_NETWORK)),
     replay("revocation signed under another signing key id", rev, dict(rev, signingKeyId=KEY_B)),
     replay("revocation signed for another attestation", rev, dict(rev, attestationId="55555555-5555-4555-8555-555555555556")),
     replay("revocation signed with another reason code", rev, dict(rev, reasonCode="mistake")),
@@ -224,15 +236,14 @@ DESC = (
     "issuer's Ed25519 key signs these exact bytes; the verifying node rebuilds them and rejects "
     "anything that does not match. Tags avalon.attestation.issue, avalon.attestation.bulk_issue and "
     "avalon.attestation.revoke, layout version 1. Every layout starts with the same fields: "
-    "claim_kind (str, \"achievement\" for game issuers and \"milestone\" for app "
+    "network_id (str, the network the signature is valid on), claim_kind (str, \"achievement\" for game issuers and \"milestone\" for app "
     "and service issuers), issuer_ref (str, \"<namespace>:<slug>\") and signing_key_id (uuid, the "
-    "issuer key that signs); the network is deliberately not signed (#476), so attestations stay portable "
-    "across networks. Issue then adds subject (32 raw bytes), achievement (str, the claim's "
+    "issuer key that signs); an attestation signed for one network never verifies on another. Issue then adds subject (32 raw bytes), achievement (str, the claim's "
     "full global id) and issued_at (i64 BE unix microseconds, signed by the issuer and accepted "
     "only within 300 seconds of the verifying node's clock). Bulk issue adds subject, issued_at "
     "(one for every claim), count (u32 BE) and each achievement (str) in order. Revoke adds "
-    "attestation_id (uuid), reason_code (str; an unrecognised code is signed as its own string) and "
-    "reason (str). The layout is the structured signing-bytes encoding "
+    "attestation_id (uuid), reason_code (str; an unrecognised code is signed as its own string), "
+    "hash_algo (u8, 01 = SHA-256) and the 32-byte SHA-256 of the UTF-8 reason, so the reason text can be redacted while the signature stays valid. The layout is the structured signing-bytes encoding "
     "(avalon_protocol::signing_bytes): the ASCII domain tag with no length, a u16 big-endian layout "
     "version (1) and a u32 big-endian rules version (1), then the fields in the order listed, then "
     "the extensions region (count u16 = 0: 00 00). str is a u32 big-endian byte length and the "
@@ -244,7 +255,7 @@ GEN = (
     "one (cryptography Ed25519). signingKeySeedHex is the Ed25519 seed of the issuer key; Ed25519 "
     "signatures are deterministic."
 )
-REASON = "Protocol-only until the SDK slice for #1226 lands the structured attestation layouts."
+REASON = "Protocol-only until the SDK slice lands the structured attestation layouts with the network id."
 
 doc = {
     "$schema": "./SCHEMA.md#attestation-signing",

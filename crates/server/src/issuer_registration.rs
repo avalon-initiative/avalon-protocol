@@ -1,8 +1,6 @@
-//! Per-network issuer registration gate: network isolation is enforced by admission, not by
-//! binding `network_id` into attestation/event signatures
-//! (`crates/protocol/src/achievements.rs`'s `attestation_signing_bytes`
-//! deliberately excludes it — a signature verifies identically on every
-//! network). A signature that verifies against an issuer's registered key
+//! Per-network issuer registration gate: a second, server-side admission check on top of the
+//! network id that attestation signatures bind (`crates/protocol/src/achievements.rs`). A
+//! signature that verifies against an issuer's registered key
 //! (`crate::integrators`'s `issuer_keys`, custody/rotation history) still
 //! isn't enough to write on a given network unless that same public key
 //! has also been admitted here — authenticity and network-admission are

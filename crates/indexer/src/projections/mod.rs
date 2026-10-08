@@ -24,6 +24,7 @@ pub mod integrator_data_instances;
 pub mod integrator_recognitions;
 pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
+pub mod issuer_keys;
 pub mod profiles;
 
 /// Pulls a `Uuid`-shaped string field out of an event payload. Shared by

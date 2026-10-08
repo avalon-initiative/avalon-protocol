@@ -18,7 +18,7 @@ use avalon_protocol::achievements::{
     attestation_signing_bytes, issued_at_micros, AchievementAttestation, AttestationSigner,
 };
 use avalon_protocol::integrators::{resolve_valid_signing_key, IssuerKey};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -76,7 +76,10 @@ pub fn verify_signature(
     };
     let signature = Signature::from_bytes(&sig_array);
 
-    if verifying_key.verify(signing_bytes, &signature).is_ok() {
+    if verifying_key
+        .verify_strict(signing_bytes, &signature)
+        .is_ok()
+    {
         Authenticity::Authentic {
             key_id: key_id.to_string(),
         }
@@ -89,16 +92,17 @@ pub fn verify_signature(
 
 /// Verifies `attestation` against `issuer_keys` (the issuer's full key
 /// history — see `crate::mirror`/`avalon-server`'s `fetch_issuer_keys` for
-/// where that comes from). `claim_kind` (`"achievement"`/`"milestone"`)
+/// where that comes from). `network_id`, `claim_kind` (`"achievement"`/`"milestone"`)
 /// and `issuer_ref` (`"<namespace>:<slug>"`) must match exactly what the
 /// issuer signed over ([`attestation_signing_bytes`]) — a caller checking
-/// the wrong claim kind or issuer string will correctly get
+/// the wrong network, claim kind or issuer string will correctly get
 /// `NotAuthentic`, not a false positive, since the signed bytes themselves
 /// would differ. Thin wrapper over [`verify_signature`]: builds the
 /// issuance-specific canonical bytes and resolves the key at the
 /// attestation's own `issued_at`.
 pub fn verify_authenticity(
     attestation: &AchievementAttestation,
+    network_id: &str,
     claim_kind: &str,
     issuer_ref: &str,
     issuer_keys: &[IssuerKey],
@@ -109,6 +113,7 @@ pub fn verify_authenticity(
         };
     };
     let signer = AttestationSigner {
+        network_id,
         claim_kind,
         issuer_ref,
         signing_key_id,
@@ -138,6 +143,8 @@ mod tests {
     use time::OffsetDateTime;
     use uuid::Uuid;
 
+    const NET: &str = "avalon-dev-test";
+
     fn signed_attestation(
         signing_key: &SigningKey,
         key_id: Uuid,
@@ -148,6 +155,7 @@ mod tests {
         issued_at: OffsetDateTime,
     ) -> AchievementAttestation {
         let signer = AttestationSigner {
+            network_id: NET,
             claim_kind,
             issuer_ref,
             signing_key_id: key_id,
@@ -206,7 +214,7 @@ mod tests {
         let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
 
         assert_eq!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::Authentic {
                 key_id: key_id.to_string()
             }
@@ -236,7 +244,7 @@ mod tests {
         let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
 
         assert!(matches!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::NotAuthentic { .. }
         ));
     }
@@ -265,7 +273,7 @@ mod tests {
         let keys = [key];
 
         assert_eq!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::Authentic {
                 key_id: key_id.to_string()
             }
@@ -298,7 +306,7 @@ mod tests {
         let keys = [key];
 
         assert!(matches!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::NotAuthentic { .. }
         ));
     }
@@ -328,7 +336,35 @@ mod tests {
 
         // ...but verified as an achievement.
         assert!(matches!(
-            verify_authenticity(&attestation, "achievement", "app:wallet-app", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "app:wallet-app", &keys),
+            Authenticity::NotAuthentic { .. }
+        ));
+    }
+
+    #[test]
+    fn a_signature_made_for_another_network_is_not_authentic() {
+        let signing_key = SigningKey::generate(&mut rand::rng());
+        let key_id = Uuid::new_v4();
+        let achievement = GlobalId::new("game", "ashen-realms", "achievement", "dragon_slayer");
+        let attestation = signed_attestation(
+            &signing_key,
+            key_id,
+            "achievement",
+            "game:ashen-realms",
+            IdentityId::random_for_tests(),
+            achievement,
+            OffsetDateTime::now_utc(),
+        );
+        let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
+
+        assert!(matches!(
+            verify_authenticity(
+                &attestation,
+                "avalon-mainnet-1",
+                "achievement",
+                "game:ashen-realms",
+                &keys
+            ),
             Authenticity::NotAuthentic { .. }
         ));
     }
@@ -354,7 +390,7 @@ mod tests {
         let keys: [IssuerKey; 0] = [];
 
         assert!(matches!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::NotAuthentic { .. }
         ));
     }
@@ -365,7 +401,7 @@ mod tests {
     /// crypto.
     #[test]
     fn verify_signature_backs_revocation_verification_too() {
-        use avalon_protocol::achievements::revocation_signing_bytes;
+        use avalon_protocol::achievements::{reason_hash, revocation_signing_bytes};
         use avalon_protocol::ids::AttestationId;
 
         let signing_key = SigningKey::generate(&mut rand::rng());
@@ -374,11 +410,13 @@ mod tests {
         let attestation_id = AttestationId(Uuid::new_v4());
 
         let signer = AttestationSigner {
+            network_id: NET,
             claim_kind: "achievement",
             issuer_ref: "game:ashen-realms",
             signing_key_id: key_id,
         };
-        let bytes = revocation_signing_bytes(&signer, attestation_id, "issuer_error", "r");
+        let bytes =
+            revocation_signing_bytes(&signer, attestation_id, "issuer_error", &reason_hash("r"));
         let signature = signing_key.sign(&bytes);
         let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
 
@@ -397,8 +435,12 @@ mod tests {
 
         // A different reason code produces different bytes, so a signature
         // for one reason can't be replayed to claim a different one.
-        let other_bytes =
-            revocation_signing_bytes(&signer, attestation_id, "different_reason", "r");
+        let other_bytes = revocation_signing_bytes(
+            &signer,
+            attestation_id,
+            "different_reason",
+            &reason_hash("r"),
+        );
         assert!(matches!(
             verify_signature(
                 &key_id.to_string(),
@@ -429,7 +471,7 @@ mod tests {
 
         attestation.issued_at += time::Duration::seconds(1);
         assert!(matches!(
-            verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            verify_authenticity(&attestation, NET, "achievement", "game:ashen-realms", &keys),
             Authenticity::NotAuthentic { .. }
         ));
     }
