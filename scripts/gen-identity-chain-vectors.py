@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Writes the hashVectors of conformance/vectors/identity-chain.json.
+"""Writes the hashVectors and keyEventHashVectors of conformance/vectors/identity-chain.json.
 
-An encoder for the identity chain event hash layout (avalon.identity.chain_event) that shares no
-code with the Rust one, so the committed expectations are an independent check of it. The
+An encoder for the identity chain event hash layouts (avalon.identity.chain_event and
+avalon.identity.key_event) that shares no code with the Rust one, so the committed expectations are an independent check of it. The
 resolutionCases are kept from the existing file.
 """
+import base64
 import hashlib
 import json
 import struct
@@ -100,11 +101,11 @@ vectors.append(
 )
 vectors += [
     vec(
-        "signing key added",
-        '{"public_key":"AAAA"}',
-        kind="identity.signing_key_added",
-        issuer=f"identity:{ID}:self:signing_key_added",
-        subject=f"identity:{ID}:self:signing_key_added",
+        "passkey registered",
+        '{"label":"laptop"}',
+        kind="identity.passkey_registered",
+        issuer=f"identity:{ID}:self:passkey_registered",
+        subject=f"identity:{ID}:self:passkey_registered",
         seq="3",
         prevHashHex="af" * 32,
     ),
@@ -151,6 +152,113 @@ vectors += [
     vec("time at i64 max", '{"n":1}', timestampUnixMicros="9223372036854775807"),
 ]
 
+KEY_TAG = b"avalon.identity.key_event"
+
+
+def uuid_of(n):
+    return str(uuid.UUID(int=n))
+
+
+def raw(seed, n):
+    return bytes((seed + i) % 256 for i in range(n))
+
+
+def key_message(i):
+    prev = i["prevHashHex"]
+    out = (
+        env.header(KEY_TAG, 1, 1)
+        + bytes.fromhex(i["identityIdHex"])
+        + struct.pack(">Q", int(i["seq"]))
+        + env.hash_algo()
+        + (b"\x00" if prev is None else b"\x01" + bytes.fromhex(prev))
+    )
+    if i["content"] == "device_grant":
+        out += (
+            b"\x01"
+            + uuid.UUID(i["signingKeyId"]).bytes
+            + uuid.UUID(i["approvedBySigningKeyId"]).bytes
+            + env.key(bytes.fromhex(i["publicKeyHex"]))
+            + uuid.UUID(i["grantId"]).bytes
+            + env.signature(bytes.fromhex(i["signatureHex"]))
+        )
+    else:
+        out += (
+            b"\x02"
+            + uuid.UUID(i["signingKeyId"]).bytes
+            + uuid.UUID(i["revokedBySigningKeyId"]).bytes
+            + env.signature(bytes.fromhex(i["signatureHex"]))
+        )
+    return out + env.extension_region()
+
+
+GRANT = dict(
+    content="device_grant",
+    identityIdHex=ID,
+    seq="1",
+    prevHashHex=None,
+    signingKeyId=uuid_of(0x11),
+    approvedBySigningKeyId=uuid_of(0x22),
+    publicKeyHex=raw(1, 32).hex(),
+    grantId=uuid_of(0x11),
+    signatureHex=raw(40, 64).hex(),
+    unsigned=dict(
+        eventId="0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+        timestampUnixMicros="1700000000000000",
+        deviceLabel="phone",
+    ),
+)
+REVOKE = dict(
+    content="revocation",
+    identityIdHex=ID,
+    seq="2",
+    prevHashHex="ab" * 32,
+    signingKeyId=uuid_of(0x11),
+    revokedBySigningKeyId=uuid_of(0x22),
+    signatureHex=raw(90, 64).hex(),
+    unsigned=dict(
+        eventId="0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+        timestampUnixMicros="1700000060000000",
+        deviceLabel=None,
+    ),
+)
+
+
+def key_vec(name, base, **over):
+    i = dict(base, **over)
+    msg = key_message(i)
+    return {
+        "name": name,
+        "input": i,
+        "expected": {
+            "signingBytesHex": msg.hex(),
+            "eventHashHex": hashlib.sha256(msg).hexdigest(),
+        },
+    }
+
+
+key_vectors = [
+    key_vec("device grant at genesis", GRANT),
+    key_vec("device grant after another event", GRANT, seq="3", prevHashHex="cd" * 32),
+    key_vec("revocation", REVOKE),
+    key_vec("revocation at genesis", REVOKE, seq="1", prevHashHex=None),
+    key_vec("other identity", GRANT, identityIdHex="11" * 32),
+    key_vec("other key id", GRANT, signingKeyId=uuid_of(0x12), grantId=uuid_of(0x12)),
+    key_vec("other approver", GRANT, approvedBySigningKeyId=uuid_of(0x23)),
+    key_vec("other public key", GRANT, publicKeyHex=raw(2, 32).hex()),
+    key_vec("other signature", GRANT, signatureHex=raw(41, 64).hex()),
+    key_vec("all-zero prev hash is not genesis", GRANT, seq="2", prevHashHex="00" * 32),
+    key_vec("seq at u64 max", REVOKE, seq="18446744073709551615"),
+    key_vec(
+        "unsigned fields are not part of the hash",
+        GRANT,
+        unsigned=dict(
+            eventId="0190a1b2-c3d4-7e5f-8a9b-ffffffffffff",
+            timestampUnixMicros="-1",
+            deviceLabel=None,
+        ),
+    ),
+]
+
 old = json.loads(OUT.read_text())
 doc = {
     "$schema": "./SCHEMA.md#identity-chain",
@@ -167,12 +275,24 @@ doc = {
         "position is never part of the payload. seq and timestampUnixMicros are decimal strings. "
         "resolutionCases pin the deterministic conflict rule (apply_chain): a runner must reach the "
         "same accepted chain and fork position for every ordering of a case's events. "
+        "keyEventHashVectors pin the chain hash of an owner-signed key event (domain tag "
+        "avalon.identity.key_event), which covers only what the event's signature covers: "
+        "eventHashHex is the digest of signingBytesHex, which is the tag, layoutVersion 1 as u16 BE, "
+        "rules version 1 as u32 BE, identityIdHex (32 raw bytes), seq as u64 BE, hashAlgo u8 (1), "
+        "prevHashHex (u8 0, or u8 1 then 32 raw bytes), a content u8 (1 device grant, 2 revocation), then for "
+        "a grant signingKeyId and approvedBySigningKeyId (16 raw bytes each), the public key (alg u8 1 then "
+        "32 raw bytes), grantId (16 raw) and the approval signature (alg u8 1 then 64 raw bytes), and "
+        "for a revocation signingKeyId and revokedBySigningKeyId (16 raw bytes each) and the signature "
+        "(alg u8 1 then 64 raw bytes), then an empty extensions region (0000). input.unsigned (event id, "
+        "time, device label) is carried by the event but is never hashed: any value yields the same "
+        "hash. "
         "hashVectors are generated by scripts/gen-identity-chain-vectors.py, an encoder independent "
         "of the Rust one."
     ),
     "supportedIn": ["rust"],
     "notSupported": old["notSupported"],
     "hashVectors": vectors,
+    "keyEventHashVectors": key_vectors,
     "resolutionCases": old["resolutionCases"],
 }
 text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

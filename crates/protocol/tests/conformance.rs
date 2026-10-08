@@ -553,8 +553,9 @@ fn extension_list(v: &Value) -> Vec<avalon_protocol::signing_bytes::Extension> {
 fn identity_chain_matches_shared_vectors() {
     use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
     use avalon_protocol::identity_chain::{
-        apply_chain, chain_event_signing_bytes, compute_event_hash, ActionClass, ChainHashInput,
-        ChainedEvent, EventAuthority, EventHash,
+        apply_chain, chain_event_signing_bytes, compute_event_hash, compute_key_event_hash,
+        key_event_signing_bytes, ActionClass, ChainHashInput, ChainedEvent, EventAuthority,
+        EventHash, KeyEventContent, KeyEventHashInput,
     };
     use avalon_protocol::identity_chain_wire::{chain_owner, event_hash};
     use avalon_protocol::identity_id::IdentityId;
@@ -568,6 +569,10 @@ fn identity_chain_matches_shared_vectors() {
         "hash vectors look truncated"
     );
     assert!(!doc["resolutionCases"].as_array().unwrap().is_empty());
+    assert!(
+        doc["keyEventHashVectors"].as_array().unwrap().len() >= 10,
+        "key event vectors look truncated"
+    );
     for vector in doc["hashVectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let i = &vector["input"];
@@ -652,6 +657,110 @@ fn identity_chain_matches_shared_vectors() {
                 "[{name}] via ProtocolEvent"
             );
         }
+    }
+
+    for vector in doc["keyEventHashVectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap();
+        let i = &vector["input"];
+        let want = &vector["expected"];
+        let id = IdentityId::parse(i["identityIdHex"].as_str().unwrap()).unwrap();
+        let prev = i["prevHashHex"].as_str().map(hash_from_hex);
+        let seq: u64 = i["seq"].as_str().unwrap().parse().unwrap();
+        let uuid_of = |k: &str| uuid::Uuid::parse_str(i[k].as_str().unwrap()).unwrap();
+        let raw = |k: &str| hex::decode(i[k].as_str().unwrap()).unwrap();
+        let content = match i["content"].as_str().unwrap() {
+            "device_grant" => KeyEventContent::DeviceGrant {
+                signing_key_id: uuid_of("signingKeyId"),
+                public_key: raw("publicKeyHex").try_into().unwrap(),
+                approved_by_signing_key_id: uuid_of("approvedBySigningKeyId"),
+                grant_id: uuid_of("grantId"),
+                approval_signature: raw("signatureHex").try_into().unwrap(),
+            },
+            "revocation" => KeyEventContent::Revocation {
+                signing_key_id: uuid_of("signingKeyId"),
+                revoked_by_signing_key_id: uuid_of("revokedBySigningKeyId"),
+                signature: raw("signatureHex").try_into().unwrap(),
+            },
+            other => panic!("unknown content {other}"),
+        };
+        let input = KeyEventHashInput {
+            identity_id: &id,
+            seq,
+            prev_hash: prev.as_ref(),
+            content: &content,
+        };
+        assert_eq!(
+            hex::encode(key_event_signing_bytes(&input).unwrap()),
+            want["signingBytesHex"].as_str().unwrap(),
+            "[{name}] signing bytes"
+        );
+        assert_eq!(
+            hex::encode(compute_key_event_hash(&input).unwrap()),
+            want["eventHashHex"].as_str().unwrap(),
+            "[{name}] hash"
+        );
+
+        // The same event as carried on the wire, with the unsigned fields the vector names.
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let (kind, payload) = match &content {
+            KeyEventContent::DeviceGrant {
+                signing_key_id,
+                public_key,
+                approved_by_signing_key_id,
+                grant_id,
+                approval_signature,
+            } => (
+                "identity.signing_key_added",
+                serde_json::json!({
+                    "signing_key_id": signing_key_id,
+                    "public_key": b64(public_key),
+                    "device_label": i["unsigned"]["deviceLabel"],
+                    "approved_by_signing_key_id": approved_by_signing_key_id,
+                    "identity_id": id,
+                    "kind": "device_grant",
+                    "grant_id": grant_id,
+                    "approval_signature": b64(approval_signature),
+                }),
+            ),
+            KeyEventContent::Revocation {
+                signing_key_id,
+                revoked_by_signing_key_id,
+                signature,
+            } => (
+                "identity.signing_key_revoked",
+                serde_json::json!({
+                    "identity_id": id,
+                    "signing_key_id": signing_key_id,
+                    "revoked_by_signing_key_id": revoked_by_signing_key_id,
+                    "signature": b64(signature),
+                }),
+            ),
+        };
+        let micros: i64 = i["unsigned"]["timestampUnixMicros"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let event = ProtocolEvent {
+            id: uuid::Uuid::parse_str(i["unsigned"]["eventId"].as_str().unwrap()).unwrap(),
+            kind: kind.to_string(),
+            issuer: avalon_protocol::ids::GlobalId::new("identity", &id.to_string(), "self", "k"),
+            subject: avalon_protocol::ids::GlobalId::new("identity", &id.to_string(), "self", "k"),
+            payload,
+            timestamp: OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1000)
+                .unwrap(),
+            version: 2,
+            identity_chain: Some(IdentityChainPosition::current(
+                seq,
+                i["prevHashHex"].as_str().map(str::to_string),
+            )),
+        };
+        assert_eq!(
+            hex::encode(event_hash(&event).unwrap()),
+            want["eventHashHex"].as_str().unwrap(),
+            "[{name}] via ProtocolEvent"
+        );
     }
 
     for case in doc["resolutionCases"].as_array().unwrap() {

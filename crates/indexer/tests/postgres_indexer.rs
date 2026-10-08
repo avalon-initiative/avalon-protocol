@@ -65,6 +65,21 @@ fn at_position(mut event: ProtocolEvent, seq: u64, prev: Option<[u8; 32]>) -> Pr
     event
 }
 
+/// Seeds the inception key row a creation ticket fixes (no `identity.created` is applied here),
+/// so the inception key event for `key_id` binds to it.
+async fn seed_ticket_key(pool: &PgPool, who: &TestIdentity, key_id: Uuid) {
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(key_id)
+    .bind(who.id)
+    .bind(who.public_key().to_vec())
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 fn inception_event(who: &TestIdentity, key_id: Uuid) -> ProtocolEvent {
     key_event(
         who,
@@ -339,6 +354,7 @@ async fn a_signing_key_row_cannot_change_its_public_key() {
     let indexer = indexer(&pool);
     let a = seed_identity(&pool).await;
     let inception = Uuid::new_v4();
+    seed_ticket_key(&pool, &a, inception).await;
     indexer
         .apply(&inception_event(&a, inception))
         .await
@@ -474,6 +490,8 @@ async fn key_ids_are_scoped_to_their_identity_and_early_revocations_stick() {
     let (a, b) = (seed_identity(&pool).await, seed_identity(&pool).await);
     let key_id = Uuid::new_v4();
     // Both identities use the same key id for their inception key.
+    seed_ticket_key(&pool, &b, key_id).await;
+    seed_ticket_key(&pool, &a, key_id).await;
     indexer.apply(&inception_event(&b, key_id)).await.unwrap();
     indexer.apply(&inception_event(&a, key_id)).await.unwrap();
     assert!(key_active(&pool, &a, key_id).await);
@@ -488,6 +506,7 @@ async fn key_ids_are_scoped_to_their_identity_and_early_revocations_stick() {
     // Revoked-before-added: the later addition is born revoked.
     let c = seed_identity(&pool).await;
     let c_inception = Uuid::new_v4();
+    seed_ticket_key(&pool, &c, c_inception).await;
     indexer
         .apply(&inception_event(&c, c_inception))
         .await

@@ -55,7 +55,6 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
     "indexer_identity_passkey_revocations",
-    "indexer_identity_homes",
     "identity_chain_events",
     "identity_chain_state",
 ];
@@ -254,6 +253,7 @@ impl PostgresIndexer {
         // is projected through the resolved chain (see `apply_profile_chained`).
         match identity_chain_store::record(tx, event, OffsetDateTime::now_utc()).await? {
             Recorded::Unchained => {}
+            Recorded::Duplicate => return Ok(()),
             Recorded::Rejected(err) => {
                 eprintln!("indexer: dropping chained event {}: {err:?}", event.id);
                 return Ok(());

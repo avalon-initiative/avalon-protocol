@@ -88,10 +88,21 @@ fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> 
     })
 }
 
-/// Applies the identity's inception key (unchained) and returns its key id.
-async fn add_inception_key(indexer: &PostgresIndexer, who: &TestIdentity) -> Uuid {
+/// Applies the identity's inception key (unchained) and returns its key id, which the creation
+/// ticket fixed (seeded here, as no `identity.created` is applied).
+async fn add_inception_key(pool: &PgPool, indexer: &PostgresIndexer, who: &TestIdentity) -> Uuid {
     use base64::Engine as _;
     let key_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(key_id)
+    .bind(who.id)
+    .bind(who.public_key().to_vec())
+    .execute(pool)
+    .await
+    .unwrap();
     let mut event = chained(
         who.id,
         "identity.signing_key_added",
@@ -243,7 +254,7 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
     let indexer = indexer(&pool);
     let who = seed_identity(&pool).await;
     let id = who.id;
-    let inception = add_inception_key(&indexer, &who).await;
+    let inception = add_inception_key(&pool, &indexer, &who).await;
 
     let mut a = chained(
         id,
