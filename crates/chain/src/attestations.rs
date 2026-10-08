@@ -18,7 +18,7 @@ use avalon_protocol::achievements::{
     attestation_signing_bytes, issued_at_micros, AchievementAttestation, AttestationSigner,
 };
 use avalon_protocol::integrators::{resolve_valid_signing_key, IssuerKey};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use time::OffsetDateTime;
 use uuid::Uuid;
 

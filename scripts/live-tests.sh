@@ -55,7 +55,7 @@ topology_probe topology_trace op_trace peer_table_bounds"
 # beside other tests they desync the server's in-memory Merkle leaf cache and
 # wipe rows other tests rely on, so each gets a fresh server and schema.
 LEDGER_WRITERS="history settlement retention_archive_confirmation rebuild_from_events rollback \
-read_model_boundary conversations_no_ledger"
+read_model_boundary conversations_no_ledger attestation_revocation_rebuild"
 
 group_core() {
   new_schema live_core || return

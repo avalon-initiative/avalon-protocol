@@ -322,6 +322,12 @@ silently.
   carry over a network reset: issuers re-issue on the new network. Attestations stored under the
   old bytes stop verifying as authentic, and `achievement.issued` events without
   `issued_at_micros` are skipped by the indexer, so reset development databases with the node update.
+- **Revocations:** the `achievement.revoked` and `milestone.revoked` ledger payload carries a required
+  `proof` (`key_id`, `algorithm`, base64 `bytes`: the issuer key's signature over the revocation
+  bytes). The indexer verifies it against the issuer's keys and the network of the stream that
+  delivered the event, and refuses an unsigned or mis-signed revocation. Mirrors project issuer keys
+  from `game.registered`, `issuer.key_added` and `issuer.key_revoked` for this; old revocation events
+  have no proof and are refused, so reset development databases with the node update.
 
 ## Migrations 0089 and 0090: key event chain hash, no home shards (destructive)
 

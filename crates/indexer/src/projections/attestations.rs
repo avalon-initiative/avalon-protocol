@@ -57,7 +57,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<AttestationWrite> {
             })
         }
         "achievement.revoked" => {
-            let id = super::uuid_field(&event.payload, "id")?;
+            let id = super::uuid_field(&event.payload, "attestation_id")?;
             Some(AttestationWrite::Revoke {
                 id,
                 revoked_at: event.timestamp,
@@ -303,7 +303,10 @@ mod tests {
     #[test]
     fn decodes_achievement_revoked() {
         let id = Uuid::new_v4();
-        let source_event = event("achievement.revoked", serde_json::json!({ "id": id }));
+        let source_event = event(
+            "achievement.revoked",
+            serde_json::json!({ "attestation_id": id }),
+        );
         let write = decode(&source_event).unwrap();
         assert_eq!(
             write,
@@ -354,7 +357,12 @@ mod tests {
                 }),
             )
         };
-        let revoke = |id: Uuid| event("achievement.revoked", serde_json::json!({ "id": id }));
+        let revoke = |id: Uuid| {
+            event(
+                "achievement.revoked",
+                serde_json::json!({ "attestation_id": id }),
+            )
+        };
 
         let attestation_1 = Uuid::new_v4();
         let attestation_2 = Uuid::new_v4();
@@ -409,7 +417,7 @@ mod tests {
         );
         let mut revoke_event = event(
             "achievement.revoked",
-            serde_json::json!({ "id": attestation_id }),
+            serde_json::json!({ "attestation_id": attestation_id }),
         );
         revoke_event.timestamp = future;
 

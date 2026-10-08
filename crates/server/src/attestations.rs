@@ -51,7 +51,7 @@ use avalon_protocol::ids::AttestationId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
 use avalon_protocol::revocation::RevocationReasonCode;
 
-use avalon_protocol::event_payloads::ClaimRevokedPayload;
+use avalon_protocol::event_payloads::{ClaimProofPayload, ClaimRevokedPayload};
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 
 use crate::achievements::claim_kind_variant;
@@ -742,6 +742,11 @@ pub async fn revoke_attestation(
             issuer: issuer.clone(),
             reason_code: body.reason_code.clone(),
             reason: body.reason.clone(),
+            proof: ClaimProofPayload {
+                key_id: body.key_id,
+                algorithm: "ed25519".to_string(),
+                bytes: body.signature.clone(),
+            },
         })
         .expect("ClaimRevokedPayload should serialize"),
         timestamp: now,

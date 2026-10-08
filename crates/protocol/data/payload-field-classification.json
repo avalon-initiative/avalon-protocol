@@ -1399,6 +1399,11 @@
           "disposition": "inline_redactable",
           "reason": "Free-text revocation reason about a person's claim; inline and removable.",
           "ref": "#1316"
+        },
+        "proof": {
+          "class": "authority_state",
+          "disposition": "none",
+          "reason": "Nested proof payload, classified separately."
         }
       }
     },
