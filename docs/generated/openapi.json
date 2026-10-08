@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.13.3"
+    "version": "0.13.4"
   },
   "paths": {
     "/attestations/{id}": {
@@ -700,6 +700,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting friendship",
@@ -730,6 +740,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Friendship removed"
@@ -1831,6 +1851,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting guild member",
@@ -1895,6 +1925,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting guild member",
@@ -2096,6 +2136,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting guild member",
@@ -2161,6 +2211,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaveGuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Left the guild"
@@ -2227,6 +2287,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Member removed"
@@ -2758,6 +2828,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchIdentitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/identities/{id}/chain-head": {
+      "get": {
+        "tags": [
+          "identities"
+        ],
+        "summary": "`GET /identities/{id}/chain-head` — where the next event of the identity's chain goes: sign\n`seq + 1` with `prev_hash = head_hash`.",
+        "operationId": "chain_head",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The chain head",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainHeadResponse"
                 }
               }
             }
@@ -4985,6 +5086,73 @@
         }
       }
     },
+    "/me/passkeys/{id}/announce": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "`POST /me/passkeys/{id}/announce` — authors the signed `identity.passkey_registered` event for\na passkey, so other nodes learn the credential.",
+        "operationId": "announce_passkey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Passkey announced"
+          }
+        }
+      }
+    },
+    "/me/passkeys/{id}/announcement": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "`GET /me/passkeys/{id}/announcement` — the event to sign to announce a passkey that has not\nbeen announced yet.",
+        "operationId": "passkey_announcement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event to sign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyAnnouncement"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/me/passkeys/{id}/revoke": {
       "post": {
         "tags": [
@@ -5644,7 +5812,6 @@
         "tags": [
           "recovery"
         ],
-        "summary": "`POST /recovery/requests/:id/approve` — a guardian's independent\napproval. Requires the caller to currently be one of the identity's\nguardians (not just at request time — a guardian removed since can no\nlonger approve, mirroring [`guard_cancel_authority`]'s same \"current,\nnot historical, guardian\" rule). Idempotency: a guardian approving\ntwice hits `recovery_approvals`'s primary key and gets\n`AppError::AlreadyApproved`, not a double-counted approval. Reaching\n[`meets_threshold`] against `threshold_at_request` (frozen at request\ncreation, not the identity's possibly-since-changed live threshold)\ntransitions the row into the delay phase in the same transaction as\nthis approval.",
         "operationId": "approve_request",
         "parameters": [
           {
@@ -5657,6 +5824,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting recovery request",
@@ -5731,6 +5908,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAction"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The resulting recovery request",
@@ -6142,6 +6329,23 @@
           }
         }
       },
+      "ApproveRecoveryRequest": {
+        "type": "object",
+        "description": "`POST /recovery/requests/:id/approve` — a guardian's independent\napproval. Requires the caller to currently be one of the identity's\nguardians (not just at request time — a guardian removed since can no\nlonger approve, mirroring [`guard_cancel_authority`]'s same \"current,\nnot historical, guardian\" rule). Idempotency: a guardian approving\ntwice hits `recovery_approvals`'s primary key and gets\n`AppError::AlreadyApproved`, not a double-counted approval. Reaching\n[`meets_threshold`] against `threshold_at_request` (frozen at request\ncreation, not the identity's possibly-since-changed live threshold)\ntransitions the row into the delay phase in the same transaction as\nthis approval.\nA guardian's approval: their own active key and its signature over\n`recovery_approval_signing_bytes` for this request and its new key.",
+        "required": [
+          "signing_key_id",
+          "signature"
+        ],
+        "properties": {
+          "signature": {
+            "type": "string"
+          },
+          "signing_key_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ArchivedMessageResponse": {
         "type": "object",
         "required": [
@@ -6521,6 +6725,82 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ChainEventSignature": {
+        "type": "object",
+        "description": "What a client signs to author a chained event: the event identity and time it chose, the chain\nposition it signed (the head it saw plus one) and its key's Ed25519 signature over\n`chain_event_signature_bytes` of the event the endpoint builds.",
+        "required": [
+          "event_id",
+          "timestamp",
+          "seq",
+          "signing_key_id",
+          "signature"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Id of the event the endpoint will author; chosen by the signer."
+          },
+          "prev_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The head's event hash as 64 lowercase hex characters; absent for the first chained event."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Chain position: the identity's head `seq` plus one.",
+            "minimum": 0
+          },
+          "signature": {
+            "type": "string",
+            "description": "Base64 Ed25519 signature."
+          },
+          "signing_key_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The active signing key of the author that signed."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Event time, at microsecond precision, within five minutes of the node's clock."
+          }
+        }
+      },
+      "ChainHeadResponse": {
+        "type": "object",
+        "description": "The head of an identity's event chain: the position the next signed event must extend.",
+        "required": [
+          "seq"
+        ],
+        "properties": {
+          "forked_at_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set while the chain is forked; only `identity.recovered` extends it then.",
+            "minimum": 0
+          },
+          "head_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The head event's hash as 64 lowercase hex characters; absent before the first chained event."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`seq` of the head event; 0 before the first chained event.",
+            "minimum": 0
           }
         }
       },
@@ -6971,9 +7251,14 @@
       "CreateFriendRequestRequest": {
         "type": "object",
         "required": [
-          "to"
+          "to",
+          "chain_event"
         ],
         "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature",
+            "description": "The requester's signature of the `friend.requested` event this authors."
+          },
           "to": {
             "$ref": "#/components/schemas/IdentityId"
           }
@@ -8630,6 +8915,29 @@
           }
         }
       },
+      "LeaveGuildRequest": {
+        "type": "object",
+        "description": "The signatures `POST /guilds/{id}/leave` needs: the `guild.member_removed` event, and first the\n`profile.updated` that clears the caller's main guild when it is the guild being left.",
+        "required": [
+          "chain_event"
+        ],
+        "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature"
+          },
+          "clear_main_guild_chain_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChainEventSignature",
+                "description": "Required exactly when the caller's main guild is this guild; signed at the position before\n`chain_event`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "ListIntegratorsResponse": {
         "type": "object",
         "required": [
@@ -9165,6 +9473,36 @@
           "tree_size": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "PasskeyAnnouncement": {
+        "type": "object",
+        "description": "The `identity.passkey_registered` event a passkey's owner signs to announce it to other nodes:\nthe endpoint builds exactly this event, with the client's id, time and position.",
+        "required": [
+          "kind",
+          "version",
+          "issuer",
+          "subject",
+          "payload"
+        ],
+        "properties": {
+          "issuer": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -9751,9 +10089,14 @@
         "type": "object",
         "required": [
           "ticket_id",
-          "webauthn_credential"
+          "webauthn_credential",
+          "new_signing_public_key"
         ],
         "properties": {
+          "new_signing_public_key": {
+            "type": "string",
+            "description": "Base64 Ed25519 public key the recovered identity will sign with; its key id is the request id."
+          },
           "ticket_id": {
             "type": "string",
             "format": "uuid"
@@ -10052,9 +10395,25 @@
       "ReverseEventRequest": {
         "type": "object",
         "required": [
-          "since"
+          "since",
+          "chain_event"
         ],
         "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature",
+            "description": "The owner's signature of the reversal event this authors; its `event_id` is the reversal's id."
+          },
+          "clear_main_guild_chain_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChainEventSignature",
+                "description": "Required when the reversal also clears the main guild; signed at the position before\n`chain_event`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "signature": {
             "type": [
               "string",
@@ -10184,7 +10543,14 @@
       "RevokePasskeyRequest": {
         "type": "object",
         "description": "#697/#698: replaces the old `?confirm=true` speed bump for the\nlast-passkey case with a fresh-signature requirement (the ticket's own\nupgrade from \"confirm\" to \"sign\") — `signing_key_id`/`signature` are\nonly enforced when this revoke would leave zero passkeys, per\n[`needs_fresh_signature`]. Revoking one of several passkeys stays\nunsigned/ambient and these fields go unused.",
+        "required": [
+          "chain_event"
+        ],
         "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature",
+            "description": "The owner's signature of the `identity.passkey_revoked` event this authors."
+          },
           "signature": {
             "type": [
               "string",
@@ -10762,9 +11128,14 @@
         "type": "object",
         "required": [
           "guardian_ids",
-          "threshold"
+          "threshold",
+          "chain_event"
         ],
         "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature",
+            "description": "The owner's signature of the `identity.recovery_configured` event this authors."
+          },
           "guardian_ids": {
             "type": "array",
             "items": {
@@ -10852,6 +11223,18 @@
           "tree_size": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "SignedAction": {
+        "type": "object",
+        "description": "A request body that only carries the author's signature of the event the endpoint authors.",
+        "required": [
+          "chain_event"
+        ],
+        "properties": {
+          "chain_event": {
+            "$ref": "#/components/schemas/ChainEventSignature"
           }
         }
       },
@@ -11474,6 +11857,17 @@
               "null"
             ],
             "description": "Three states, same as `avatar_url`: omitted (untouched), `Some(\"\")`\n(clear to `NULL`), `Some(nonempty)` (validate against\n[`MAX_BIO_LEN`], then set)."
+          },
+          "chain_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChainEventSignature",
+                "description": "The author's signature of the `profile.updated` event; required when the request changes\nanything."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "discoverable": {
             "type": [

@@ -32,7 +32,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
-        version = "0.13.3"
+        version = "0.13.4"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -170,6 +170,9 @@ use utoipa::OpenApi;
         crate::passkeys::register_start,
         crate::passkeys::rename_passkey,
         crate::passkeys::revoke_passkey,
+        crate::passkeys::passkey_announcement,
+        crate::passkeys::announce_passkey,
+        crate::identity_chain::chain_head,
         crate::presence::get_presence,
         crate::presence::update_integrator_presence,
         crate::presence::update_my_presence,
@@ -371,6 +374,12 @@ use utoipa::OpenApi;
         crate::passkeys::PasskeyResponse,
         crate::passkeys::RenamePasskeyRequest,
         crate::passkeys::RevokePasskeyRequest,
+        crate::passkeys::PasskeyAnnouncement,
+        crate::identity_chain::ChainEventSignature,
+        crate::identity_chain::SignedAction,
+        crate::identity_chain::ChainHeadResponse,
+        crate::guilds::LeaveGuildRequest,
+        crate::recovery::ApproveRecoveryRequest,
         crate::presence::PresenceResponse,
         crate::presence::UpdateIntegratorPresenceRequest,
         crate::presence::UpdatePresenceRequest,

@@ -2232,8 +2232,10 @@ async fn fetch_pending_invite(
 /// violation did — this reads `guild_rosters::is_member` first, inside the
 /// same transaction, so the check and the write can't race against each
 /// other via another request.
+#[allow(clippy::too_many_arguments)]
 async fn add_member(
-    indexer: &crate::state::IndexerHandle,
+    state: &AppState,
+    chain_event: &crate::identity_chain::ChainEventSignature,
     tx: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: Uuid,
     identity_id: IdentityId,
@@ -2265,11 +2267,11 @@ async fn add_member(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(tx, &mut event).await?;
-    indexer.apply_in_tx(tx, &event).await?;
+    crate::identity_chain::place_signed(state, tx, &mut event, chain_event, None).await?;
+    state.indexer.apply_in_tx(tx, &event).await?;
     outbox::enqueue(tx, &event).await?;
 
-    Ok((joined_at, event))
+    Ok((event.timestamp, event))
 }
 
 #[utoipa::path(
@@ -2277,12 +2279,14 @@ async fn add_member(
     path = "/guilds/{id}/invites/{invite_id}/accept",
     tag = "guilds",
     params(("id" = Uuid, Path), ("invite_id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn accept_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((guild_id, invite_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<Json<GuildMemberResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let invite = fetch_pending_invite(&state, guild_id, invite_id).await?;
@@ -2306,7 +2310,8 @@ pub async fn accept_invite(
     }
 
     let (joined_at, member_added_event) = add_member(
-        &state.indexer,
+        &state,
+        &body.chain_event,
         &mut tx,
         guild_id,
         actor,
@@ -2363,12 +2368,14 @@ pub async fn decline_invite(
     path = "/guilds/{id}/join",
     tag = "guilds",
     params(("id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn join_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(guild_id): Path<Uuid>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<Json<GuildMemberResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -2380,7 +2387,8 @@ pub async fn join_guild(
     let mut tx = state.pool.begin().await?;
 
     let (joined_at, member_added_event) = add_member(
-        &state.indexer,
+        &state,
+        &body.chain_event,
         &mut tx,
         guild_id,
         actor,
@@ -2404,17 +2412,29 @@ pub async fn join_guild(
     }))
 }
 
+/// The signatures `POST /guilds/{id}/leave` needs: the `guild.member_removed` event, and first the
+/// `profile.updated` that clears the caller's main guild when it is the guild being left.
+#[derive(Deserialize, ToSchema)]
+pub struct LeaveGuildRequest {
+    pub chain_event: crate::identity_chain::ChainEventSignature,
+    /// Required exactly when the caller's main guild is this guild; signed at the position before
+    /// `chain_event`.
+    pub clear_main_guild_chain_event: Option<crate::identity_chain::ChainEventSignature>,
+}
+
 #[utoipa::path(
     post,
     path = "/guilds/{id}/leave",
     tag = "guilds",
     params(("id" = Uuid, Path)),
+    request_body = LeaveGuildRequest,
     responses((status = 200, description = "Left the guild")),
 )]
 pub async fn leave_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(guild_id): Path<Uuid>,
+    Json(body): Json<LeaveGuildRequest>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -2474,7 +2494,11 @@ pub async fn leave_guild(
             version: 1,
             identity_chain: None,
         };
-        crate::identity_chain::assign(&mut tx, &mut event).await?;
+        let clear = body
+            .clear_main_guild_chain_event
+            .as_ref()
+            .ok_or(AppError::InvalidAuthorSignature)?;
+        crate::identity_chain::place_signed(&state, &mut tx, &mut event, clear, None).await?;
         state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
         clear_main_guild_event = Some(event);
@@ -2498,7 +2522,8 @@ pub async fn leave_guild(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -2519,12 +2544,14 @@ pub async fn leave_guild(
     path = "/guilds/{id}/members/{identity_id}",
     tag = "guilds",
     params(("id" = Uuid, Path), ("identity_id" = IdentityId, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "Member removed")),
 )]
 pub async fn remove_member(
     State(state): State<AppState>,
     headers: HeaderMap,
     IdPath((guild_id, identity_id)): IdPath<(Uuid, IdentityId)>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -2563,7 +2590,8 @@ pub async fn remove_member(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
@@ -2837,12 +2865,14 @@ async fn fetch_pending_join_request(
     path = "/guilds/{id}/join-requests/{request_id}/approve",
     tag = "guilds",
     params(("id" = Uuid, Path), ("request_id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "The resulting guild member", body = GuildMemberResponse)),
 )]
 pub async fn approve_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((guild_id, request_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<Json<GuildMemberResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -2875,7 +2905,8 @@ pub async fn approve_join_request(
     }
 
     let (joined_at, member_added_event) = add_member(
-        &state.indexer,
+        &state,
+        &body.chain_event,
         &mut tx,
         guild_id,
         request.applicant,

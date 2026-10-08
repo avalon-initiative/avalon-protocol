@@ -514,6 +514,11 @@ pub struct ReverseEventRequest {
     /// `avalon:rollback.reverse:v1:<event_id>:<identity_id>:<since>`.
     #[serde(default)]
     pub signature: Option<String>,
+    /// The owner's signature of the reversal event this authors; its `event_id` is the reversal's id.
+    pub chain_event: crate::identity_chain::ChainEventSignature,
+    /// Required when the reversal also clears the main guild; signed at the position before
+    /// `chain_event`.
+    pub clear_main_guild_chain_event: Option<crate::identity_chain::ChainEventSignature>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -599,7 +604,7 @@ pub async fn reverse_event(
     };
 
     let now = OffsetDateTime::now_utc();
-    let reversal_event_id = Uuid::new_v4();
+    let reversal_event_id = body.chain_event.event_id;
     let mut cleared_main_guild = None;
     let reversal = match plan {
         ReversalPlan::RemoveFriendship { counterparty } => ProtocolEvent {
@@ -655,10 +660,18 @@ pub async fn reverse_event(
         }
     };
 
-    if let Some(clear) = &cleared_main_guild {
+    let mut reversal = reversal;
+    if let Some(clear) = cleared_main_guild.as_mut() {
+        let sig = body
+            .clear_main_guild_chain_event
+            .as_ref()
+            .ok_or(AppError::InvalidAuthorSignature)?;
+        crate::identity_chain::place_signed(&state, &mut tx, clear, sig, None).await?;
         state.indexer.apply_in_tx(&mut tx, clear).await?;
         outbox::enqueue(&mut tx, clear).await?;
     }
+    crate::identity_chain::place_signed(&state, &mut tx, &mut reversal, &body.chain_event, None)
+        .await?;
     state.indexer.apply_in_tx(&mut tx, &reversal).await?;
     outbox::enqueue(&mut tx, &reversal).await?;
 

@@ -563,6 +563,18 @@ fn full_routes(state: AppState) -> Router {
         .route("/me/passkeys/{id}", patch(passkeys::rename_passkey))
         .route("/me/passkeys/{id}/revoke", post(passkeys::revoke_passkey))
         .route(
+            "/me/passkeys/{id}/announcement",
+            get(passkeys::passkey_announcement),
+        )
+        .route(
+            "/me/passkeys/{id}/announce",
+            post(passkeys::announce_passkey),
+        )
+        .route(
+            "/identities/{id}/chain-head",
+            get(identity_chain::chain_head),
+        )
+        .route(
             "/me/rollback/candidates",
             get(rollback::list_rollback_candidates),
         )

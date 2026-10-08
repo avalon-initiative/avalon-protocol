@@ -377,6 +377,7 @@ pub async fn approve_device_grant(
         identity_id,
         body.seq,
         body.prev_hash.as_deref(),
+        false,
     )
     .await?;
 
@@ -430,7 +431,13 @@ pub async fn approve_device_grant(
         version: 2,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_key_event(
+        &mut tx,
+        &mut event,
+        body.seq,
+        body.prev_hash.as_deref(),
+    )
+    .await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
@@ -623,6 +630,7 @@ pub async fn revoke_device(
         identity_id,
         body.seq,
         body.prev_hash.as_deref(),
+        false,
     )
     .await?;
 
@@ -656,7 +664,13 @@ pub async fn revoke_device(
         version: 2,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_key_event(
+        &mut tx,
+        &mut event,
+        body.seq,
+        body.prev_hash.as_deref(),
+    )
+    .await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 

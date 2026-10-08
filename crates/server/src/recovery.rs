@@ -9,15 +9,16 @@ use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_protocol::event_payloads::{
-    IdentityPasskeyRevokedPayload, IdentityRecoveredPayload, IdentityRecoveryApprovedPayload,
-    IdentityRecoveryCancelledPayload, IdentityRecoveryConfiguredPayload,
-    IdentityRecoveryRequestedPayload,
+    IdentityRecoveredPayload, IdentityRecoveryApprovedPayload, IdentityRecoveryCancelledPayload,
+    IdentityRecoveryConfiguredPayload, IdentityRecoveryRequestedPayload, RecoveryApprovalProof,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
@@ -175,6 +176,8 @@ pub struct SetGuardiansRequest {
     /// threshold stays ambient.
     pub signing_key_id: Option<Uuid>,
     pub signature: Option<String>,
+    /// The owner's signature of the `identity.recovery_configured` event this authors.
+    pub chain_event: crate::identity_chain::ChainEventSignature,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -307,7 +310,8 @@ pub async fn set_guardians(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -631,6 +635,8 @@ pub struct RecoveryFinishRequest {
     pub ticket_id: Uuid,
     #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
+    /// Base64 Ed25519 public key the recovered identity will sign with; its key id is the request id.
+    pub new_signing_public_key: String,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -705,6 +711,12 @@ pub async fn finish_request(
     let recent_count = recent_request_count(&state, ceremony.identity_id).await?;
     guard_rate_limit(recent_count)?;
 
+    let _new_key: [u8; 32] = BASE64
+        .decode(&body.new_signing_public_key)
+        .ok()
+        .and_then(|raw| raw.try_into().ok())
+        .filter(|key| avalon_protocol::ed25519_key::parse_ed25519_public_key(key).is_some())
+        .ok_or(AppError::InvalidRecoveryKey)?;
     let passkey = state
         .webauthn
         .finish_passkey_registration(&body.webauthn_credential, &ceremony.webauthn_state)
@@ -720,8 +732,8 @@ pub async fn finish_request(
         r#"
         INSERT INTO recovery_requests
             (id, identity_id, pending_passkey_data, pending_credential_id, pending_device_label,
-             threshold_at_request, status, requested_at)
-        VALUES ($1, $2, $3, $4, $5, $6, 'pending_approvals', $7)
+             threshold_at_request, status, requested_at, new_signing_public_key)
+        VALUES ($1, $2, $3, $4, $5, $6, 'pending_approvals', $7, $8)
         "#,
     )
     .bind(request_id)
@@ -731,6 +743,7 @@ pub async fn finish_request(
     .bind(&ceremony.device_label)
     .bind(threshold)
     .bind(requested_at)
+    .bind(&body.new_signing_public_key)
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &inserted {
@@ -740,7 +753,7 @@ pub async fn finish_request(
     }
     inserted?;
 
-    let mut event = ProtocolEvent {
+    let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryRequested
             .as_str()
@@ -750,13 +763,13 @@ pub async fn finish_request(
         payload: serde_json::to_value(IdentityRecoveryRequestedPayload {
             request_id,
             threshold,
+            new_signing_public_key: body.new_signing_public_key.clone(),
         })
         .expect("IdentityRecoveryRequestedPayload should serialize"),
         timestamp: requested_at,
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -822,6 +835,62 @@ fn to_response(id: Uuid, row: RequestRow, approvals_count: i64) -> RecoveryReque
     }
 }
 
+/// The new Ed25519 key a recovery request names.
+async fn request_new_key(state: &AppState, request_id: Uuid) -> Result<[u8; 32], AppError> {
+    let text: Option<String> =
+        sqlx::query_scalar("SELECT new_signing_public_key FROM recovery_requests WHERE id = $1")
+            .bind(request_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::RecoveryRequestNotFound)?;
+    text.and_then(|t| BASE64.decode(t).ok())
+        .and_then(|raw| raw.try_into().ok())
+        .ok_or(AppError::InvalidRecoveryKey)
+}
+
+/// Checks the guardian's approval signature against one of their active keys.
+async fn verify_guardian_approval(
+    state: &AppState,
+    request: &RequestRow,
+    request_id: Uuid,
+    guardian: IdentityId,
+    body: &ApproveRecoveryRequest,
+) -> Result<(), AppError> {
+    let new_key = request_new_key(state, request_id).await?;
+    let raw: Vec<u8> = sqlx::query_scalar(
+        "SELECT public_key FROM identity_signing_keys \
+         WHERE id = $1 AND identity_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(body.signing_key_id)
+    .bind(guardian)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::InvalidAuthorSignature)?;
+    let key = <[u8; 32]>::try_from(raw).map_err(|_| AppError::InvalidAuthorSignature)?;
+    let signature: [u8; 64] = BASE64
+        .decode(&body.signature)
+        .ok()
+        .and_then(|raw| raw.try_into().ok())
+        .ok_or(AppError::InvalidAuthorSignature)?;
+    let bytes = avalon_protocol::identity_id::recovery_approval_signing_bytes(
+        state.chain.network_id(),
+        &request.identity_id,
+        request_id,
+        &guardian,
+        body.signing_key_id,
+        &new_key,
+    );
+    let verifies =
+        avalon_protocol::ed25519_key::parse_ed25519_public_key(&key).is_some_and(|key| {
+            avalon_protocol::ed25519_key::verify_strict_signature(&key, &bytes, &signature)
+        });
+    if verifies {
+        Ok(())
+    } else {
+        Err(AppError::InvalidAuthorSignature)
+    }
+}
+
 /// `POST /recovery/requests/:id/approve` — a guardian's independent
 /// approval. Requires the caller to currently be one of the identity's
 /// guardians (not just at request time — a guardian removed since can no
@@ -833,17 +902,27 @@ fn to_response(id: Uuid, row: RequestRow, approvals_count: i64) -> RecoveryReque
 /// creation, not the identity's possibly-since-changed live threshold)
 /// transitions the row into the delay phase in the same transaction as
 /// this approval.
+/// A guardian's approval: their own active key and its signature over
+/// `recovery_approval_signing_bytes` for this request and its new key.
+#[derive(Deserialize, ToSchema)]
+pub struct ApproveRecoveryRequest {
+    pub signing_key_id: Uuid,
+    pub signature: String,
+}
+
 #[utoipa::path(
     post,
     path = "/recovery/requests/{id}/approve",
     tag = "recovery",
     params(("id" = Uuid, Path)),
+    request_body = ApproveRecoveryRequest,
     responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn approve_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
+    Json(body): Json<ApproveRecoveryRequest>,
 ) -> Result<Json<RecoveryRequestResponse>, AppError> {
     let caller = authenticate(&state, &headers).await?;
     let request = fetch_request(&state, request_id).await?;
@@ -856,6 +935,8 @@ pub async fn approve_request(
     if !guardians.contains(&caller) {
         return Err(AppError::NotAGuardian);
     }
+
+    verify_guardian_approval(&state, &request, request_id, caller, &body).await?;
 
     let mut tx = state.pool.begin().await?;
 
@@ -884,11 +965,14 @@ pub async fn approve_request(
 
     let approved_at = OffsetDateTime::now_utc();
     let inserted = sqlx::query(
-        "INSERT INTO recovery_approvals (request_id, guardian_identity_id, approved_at) VALUES ($1, $2, $3)",
+        "INSERT INTO recovery_approvals (request_id, guardian_identity_id, approved_at, signing_key_id, signature) \
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(request_id)
     .bind(caller)
     .bind(approved_at)
+    .bind(body.signing_key_id)
+    .bind(&body.signature)
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &inserted {
@@ -925,7 +1009,7 @@ pub async fn approve_request(
         .await?;
     }
 
-    let mut event = ProtocolEvent {
+    let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryApproved
             .as_str()
@@ -938,13 +1022,14 @@ pub async fn approve_request(
             approvals_count: count,
             threshold: request.threshold_at_request,
             delay_ends_at,
+            signing_key_id: body.signing_key_id,
+            signature: body.signature.clone(),
         })
         .expect("IdentityRecoveryApprovedPayload should serialize"),
         timestamp: approved_at,
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -1015,7 +1100,7 @@ pub async fn cancel_request(
         return Err(AppError::RecoveryAlreadyResolved);
     }
 
-    let mut event = ProtocolEvent {
+    let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityRecoveryCancelled
             .as_str()
@@ -1032,7 +1117,6 @@ pub async fn cancel_request(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -1063,11 +1147,13 @@ pub async fn cancel_request(
     path = "/recovery/requests/{id}/finalize",
     tag = "recovery",
     params(("id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "The resulting recovery request", body = RecoveryRequestResponse)),
 )]
 pub async fn finalize_request(
     State(state): State<AppState>,
     Path(request_id): Path<Uuid>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<Json<RecoveryRequestResponse>, AppError> {
     let request = fetch_request(&state, request_id).await?;
 
@@ -1105,40 +1191,44 @@ pub async fn finalize_request(
     let locked_delay_ends_at: Option<OffsetDateTime> = locked.try_get("delay_ends_at")?;
     guard_can_finalize(&locked_status, locked_delay_ends_at, now)?;
 
-    // Recovery replaces the passkeys: every pre-existing one is revoked, durably, like
-    // `passkeys::revoke_passkey` does.
-    let old_passkeys: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id FOR UPDATE",
-    )
-    .bind(request.identity_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    // Recovery replaces every credential: the passkeys and signing keys that existed are revoked
+    // (`identity.recovered` implies it) and the new passkey and key take their place.
     sqlx::query("DELETE FROM identity_keys WHERE identity_id = $1")
         .bind(request.identity_id)
         .execute(&mut *tx)
         .await?;
-    let mut revoked_events = Vec::with_capacity(old_passkeys.len());
-    for passkey_id in old_passkeys {
-        let mut event = ProtocolEvent {
-            id: Uuid::new_v4(),
-            kind: ProtocolEventKindVariant::IdentityPasskeyRevoked
-                .as_str()
-                .to_string(),
-            issuer: identity_ref(request.identity_id, "passkey_revoked"),
-            subject: identity_ref(request.identity_id, "passkey_revoked"),
-            payload: serde_json::to_value(IdentityPasskeyRevokedPayload {
-                passkey_id,
-                identity_id: request.identity_id,
-            })
-            .expect("IdentityPasskeyRevokedPayload should serialize"),
-            timestamp: now,
-            version: 1,
-            identity_chain: None,
-        };
-        crate::identity_chain::assign(&mut tx, &mut event).await?;
-        outbox::enqueue(&mut tx, &event).await?;
-        state.indexer.apply_in_tx(&mut tx, &event).await?;
-        revoked_events.push(event);
+    sqlx::query(
+        "UPDATE identity_signing_keys SET revoked_at = $2 WHERE identity_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(request.identity_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    let new_key = request_new_key(&state, request_id).await?;
+    sqlx::query(
+        "INSERT INTO identity_signing_keys (id, identity_id, public_key, label) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(request_id)
+    .bind(request.identity_id)
+    .bind(new_key.as_slice())
+    .bind(&pending_device_label)
+    .execute(&mut *tx)
+    .await?;
+    let approval_rows = sqlx::query(
+        "SELECT guardian_identity_id, signing_key_id, signature FROM recovery_approvals \
+         WHERE request_id = $1 AND signing_key_id IS NOT NULL AND signature IS NOT NULL \
+         ORDER BY approved_at",
+    )
+    .bind(request_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut approvals = Vec::with_capacity(approval_rows.len());
+    for row in &approval_rows {
+        approvals.push(RecoveryApprovalProof {
+            guardian_id: row.try_get("guardian_identity_id")?,
+            signing_key_id: row.try_get("signing_key_id")?,
+            signature: row.try_get("signature")?,
+        });
     }
 
     sqlx::query(
@@ -1173,19 +1263,27 @@ pub async fn finalize_request(
         payload: serde_json::to_value(IdentityRecoveredPayload {
             request_id,
             device_label: pending_device_label.clone(),
+            new_signing_public_key: BASE64.encode(new_key),
+            approvals,
         })
         .expect("IdentityRecoveredPayload should serialize"),
         timestamp: completed_at,
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(
+        &state,
+        &mut tx,
+        &mut event,
+        &body.chain_event,
+        Some(new_key),
+    )
+    .await?;
     outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
-    for event in &revoked_events {
-        state.indexer.apply_after_commit(event).await?;
-    }
+    state.indexer.apply_after_commit(&event).await?;
 
     let approvals = approvals_count(&state, request_id).await?;
     Ok(Json(RecoveryRequestResponse {

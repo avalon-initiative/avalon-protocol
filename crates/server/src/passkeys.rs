@@ -259,13 +259,44 @@ pub async fn register_finish(
     let passkey_id: Uuid = inserted.try_get("id")?;
     let added_at: OffsetDateTime = inserted.try_get("added_at")?;
 
-    // Issue #523: durable, mirrorable public credential material — see
-    // this module's own doc comment update and
-    // `avalon_protocol::event_payloads::IdentityPasskeyRegisteredPayload`'s
-    // doc comment for why this carries the full serialized `Passkey`
-    // rather than just an opaque reference.
-    let mut event = ProtocolEvent {
-        id: Uuid::new_v4(),
+    tx.commit().await?;
+
+    Ok(Json(PasskeyResponse {
+        id: passkey_id,
+        label: body.label,
+        added_at,
+    }))
+}
+
+/// The `identity.passkey_registered` event a passkey's owner signs to announce it to other nodes:
+/// the endpoint builds exactly this event, with the client's id, time and position.
+#[derive(Serialize, ToSchema)]
+pub struct PasskeyAnnouncement {
+    pub kind: String,
+    pub version: u32,
+    pub issuer: String,
+    pub subject: String,
+    #[schema(value_type = Object)]
+    pub payload: serde_json::Value,
+}
+
+async fn unannounced_passkey_event(
+    state: &AppState,
+    identity_id: IdentityId,
+    passkey_id: Uuid,
+) -> Result<ProtocolEvent, AppError> {
+    let row = sqlx::query(
+        "SELECT credential_id, passkey_data, label FROM identity_keys \
+         WHERE id = $1 AND identity_id = $2 AND announced_at IS NULL",
+    )
+    .bind(passkey_id)
+    .bind(identity_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::PasskeyNotFound)?;
+    let credential_id: Vec<u8> = row.try_get("credential_id")?;
+    Ok(ProtocolEvent {
+        id: Uuid::nil(),
         kind: ProtocolEventKindVariant::IdentityPasskeyRegistered
             .as_str()
             .to_string(),
@@ -275,26 +306,78 @@ pub async fn register_finish(
             passkey_id,
             identity_id,
             credential_id: BASE64.encode(credential_id),
-            passkey_data: passkey_json,
-            label: body.label.clone(),
+            passkey_data: row.try_get("passkey_data")?,
+            label: row.try_get("label")?,
         })
         .expect("IdentityPasskeyRegisteredPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
         identity_chain: None,
-    };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    })
+}
+
+/// `GET /me/passkeys/{id}/announcement` — the event to sign to announce a passkey that has not
+/// been announced yet.
+#[utoipa::path(
+    get,
+    path = "/me/passkeys/{id}/announcement",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, description = "The event to sign", body = PasskeyAnnouncement)),
+)]
+pub async fn passkey_announcement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(passkey_id): Path<Uuid>,
+) -> Result<Json<PasskeyAnnouncement>, AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+    let event = unannounced_passkey_event(&state, identity_id, passkey_id).await?;
+    Ok(Json(PasskeyAnnouncement {
+        kind: event.kind,
+        version: event.version,
+        issuer: event.issuer.to_string(),
+        subject: event.subject.to_string(),
+        payload: event.payload,
+    }))
+}
+
+/// `POST /me/passkeys/{id}/announce` — authors the signed `identity.passkey_registered` event for
+/// a passkey, so other nodes learn the credential.
+#[utoipa::path(
+    post,
+    path = "/me/passkeys/{id}/announce",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
+    responses((status = 200, description = "Passkey announced")),
+)]
+pub async fn announce_passkey(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(passkey_id): Path<Uuid>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
+) -> Result<(), AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+    let mut event = unannounced_passkey_event(&state, identity_id, passkey_id).await?;
+    let mut tx = state.pool.begin().await?;
+    let claimed = sqlx::query(
+        "UPDATE identity_keys SET announced_at = now() \
+         WHERE id = $1 AND identity_id = $2 AND announced_at IS NULL",
+    )
+    .bind(passkey_id)
+    .bind(identity_id)
+    .execute(&mut *tx)
+    .await?;
+    if claimed.rows_affected() == 0 {
+        return Err(AppError::PasskeyNotFound);
+    }
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
-
     tx.commit().await?;
     state.indexer.apply_after_commit(&event).await?;
-
-    Ok(Json(PasskeyResponse {
-        id: passkey_id,
-        label: body.label,
-        added_at,
-    }))
+    Ok(())
 }
 
 /// `GET /me/passkeys` — every passkey registered to the caller's identity,
@@ -380,8 +463,10 @@ pub async fn rename_passkey(
 /// only enforced when this revoke would leave zero passkeys, per
 /// [`needs_fresh_signature`]. Revoking one of several passkeys stays
 /// unsigned/ambient and these fields go unused.
-#[derive(Deserialize, Default, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 pub struct RevokePasskeyRequest {
+    /// The owner's signature of the `identity.passkey_revoked` event this authors.
+    pub chain_event: crate::identity_chain::ChainEventSignature,
     #[serde(default)]
     pub signing_key_id: Option<Uuid>,
     #[serde(default)]
@@ -481,7 +566,8 @@ pub async fn revoke_passkey(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     outbox::enqueue(&mut tx, &event).await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 

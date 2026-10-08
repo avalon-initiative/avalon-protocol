@@ -112,6 +112,8 @@ pub async fn resolve_handle(
 #[derive(Deserialize, ToSchema)]
 pub struct CreateFriendRequestRequest {
     pub to: IdentityId,
+    /// The requester's signature of the `friend.requested` event this authors.
+    pub chain_event: crate::identity_chain::ChainEventSignature,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -203,7 +205,8 @@ pub async fn create_friend_request(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -252,12 +255,14 @@ pub struct FriendshipResponse {
     path = "/friends/requests/{id}/accept",
     tag = "friends",
     params(("id" = Uuid, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "The resulting friendship", body = FriendshipResponse)),
 )]
 pub async fn accept_friend_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<Json<FriendshipResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let request = fetch_pending_request(&state, request_id).await?;
@@ -300,7 +305,9 @@ pub async fn accept_friend_request(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
+    let since = event.timestamp;
     // Issue #506: `friendships` is a projection now — the row is written
     // by the indexer applying `event`, not a bespoke `INSERT` here, same
     // pattern `handlers::register_finish` established for `profiles`.
@@ -352,12 +359,14 @@ pub async fn decline_or_withdraw_friend_request(
     path = "/friends/{identity_id}",
     tag = "friends",
     params(("identity_id" = IdentityId, Path)),
+    request_body = crate::identity_chain::SignedAction,
     responses((status = 200, description = "Friendship removed")),
 )]
 pub async fn remove_friend(
     State(state): State<AppState>,
     headers: HeaderMap,
     IdPath(other_identity_id): IdPath<IdentityId>,
+    Json(body): Json<crate::identity_chain::SignedAction>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let (a, b) = ordered_pair(actor, other_identity_id);
@@ -384,7 +393,8 @@ pub async fn remove_friend(
         version: 1,
         identity_chain: None,
     };
-    crate::identity_chain::assign(&mut tx, &mut event).await?;
+    crate::identity_chain::place_signed(&state, &mut tx, &mut event, &body.chain_event, None)
+        .await?;
     state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 

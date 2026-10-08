@@ -119,6 +119,10 @@ pub enum AppError {
     },
     #[error("chain position prev_hash must be 64 lowercase hex characters")]
     InvalidChainPosition,
+    #[error("the recovery's new signing key is missing or not a valid Ed25519 public key")]
+    InvalidRecoveryKey,
+    #[error("the event signature does not verify under an active key of its author, or its time is outside the allowed window")]
+    InvalidAuthorSignature,
     #[error("no completed recovery exists for this identity")]
     RollbackNoCompletedRecovery,
     #[error(
@@ -633,6 +637,8 @@ impl AppError {
             AppError::IdentityChainForked => "IDENTITY_CHAIN_FORKED",
             AppError::IdentityChainPositionStale { .. } => "IDENTITY_CHAIN_POSITION_STALE",
             AppError::InvalidChainPosition => "INVALID_CHAIN_POSITION",
+            AppError::InvalidAuthorSignature => "INVALID_AUTHOR_SIGNATURE",
+            AppError::InvalidRecoveryKey => "INVALID_RECOVERY_KEY",
             AppError::RollbackNoCompletedRecovery => "ROLLBACK_NO_COMPLETED_RECOVERY",
             AppError::InvalidRollbackWindow => "INVALID_ROLLBACK_WINDOW",
             AppError::RollbackEventNotEligible => "ROLLBACK_EVENT_NOT_ELIGIBLE",
@@ -831,6 +837,9 @@ impl IntoResponse for AppError {
             | AppError::IdentityChainForked
             | AppError::IdentityChainPositionStale { .. } => StatusCode::CONFLICT,
             AppError::InvalidChainPosition => StatusCode::BAD_REQUEST,
+            AppError::InvalidAuthorSignature | AppError::InvalidRecoveryKey => {
+                StatusCode::BAD_REQUEST
+            }
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
             AppError::DisplayNameTaken => StatusCode::CONFLICT,

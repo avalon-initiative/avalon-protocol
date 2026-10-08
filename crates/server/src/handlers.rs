@@ -17,8 +17,8 @@
 
 use avalon_indexer::projections::profiles as profile_reads;
 use avalon_protocol::event_payloads::{
-    IdentityCreatedPayload, IdentityPasskeyRegisteredPayload, IdentitySigningKeyAddedPayload,
-    ProfileUpdatedPayload, SIGNING_KEY_KIND_INCEPTION,
+    IdentityCreatedPayload, IdentitySigningKeyAddedPayload, ProfileUpdatedPayload,
+    SIGNING_KEY_KIND_INCEPTION,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity::{
@@ -427,54 +427,19 @@ pub async fn register_finish(
         return Err(err.into());
     }
 
-    let passkey_row = sqlx::query(
-        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) VALUES ($1, $2, $3) RETURNING id",
+    sqlx::query(
+        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) VALUES ($1, $2, $3)",
     )
     .bind(ceremony.identity_id)
     .bind(credential_id)
     .bind(&passkey_json)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
-    let passkey_id: Uuid = passkey_row.try_get("id")?;
 
-    // Issue #523: the identity's very first passkey — the common case most
-    // identities will only ever have — gets the same durable, mirrorable
-    // event `passkeys::register_finish` emits for every later one, so a
-    // freshly-created identity is portable from the start rather than only
-    // once a second passkey happens to be registered.
-    let passkey_event = ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: ProtocolEventKindVariant::IdentityPasskeyRegistered
-            .as_str()
-            .to_string(),
-        issuer: GlobalId::new(
-            "identity",
-            &ceremony.identity_id.to_string(),
-            "self",
-            "passkey_registered",
-        ),
-        subject: GlobalId::new(
-            "identity",
-            &ceremony.identity_id.to_string(),
-            "self",
-            "passkey_registered",
-        ),
-        payload: serde_json::to_value(IdentityPasskeyRegisteredPayload {
-            passkey_id,
-            identity_id: ceremony.identity_id,
-            credential_id: BASE64.encode(credential_id),
-            passkey_data: passkey_json.clone(),
-            label: None,
-        })
-        .expect("IdentityPasskeyRegisteredPayload should serialize"),
-        timestamp: OffsetDateTime::now_utc(),
-        version: 1,
-        identity_chain: None,
-    };
+    // The first passkey is announced to other nodes by its owner's signed
+    // `identity.passkey_registered`, like every later one (`passkeys::announce_passkey`).
     // Parent first: ledger order must put `identity.created` ahead of the rows that reference it.
     outbox::enqueue(&mut tx, &event).await?;
-    outbox::enqueue(&mut tx, &passkey_event).await?;
-    state.indexer.apply_in_tx(&mut tx, &passkey_event).await?;
 
     let signing_key_row = sqlx::query(
         "INSERT INTO identity_signing_keys (id, identity_id, public_key, label) VALUES ($1, $2, $3, $4) RETURNING id, added_at",
@@ -538,7 +503,6 @@ pub async fn register_finish(
 
     tx.commit().await?;
     state.indexer.apply_after_commit(&event).await?;
-    state.indexer.apply_after_commit(&passkey_event).await?;
     state.indexer.apply_after_commit(&signing_key_event).await?;
 
     Ok(Json(RegisterFinishResponse {
@@ -1108,6 +1072,9 @@ pub async fn my_history(
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateProfileRequest {
+    /// The author's signature of the `profile.updated` event; required when the request changes
+    /// anything.
+    pub chain_event: Option<crate::identity_chain::ChainEventSignature>,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     /// Three states, same as `avatar_url`: omitted (untouched), `Some("")`
@@ -1587,7 +1554,11 @@ pub async fn update_profile(
 
     let mut tx = state.pool.begin().await?;
     if let Some(event) = event.as_mut() {
-        crate::identity_chain::assign(&mut tx, event).await?;
+        let sig = body
+            .chain_event
+            .as_ref()
+            .ok_or(AppError::InvalidAuthorSignature)?;
+        crate::identity_chain::place_signed(&state, &mut tx, event, sig, None).await?;
     }
 
     // `profiles` is a projection: the write below happens
