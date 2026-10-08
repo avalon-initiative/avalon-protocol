@@ -5,6 +5,8 @@
 //! identities and sessions are inserted directly rather than through a
 //! real WebAuthn ceremony.
 
+mod chain_sign;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -31,6 +33,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("discovery-test-{identity_id}"))
@@ -61,12 +64,13 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 async fn become_friends(
     http: &reqwest::Client,
     base: &str,
+    from_id: avalon_protocol::ids::IdentityId,
     from_token: &str,
     to_id: avalon_protocol::ids::IdentityId,
     to_token: &str,
 ) {
     let create = auth(http.post(format!("{base}/friends/requests")), from_token)
-        .json(&serde_json::json!({ "to": to_id }))
+        .json(&serde_json::json!({ "to": to_id, "chain_event": chain_sign::friend_requested(from_id, to_id).await }))
         .send()
         .await
         .expect("create friend request failed — is `make start` running?");
@@ -78,6 +82,7 @@ async fn become_friends(
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         to_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::friend_accepted(to_id, from_id, to_id).await }))
     .send()
     .await
     .unwrap();
@@ -130,6 +135,7 @@ async fn create_guild_with_member(
         )),
         member_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(member_id, guild_id.parse().unwrap(), "invite").await }))
     .send()
     .await
     .unwrap();
@@ -167,8 +173,8 @@ async fn a_friend_of_a_friend_surfaces_as_a_candidate() {
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
     let (carol_id, carol_token) = seed_identity_session(&pool).await;
 
-    become_friends(&http, &base, &alice_token, bob_id, &bob_token).await;
-    become_friends(&http, &base, &bob_token, carol_id, &carol_token).await;
+    become_friends(&http, &base, alice_id, &alice_token, bob_id, &bob_token).await;
+    become_friends(&http, &base, bob_id, &bob_token, carol_id, &carol_token).await;
 
     let candidates = discover(&http, &base, &alice_token).await;
     assert!(

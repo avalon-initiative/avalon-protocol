@@ -288,3 +288,147 @@ pub async fn recovery_configured(
     )
     .await
 }
+
+/// The `PATCH /me` body `body` plus the `chain_event` for the `profile.updated` it produces.
+pub async fn profile_patch(identity: IdentityId, mut body: serde_json::Value) -> serde_json::Value {
+    const NULLABLE: [&str; 9] = [
+        "avatar_url",
+        "bio",
+        "pronouns",
+        "banner_url",
+        "status",
+        "timezone",
+        "theme_color",
+        "location",
+        "main_guild",
+    ];
+    let mut payload = serde_json::Map::new();
+    for (key, value) in body.as_object().unwrap() {
+        match key.as_str() {
+            "display_name" | "favorite_genres" | "links" => {
+                payload.insert(key.clone(), value.clone());
+            }
+            k if NULLABLE.contains(&k) => {
+                let cleared = value.as_str() == Some("");
+                payload.insert(
+                    key.clone(),
+                    if cleared {
+                        serde_json::Value::Null
+                    } else {
+                        value.clone()
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    if !payload.is_empty() {
+        body["chain_event"] = profile_updated(identity, payload.into()).await;
+    }
+    body
+}
+
+/// The `POST /guilds/{id}/leave` body; `clears_main_guild` adds the signed main-guild clear first.
+pub async fn leave_body(
+    identity: IdentityId,
+    guild_id: Uuid,
+    clears_main_guild: bool,
+) -> serde_json::Value {
+    let (key, key_id) = key_of(identity);
+    let (seq, prev) = head(identity).await;
+    let mut body = serde_json::Map::new();
+    let (mut next_seq, mut next_prev) = (seq + 1, prev);
+    if clears_main_guild {
+        let (clear, hash) = sign_hashed(
+            &key,
+            key_id,
+            "profile.updated",
+            identity_ref(identity, "profile_updated"),
+            identity_ref(identity, "profile_updated"),
+            serde_json::json!({ "main_guild": null }),
+            next_seq,
+            next_prev,
+        );
+        body.insert("clear_main_guild_chain_event".into(), clear);
+        next_seq += 1;
+        next_prev = Some(hash);
+    }
+    let removed = sign_hashed(
+        &key,
+        key_id,
+        "guild.member_removed",
+        identity_ref(identity, "guild_member_removed"),
+        guild_ref(guild_id, "guild_member_removed"),
+        serde_json::to_value(GuildMemberRemovedPayload {
+            guild_id,
+            identity_id: identity,
+            reason: "left".to_string(),
+            actor: identity,
+        })
+        .unwrap(),
+        next_seq,
+        next_prev,
+    )
+    .0;
+    body.insert("chain_event".into(), removed);
+    body.into()
+}
+
+/// The `DELETE /guilds/{id}/members/{who}` body.
+pub async fn remove_member_body(
+    actor: IdentityId,
+    guild_id: Uuid,
+    member: IdentityId,
+) -> serde_json::Value {
+    serde_json::json!({ "chain_event": guild_member_removed(actor, guild_id, member, "removed").await })
+}
+
+/// Like [`sign_at`] but also returns the event hash, so a follow-up event can chain onto it.
+#[allow(clippy::too_many_arguments)]
+fn sign_hashed(
+    key: &ed25519_dalek::SigningKey,
+    key_id: Uuid,
+    kind: &str,
+    issuer: GlobalId,
+    subject: GlobalId,
+    payload: serde_json::Value,
+    seq: u64,
+    prev: Option<String>,
+) -> (serde_json::Value, String) {
+    let mut event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: kind.to_string(),
+        issuer,
+        subject,
+        payload,
+        timestamp: truncate_to_micros(OffsetDateTime::now_utc()),
+        version: 1,
+        identity_chain: Some(IdentityChainPosition::current(seq, prev.clone())),
+    };
+    author_sign(&mut event, &network_id(), key_id, key).unwrap();
+    let hash = hex::encode(event_hash(&event).unwrap());
+    let json = serde_json::json!({
+        "event_id": event.id,
+        "timestamp": event.timestamp.format(&time::format_description::well_known::Rfc3339).unwrap(),
+        "seq": seq,
+        "prev_hash": prev,
+        "signing_key_id": key_id,
+        "signature": event.identity_chain.unwrap().signature,
+    });
+    (json, hash)
+}
+
+/// Removes a seeded identity's signing keys, for tests of the "no registered key" paths.
+pub async fn unregister(pool: &PgPool, id: IdentityId) {
+    sqlx::query("DELETE FROM identity_signing_keys WHERE identity_id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("failed to remove signing key");
+    sqlx::query("DELETE FROM indexer_identity_signing_keys WHERE identity_id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("failed to remove projected signing key");
+    KEYS.lock().unwrap().remove(&id);
+}

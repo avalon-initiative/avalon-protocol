@@ -6,6 +6,8 @@
 //! `crates/server/tests/friends.rs` — this feature doesn't care how a
 //! session was established, only that it's a valid bearer token.
 
+mod chain_sign;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -32,6 +34,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("blocks-test-{identity_id}"))
@@ -94,15 +97,16 @@ async fn a_friend_request_from_a_blocked_identity_fails_identically_to_a_nonexis
     // Bob tries to friend-request Alice — must fail exactly like a request
     // to a nonexistent identity, not a distinguishable "you're blocked".
     let blocked_attempt = auth(http.post(format!("{base}/friends/requests")), &bob_token)
-        .json(&serde_json::json!({ "to": alice_id }))
+        .json(&serde_json::json!({ "to": alice_id, "chain_event": chain_sign::friend_requested(bob_id, alice_id).await }))
         .send()
         .await
         .unwrap();
     let blocked_status = blocked_attempt.status();
     let blocked_body: serde_json::Value = blocked_attempt.json().await.unwrap();
 
+    let missing_id = avalon_protocol::ids::IdentityId::random_for_tests();
     let nonexistent_attempt = auth(http.post(format!("{base}/friends/requests")), &bob_token)
-        .json(&serde_json::json!({ "to": avalon_protocol::ids::IdentityId::random_for_tests() }))
+        .json(&serde_json::json!({ "to": missing_id, "chain_event": chain_sign::friend_requested(bob_id, missing_id).await }))
         .send()
         .await
         .unwrap();
@@ -115,7 +119,7 @@ async fn a_friend_request_from_a_blocked_identity_fails_identically_to_a_nonexis
     // The blocker's own attempt to friend the person they blocked fails
     // the same indistinguishable way too.
     let blocker_attempt = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": bob_id }))
+        .json(&serde_json::json!({ "to": bob_id, "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
         .send()
         .await
         .unwrap();
@@ -130,17 +134,16 @@ async fn blocking_auto_resolves_a_pending_friend_request_in_either_direction() {
     let base = server_url();
 
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
-    let (_bob_id, bob_token) = seed_identity_session(&pool).await;
+    let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
     let create = auth(http.post(format!("{base}/friends/requests")), &bob_token)
-        .json(&serde_json::json!({ "to": alice_id }))
+        .json(&serde_json::json!({ "to": alice_id, "chain_event": chain_sign::friend_requested(bob_id, alice_id).await }))
         .send()
         .await
         .unwrap();
     assert!(create.status().is_success(), "{:?}", create.status());
 
     // Alice blocks Bob — the pending request Bob sent must be resolved.
-    let bob_id = _bob_id;
     let block = auth(http.post(format!("{base}/blocks")), &alice_token)
         .json(&serde_json::json!({ "identity_id": bob_id }))
         .send()

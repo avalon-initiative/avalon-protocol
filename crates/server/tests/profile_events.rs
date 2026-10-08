@@ -7,6 +7,8 @@
 //! actually reaches the ledger, which means waiting for the outbox worker's
 //! next tick (3s) rather than asserting the moment the request returns.
 
+mod chain_sign;
+
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
@@ -35,6 +37,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("profile-events-test-{identity_id}"))
@@ -92,7 +95,7 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     // Issue #510: display_name is now globally unique, so a fixed literal
     // here would fail every run after the first against a persistent dev
@@ -103,7 +106,13 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "display_name": new_display_name }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({ "display_name": new_display_name }),
+            )
+            .await,
+        )
         .send()
         .await
         .expect("update request failed — is `make start` running?");
@@ -129,7 +138,7 @@ async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     for body in [
         serde_json::json!({ "avatar_url": "https://example.com/a.png" }),
@@ -138,7 +147,7 @@ async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
         let update = http
             .patch(format!("{base}/me"))
             .bearer_auth(&token)
-            .json(&body)
+            .json(&chain_sign::profile_patch(identity_id, body).await)
             .send()
             .await
             .unwrap();
@@ -180,16 +189,22 @@ async fn a_self_description_update_round_trips_through_get_me() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "bio": "just here for the guild raids",
-            "favorite_genres": ["rpg", "puzzle"],
-            "pronouns": "they/them",
-        }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({
+                    "bio": "just here for the guild raids",
+                    "favorite_genres": ["rpg", "puzzle"],
+                    "pronouns": "they/them",
+                }),
+            )
+            .await,
+        )
         .send()
         .await
         .expect("update request failed — is `make start` running?");
@@ -213,11 +228,17 @@ async fn a_self_description_update_round_trips_through_get_me() {
     let clear = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "bio": "",
-            "favorite_genres": [],
-            "pronouns": "",
-        }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({
+                    "bio": "",
+                    "favorite_genres": [],
+                    "pronouns": "",
+                }),
+            )
+            .await,
+        )
         .send()
         .await
         .unwrap();
@@ -247,19 +268,25 @@ async fn expanded_profile_fields_round_trip_through_get_me() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "banner_url": "https://example.com/banner.png",
-            "status": "raiding tonight",
-            "links": ["https://example.com", "https://example.org"],
-            "timezone": "America/New_York",
-            "theme_color": "#a1b2c3",
-            "location": "Pacific Northwest",
-        }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({
+                    "banner_url": "https://example.com/banner.png",
+                    "status": "raiding tonight",
+                    "links": ["https://example.com", "https://example.org"],
+                    "timezone": "America/New_York",
+                    "theme_color": "#a1b2c3",
+                    "location": "Pacific Northwest",
+                }),
+            )
+            .await,
+        )
         .send()
         .await
         .expect("update request failed — is `make start` running?");
@@ -289,14 +316,20 @@ async fn expanded_profile_fields_round_trip_through_get_me() {
     let clear = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "banner_url": "",
-            "status": "",
-            "links": [],
-            "timezone": "",
-            "theme_color": "",
-            "location": "",
-        }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({
+                    "banner_url": "",
+                    "status": "",
+                    "links": [],
+                    "timezone": "",
+                    "theme_color": "",
+                    "location": "",
+                }),
+            )
+            .await,
+        )
         .send()
         .await
         .unwrap();
@@ -326,12 +359,18 @@ async fn an_invalid_theme_color_is_rejected_not_silently_dropped() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "theme_color": "not-a-color" }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({ "theme_color": "not-a-color" }),
+            )
+            .await,
+        )
         .send()
         .await
         .unwrap();
@@ -345,12 +384,18 @@ async fn an_unknown_genre_is_rejected_not_silently_dropped() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "favorite_genres": ["not_a_real_genre"] }))
+        .json(
+            &chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({ "favorite_genres": ["not_a_real_genre"] }),
+            )
+            .await,
+        )
         .send()
         .await
         .unwrap();
@@ -364,12 +409,12 @@ async fn a_request_that_changes_nothing_emits_nothing() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({}))
+        .json(&chain_sign::profile_patch(identity_id, serde_json::json!({})).await)
         .send()
         .await
         .unwrap();
@@ -400,12 +445,18 @@ async fn get_identity_profile_exposes_the_same_fields_get_me_does() {
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&viewed_token)
-        .json(&serde_json::json!({
-            "bio": "raid leader",
-            "pronouns": "she/her",
-            "status": "raiding tonight",
-            "location": "Pacific Northwest",
-        }))
+        .json(
+            &chain_sign::profile_patch(
+                viewed_id,
+                serde_json::json!({
+                    "bio": "raid leader",
+                    "pronouns": "she/her",
+                    "status": "raiding tonight",
+                    "location": "Pacific Northwest",
+                }),
+            )
+            .await,
+        )
         .send()
         .await
         .expect("update request failed — is `make start` running?");
@@ -457,7 +508,7 @@ async fn a_display_name_shaped_like_an_identity_id_is_refused_on_update_and_neve
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_id, token) = seed_identity_session(&pool).await;
+    let (id, token) = seed_identity_session(&pool).await;
     let (victim_id, _) = seed_identity_session(&pool).await;
     let victim = victim_id.to_string();
 
@@ -482,7 +533,7 @@ async fn a_display_name_shaped_like_an_identity_id_is_refused_on_update_and_neve
         let response = http
             .patch(format!("{base}/me"))
             .bearer_auth(&token)
-            .json(&serde_json::json!({ "display_name": bad }))
+            .json(&chain_sign::profile_patch(id, serde_json::json!({ "display_name": bad })).await)
             .send()
             .await
             .expect("PATCH /me failed — is `make start` running?");
