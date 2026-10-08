@@ -25,6 +25,8 @@
 //!   test below also opens Postgres directly, but only against its own
 //!   throwaway schema — see its own doc comment for why.
 
+mod chain_sign;
+
 mod hub_side {
     //! Everything the Hub would do, over raw HTTP — no `avalon_sdk`.
 
@@ -225,7 +227,17 @@ mod hub_side {
         let create = http
             .post(format!("{base}/friends/requests"))
             .bearer_auth(&a.token)
-            .json(&json!({ "to": b.identity_id }))
+            .json(&json!({
+                "to": b.identity_id,
+                "chain_event": crate::chain_sign::friend_requested(
+                    http,
+                    base,
+                    &crate::chain_sign::network_id(),
+                    (a.identity_id, &a.signing_key, &a.signing_key_id),
+                    b.identity_id,
+                )
+                .await,
+            }))
             .send()
             .await
             .expect("step 3: create friend request failed");
@@ -240,6 +252,16 @@ mod hub_side {
         let accept = http
             .post(format!("{base}/friends/requests/{request_id}/accept"))
             .bearer_auth(&b.token)
+            .json(&json!({
+                "chain_event": crate::chain_sign::friend_accepted(
+                    http,
+                    base,
+                    &crate::chain_sign::network_id(),
+                    (b.identity_id, &b.signing_key, &b.signing_key_id),
+                    a.identity_id,
+                )
+                .await,
+            }))
             .send()
             .await
             .expect("step 3: accept friend request failed");
@@ -307,6 +329,16 @@ mod hub_side {
                 "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
             ))
             .bearer_auth(&joiner.token)
+            .json(&json!({
+                "chain_event": crate::chain_sign::invite_accepted(
+                    http,
+                    base,
+                    &crate::chain_sign::network_id(),
+                    (joiner.identity_id, &joiner.signing_key, &joiner.signing_key_id),
+                    guild_id,
+                )
+                .await,
+            }))
             .send()
             .await
             .expect("step 5: accept invite failed");

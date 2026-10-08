@@ -27,6 +27,8 @@
 //!   rather than folded into the `profiles` byte-for-byte comparison,
 //!   since it's still useful as a readable, self-contained expectation.
 
+mod chain_sign;
+
 use avalon_chain::PostgresSettlementProvider;
 use avalon_indexer::postgres::PROJECTION_TABLES;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -186,6 +188,7 @@ async fn register_and_login(
         .parse()
         .unwrap();
 
+    chain_sign::remember(identity_id, signing_key.clone(), signing_key_id);
     (identity_id, token, signing_key, signing_key_id)
 }
 
@@ -532,14 +535,20 @@ async fn rebuild_reproduces_projections_exactly() {
     let (bob_id, bob_token, ..) = register_and_login(&http, &base).await;
 
     let update = auth(http.patch(format!("{base}/me")), &alice_token)
-        .json(&serde_json::json!({ "bio": "rebuild-from-events test fixture" }))
+        .json(&serde_json::json!({
+            "bio": "rebuild-from-events test fixture",
+            "chain_event": chain_sign::profile_updated(alice_id, serde_json::json!({ "bio": "rebuild-from-events test fixture" })).await,
+        }))
         .send()
         .await
         .expect("PATCH /me failed");
     assert!(update.status().is_success(), "{:?}", update.status());
 
     let create_request = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": bob_id }))
+        .json(&serde_json::json!({
+            "to": bob_id,
+            "chain_event": chain_sign::friend_requested(alice_id, bob_id).await,
+        }))
         .send()
         .await
         .expect("create friend request failed");
@@ -551,6 +560,9 @@ async fn rebuild_reproduces_projections_exactly() {
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::friend_accepted(bob_id, alice_id, bob_id).await,
+    }))
     .send()
     .await
     .expect("accept friend request failed");
@@ -596,6 +608,9 @@ async fn rebuild_reproduces_projections_exactly() {
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &bob_token,
     )
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::joined(bob_id, guild_id.parse().unwrap(), "join").await,
+    }))
     .send()
     .await
     .expect("join guild failed");
@@ -706,7 +721,10 @@ async fn rebuild_reproduces_rollback_reversals() {
 
     let request: serde_json::Value =
         auth(http.post(format!("{base}/friends/requests")), &alice_token)
-            .json(&serde_json::json!({ "to": bob_id }))
+            .json(&serde_json::json!({
+                "to": bob_id,
+                "chain_event": chain_sign::friend_requested(alice_id, bob_id).await,
+            }))
             .send()
             .await
             .unwrap()
@@ -720,6 +738,9 @@ async fn rebuild_reproduces_rollback_reversals() {
         )),
         &bob_token,
     )
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::friend_accepted(bob_id, alice_id, bob_id).await,
+    }))
     .send()
     .await
     .unwrap()
@@ -756,6 +777,9 @@ async fn rebuild_reproduces_rollback_reversals() {
             http.post(format!("{base}/guilds/{guild_id}/join")),
             &bob_token,
         )
+        .json(&serde_json::json!({
+            "chain_event": chain_sign::joined(bob_id, guild_id.parse().unwrap(), "join").await,
+        }))
         .send()
         .await
         .unwrap()
@@ -768,6 +792,9 @@ async fn rebuild_reproduces_rollback_reversals() {
         http.post(format!("{base}/guilds/{}/leave", guilds[1])),
         &bob_token,
     )
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::guild_member_removed(bob_id, guilds[1].parse().unwrap(), bob_id, "left").await,
+    }))
     .send()
     .await
     .unwrap()
@@ -776,14 +803,14 @@ async fn rebuild_reproduces_rollback_reversals() {
 
     wait_for_outbox_drain(&pool).await;
 
-    sqlx::query(
+    let recovery_id: Uuid = sqlx::query_scalar(
         "INSERT INTO recovery_requests \
          (identity_id, pending_passkey_data, pending_credential_id, threshold_at_request, status, completed_at) \
-         VALUES ($1, '{}'::jsonb, $2, 1, 'completed', now())",
+         VALUES ($1, '{}'::jsonb, $2, 1, 'completed', now()) RETURNING id",
     )
     .bind(bob_id)
     .bind(Uuid::new_v4().as_bytes().as_slice())
-    .execute(&pool)
+    .fetch_one(&pool)
     .await
     .unwrap();
 
@@ -798,7 +825,7 @@ async fn rebuild_reproduces_rollback_reversals() {
     .json()
     .await
     .unwrap();
-    let to_reverse: Vec<String> = listing["candidates"]
+    let to_reverse: Vec<(String, String)> = listing["candidates"]
         .as_array()
         .unwrap_or_else(|| panic!("unexpected candidates body: {listing}"))
         .iter()
@@ -809,11 +836,30 @@ async fn rebuild_reproduces_rollback_reversals() {
                         && c["summary"].as_str().unwrap().contains(&guilds[0]))
                     || c["kind"] == "guild.member_removed")
         })
-        .map(|c| c["event_id"].as_str().unwrap().to_string())
+        .map(|c| {
+            (
+                c["event_id"].as_str().unwrap().to_string(),
+                c["kind"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
     assert_eq!(to_reverse.len(), 3, "{listing}");
 
-    for event_id in &to_reverse {
+    for (event_id, kind) in &to_reverse {
+        let reverses: Uuid = event_id.parse().unwrap();
+        let chain_event = match kind.as_str() {
+            "friend.accepted" => {
+                chain_sign::friendship_reversed(bob_id, alice_id, reverses, recovery_id).await
+            }
+            "guild.member_added" => {
+                let guild = guilds[0].parse().unwrap();
+                chain_sign::membership_reversed(bob_id, guild, reverses, recovery_id, false).await
+            }
+            _ => {
+                let guild = guilds[1].parse().unwrap();
+                chain_sign::membership_reversed(bob_id, guild, reverses, recovery_id, true).await
+            }
+        };
         let message = format!("avalon:rollback.reverse:v1:{event_id}:{bob_id}:{since}");
         let response = auth(
             http.post(format!("{base}/me/rollback/{event_id}/reverse")),
@@ -823,6 +869,7 @@ async fn rebuild_reproduces_rollback_reversals() {
             "since": since,
             "signing_key_id": bob_key_id,
             "signature": BASE64.encode(bob_key.sign(message.as_bytes()).to_bytes()),
+            "chain_event": chain_event,
         }))
         .send()
         .await
@@ -899,9 +946,12 @@ async fn replay_onto_rebuilt_index_is_noop() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (_alice_id, alice_token, ..) = register_and_login(&http, &base).await;
+    let (alice_id, alice_token, ..) = register_and_login(&http, &base).await;
     auth(http.patch(format!("{base}/me")), &alice_token)
-        .json(&serde_json::json!({ "bio": "idempotency fixture" }))
+        .json(&serde_json::json!({
+            "bio": "idempotency fixture",
+            "chain_event": chain_sign::profile_updated(alice_id, serde_json::json!({ "bio": "idempotency fixture" })).await,
+        }))
         .send()
         .await
         .expect("PATCH /me failed")

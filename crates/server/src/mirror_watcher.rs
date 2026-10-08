@@ -4440,6 +4440,171 @@ mod tests {
         payload
     }
 
+    /// Signs a chained fixture (its payload already carries a position) as `who` under key `key_id`.
+    fn sign_entry(
+        entry: &mut mirror::MirroredEntry,
+        network_id: &str,
+        key_id: Uuid,
+        who: &TestIdentity,
+    ) {
+        entry.event_timestamp =
+            avalon_protocol::identity_chain_wire::truncate_to_micros(entry.event_timestamp);
+        let mut event = protocol_event_from_mirrored(entry).unwrap();
+        avalon_protocol::identity_chain_wire::author_sign(
+            &mut event,
+            network_id,
+            key_id,
+            &who.signing_key,
+        )
+        .unwrap();
+        let payload = avalon_protocol::identity_chain_wire::embed_position(
+            entry.payload.as_ref().unwrap(),
+            &event.identity_chain.unwrap(),
+        );
+        entry.payload_hash = avalon_chain::payload_hash_hex(&payload).unwrap();
+        entry.payload = Some(payload);
+        entry.entry_hash = entry.recomputed_hash().unwrap().unwrap();
+    }
+
+    /// The inception key event of `who`, whose key id is the creation ticket.
+    fn inception_entry(
+        network_id: &str,
+        seq: i64,
+        who: &TestIdentity,
+        ticket: Uuid,
+    ) -> mirror::MirroredEntry {
+        let key = serde_json::json!({
+            "signing_key_id": ticket,
+            "public_key": b64(&who.public_key()),
+            "device_label": null,
+            "approved_by_signing_key_id": ticket,
+            "identity_id": who.id,
+            "kind": "inception",
+        });
+        mk_entry(
+            network_id,
+            seq,
+            "identity.signing_key_added",
+            who.id,
+            Some(key),
+        )
+    }
+
+    /// A passkey registration chained first and signed by the inception key `key_id`.
+    fn signed_passkey_entry(
+        network_id: &str,
+        seq: i64,
+        who: &TestIdentity,
+        key_id: Uuid,
+    ) -> mirror::MirroredEntry {
+        signed_passkey_entry_with(network_id, seq, who, key_id, Uuid::new_v4())
+    }
+
+    /// A passkey revocation chained after `registered` and signed by `key_id`.
+    fn signed_revoked_entry(
+        network_id: &str,
+        seq: i64,
+        who: &TestIdentity,
+        key_id: Uuid,
+        passkey_id: Uuid,
+        registered: &mirror::MirroredEntry,
+    ) -> mirror::MirroredEntry {
+        let payload = chained(
+            serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id }),
+            2,
+            Some(chain_hash(registered)),
+        );
+        let mut entry = mk_entry(
+            network_id,
+            seq,
+            "identity.passkey_revoked",
+            who.id,
+            Some(payload),
+        );
+        sign_entry(&mut entry, network_id, key_id, who);
+        entry
+    }
+
+    /// `actor` (already projected, key `ticket`) accepts a friend request from `from`, chain seq 1.
+    fn signed_accept_entry(
+        network_id: &str,
+        seq: i64,
+        actor: &TestIdentity,
+        ticket: Uuid,
+        from: IdentityId,
+    ) -> mirror::MirroredEntry {
+        let payload = chained(
+            serde_json::json!({ "from": from, "to": actor.id, "actor": actor.id }),
+            1,
+            None,
+        );
+        let mut entry = mk_entry(network_id, seq, "friend.accepted", actor.id, Some(payload));
+        sign_entry(&mut entry, network_id, ticket, actor);
+        entry
+    }
+
+    /// A projected identity: its creation and inception key entries (seq 1 and 2).
+    async fn project_identity(
+        pool: &PgPool,
+        indexer: &PostgresIndexer,
+        network_id: &str,
+        who: &TestIdentity,
+        ticket: Uuid,
+    ) {
+        let created = mk_entry(
+            network_id,
+            1,
+            "identity.created",
+            who.id,
+            Some(created_payload_for(who, network_id, "parent-user", ticket)),
+        );
+        let key = inception_entry(network_id, 2, who, ticket);
+        let mut blocked = false;
+        for e in [&created, &key] {
+            store_and_project(pool, indexer, e, &mut blocked)
+                .await
+                .unwrap();
+        }
+        assert!(!blocked);
+    }
+
+    /// A creation of `who` as another shard records it (the parent a friend action waits for).
+    fn foreign_created(
+        network_id: &str,
+        seq: i64,
+        who: &TestIdentity,
+        ticket: Uuid,
+    ) -> mirror::MirroredEntry {
+        let mut created = mk_entry(
+            network_id,
+            seq,
+            "identity.created",
+            who.id,
+            Some(created_payload_for(who, network_id, "ordered-user", ticket)),
+        );
+        reshard(&mut created, "game:slug/1");
+        created
+    }
+
+    fn signed_passkey_entry_with(
+        network_id: &str,
+        seq: i64,
+        who: &TestIdentity,
+        key_id: Uuid,
+        passkey_id: Uuid,
+    ) -> mirror::MirroredEntry {
+        let payload = chained(passkey_payload(who.id, passkey_id), 1, None);
+        let mut entry = mk_entry(
+            network_id,
+            seq,
+            "identity.passkey_registered",
+            who.id,
+            Some(payload),
+        );
+        sign_entry(&mut entry, network_id, key_id, who);
+        entry
+    }
+
     fn passkey_payload(identity_id: IdentityId, passkey_id: Uuid) -> serde_json::Value {
         serde_json::json!({
             "passkey_id": passkey_id,
@@ -4481,14 +4646,15 @@ mod tests {
                     "identity.created",
                     created_payload_for(&who, network_id, &format!("replay-{id}"), ticket),
                 ),
-                (
-                    "identity.passkey_registered",
-                    passkey_payload(id, Uuid::new_v4()),
-                ),
+                ("identity.passkey_registered", serde_json::Value::Null),
                 ("identity.signing_key_added", key),
             ] {
                 seq += 1;
-                entries.push(mk_entry(network_id, seq, kind, id, Some(payload)));
+                entries.push(if kind == "identity.passkey_registered" {
+                    signed_passkey_entry(network_id, seq, &who, ticket)
+                } else {
+                    mk_entry(network_id, seq, kind, id, Some(payload))
+                });
             }
         }
         entries
@@ -4968,51 +5134,37 @@ mod tests {
         let network_id = fresh_network("ordered");
         let indexer = indexer_for(&pool, &network_id);
         let who = TestIdentity::new();
-        let passkey_id = Uuid::new_v4();
-        let registered = mk_entry(
+        let (ticket, ghost, ghost_ticket) = (Uuid::new_v4(), TestIdentity::new(), Uuid::new_v4());
+        project_identity(&pool, &indexer, &network_id, &who, ticket).await;
+        let waiting = signed_accept_entry(&network_id, 3, &who, ticket, ghost.id);
+        let mut follow = mk_entry(
             &network_id,
-            1,
+            4,
             "identity.passkey_registered",
             who.id,
-            Some(passkey_payload(who.id, passkey_id)),
+            Some(chained(
+                passkey_payload(who.id, Uuid::new_v4()),
+                2,
+                Some(chain_hash(&waiting)),
+            )),
         );
-        let revoked = mk_entry(
-            &network_id,
-            2,
-            "identity.passkey_revoked",
-            who.id,
-            Some(serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id })),
-        );
+        sign_entry(&mut follow, &network_id, ticket, &who);
         let mut blocked = false;
-        for e in [&registered, &revoked] {
+        for e in [&waiting, &follow] {
             store_and_project(&pool, &indexer, e, &mut blocked)
                 .await
                 .unwrap();
         }
         assert!(blocked);
-        assert_eq!(claimed(&pool, &[&registered, &revoked]).await, 0);
+        assert_eq!(claimed(&pool, &[&waiting, &follow]).await, 0);
         let report = reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
             .unwrap();
         assert!(report.blocked && report.projected == 0, "{report:?}");
-        assert_eq!(claimed(&pool, &[&revoked]).await, 0);
+        assert_eq!(claimed(&pool, &[&follow]).await, 0);
 
-        // The identity is created on another shard: both apply, registration first.
-        let mut created = mk_entry(
-            &network_id,
-            1,
-            "identity.created",
-            who.id,
-            Some(
-                serde_json::to_value(who.created_payload_for(
-                    &network_id,
-                    Uuid::new_v4(),
-                    "ordered-user",
-                ))
-                .unwrap(),
-            ),
-        );
-        reshard(&mut created, "game:slug/1");
+        // The identity is created on another shard: both apply, the friend action first.
+        let created = foreign_created(&network_id, 1, &ghost, ghost_ticket);
         mirror::insert_mirrored_entry(&pool, &created)
             .await
             .unwrap();
@@ -5025,7 +5177,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(report.projected, 2, "{report:?}");
-        assert_eq!(claimed(&pool, &[&registered, &revoked]).await, 2);
+        assert_eq!(claimed(&pool, &[&waiting, &follow]).await, 2);
     }
 
     /// A scan stops after a shard's cap of waiting entries, so the newest are never touched.
@@ -5065,24 +5217,24 @@ mod tests {
         let pool = live_test_pool().await;
         let network_id = fresh_network("expiry");
         let indexer = indexer_for(&pool, &network_id);
-        let ghost = TestIdentity::new();
-        let stuck = mk_entry(
+        let (who, ghost, ticket) = (TestIdentity::new(), TestIdentity::new(), Uuid::new_v4());
+        project_identity(&pool, &indexer, &network_id, &who, ticket).await;
+        let stuck = signed_accept_entry(&network_id, 3, &who, ticket, ghost.id);
+        let mut after = mk_entry(
             &network_id,
-            1,
+            4,
             "identity.passkey_registered",
-            ghost.id,
-            Some(passkey_payload(ghost.id, Uuid::new_v4())),
+            who.id,
+            Some(chained(
+                passkey_payload(who.id, Uuid::new_v4()),
+                2,
+                Some(chain_hash(&stuck)),
+            )),
         );
-        let after = mk_entry(
-            &network_id,
-            2,
-            "identity.passkey_revoked",
-            ghost.id,
-            Some(serde_json::json!({ "passkey_id": Uuid::new_v4(), "identity_id": ghost.id })),
-        );
+        sign_entry(&mut after, &network_id, ticket, &who);
         store_entries(&pool, &[stuck, after]).await;
         let stuck_id: Uuid = sqlx::query_scalar(
-            "SELECT event_id FROM mirrored_entries WHERE network_id = $1 AND seq = 1",
+            "SELECT event_id FROM mirrored_entries WHERE network_id = $1 AND seq = 3",
         )
         .bind(&network_id)
         .fetch_one(&pool)
@@ -5098,7 +5250,7 @@ mod tests {
         // Stored long ago (a restart forgets the in-memory wait; the row's age still counts).
         sqlx::query(
             "UPDATE mirrored_entries SET mirrored_at = now() - interval '25 hours' \
-             WHERE network_id = $1 AND seq = 1",
+             WHERE network_id = $1 AND seq = 3",
         )
         .bind(&network_id)
         .execute(&pool)
@@ -5343,14 +5495,9 @@ mod tests {
         let pool = live_test_pool().await;
         let network_id = fresh_network("tracked-expiry");
         let indexer = indexer_for(&pool, &network_id);
-        let ghost = TestIdentity::new();
-        let stuck = mk_entry(
-            &network_id,
-            1,
-            "identity.passkey_registered",
-            ghost.id,
-            Some(passkey_payload(ghost.id, Uuid::new_v4())),
-        );
+        let (who, ghost, ticket) = (TestIdentity::new(), TestIdentity::new(), Uuid::new_v4());
+        project_identity(&pool, &indexer, &network_id, &who, ticket).await;
+        let stuck = signed_accept_entry(&network_id, 3, &who, ticket, ghost.id);
         let mut blocked = false;
         store_and_project(&pool, &indexer, &stuck, &mut blocked)
             .await
@@ -5524,12 +5671,13 @@ mod tests {
         let indexer = indexer_for(&pool, &network_id);
         let name = format!("dup-{}", Uuid::new_v4());
         let (a, b) = (TestIdentity::new(), TestIdentity::new());
+        let ticket = Uuid::new_v4();
         let first = mk_entry(
             &network_id,
             1,
             "identity.created",
             a.id,
-            Some(created_payload(&a, &network_id, &name)),
+            Some(created_payload_for(&a, &network_id, &name, ticket)),
         );
         let second = mk_entry(
             &network_id,
@@ -5538,24 +5686,19 @@ mod tests {
             b.id,
             Some(forged_created_payload(&b, &network_id, &name)),
         );
-        let after = mk_entry(
-            &network_id,
-            3,
-            "identity.passkey_registered",
-            a.id,
-            Some(passkey_payload(a.id, Uuid::new_v4())),
-        );
-        for e in [&first, &second, &after] {
+        let key = inception_entry(&network_id, 3, &a, ticket);
+        let after = signed_passkey_entry(&network_id, 4, &a, ticket);
+        for e in [&first, &second, &key, &after] {
             mirror::insert_mirrored_entry(&pool, e).await.unwrap();
         }
 
         let mut tx = pool.begin().await.unwrap();
-        assert_eq!(
-            project_mirrored_entry(&mut tx, &indexer, &first)
-                .await
-                .unwrap(),
-            ProjectionOutcome::Applied
-        );
+        for e in [&first, &key] {
+            assert_eq!(
+                project_mirrored_entry(&mut tx, &indexer, e).await.unwrap(),
+                ProjectionOutcome::Applied
+            );
+        }
         let outcome = project_mirrored_entry(&mut tx, &indexer, &second)
             .await
             .unwrap();
@@ -5597,7 +5740,7 @@ mod tests {
         assert_eq!(claimed(&pool, &[&after]).await, 1);
     }
 
-    /// An entry mirrored from a non-core shard that carries no proof is stored but not projected.
+    /// An entry mirrored from a non-core shard that carries no author signature is stored but not projected.
     #[tokio::test]
     #[ignore]
     async fn an_unproven_entry_from_a_game_shard_is_stored_but_not_projected() {
@@ -5605,12 +5748,18 @@ mod tests {
         let network_id = fresh_network("gameshard");
         let indexer = indexer_for(&pool, &network_id);
         let who = TestIdentity::new();
+        let ticket = Uuid::new_v4();
         let created = mk_entry(
             &network_id,
             1,
             "identity.created",
             who.id,
-            Some(created_payload(&who, &network_id, "gameshard-user")),
+            Some(created_payload_for(
+                &who,
+                &network_id,
+                "gameshard-user",
+                ticket,
+            )),
         );
         let mut passkey = mk_entry(
             &network_id,
@@ -5635,7 +5784,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(reason.is_some_and(|r| r.contains("carries no proof")));
+        assert!(reason.is_some_and(|r| r.contains("carries no author signature")));
     }
 
     /// A transient failure stops the pass at that entry and keeps the scan due.
@@ -5718,36 +5867,33 @@ mod tests {
         let pool = live_test_pool().await;
         let network_id = fresh_network("revoke");
         let indexer = indexer_for(&pool, &network_id);
-        let (who, passkey_id) = (TestIdentity::new(), Uuid::new_v4());
+        let (who, passkey_id, ticket) = (TestIdentity::new(), Uuid::new_v4(), Uuid::new_v4());
         let id = who.id;
         let created = mk_entry(
             &network_id,
             1,
             "identity.created",
             id,
-            Some(created_payload(&who, &network_id, &format!("revoke-{id}"))),
+            Some(created_payload_for(
+                &who,
+                &network_id,
+                &format!("revoke-{id}"),
+                ticket,
+            )),
         );
-        let registered = mk_entry(
-            &network_id,
-            2,
-            "identity.passkey_registered",
-            id,
-            Some(passkey_payload(id, passkey_id)),
-        );
-        let revoked = mk_entry(
-            &network_id,
-            3,
-            "identity.passkey_revoked",
-            id,
-            Some(serde_json::json!({ "passkey_id": passkey_id, "identity_id": id })),
-        );
+        let key = inception_entry(&network_id, 2, &who, ticket);
+        let registered = signed_passkey_entry_with(&network_id, 3, &who, ticket, passkey_id);
+        let revoked = signed_revoked_entry(&network_id, 4, &who, ticket, passkey_id, &registered);
         let mut blocked = true;
-        for e in [&created, &registered, &revoked] {
+        for e in [&created, &key, &registered, &revoked] {
             store_and_project(&pool, &indexer, e, &mut blocked)
                 .await
                 .unwrap();
         }
-        assert_eq!(claimed(&pool, &[&created, &registered, &revoked]).await, 0);
+        assert_eq!(
+            claimed(&pool, &[&created, &key, &registered, &revoked]).await,
+            0
+        );
 
         reproject_unapplied(&pool, &indexer, &network_id, mirror::CORE_SHARD_ID)
             .await
