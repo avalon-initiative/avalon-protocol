@@ -314,3 +314,18 @@ silently.
   shard); device grant approval and signing-key revocation signatures cover the network id too;
   device revocation requires a signature. SDKs and the Hub must be updated before they can register
   identities against a migrated node.
+
+## Migrations 0089 and 0090: key event chain hash, no home shards (destructive)
+
+The identity chain hash of a signing-key event (device grant, key revocation) now covers only what
+its signature covers (key ids, keys, signature and chain position), so one signed event has exactly
+one hash whichever node republished it, and the inception key event must name the key id the
+creation ticket fixed. Migration 0089 refuses to run while `identity_chain_events` or a non-empty
+`identity_chain_state` exists, because stored chain hashes and positions no longer verify; run
+`make db-reset` on a development node. Migration 0090 drops `indexer_identity_homes`: which node
+delivered a key event no longer decides whether it is accepted.
+
+- **All nodes of a network must update together:** a node on the old version computes different
+  chain hashes for key events.
+- **Clients:** the signed bytes of key events are unchanged; the signed position's `prev_hash` is
+  the new hash of the head event, as the server reports it.
