@@ -10,9 +10,11 @@
 
 use avalon_protocol::ed25519_key::{parse_ed25519_public_key, verify_strict_signature};
 use avalon_protocol::event_payloads::{
-    IdentityCreatedPayload, IdentityRecoveredPayload, IdentityRecoveryConfiguredPayload,
-    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload,
-    SIGNING_KEY_KIND_DEVICE_GRANT, SIGNING_KEY_KIND_INCEPTION,
+    FriendAcceptedPayload, FriendRelationshipReversedPayload, FriendRemovedPayload,
+    FriendRequestedPayload, GuildMemberAddedPayload, GuildMemberRemovedPayload,
+    GuildMembershipReversedPayload, IdentityCreatedPayload, IdentityRecoveredPayload,
+    IdentityRecoveryConfiguredPayload, IdentitySigningKeyAddedPayload,
+    IdentitySigningKeyRevokedPayload, SIGNING_KEY_KIND_DEVICE_GRANT, SIGNING_KEY_KIND_INCEPTION,
 };
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::identity_chain_wire::{
@@ -378,6 +380,102 @@ async fn verify_key_revoked(
     Ok(())
 }
 
+fn payload_as<T: serde::de::DeserializeOwned>(event: &ProtocolEvent) -> Result<T, IndexError> {
+    serde_json::from_value(event.payload.clone())
+        .map_err(|_| reject(format!("{} payload is malformed", event.kind)))
+}
+
+fn guild_of(id: &GlobalId) -> Option<Uuid> {
+    let mut parts = id.as_str().splitn(4, ':');
+    if parts.next()? != "guild" {
+        return None;
+    }
+    parts.next()?.parse().ok()
+}
+
+/// Requires that the identities the projections act on are the signer or, for the explicit
+/// admin kinds, named consistently: a signature by B must never change A's profile, passkeys,
+/// friendships or roster rows.
+fn require_binding(event: &ProtocolEvent, signer: IdentityId) -> Result<(), IndexError> {
+    let own = |id: IdentityId| id == signer;
+    let subject = embedded_identity(&event.subject);
+    let bad = |what: &str| reject(format!("{} {what}", event.kind));
+    match event.kind.as_str() {
+        "profile.updated"
+        | "identity.recovery_configured"
+        | "identity.recovered"
+        | "identity.passkey_registered"
+        | "identity.passkey_revoked" => {
+            if !subject.is_some_and(own) {
+                return Err(bad("subject is not the signer"));
+            }
+            if event.kind.starts_with("identity.passkey_") {
+                let p: serde_json::Value = event.payload.clone();
+                let id: Option<IdentityId> = p
+                    .get("identity_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                if !id.is_some_and(own) {
+                    return Err(bad("payload names another identity"));
+                }
+            }
+        }
+        "friend.requested" => {
+            let p: FriendRequestedPayload = payload_as(event)?;
+            if !(own(p.from) && own(p.actor) && subject == Some(p.to) && p.to != p.from) {
+                return Err(bad("is not authored by the requester"));
+            }
+        }
+        "friend.accepted" => {
+            let p: FriendAcceptedPayload = payload_as(event)?;
+            if !(own(p.to) && own(p.actor) && subject == Some(p.from) && p.to != p.from) {
+                return Err(bad("is not authored by the recipient"));
+            }
+        }
+        "friend.removed" => {
+            let p: FriendRemovedPayload = payload_as(event)?;
+            let other = if own(p.a) { p.b } else { p.a };
+            if !(own(p.actor) && (own(p.a) || own(p.b)) && p.a != p.b && subject == Some(other)) {
+                return Err(bad("is not authored by a party to the friendship"));
+            }
+        }
+        "friend.relationship_reversed" => {
+            let p: FriendRelationshipReversedPayload = payload_as(event)?;
+            if !(own(p.identity_id) && subject == Some(p.counterparty_id)) {
+                return Err(bad("is not authored by the identity it reverses"));
+            }
+        }
+        "guild.member_added" => {
+            let p: GuildMemberAddedPayload = payload_as(event)?;
+            // A join, invite acceptance or direct join is the member's own act; only a
+            // join-request approval is an admin act naming another member.
+            let own_act = p.via != "join_request";
+            if !own(p.actor) || guild_of(&event.subject) != Some(p.guild_id) {
+                return Err(bad("is not authored by its actor for its guild"));
+            }
+            if own_act && !own(p.identity_id) {
+                return Err(bad("adds another identity outside an admin act"));
+            }
+        }
+        "guild.member_removed" => {
+            let p: GuildMemberRemovedPayload = payload_as(event)?;
+            if !own(p.actor) || guild_of(&event.subject) != Some(p.guild_id) {
+                return Err(bad("is not authored by its actor for its guild"));
+            }
+            if p.reason != "removed" && !own(p.identity_id) {
+                return Err(bad("removes another identity outside an admin act"));
+            }
+        }
+        "guild.membership_reversed" => {
+            let p: GuildMembershipReversedPayload = payload_as(event)?;
+            if !(own(p.identity_id) && guild_of(&event.subject) == Some(p.guild_id)) {
+                return Err(bad("is not authored by the identity it reverses"));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Checks a chained event's author signature: the event names its signer (the issuer's identity)
 /// and key, the key is active in the signer's key chain, and its signature covers the event and
 /// its chain position on this network. An unknown key defers the event.
@@ -393,6 +491,7 @@ async fn verify_author(
         .as_ref()
         .and_then(|p| p.signing_key_id)
         .ok_or_else(|| reject(format!("{} carries no author signature", event.kind)))?;
+    require_binding(event, signer)?;
     let key = signer_key(tx, signer, key_id, "authoring").await?;
     match verify_author_signature(event, network_id, &key) {
         Ok(true) => Ok(()),
@@ -418,6 +517,7 @@ async fn verify_recovered(
 ) -> Result<(), IndexError> {
     let network_id = key_event_network(origin)?;
     let owner = chain_owner(event).ok_or_else(|| reject("issuer is not an identity"))?;
+    require_binding(event, owner)?;
     let payload: IdentityRecoveredPayload = serde_json::from_value(event.payload.clone())
         .map_err(|_| reject("identity.recovered payload is malformed"))?;
     let new_key = decode_key(&payload.new_signing_public_key)?;
@@ -435,6 +535,31 @@ async fn verify_recovered(
     }
 
     let accepted = identity_chain_store::accepted_events(tx, owner).await?;
+    // A recovery is single-use: its request id and its new key can never be installed twice, so
+    // a stolen recovery key cannot replay an old recovered at a later head.
+    let consumed = accepted.iter().any(|e| {
+        e.id != event.id
+            && e.kind == "identity.recovered"
+            && e.payload.get("request_id") == Some(&serde_json::json!(payload.request_id))
+    });
+    let key_known: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 AND (signing_key_id = $2 OR public_key = $3))",
+    )
+    .bind(owner)
+    .bind(payload.request_id)
+    .bind(new_key.as_slice())
+    .fetch_one(&mut **tx)
+    .await?;
+    if key_known && accepted.iter().any(|e| e.id == event.id) {
+        // The same recovery redelivered from another shard.
+        return Ok(());
+    }
+    if consumed || key_known {
+        return Err(reject(
+            "identity.recovered reuses a consumed recovery request or an existing key",
+        ));
+    }
     let configured: IdentityRecoveryConfiguredPayload = accepted
         .iter()
         .rev()

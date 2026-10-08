@@ -1372,3 +1372,154 @@ async fn a_guardian_key_cannot_sign_anything_on_the_owners_chain() {
         0
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_recovered_cannot_be_replayed_after_the_recovery_key_is_revoked_or_at_a_later_head() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let (new_key, request_id) = (TestIdentity::new(), Uuid::new_v4());
+    let owner = f.owner.id;
+    let approvals: Vec<_> = (0..2)
+        .map(|i| approval(&owner, request_id, &f.guardians[i], &new_key))
+        .collect();
+    let first = recovered(&f, request_id, &new_key, approvals.clone());
+    apply(&pool, &first, &game()).await.unwrap();
+    // The same recovery delivered again from another shard is idempotent.
+    apply(&pool, &first, &other()).await.unwrap();
+    assert!(
+        avalon_indexer::projections::identity_signing_keys::find_active_by_id(
+            &pool, owner, request_id
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+
+    // The owner later revokes the recovery key (a device grant, then a revocation of the key).
+    let device = TestIdentity::new();
+    let device_key = Uuid::new_v4();
+    let add = grant(
+        &f.owner,
+        &new_key,
+        request_id,
+        &device,
+        device_key,
+        Some(&first),
+    );
+    apply(&pool, &add, &game()).await.unwrap();
+    let revocation = revoke(&f.owner, &device, device_key, request_id, Some(&add));
+    apply(&pool, &revocation, &game()).await.unwrap();
+    assert!(!active(&pool, &f.owner, request_id).await);
+
+    // A thief with the revoked recovery key replays the recovered at the new head, with a fresh
+    // event id, and again with a fresh request id but the old approvals.
+    let (seq, prev) = next_position(Some(&revocation));
+    let mut replay = first.clone();
+    replay.id = Uuid::new_v4();
+    replay.identity_chain = Some(IdentityChainPosition::current(seq, prev.map(hex::encode)));
+    new_key.sign_event(&mut replay, request_id);
+    assert!(matches!(
+        apply(&pool, &replay, &game()).await,
+        Err(IndexError::Rejected(_))
+    ));
+    let other_request = Uuid::new_v4();
+    let mut fresh_request = replay.clone();
+    fresh_request.id = Uuid::new_v4();
+    fresh_request.payload["request_id"] = serde_json::json!(other_request);
+    new_key.sign_event(&mut fresh_request, other_request);
+    assert!(apply(&pool, &fresh_request, &game()).await.is_err());
+    assert!(!active(&pool, &f.owner, request_id).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_signature_by_one_identity_cannot_act_on_another_identitys_state() {
+    let pool = pool().await;
+    let (a, b) = (TestIdentity::new(), TestIdentity::new());
+    let key_b = register(&pool, &b).await;
+    register(&pool, &a).await;
+    let name_before = profile_name(&pool, &a).await;
+    let victim = |kind: &str, payload: serde_json::Value, subject: IdentityId| {
+        let mut e = event(&b, kind, 1, payload);
+        e.subject = GlobalId::new("identity", &subject.to_string(), "self", "x");
+        let mut e = positioned(e, 1, None);
+        b.sign_event(&mut e, key_b);
+        e
+    };
+    let guild = Uuid::new_v4();
+    let forged = [
+        victim("profile.updated", serde_json::json!({"bio": "owned"}), a.id),
+        victim(
+            "identity.passkey_registered",
+            serde_json::json!({
+                "passkey_id": Uuid::new_v4(), "identity_id": a.id,
+                "credential_id": b64(Uuid::new_v4().as_bytes()),
+                "passkey_data": {"k": 1}, "label": null,
+            }),
+            b.id,
+        ),
+        victim(
+            "identity.passkey_revoked",
+            serde_json::json!({"passkey_id": Uuid::new_v4(), "identity_id": a.id}),
+            b.id,
+        ),
+        victim(
+            "friend.accepted",
+            serde_json::json!({"from": a.id, "to": TestIdentity::new().id, "actor": a.id}),
+            a.id,
+        ),
+        victim(
+            "friend.requested",
+            serde_json::json!({"from": a.id, "to": b.id, "actor": a.id}),
+            b.id,
+        ),
+        victim(
+            "friend.removed",
+            serde_json::json!({"a": a.id, "b": TestIdentity::new().id, "actor": b.id}),
+            a.id,
+        ),
+        victim(
+            "friend.relationship_reversed",
+            serde_json::json!({
+                "reverses_event_id": Uuid::nil(), "recovery_request_id": Uuid::nil(),
+                "identity_id": a.id, "counterparty_id": b.id, "effect": "friendship_removed",
+            }),
+            b.id,
+        ),
+    ];
+    for e in &forged {
+        assert!(
+            matches!(apply(&pool, e, &game()).await, Err(IndexError::Rejected(_))),
+            "{}",
+            e.kind
+        );
+    }
+    // A guild act on another identity is refused unless it is an explicit admin act.
+    let mut join = event(
+        &b,
+        "guild.member_added",
+        1,
+        serde_json::json!({
+            "guild_id": guild, "identity_id": a.id, "role_index": 2, "via": "join", "actor": b.id,
+        }),
+    );
+    join.subject = GlobalId::new("guild", &guild.to_string(), "self", "x");
+    let mut join = positioned(join, 1, None);
+    b.sign_event(&mut join, key_b);
+    assert!(matches!(
+        apply(&pool, &join, &game()).await,
+        Err(IndexError::Rejected(_))
+    ));
+    assert_eq!(profile_name(&pool, &a).await, name_before);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM identity_chain_events WHERE identity_id = $1",
+            b.id
+        )
+        .await,
+        0,
+        "no forged event reaches the signer's chain"
+    );
+}

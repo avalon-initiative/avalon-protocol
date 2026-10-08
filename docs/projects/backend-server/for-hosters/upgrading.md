@@ -375,3 +375,8 @@ development databases with the node update. All nodes of a network update togeth
   `identity.recovery_configured`. Recovery revokes every earlier passkey and signing key.
 - **Not covered by mirrors:** the recovery delay and a veto (cancel) are enforced by the node that
   finalizes, not provable by a mirror.
+- **Binding:** a valid signature must also bind the state it changes. Profile, passkey and recovery
+  events need the signer as subject and payload identity; a friend event must be authored by a
+  party to the friendship; a guild event by its actor, and only a join-request approval or a member
+  removal may name another member. `identity.recovered` is single-use: a request id or key that was
+  already installed is refused.

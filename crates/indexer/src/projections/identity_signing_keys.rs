@@ -94,6 +94,17 @@ pub async fn apply_recovered(
         &payload.new_signing_public_key,
     )
     .map_err(|_| IndexError::Rejected("new signing key is not base64".into()))?;
+    let installed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 AND signing_key_id = $2)",
+    )
+    .bind(identity_id)
+    .bind(payload.request_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if installed {
+        return Ok(());
+    }
     for sql in [
         "UPDATE indexer_identity_signing_keys SET revoked_at = $2 WHERE identity_id = $1 AND revoked_at IS NULL",
         "UPDATE indexer_identity_passkeys SET revoked_at = $2 WHERE identity_id = $1 AND revoked_at IS NULL",

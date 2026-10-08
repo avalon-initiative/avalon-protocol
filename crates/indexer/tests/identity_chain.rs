@@ -434,16 +434,19 @@ async fn a_chained_event_without_a_valid_author_signature_cannot_take_a_chain_po
     assert!(!identity_chain_store::is_forked(&pool, id).await.unwrap());
 
     // A properly signed event extends the chain from whichever shard delivers it.
-    let next = chained(
+    let friend = IdentityId::random_for_tests();
+    let mut next = chained(
         &who,
         inception,
         "friend.requested",
         "friend_requested",
-        serde_json::json!({"from": id, "to": IdentityId::random_for_tests()}),
+        serde_json::json!({"from": id, "to": friend, "actor": id}),
         300,
         2,
         Some(&grant),
     );
+    next.subject = gid(friend, "friend_requested");
+    who.sign_event(&mut next, inception);
     let origin = EventOrigin::mirrored(TEST_NETWORK_ID, "game:other/1");
     let mut tx = pool.begin().await.unwrap();
     indexer
