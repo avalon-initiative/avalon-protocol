@@ -20,6 +20,8 @@
 //! `PUT /presence/:identity_id` is authenticated the same way
 //! `crate::authz::authenticate_caller` authenticates any `Caller::Integrator`.
 
+mod chain_sign;
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -49,6 +51,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("presence-test-{identity_id}"))
@@ -567,7 +570,7 @@ async fn presence_visible_to_friends_only() {
     // Alice and Bob become friends; Carol never does.
     let friend_request: serde_json::Value =
         auth(http.post(format!("{base}/friends/requests")), &alice_token)
-            .json(&serde_json::json!({ "to": bob_id }))
+            .json(&serde_json::json!({ "to": bob_id, "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
             .send()
             .await
             .unwrap()
@@ -579,6 +582,7 @@ async fn presence_visible_to_friends_only() {
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::friend_accepted(bob_id, alice_id, bob_id).await }))
     .send()
     .await
     .unwrap();

@@ -6,6 +6,8 @@
 //! Test identities are seeded directly via SQL, same reasoning
 //! `crates/server/tests/guilds.rs` already documents.
 
+mod chain_sign;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -32,6 +34,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("main-guild-test-{identity_id}"))
@@ -96,6 +99,7 @@ async fn create_open_guild_and_join(
     http: &reqwest::Client,
     base: &str,
     owner_token: &str,
+    member_id: avalon_protocol::ids::IdentityId,
     member_token: &str,
 ) -> String {
     let guild_id = create_guild(http, base, owner_token).await;
@@ -111,6 +115,7 @@ async fn create_open_guild_and_join(
         http.post(format!("{base}/guilds/{guild_id}/join")),
         member_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(member_id, guild_id.parse().unwrap(), "join").await }))
     .send()
     .await
     .unwrap();
@@ -135,13 +140,16 @@ async fn setting_main_guild_to_a_membership_succeeds_and_round_trips() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
 
     // Creating a guild makes the creator a member of it.
     let guild_id = create_guild(&http, &base, &owner_token).await;
 
     let update = auth(http.patch(format!("{base}/me")), &owner_token)
-        .json(&serde_json::json!({ "main_guild": guild_id }))
+        .json(
+            &chain_sign::profile_patch(owner_id, serde_json::json!({ "main_guild": guild_id }))
+                .await,
+        )
         .send()
         .await
         .unwrap();
@@ -162,7 +170,7 @@ async fn setting_main_guild_to_a_guild_youre_not_a_member_of_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_other_owner_id, other_owner_token) = seed_identity_session(&pool).await;
 
     // A guild owned by a different identity — `owner_token`'s identity is
@@ -170,7 +178,10 @@ async fn setting_main_guild_to_a_guild_youre_not_a_member_of_is_rejected() {
     let guild_id = create_guild(&http, &base, &other_owner_token).await;
 
     let update = auth(http.patch(format!("{base}/me")), &owner_token)
-        .json(&serde_json::json!({ "main_guild": guild_id }))
+        .json(
+            &chain_sign::profile_patch(owner_id, serde_json::json!({ "main_guild": guild_id }))
+                .await,
+        )
         .send()
         .await
         .unwrap();
@@ -187,10 +198,12 @@ async fn setting_main_guild_to_a_malformed_id_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_id, token) = seed_identity_session(&pool).await;
+    let (id, token) = seed_identity_session(&pool).await;
 
     let update = auth(http.patch(format!("{base}/me")), &token)
-        .json(&serde_json::json!({ "main_guild": "not-a-uuid" }))
+        .json(
+            &chain_sign::profile_patch(id, serde_json::json!({ "main_guild": "not-a-uuid" })).await,
+        )
         .send()
         .await
         .unwrap();
@@ -204,12 +217,16 @@ async fn leaving_your_main_guild_clears_it() {
     let base = server_url();
     let pool = test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (_member_id, member_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
 
-    let guild_id = create_open_guild_and_join(&http, &base, &owner_token, &member_token).await;
+    let guild_id =
+        create_open_guild_and_join(&http, &base, &owner_token, member_id, &member_token).await;
 
     let set = auth(http.patch(format!("{base}/me")), &member_token)
-        .json(&serde_json::json!({ "main_guild": guild_id }))
+        .json(
+            &chain_sign::profile_patch(member_id, serde_json::json!({ "main_guild": guild_id }))
+                .await,
+        )
         .send()
         .await
         .unwrap();
@@ -221,6 +238,7 @@ async fn leaving_your_main_guild_clears_it() {
         http.post(format!("{base}/guilds/{guild_id}/leave")),
         &member_token,
     )
+    .json(&chain_sign::leave_body(member_id, guild_id.parse().unwrap(), true).await)
     .send()
     .await
     .unwrap();
@@ -242,13 +260,18 @@ async fn leaving_a_guild_that_isnt_your_main_guild_leaves_it_untouched() {
     let pool = test_pool().await;
     let (_owner_a, owner_a_token) = seed_identity_session(&pool).await;
     let (_owner_b, owner_b_token) = seed_identity_session(&pool).await;
-    let (_member_id, member_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
 
-    let guild_a = create_open_guild_and_join(&http, &base, &owner_a_token, &member_token).await;
-    let guild_b = create_open_guild_and_join(&http, &base, &owner_b_token, &member_token).await;
+    let guild_a =
+        create_open_guild_and_join(&http, &base, &owner_a_token, member_id, &member_token).await;
+    let guild_b =
+        create_open_guild_and_join(&http, &base, &owner_b_token, member_id, &member_token).await;
 
     let set = auth(http.patch(format!("{base}/me")), &member_token)
-        .json(&serde_json::json!({ "main_guild": guild_a }))
+        .json(
+            &chain_sign::profile_patch(member_id, serde_json::json!({ "main_guild": guild_a }))
+                .await,
+        )
         .send()
         .await
         .unwrap();
@@ -258,6 +281,7 @@ async fn leaving_a_guild_that_isnt_your_main_guild_leaves_it_untouched() {
         http.post(format!("{base}/guilds/{guild_b}/leave")),
         &member_token,
     )
+    .json(&chain_sign::leave_body(member_id, guild_b.parse().unwrap(), false).await)
     .send()
     .await
     .unwrap();
@@ -275,11 +299,13 @@ async fn effective_main_guild_defaults_to_the_earliest_joined_membership_when_un
     let pool = test_pool().await;
     let (_owner_a, owner_a_token) = seed_identity_session(&pool).await;
     let (_owner_b, owner_b_token) = seed_identity_session(&pool).await;
-    let (_member_id, member_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
 
     // Joined strictly in this order — `guild_a` first.
-    let guild_a = create_open_guild_and_join(&http, &base, &owner_a_token, &member_token).await;
-    let guild_b = create_open_guild_and_join(&http, &base, &owner_b_token, &member_token).await;
+    let guild_a =
+        create_open_guild_and_join(&http, &base, &owner_a_token, member_id, &member_token).await;
+    let guild_b =
+        create_open_guild_and_join(&http, &base, &owner_b_token, member_id, &member_token).await;
     assert_ne!(guild_a, guild_b);
 
     let me = get_me(&http, &base, &member_token).await;
@@ -300,19 +326,22 @@ async fn main_guild_can_be_explicitly_cleared() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
 
     let guild_id = create_guild(&http, &base, &owner_token).await;
 
     let set = auth(http.patch(format!("{base}/me")), &owner_token)
-        .json(&serde_json::json!({ "main_guild": guild_id }))
+        .json(
+            &chain_sign::profile_patch(owner_id, serde_json::json!({ "main_guild": guild_id }))
+                .await,
+        )
         .send()
         .await
         .unwrap();
     assert!(set.status().is_success());
 
     let clear = auth(http.patch(format!("{base}/me")), &owner_token)
-        .json(&serde_json::json!({ "main_guild": "" }))
+        .json(&chain_sign::profile_patch(owner_id, serde_json::json!({ "main_guild": "" })).await)
         .send()
         .await
         .unwrap();

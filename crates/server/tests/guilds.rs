@@ -7,6 +7,8 @@
 //! already documents — guild endpoints don't care how a session was
 //! established, only that it's a valid bearer token.
 
+mod chain_sign;
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -69,6 +71,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("guilds-test-{identity_id}"))
@@ -505,6 +508,7 @@ async fn deleting_a_role_still_held_by_a_member_is_rejected() {
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &other_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(other_id, guild_id.parse().unwrap(), "join").await }))
     .send()
     .await
     .unwrap();
@@ -670,6 +674,7 @@ async fn transferring_ownership_without_a_signature_is_rejected() {
     let pool = test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (new_owner_id, _new_owner_token) = seed_identity_session(&pool).await;
+    chain_sign::unregister(&pool, owner_id).await;
 
     let create = auth(http.post(format!("{base}/guilds")), &owner_token)
         .json(&unique_guild_body())
@@ -855,6 +860,7 @@ async fn invite_accept_join_and_leave_flow() {
         )),
         &invitee_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(invitee_id, guild_id.parse().unwrap(), "invite").await }))
     .send()
     .await
     .unwrap();
@@ -887,6 +893,7 @@ async fn invite_accept_join_and_leave_flow() {
         http.post(format!("{base}/guilds/{guild_id}/leave")),
         &invitee_token,
     )
+    .json(&chain_sign::leave_body(invitee_id, guild_id.parse().unwrap(), false).await)
     .send()
     .await
     .unwrap();
@@ -912,7 +919,7 @@ async fn joining_an_invite_only_guild_directly_is_rejected() {
     let base = server_url();
     let pool = test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (_other_id, other_token) = seed_identity_session(&pool).await;
+    let (other_id, other_token) = seed_identity_session(&pool).await;
 
     let create = auth(http.post(format!("{base}/guilds")), &owner_token)
         .json(&unique_guild_body())
@@ -929,6 +936,7 @@ async fn joining_an_invite_only_guild_directly_is_rejected() {
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &other_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(other_id, guild_id.parse().unwrap(), "join").await }))
     .send()
     .await
     .unwrap();
@@ -969,6 +977,7 @@ async fn opening_a_guild_lets_a_stranger_join_directly_bypassing_requests_and_in
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &other_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(other_id, guild_id.parse().unwrap(), "join").await }))
     .send()
     .await
     .unwrap();
@@ -1014,6 +1023,7 @@ async fn the_owner_cannot_leave_or_be_removed() {
         http.post(format!("{base}/guilds/{guild_id}/leave")),
         &owner_token,
     )
+    .json(&chain_sign::leave_body(owner_id, guild_id.parse().unwrap(), false).await)
     .send()
     .await
     .unwrap();
@@ -1023,6 +1033,7 @@ async fn the_owner_cannot_leave_or_be_removed() {
         http.delete(format!("{base}/guilds/{guild_id}/members/{owner_id}")),
         &owner_token,
     )
+    .json(&chain_sign::remove_member_body(owner_id, guild_id.parse().unwrap(), owner_id).await)
     .send()
     .await
     .unwrap();
@@ -1069,7 +1080,8 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
             )),
             identity_token,
         )
-        .send()
+        .json(&serde_json::json!({ "chain_event": chain_sign::joined(identity_id, guild_id.parse().unwrap(), "invite").await }))
+    .send()
         .await
         .unwrap();
 
@@ -1101,6 +1113,10 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
     let remove = auth(
         http.delete(format!("{base}/guilds/{guild_id}/members/{officer_b_id}")),
         &officer_a_token,
+    )
+    .json(
+        &chain_sign::remove_member_body(officer_a_id, guild_id.parse().unwrap(), officer_b_id)
+            .await,
     )
     .send()
     .await
@@ -1659,6 +1675,7 @@ async fn invite_and_accept(
         )),
         to_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(to_identity_id, guild_id.parse().unwrap(), "invite").await }))
     .send()
     .await
     .unwrap();
@@ -2192,7 +2209,7 @@ async fn approving_a_join_request_adds_membership() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (applicant_id, applicant_token) = seed_identity_session(&pool).await;
 
     let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
@@ -2218,6 +2235,7 @@ async fn approving_a_join_request_adds_membership() {
         )),
         &owner_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::guild_member_added(owner_id, guild_id.parse().unwrap(), applicant_id, chain_sign::MEMBER_ROLE_INDEX, "join_request").await }))
     .send()
     .await
     .unwrap();
@@ -2291,8 +2309,8 @@ async fn withdrawing_a_join_request_leaves_membership_unchanged() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (applicant_id, applicant_token) = seed_identity_session(&pool).await;
 
     let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
     let guild_id = guild["id"].as_str().unwrap();
@@ -2328,6 +2346,7 @@ async fn withdrawing_a_join_request_leaves_membership_unchanged() {
         )),
         &owner_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::guild_member_added(owner_id, guild_id.parse().unwrap(), applicant_id, chain_sign::MEMBER_ROLE_INDEX, "join_request").await }))
     .send()
     .await
     .unwrap();
@@ -2342,8 +2361,8 @@ async fn non_manager_cannot_approve_or_reject_a_join_request() {
     let base = server_url();
     let pool = test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
-    let (_bystander_id, bystander_token) = seed_identity_session(&pool).await;
+    let (applicant_id, applicant_token) = seed_identity_session(&pool).await;
+    let (bystander_id, bystander_token) = seed_identity_session(&pool).await;
 
     let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
     let guild_id = guild["id"].as_str().unwrap();
@@ -2366,6 +2385,7 @@ async fn non_manager_cannot_approve_or_reject_a_join_request() {
         )),
         &bystander_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::guild_member_added(bystander_id, guild_id.parse().unwrap(), applicant_id, chain_sign::MEMBER_ROLE_INDEX, "join_request").await }))
     .send()
     .await
     .unwrap();
@@ -2638,7 +2658,8 @@ async fn creating_a_role_without_a_signature_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
+    chain_sign::unregister(&pool, owner_id).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -2730,6 +2751,7 @@ async fn escalating_a_member_role_without_a_signature_is_rejected() {
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &other_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::joined(other_id, guild_id.parse().unwrap(), "join").await }))
     .send()
     .await
     .unwrap();

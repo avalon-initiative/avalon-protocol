@@ -19,6 +19,8 @@
 //! write path on the one connection its transaction already holds, so
 //! concurrent writers should queue and complete instead.
 
+mod chain_sign;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
@@ -46,7 +48,10 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
+async fn seed_identity_session(
+    pool: &PgPool,
+    label: &str,
+) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
     let identity_id = who.id;
     sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
@@ -55,6 +60,7 @@ async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("db-pool-writes-{label}-{identity_id}"))
@@ -72,7 +78,7 @@ async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
         .await
         .expect("failed to seed session");
 
-    token
+    (identity_id, token)
 }
 
 /// `CONCURRENT_WRITERS` distinct identities each `PATCH /me` once, all in
@@ -97,13 +103,18 @@ async fn concurrent_profile_writes_queue_and_complete_on_a_small_pool() {
 
     let started = Instant::now();
     let mut requests = Vec::with_capacity(CONCURRENT_WRITERS);
-    for (i, token) in tokens.into_iter().enumerate() {
+    for (i, (identity_id, token)) in tokens.into_iter().enumerate() {
         let http = http.clone();
         let base = base.clone();
         requests.push(tokio::spawn(async move {
+            let body = chain_sign::profile_patch(
+                identity_id,
+                serde_json::json!({ "bio": format!("concurrent write {i}") }),
+            )
+            .await;
             http.patch(format!("{base}/me"))
                 .bearer_auth(&token)
-                .json(&serde_json::json!({ "bio": format!("concurrent write {i}") }))
+                .json(&body)
                 .send()
                 .await
         }));
