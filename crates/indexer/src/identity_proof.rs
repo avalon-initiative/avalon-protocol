@@ -2,11 +2,10 @@
 //!
 //! Self-authenticating kinds (`identity.created`, `identity.signing_key_added`,
 //! `identity.signing_key_revoked`) are checked against the signature they carry and the identity's
-//! own key chain; the check does not depend on which shard delivered the event. Kinds that carry
-//! no proof are accepted only from an authoritative origin (see [`EventOrigin::is_authoritative`]).
-//! Residual: the inception `signing_key_added` id is not bound by any signature or checked against the
-//! creation ticket (not stored), so only home shards, core and the local shard may deliver it.
-//! Anything refused is returned as [`IndexError::Rejected`] before any table is touched.
+//! own key chain; the check does not depend on which shard delivered the event. The inception key
+//! event is bound to the creation ticket's key id. Kinds that carry no proof are accepted only from
+//! an authoritative origin (see [`EventOrigin::is_authoritative`]). Anything refused is returned as
+//! [`IndexError::Rejected`] before any table is touched.
 
 use avalon_protocol::ed25519_key::{parse_ed25519_public_key, verify_strict_signature};
 use avalon_protocol::event_payloads::{
@@ -68,6 +67,8 @@ impl EventOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedCreation {
     pub identity_id: IdentityId,
+    /// The ticket id, which is the id of the inception signing key.
+    pub ticket_id: Uuid,
     pub inception_key: [u8; 32],
     pub display_name: String,
 }
@@ -163,6 +164,7 @@ pub fn verify_created(
     }
     Ok(VerifiedCreation {
         identity_id: created.identity_id,
+        ticket_id: created.ticket_id,
         inception_key: key,
         display_name: created.display_name,
     })
@@ -229,37 +231,50 @@ async fn signer_key(
     }
 }
 
-/// Key events change what authenticates as the identity. The signatures cover the network, key ids and
-/// chain position, not the unsigned fields the chain hash covers (#1354). A home shard is no longer
-/// proven by the creation signature; the home concept is being removed (#1305).
-async fn require_key_authority<'a>(
+/// The network a key event's signature is bound to: the network of the stream it was read from.
+fn key_event_network(origin: Option<&EventOrigin>) -> Result<&str, IndexError> {
+    origin
+        .map(|o| o.network_id.as_str())
+        .ok_or_else(|| reject("no origin to verify a key event"))
+}
+
+/// The inception key event must name the key id the creation ticket fixed, so no one can register
+/// the identity's own key under another id.
+async fn require_ticket_key(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
-    origin: Option<&'a EventOrigin>,
-    local_network: Option<&str>,
-) -> Result<&'a str, IndexError> {
-    let Some(origin) = origin else {
-        return Err(reject("no origin to authorize a key event"));
-    };
-    if origin.is_authoritative(local_network) {
-        return Ok(&origin.network_id);
-    }
-    let home: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM indexer_identity_homes \
-         WHERE identity_id = $1 AND network_id = $2 AND shard_id = $3)",
+    signing_key_id: Uuid,
+    key: &[u8; 32],
+) -> Result<(), IndexError> {
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT public_key FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 AND signing_key_id = $2",
     )
     .bind(identity_id)
-    .bind(&origin.network_id)
-    .bind(&origin.shard_id)
+    .bind(signing_key_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(stored) = stored {
+        return if stored.as_slice() == key.as_slice() {
+            Ok(())
+        } else {
+            Err(reject("inception key id belongs to another key"))
+        };
+    }
+    let created: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_keys WHERE identity_id = $1)",
+    )
+    .bind(identity_id)
     .fetch_one(&mut **tx)
     .await?;
-    if home {
-        Ok(&origin.network_id)
+    if created {
+        Err(reject(
+            "inception key id is not the id of the creation ticket",
+        ))
     } else {
-        Err(reject(format!(
-            "shard {} is not a shard this identity was created on",
-            origin.shard_id
-        )))
+        Err(IndexError::AwaitingKey(
+            "identity creation is not projected yet".to_string(),
+        ))
     }
 }
 
@@ -267,7 +282,6 @@ async fn verify_key_added(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
     origin: Option<&EventOrigin>,
-    local_network: Option<&str>,
 ) -> Result<(), IndexError> {
     if event.version != 2 {
         return Err(reject("identity.signing_key_added must be version 2"));
@@ -275,13 +289,17 @@ async fn verify_key_added(
     let added: IdentitySigningKeyAddedPayload = serde_json::from_value(event.payload.clone())
         .map_err(|_| reject("identity.signing_key_added payload is malformed"))?;
     require_issuer_is(event, added.identity_id)?;
-    let network_id = require_key_authority(tx, added.identity_id, origin, local_network).await?;
+    let network_id = key_event_network(origin)?;
     let key = decode_key(&added.public_key)?;
     match added.kind.as_str() {
         SIGNING_KEY_KIND_INCEPTION => {
             if !added.identity_id.matches_key(&key) {
                 return Err(reject("inception key does not derive the identity id"));
             }
+            if event.identity_chain.is_some() {
+                return Err(reject("the inception key event is not part of a chain"));
+            }
+            require_ticket_key(tx, added.identity_id, added.signing_key_id, &key).await?;
         }
         SIGNING_KEY_KIND_DEVICE_GRANT => {
             let (Some(grant_id), Some(signature)) = (added.grant_id, &added.approval_signature)
@@ -328,7 +346,6 @@ async fn verify_key_revoked(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
     origin: Option<&EventOrigin>,
-    local_network: Option<&str>,
 ) -> Result<(), IndexError> {
     if event.version != 2 {
         return Err(reject("identity.signing_key_revoked must be version 2"));
@@ -337,7 +354,7 @@ async fn verify_key_revoked(
         serde_json::from_value(event.payload.clone())
             .map_err(|_| reject("identity.signing_key_revoked payload is malformed"))?;
     require_issuer_is(event, revoked.identity_id)?;
-    let network_id = require_key_authority(tx, revoked.identity_id, origin, local_network).await?;
+    let network_id = key_event_network(origin)?;
     let signature = decode_signature(&revoked.signature)?;
     let revoker = signer_key(
         tx,
@@ -388,10 +405,10 @@ pub async fn verify(
             let origin = origin.ok_or_else(|| reject("no origin to verify identity.created"))?;
             verify_created(event, &origin.network_id).map(Verified::Creation)
         }
-        "identity.signing_key_added" => verify_key_added(tx, event, origin, local_network)
+        "identity.signing_key_added" => verify_key_added(tx, event, origin)
             .await
             .map(|()| Verified::Other),
-        "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin, local_network)
+        "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin)
             .await
             .map(|()| Verified::Other),
         kind if is_unproven_identity_state(kind) => {

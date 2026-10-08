@@ -11,10 +11,14 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::canonical_payload::CanonicalPayloadError;
+use crate::event_payloads::{
+    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload, SIGNING_KEY_KIND_DEVICE_GRANT,
+};
 use crate::events::{IdentityChainPosition, ProtocolEvent, ProtocolEventKind};
 use crate::identity_chain::{
-    apply_chain, clamp_timestamp, compute_event_hash, ActionClass, ChainHashInput, ChainOutcome,
-    ChainedEvent, ClockSkewBounds, EventAuthority, EventHash, TimestampError,
+    apply_chain, clamp_timestamp, compute_event_hash, compute_key_event_hash, ActionClass,
+    ChainHashInput, ChainOutcome, ChainedEvent, ClockSkewBounds, EventAuthority, EventHash,
+    KeyEventContent, KeyEventHashInput, TimestampError,
 };
 use crate::identity_id::IdentityId;
 use crate::ledger_entry::{floor_to_micros, payload_hash, timestamp_micros, EntryHashError};
@@ -34,6 +38,8 @@ pub enum ChainEventError {
     /// The timestamp or version does not fit the hash layout.
     OutOfRange,
     Layout(SigningBytesError),
+    /// A key event whose payload is not a well-formed signed key event of its owner.
+    KeyEvent,
 }
 
 /// Returns `payload` with `position` embedded under [`PAYLOAD_KEY`]. A
@@ -95,8 +101,60 @@ pub fn parse_hash(hex_str: &str) -> Option<EventHash> {
     hex::decode(hex_str).ok()?.try_into().ok()
 }
 
+/// The signed content of an owner-signed key event, or `None` for any other kind.
+fn key_event_content(
+    event: &ProtocolEvent,
+    owner: &IdentityId,
+) -> Result<Option<KeyEventContent>, ChainEventError> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    fn raw<const N: usize>(b64: &str) -> Result<[u8; N], ChainEventError> {
+        STANDARD
+            .decode(b64)
+            .ok()
+            .and_then(|bytes| <[u8; N]>::try_from(bytes).ok())
+            .ok_or(ChainEventError::KeyEvent)
+    }
+    let bad = |_| ChainEventError::KeyEvent;
+    match event.kind.as_str() {
+        "identity.signing_key_added" => {
+            let added: IdentitySigningKeyAddedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(bad)?;
+            let (Some(grant_id), Some(signature)) = (added.grant_id, &added.approval_signature)
+            else {
+                return Err(ChainEventError::KeyEvent);
+            };
+            if &added.identity_id != owner || added.kind != SIGNING_KEY_KIND_DEVICE_GRANT {
+                return Err(ChainEventError::KeyEvent);
+            }
+            Ok(Some(KeyEventContent::DeviceGrant {
+                signing_key_id: added.signing_key_id,
+                public_key: raw(&added.public_key)?,
+                approved_by_signing_key_id: added.approved_by_signing_key_id,
+                grant_id,
+                approval_signature: raw(signature)?,
+            }))
+        }
+        "identity.signing_key_revoked" => {
+            let revoked: IdentitySigningKeyRevokedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(bad)?;
+            if &revoked.identity_id != owner {
+                return Err(ChainEventError::KeyEvent);
+            }
+            Ok(Some(KeyEventContent::Revocation {
+                signing_key_id: revoked.signing_key_id,
+                revoked_by_signing_key_id: revoked.revoked_by_signing_key_id,
+                signature: raw(&revoked.signature)?,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The chain hash of `event`: the position comes from its `identity_chain` field and the owner from
-/// [`chain_owner`], never from the payload, which is covered through its canonical hash.
+/// [`chain_owner`], never from the payload. An owner-signed key event hashes only what its signature
+/// covers ([`KeyEventContent`] and the position); every other event hashes its id, time and
+/// canonical payload as well.
 pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
     let position = event
         .identity_chain
@@ -108,6 +166,15 @@ pub fn event_hash(event: &ProtocolEvent) -> Result<EventHash, ChainEventError> {
         None => None,
     };
     let envelope = position.envelope().map_err(ChainEventError::Layout)?;
+    if let Some(content) = key_event_content(event, &owner)? {
+        return compute_key_event_hash(&KeyEventHashInput {
+            identity_id: &owner,
+            seq: position.seq,
+            prev_hash: prev.as_ref(),
+            content: &content,
+        })
+        .map_err(ChainEventError::Layout);
+    }
     let payload = payload_hash(&event.payload).map_err(ChainEventError::Payload)?;
     let out_of_range = |_: EntryHashError| ChainEventError::OutOfRange;
     compute_event_hash(&ChainHashInput {
@@ -282,8 +349,8 @@ mod tests {
         let id = IdentityId::random_for_tests();
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
         let b = ClockSkewBounds::default();
-        let a = event("identity.signing_key_added", id, 1, None);
-        let mut a2 = event("identity.signing_key_revoked", id, 1, None);
+        let a = event("identity.recovery_configured", id, 1, None);
+        let mut a2 = event("identity.recovery_requested", id, 1, None);
         a2.payload = json!({"other": 1});
         let mut r = event("identity.recovered", id, 1, None);
         r.payload = json!({"r": 1});
@@ -311,5 +378,104 @@ mod tests {
         let mut e = event("profile.updated", id, 1, None);
         e.identity_chain.as_mut().unwrap().layout_version = 2;
         assert!(event_hash(&e).is_err());
+    }
+
+    fn grant_event(id: IdentityId, seq: u64) -> ProtocolEvent {
+        let mut e = event("identity.signing_key_added", id, seq, None);
+        e.version = 2;
+        e.payload = json!({
+            "signing_key_id": Uuid::from_u128(1),
+            "public_key": base64_of(&[7; 32]),
+            "device_label": "phone",
+            "approved_by_signing_key_id": Uuid::from_u128(2),
+            "identity_id": id,
+            "kind": "device_grant",
+            "grant_id": Uuid::from_u128(1),
+            "approval_signature": base64_of(&[9; 64]),
+        });
+        e
+    }
+
+    fn base64_of(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn a_key_event_has_one_hash_whatever_its_unsigned_fields() {
+        let id = IdentityId::random_for_tests();
+        let a = grant_event(id, 1);
+        let base = event_hash(&a).unwrap();
+        let mut variants = Vec::new();
+        let mut v = a.clone();
+        v.id = Uuid::new_v4();
+        variants.push(v);
+        let mut v = a.clone();
+        v.timestamp += time::Duration::days(3);
+        variants.push(v);
+        let mut v = a.clone();
+        v.issuer = GlobalId::new("identity", &id.to_string(), "other", "y");
+        variants.push(v);
+        let mut v = a.clone();
+        v.payload["device_label"] = json!("renamed");
+        variants.push(v);
+        let mut v = a.clone();
+        v.payload["unexpected"] = json!(1);
+        variants.push(v);
+        let mut v = a.clone();
+        v.payload.as_object_mut().unwrap().remove("device_label");
+        variants.push(v);
+        let mut v = a.clone();
+        v.identity_chain.as_mut().unwrap().extensions = "0001000c000000000100".to_string();
+        variants.push(v);
+        for (i, v) in variants.iter().enumerate() {
+            assert_eq!(event_hash(v).unwrap(), base, "variant {i}");
+        }
+    }
+
+    #[test]
+    fn a_key_event_hash_covers_every_signed_field_and_the_position() {
+        let id = IdentityId::random_for_tests();
+        let a = grant_event(id, 1);
+        let base = event_hash(&a).unwrap();
+        let mut variants = Vec::new();
+        for (field, value) in [
+            ("signing_key_id", json!(Uuid::from_u128(5))),
+            ("grant_id", json!(Uuid::from_u128(5))),
+            ("public_key", json!(base64_of(&[8; 32]))),
+            ("approved_by_signing_key_id", json!(Uuid::from_u128(5))),
+            ("approval_signature", json!(base64_of(&[1; 64]))),
+        ] {
+            let mut v = a.clone();
+            v.payload[field] = value;
+            variants.push(v);
+        }
+        variants.push(grant_event(id, 2));
+        let mut v = a.clone();
+        v.identity_chain.as_mut().unwrap().prev_hash = Some("00".repeat(32));
+        variants.push(v);
+        for (i, v) in variants.iter().enumerate() {
+            assert_ne!(event_hash(v).unwrap(), base, "variant {i}");
+        }
+    }
+
+    #[test]
+    fn a_key_event_that_is_not_a_signed_key_event_has_no_hash() {
+        let id = IdentityId::random_for_tests();
+        let mut inception = grant_event(id, 1);
+        inception.payload["kind"] = json!("inception");
+        let mut other_owner = grant_event(id, 1);
+        other_owner.payload["identity_id"] = json!(IdentityId::random_for_tests());
+        let mut short_key = grant_event(id, 1);
+        short_key.payload["public_key"] = json!(base64_of(&[7; 31]));
+        let mut unsigned = grant_event(id, 1);
+        unsigned
+            .payload
+            .as_object_mut()
+            .unwrap()
+            .remove("approval_signature");
+        for e in [inception, other_owner, short_key, unsigned] {
+            assert_eq!(event_hash(&e), Err(ChainEventError::KeyEvent));
+        }
     }
 }

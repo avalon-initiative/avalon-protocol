@@ -197,8 +197,8 @@ pub fn disambiguated_display_name(name: &str, identity_id: &IdentityId, hex_len:
     format!("{}{suffix}", base.trim_end())
 }
 
-/// Creates the identity row, records the shard as one of its homes, and creates its profile from
-/// a verified `identity.created`.
+/// Creates the identity row, its inception signing key (whose id is the creation ticket) and its
+/// profile from a verified `identity.created`.
 ///
 /// All of it is one unit: the caller's savepoint rolls everything back on a refusal. An existing
 /// profile is never overwritten; a second creation with the same name is a no-op and one with
@@ -226,15 +226,35 @@ pub async fn apply_created(
     .bind(created.inception_key.as_slice())
     .execute(&mut **tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO indexer_identity_homes (identity_id, network_id, shard_id) \
-         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+    let inserted = sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys \
+         (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \
+         VALUES ($1, $2, $3, NULL, $4, \
+                 (SELECT revoked_at FROM indexer_identity_signing_key_revocations \
+                  WHERE identity_id = $2 AND signing_key_id = $1)) \
+         ON CONFLICT DO NOTHING",
     )
+    .bind(created.ticket_id)
     .bind(identity_id)
-    .bind(&origin.network_id)
-    .bind(&origin.shard_id)
+    .bind(created.inception_key.as_slice())
+    .bind(created_at)
     .execute(&mut **tx)
     .await?;
+    if inserted.rows_affected() == 0 {
+        let stored: Option<Uuid> = sqlx::query_scalar(
+            "SELECT signing_key_id FROM indexer_identity_signing_keys \
+             WHERE identity_id = $1 AND public_key = $2",
+        )
+        .bind(identity_id)
+        .bind(created.inception_key.as_slice())
+        .fetch_optional(&mut **tx)
+        .await?;
+        if stored.is_some_and(|id| id != created.ticket_id) {
+            return Err(IndexError::Rejected(format!(
+                "identity {identity_id} was already created with another ticket"
+            )));
+        }
+    }
 
     let existing: Option<String> =
         sqlx::query_scalar("SELECT display_name FROM profiles WHERE identity_id = $1")

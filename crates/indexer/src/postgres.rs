@@ -55,7 +55,6 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_identity_signing_keys",
     "indexer_identity_signing_key_revocations",
     "indexer_identity_passkey_revocations",
-    "indexer_identity_homes",
     "identity_chain_events",
     "identity_chain_state",
 ];
@@ -233,6 +232,8 @@ impl PostgresIndexer {
         event: &ProtocolEvent,
         origin: Option<&EventOrigin>,
     ) -> Result<(), IndexError> {
+        // The claim is per (event id, shard): a relabelled copy can only occupy the id on the
+        // shard that delivered it, never on the shard that carries the genuine event.
         let claimed = sqlx::query(
             "INSERT INTO indexer_applied_events (event_id, shard_id) VALUES ($1, $2) \
              ON CONFLICT DO NOTHING RETURNING event_id",
@@ -254,6 +255,7 @@ impl PostgresIndexer {
         // is projected through the resolved chain (see `apply_profile_chained`).
         match identity_chain_store::record(tx, event, OffsetDateTime::now_utc()).await? {
             Recorded::Unchained => {}
+            Recorded::Duplicate => return Ok(()),
             Recorded::Rejected(err) => {
                 eprintln!("indexer: dropping chained event {}: {err:?}", event.id);
                 return Ok(());

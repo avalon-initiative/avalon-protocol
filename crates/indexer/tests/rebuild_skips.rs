@@ -111,7 +111,8 @@ async fn children_ahead_of_their_creation_are_applied_once_it_arrives() {
     let indexer =
         PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core");
     let who = TestIdentity::new();
-    let key_id = Uuid::new_v4();
+    let creation = created(&who, &format!("legacy-{}", Uuid::new_v4().simple()));
+    let key_id: Uuid = serde_json::from_value(creation.payload["ticket_id"].clone()).unwrap();
     let child = |kind: &str, verb: &str, version: u32, payload: serde_json::Value| ProtocolEvent {
         id: Uuid::new_v4(),
         kind: kind.to_string(),
@@ -144,7 +145,7 @@ async fn children_ahead_of_their_creation_are_applied_once_it_arrives() {
                 "identity_id": who.id, "kind": "inception",
             }),
         ),
-        created(&who, &format!("legacy-{}", Uuid::new_v4().simple())),
+        creation,
     ];
     let outcome = indexer.rebuild_from_scratch(&events).await.unwrap();
     assert_eq!((outcome.applied, outcome.refused), (3, 0));

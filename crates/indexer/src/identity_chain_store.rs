@@ -17,6 +17,7 @@ use avalon_protocol::identity_chain_wire::{
 use avalon_protocol::identity_id::IdentityId;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// Resolved head of one identity's chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,9 @@ pub enum Recorded {
     Unchained,
     /// Chained but its timestamp was outside the node's clock bounds.
     Rejected(ChainEventError),
+    /// The chain already holds this hash under another event id: the same signed event,
+    /// republished with different unsigned fields.
+    Duplicate,
     Chained {
         /// The event is part of the identity's resolved chain.
         accepted: bool,
@@ -235,12 +239,22 @@ async fn record_locked(
         Err(ChainEventError::NotChained) => return Ok(Recorded::Unchained),
         Err(e) => return Ok(Recorded::Rejected(e)),
     };
+    let hash = event_hash(event).map_err(|e| sqlx::Error::Decode(format!("{e:?}").into()))?;
+    let held: Option<Uuid> = sqlx::query_scalar(
+        "SELECT event_id FROM identity_chain_events WHERE identity_id = $1 AND event_hash = $2",
+    )
+    .bind(owner)
+    .bind(hex::encode(hash))
+    .fetch_optional(&mut **tx)
+    .await?;
+    if held.is_some_and(|id| id != event.id) {
+        return Ok(Recorded::Duplicate);
+    }
     let before = load(tx, owner).await?;
     let old_outcome = outcome_of(&before);
     let old_hashes: BTreeSet<EventHash> =
         old_outcome.accepted.iter().map(|a| a.event_hash).collect();
 
-    let hash = event_hash(event).map_err(|e| sqlx::Error::Decode(format!("{e:?}").into()))?;
     let position = event.identity_chain.as_ref().expect("checked by caller");
     sqlx::query(
         "INSERT INTO identity_chain_events \

@@ -4415,8 +4415,17 @@ mod tests {
     }
 
     fn created_payload(who: &TestIdentity, network_id: &str, name: &str) -> serde_json::Value {
-        let payload = who.created_payload_for(network_id, Uuid::new_v4(), name);
-        serde_json::to_value(payload).unwrap()
+        created_payload_for(who, network_id, name, Uuid::new_v4())
+    }
+
+    /// A creation whose ticket id is the id of the inception signing key.
+    fn created_payload_for(
+        who: &TestIdentity,
+        network_id: &str,
+        name: &str,
+        ticket: Uuid,
+    ) -> serde_json::Value {
+        serde_json::to_value(who.created_payload_for(network_id, ticket, name)).unwrap()
     }
 
     /// A creation whose signature was made by another key: refused at projection.
@@ -4458,18 +4467,19 @@ mod tests {
         for _ in 0..identities {
             let who = TestIdentity::new();
             let id = who.id;
+            let ticket = Uuid::new_v4();
             let key = serde_json::json!({
-                "signing_key_id": Uuid::new_v4(),
+                "signing_key_id": ticket,
                 "public_key": b64(&who.public_key()),
                 "device_label": null,
-                "approved_by_signing_key_id": Uuid::new_v4(),
+                "approved_by_signing_key_id": ticket,
                 "identity_id": id,
                 "kind": "inception",
             });
             for (kind, payload) in [
                 (
                     "identity.created",
-                    created_payload(&who, network_id, &format!("replay-{id}")),
+                    created_payload_for(&who, network_id, &format!("replay-{id}"), ticket),
                 ),
                 (
                     "identity.passkey_registered",
@@ -4698,27 +4708,43 @@ mod tests {
         let network_id = fresh_network("defer");
         let indexer = indexer_for(&pool, &network_id);
         let who = TestIdentity::new();
-        let device = TestIdentity::new();
-        let approver = Uuid::new_v4();
+        let (approving_device, device) = (TestIdentity::new(), TestIdentity::new());
+        let (ticket, approver, grant_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         let b64k = |k: [u8; 32]| b64(&k);
-        let grant_id = Uuid::new_v4();
-        let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+        let sign = |signer: &TestIdentity, bytes: Vec<u8>| {
+            ed25519_dalek::Signer::sign(&signer.signing_key, &bytes).to_bytes()
+        };
+        // The approving device's key is added by the inception key; the grant it approves comes first.
+        let adds_approver = mk_entry(
             &network_id,
-            grant_id,
-            &who.id,
-            approver,
-            &device.public_key(),
-            1,
-            None,
+            3,
+            "identity.signing_key_added",
+            who.id,
+            Some(chained(
+                serde_json::json!({
+                    "signing_key_id": approver, "public_key": b64k(approving_device.public_key()),
+                    "device_label": null, "approved_by_signing_key_id": ticket,
+                    "identity_id": who.id, "kind": "device_grant",
+                    "grant_id": approver, "approval_signature": b64(&sign(
+                        &who,
+                        avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+                            &network_id, approver, &who.id, ticket,
+                            &approving_device.public_key(), 1, None,
+                        ),
+                    )),
+                }),
+                1,
+                None,
+            )),
         );
-        let signature = ed25519_dalek::Signer::sign(&who.signing_key, &bytes).to_bytes();
         let created = mk_entry(
             &network_id,
             1,
             "identity.created",
             who.id,
-            Some(created_payload(&who, &network_id, "defer-user")),
+            Some(created_payload_for(&who, &network_id, "defer-user", ticket)),
         );
+        let prev = chain_hash(&adds_approver);
         let grant = mk_entry(
             &network_id,
             2,
@@ -4729,23 +4755,19 @@ mod tests {
                     "signing_key_id": grant_id, "public_key": b64k(device.public_key()),
                     "device_label": null, "approved_by_signing_key_id": approver,
                     "identity_id": who.id, "kind": "device_grant",
-                    "grant_id": grant_id, "approval_signature": b64(&signature),
+                    "grant_id": grant_id, "approval_signature": b64(&sign(
+                        &approving_device,
+                        avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+                            &network_id, grant_id, &who.id, approver,
+                            &device.public_key(), 2, Some(&prev),
+                        ),
+                    )),
                 }),
-                1,
-                None,
+                2,
+                Some(prev),
             )),
         );
-        let inception = mk_entry(
-            &network_id,
-            3,
-            "identity.signing_key_added",
-            who.id,
-            Some(serde_json::json!({
-                "signing_key_id": approver, "public_key": b64k(who.public_key()),
-                "device_label": null, "approved_by_signing_key_id": approver,
-                "identity_id": who.id, "kind": "inception",
-            })),
-        );
+        let inception = adds_approver;
         for e in [&created, &grant, &inception] {
             mirror::insert_mirrored_entry(&pool, e).await.unwrap();
         }
@@ -4879,7 +4901,12 @@ mod tests {
                 1,
                 "identity.created",
                 who.id,
-                Some(created_payload(&who, &network_id, "slow-revoke")),
+                Some(created_payload_for(
+                    &who,
+                    &network_id,
+                    "slow-revoke",
+                    inception,
+                )),
             ),
             mk_entry(
                 &network_id,
@@ -5437,7 +5464,7 @@ mod tests {
         )
         .bind(inception)
         .bind(who.id)
-        .bind(who.public_key().to_vec())
+        .bind(TestIdentity::new().public_key().to_vec())
         .execute(&pool)
         .await
         .unwrap();

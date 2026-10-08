@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::events::{ProtocolEventKind, ProtocolEventKindVariant};
 use crate::identity_id::IdentityId;
-use crate::signing_bytes::{tags, Builder, Envelope, SigningBytesError};
+use crate::signing_bytes::{tags, Builder, Envelope, HashAlgo, SigningBytesError};
 
 /// A sha256 digest identifying one chained event's content — the hash a
 /// later event's `prev_hash` points back to. Hex-encoded on the wire (see
@@ -81,6 +81,86 @@ pub fn compute_event_hash(input: &ChainHashInput<'_>) -> Result<EventHash, Signi
         .envelope
         .hash_algo
         .digest(&chain_event_signing_bytes(input)?))
+}
+
+/// What an owner-signed key event's signature establishes. The chain hash of such an event is a
+/// function of these fields and its position alone, so one signed event has exactly one hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyEventContent {
+    /// `identity.signing_key_added` by device grant.
+    DeviceGrant {
+        signing_key_id: Uuid,
+        public_key: [u8; 32],
+        approved_by_signing_key_id: Uuid,
+        grant_id: Uuid,
+        approval_signature: [u8; 64],
+    },
+    /// `identity.signing_key_revoked`.
+    Revocation {
+        signing_key_id: Uuid,
+        revoked_by_signing_key_id: Uuid,
+        signature: [u8; 64],
+    },
+}
+
+/// Every field the chain hash of a key event covers.
+pub struct KeyEventHashInput<'a> {
+    pub identity_id: &'a IdentityId,
+    pub seq: u64,
+    pub prev_hash: Option<&'a EventHash>,
+    pub content: &'a KeyEventContent,
+}
+
+/// The exact bytes a key event's chain hash is the digest of. Layout: tag `avalon.identity.key_event`,
+/// header and extensions as in [`crate::signing_bytes`] (this node's rules, no extensions), identity id
+/// (32 raw), `seq` u64, `hash_algo` u8, `prev_hash` (u8 flag 0, or 1 then 32 raw), a content `u8`
+/// (1 device grant, 2 revocation), then for a grant the key id and approver key id (uuid), the key,
+/// the grant id (uuid) and the approval signature, and for a revocation the key id and revoker key id
+/// (uuid) and the signature. The event id, time, issuer, subject, label and the position's own
+/// envelope are not covered: no signature covers them.
+pub fn key_event_signing_bytes(
+    input: &KeyEventHashInput<'_>,
+) -> Result<Vec<u8>, SigningBytesError> {
+    let builder = Builder::new(tags::IDENTITY_KEY_EVENT, 1)
+        .fixed(input.identity_id.as_bytes())
+        .u64(input.seq)
+        .hash_algo(HashAlgo::Sha256);
+    let builder = match input.prev_hash {
+        Some(hash) => builder.u8(1).hash(hash),
+        None => builder.u8(0),
+    };
+    match input.content {
+        KeyEventContent::DeviceGrant {
+            signing_key_id,
+            public_key,
+            approved_by_signing_key_id,
+            grant_id,
+            approval_signature,
+        } => builder
+            .u8(1)
+            .uuid(*signing_key_id)
+            .uuid(*approved_by_signing_key_id)
+            .key(public_key)
+            .uuid(*grant_id)
+            .signature(approval_signature),
+        KeyEventContent::Revocation {
+            signing_key_id,
+            revoked_by_signing_key_id,
+            signature,
+        } => builder
+            .u8(2)
+            .uuid(*signing_key_id)
+            .uuid(*revoked_by_signing_key_id)
+            .signature(signature),
+    }
+    .finish()
+}
+
+/// The chain hash of a key event: SHA-256 over [`key_event_signing_bytes`].
+pub fn compute_key_event_hash(
+    input: &KeyEventHashInput<'_>,
+) -> Result<EventHash, SigningBytesError> {
+    Ok(HashAlgo::Sha256.digest(&key_event_signing_bytes(input)?))
 }
 
 /// How a layer-1 event kind participates in its identity's chain. Drives

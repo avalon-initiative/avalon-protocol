@@ -320,3 +320,22 @@ silently.
   the node's clock); the revoke signature covers `reason_code` and `reason`. Attestations stored
   under the old bytes stop verifying as authentic, and `achievement.issued` events without
   `issued_at_micros` are skipped by the indexer, so reset development databases with the node update.
+
+## Migrations 0089 and 0090: key event chain hash, no home shards (destructive)
+
+The identity chain hash of a signing-key event (device grant, key revocation) now covers only what
+its signature covers (key ids, keys, signature and chain position), so one signed event has exactly
+one hash whichever node republished it, and the inception key event must name the key id the
+creation ticket fixed. Migration 0089 refuses to run while `identity_chain_events` or a non-empty
+`identity_chain_state` exists, because stored chain hashes and positions no longer verify; run
+`make db-reset` on a development node. Migration 0090 drops `indexer_identity_homes`: which node
+delivered a key event no longer decides whether it is accepted.
+
+- **All nodes of a network must update together:** a node on the old version computes different
+  chain hashes for key events.
+- **Clients:** the signed bytes of key events are unchanged; the signed position's `prev_hash` is
+  the new hash of the head event, as the server reports it.
+- **Unauthenticated metadata:** a key event's device label, event time (`added_at`, `revoked_at`) and
+  the shard that delivered it are not covered by any signature. They are best-effort: the first
+  delivery wins and a redelivery never overwrites them. Only key ids, keys, signatures and the chain
+  position are authenticated.

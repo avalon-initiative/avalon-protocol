@@ -64,6 +64,10 @@
       "tag": "avalon.identity.chain_event"
     },
     {
+      "kind": "identity_key_event",
+      "tag": "avalon.identity.key_event"
+    },
+    {
       "kind": "settlement_sth",
       "tag": "avalon.settlement.sth"
     },
