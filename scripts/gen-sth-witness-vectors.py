@@ -731,6 +731,7 @@ def gen_domain_tags():
     have = {t["kind"] for t in doc["tags"]}
     new = [
         ("identity_chain_signature", "avalon.identity.chain_signature"),
+        ("recovery_approval", "avalon.recovery.approval"),
         ("settlement_sth", "avalon.settlement.sth"),
         ("witness_cosign", "avalon.witness.cosign"),
         ("witness_announce", "avalon.witness.announce"),

@@ -84,6 +84,10 @@
       "tag": "avalon.identity.chain_signature"
     },
     {
+      "kind": "recovery_approval",
+      "tag": "avalon.recovery.approval"
+    },
+    {
       "kind": "conformance",
       "tag": "avalon.conformance.vector"
     }

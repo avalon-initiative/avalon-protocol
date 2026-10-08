@@ -223,6 +223,10 @@
         "threshold": {
           "class": "authority_state",
           "disposition": "none"
+        },
+        "new_signing_public_key": {
+          "class": "authority_state",
+          "disposition": "none"
         }
       }
     },
@@ -245,6 +249,14 @@
           "disposition": "none"
         },
         "delay_ends_at": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "signing_key_id": {
+          "class": "pseudonymous_identifier",
+          "disposition": "none"
+        },
+        "signature": {
           "class": "authority_state",
           "disposition": "none"
         }
@@ -279,6 +291,14 @@
           "disposition": "remove",
           "reason": "Free-text device name; same as device_label on key events.",
           "ref": "#1306"
+        },
+        "new_signing_public_key": {
+          "class": "authority_state",
+          "disposition": "none"
+        },
+        "approvals": {
+          "class": "authority_state",
+          "disposition": "none"
         }
       }
     },

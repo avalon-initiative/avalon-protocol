@@ -1285,6 +1285,22 @@ fn chain_event_signature_matches_shared_vectors() {
     });
 }
 
+#[test]
+fn recovery_approval_matches_shared_vectors() {
+    use avalon_protocol::identity_id::recovery_approval_signing_bytes;
+    assert_identity_signing_vectors("recovery-approval.json", |_, input| {
+        let new_key = verifying_key_from_hex(input["newPublicKeyHex"].as_str().unwrap());
+        recovery_approval_signing_bytes(
+            input["networkId"].as_str().unwrap(),
+            &identity_id_of(input, "identityId"),
+            parse_uuid(input, "requestId"),
+            &identity_id_of(input, "guardianId"),
+            parse_uuid(input, "guardianSigningKeyId"),
+            new_key.as_bytes(),
+        )
+    });
+}
+
 fn conformance_tag(doc_tag: &str) -> avalon_protocol::signing_bytes::DomainTag {
     *avalon_protocol::signing_bytes::tags::ALL
         .iter()

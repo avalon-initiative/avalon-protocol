@@ -296,6 +296,13 @@ impl TestIdentity {
         Self { signing_key, id }
     }
 
+    /// Signs `event` (which carries its chain position) as this identity with key `key_id` on
+    /// [`TEST_NETWORK_ID`].
+    pub fn sign_event(&self, event: &mut crate::events::ProtocolEvent, key_id: Uuid) {
+        crate::identity_chain_wire::author_sign(event, TEST_NETWORK_ID, key_id, &self.signing_key)
+            .expect("a chained event can be signed");
+    }
+
     /// The raw inception public key.
     pub fn public_key(&self) -> [u8; 32] {
         self.signing_key.verifying_key().to_bytes()
@@ -439,6 +446,29 @@ pub fn chain_event_signature_bytes(
         .hash(event_hash)
         .finish()
         .expect("chain event signature fields fit a u32 length")
+}
+
+/// Bytes a guardian signs to approve a recovery: tag `avalon.recovery.approval`, layout version 1,
+/// then `network_id` str, the recovering `owner` 32 raw bytes, `request_id` uuid (also the id of the
+/// new key), the `guardian` 32 raw bytes, the guardian's `guardian_signing_key_id` uuid and the
+/// `new_public_key` the recovered identity will sign with. It approves nothing else.
+pub fn recovery_approval_signing_bytes(
+    network_id: &str,
+    owner: &IdentityId,
+    request_id: Uuid,
+    guardian: &IdentityId,
+    guardian_signing_key_id: Uuid,
+    new_public_key: &[u8; 32],
+) -> Vec<u8> {
+    Builder::new(tags::RECOVERY_APPROVAL, 1)
+        .str(network_id)
+        .fixed(owner.as_bytes())
+        .uuid(request_id)
+        .fixed(guardian.as_bytes())
+        .uuid(guardian_signing_key_id)
+        .key(new_public_key)
+        .finish()
+        .expect("recovery approval fields fit a u32 length")
 }
 
 #[cfg(test)]

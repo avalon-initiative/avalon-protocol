@@ -116,6 +116,19 @@ def chain_signature_bytes(i):
     )
 
 
+def recovery_approval_bytes(i):
+    return (
+        header("avalon.recovery.approval")
+        + st(i["networkId"])
+        + bytes.fromhex(i["identityId"])
+        + uid(i["requestId"])
+        + bytes.fromhex(i["guardianId"])
+        + uid(i["guardianSigningKeyId"])
+        + env.key(bytes.fromhex(i["newPublicKeyHex"]))
+        + tail()
+    )
+
+
 def legacy_created(i):
     pk = pubkey(SIGNER_SEED).hex()
     return (
@@ -399,7 +412,46 @@ def write_chain_signature():
     finish("identity-chain-signature.json", "identity-chain-signature", doc, REASON)
 
 
+def write_recovery_approval():
+    guardian = identity_id_of(pubkey(SECOND_SEED)).hex()
+    base = {
+        "networkId": NETWORK,
+        "identityId": IDENTITY,
+        "requestId": "5d0c3b1e-7a2f-4c9d-8e6b-2f1a0b3c4d5e",
+        "guardianId": guardian,
+        "guardianSigningKeyId": KEY_A,
+        "newPublicKeyHex": DEVICE_KEY,
+    }
+    vectors = [
+        vector("a guardian approving a recovery to a new key", base, recovery_approval_bytes),
+        vector("another new key", dict(base, newPublicKeyHex=SECOND_KEY), recovery_approval_bytes),
+    ]
+    replays = [
+        replay("signed for another network", base, dict(base, networkId="avalon-int-1"), recovery_approval_bytes),
+        replay("approving another recovery request", base, dict(base, requestId="5d0c3b1e-7a2f-4c9d-8e6b-2f1a0b3c4d5f"), recovery_approval_bytes),
+        replay("approving a recovery of another identity", base, dict(base, identityId=guardian), recovery_approval_bytes),
+        replay("approving a recovery to another new key", base, dict(base, newPublicKeyHex=SECOND_KEY), recovery_approval_bytes),
+        replay("approval presented by another guardian", base, dict(base, guardianId=IDENTITY), recovery_approval_bytes),
+        replay("approval presented under another guardian key id", base, dict(base, guardianSigningKeyId=KEY_B), recovery_approval_bytes),
+    ]
+    doc = header_fields(
+        "A guardian's approval of a recovery (avalon_protocol::identity_id::recovery_approval_signing_bytes): "
+        "tag avalon.recovery.approval, layout version 1, fields network_id (str), the recovering identity_id "
+        "(32 raw bytes), request_id (uuid, also the id of the new signing key), the guardian's identity id "
+        "(32 raw bytes), the guardian's signing_key_id (uuid) and the new public key (algorithm byte + 32 raw bytes). "
+        "The guardian signs with their own key and approves nothing but this recovery to this key. identity.recovered "
+        "embeds at least the threshold of these approvals. Here identityId is the recovering identity and the signer is "
+        "the guardian (signingKeySeedHex stands in for the guardian key). " + STRUCTURED +
+        " replayVectors offer a signature made for one input with another input's bytes; it must not verify. "
+        "There is no legacy layout.",
+        GEN,
+        {"replayVectors": replays, "legacyLayoutVectors": [], "vectors": vectors},
+    )
+    finish("recovery-approval.json", "recovery-approval", doc, REASON)
+
+
 if __name__ == "__main__":
+    write_recovery_approval()
     write_chain_signature()
     write_created()
     write_grant()

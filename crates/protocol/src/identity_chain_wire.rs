@@ -72,10 +72,7 @@ pub fn split_position(mut payload: Value) -> (Value, Option<IdentityChainPositio
 /// unchained or the relevant `GlobalId` is not in the `identity` namespace.
 pub fn chain_owner(event: &ProtocolEvent) -> Option<IdentityId> {
     ActionClass::classify(&ProtocolEventKind::from(event.kind.as_str()))?;
-    embedded_identity(match event.kind.as_str() {
-        "identity.recovery_approved" | "identity.recovery_cancelled" => &event.subject,
-        _ => &event.issuer,
-    })
+    embedded_identity(&event.issuer)
 }
 
 fn embedded_identity(id: &crate::ids::GlobalId) -> Option<IdentityId> {
@@ -86,8 +83,8 @@ fn embedded_identity(id: &crate::ids::GlobalId) -> Option<IdentityId> {
     parts.next()?.parse().ok()
 }
 
-/// The identity that authored `event` and whose key must sign it: the issuer's identity. For a
-/// guardian's recovery approval or cancellation that is the guardian, not the chain owner.
+/// The identity that authored `event`: the issuer's identity. For a chained event this is always
+/// the chain owner; no other identity's key can sign on that chain.
 pub fn signer_of(event: &ProtocolEvent) -> Option<IdentityId> {
     embedded_identity(&event.issuer)
 }
@@ -117,6 +114,29 @@ pub fn author_signing_bytes(
         key_id,
         &event_hash(event)?,
     ))
+}
+
+/// Sets `event`'s author key id and signature (a reference signer, used by tests and the CLI).
+/// The event must already carry its chain position.
+pub fn author_sign(
+    event: &mut ProtocolEvent,
+    network_id: &str,
+    signing_key_id: uuid::Uuid,
+    key: &ed25519_dalek::SigningKey,
+) -> Result<(), ChainEventError> {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let position = event
+        .identity_chain
+        .as_mut()
+        .ok_or(ChainEventError::NotChained)?;
+    position.signing_key_id = Some(signing_key_id);
+    let bytes = author_signing_bytes(event, network_id)?;
+    let signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
+    if let Some(position) = event.identity_chain.as_mut() {
+        position.signature = Some(signature);
+    }
+    Ok(())
 }
 
 /// Whether the position's signature is a valid author signature of `event` under `public_key`.
@@ -379,12 +399,18 @@ mod tests {
     }
 
     #[test]
-    fn owner_is_subject_for_guardian_recovery_events_else_issuer() {
+    fn owner_is_the_issuer_and_recovery_markers_are_unchained() {
         let id = IdentityId::random_for_tests();
         let guardian = IdentityId::random_for_tests();
-        let mut e = event("identity.recovery_approved", guardian, 1, None);
-        e.subject = GlobalId::new("identity", &id.to_string(), "self", "x");
-        assert_eq!(chain_owner(&e), Some(id));
+        for kind in [
+            "identity.recovery_requested",
+            "identity.recovery_approved",
+            "identity.recovery_cancelled",
+        ] {
+            let mut e = event(kind, guardian, 1, None);
+            e.subject = GlobalId::new("identity", &id.to_string(), "self", "x");
+            assert_eq!(chain_owner(&e), None, "{kind}");
+        }
         let e = event("profile.updated", id, 1, None);
         assert_eq!(chain_owner(&e), Some(id));
         let e = event("achievement.issued", id, 1, None);
@@ -407,7 +433,7 @@ mod tests {
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
         let b = ClockSkewBounds::default();
         let a = event("identity.recovery_configured", id, 1, None);
-        let mut a2 = event("identity.recovery_requested", id, 1, None);
+        let mut a2 = event("identity.recovery_configured", id, 1, None);
         a2.payload = json!({"other": 1});
         let mut r = event("identity.recovered", id, 1, None);
         r.payload = json!({"r": 1});
@@ -537,14 +563,7 @@ mod tests {
     }
 
     fn author_signed(mut e: ProtocolEvent, key: &ed25519_dalek::SigningKey) -> ProtocolEvent {
-        use base64::Engine as _;
-        use ed25519_dalek::Signer as _;
-        let key_id = Uuid::from_u128(9);
-        let position = e.identity_chain.take().unwrap();
-        e.identity_chain = Some(position.signed(key_id, String::new()));
-        let bytes = author_signing_bytes(&e, "net").unwrap();
-        let sig = base64::engine::general_purpose::STANDARD.encode(key.sign(&bytes).to_bytes());
-        e.identity_chain.as_mut().unwrap().signature = Some(sig);
+        author_sign(&mut e, "net", Uuid::from_u128(9), key).unwrap();
         e
     }
 
@@ -586,17 +605,26 @@ mod tests {
     }
 
     #[test]
-    fn a_guardian_signs_on_the_owners_chain_and_key_events_need_no_author_signature() {
-        let owner = IdentityId::random_for_tests();
-        let guardian = IdentityId::random_for_tests();
-        let mut e = event("identity.recovery_approved", guardian, 1, None);
-        e.subject = GlobalId::new("identity", &owner.to_string(), "self", "x");
-        assert_eq!(chain_owner(&e), Some(owner));
-        assert_eq!(signer_of(&e), Some(guardian));
-        assert!(needs_author_signature("identity.recovery_approved"));
-        assert!(needs_author_signature("profile.updated"));
-        assert!(!needs_author_signature("identity.signing_key_added"));
-        assert!(!needs_author_signature("identity.signing_key_revoked"));
-        assert!(!needs_author_signature("achievement.issued"));
+    fn only_owner_authored_chained_kinds_need_an_author_signature() {
+        for kind in [
+            "profile.updated",
+            "friend.requested",
+            "guild.member_added",
+            "identity.passkey_registered",
+            "identity.recovery_configured",
+            "identity.recovered",
+        ] {
+            assert!(needs_author_signature(kind), "{kind}");
+        }
+        for kind in [
+            "identity.signing_key_added",
+            "identity.signing_key_revoked",
+            "identity.recovery_requested",
+            "identity.recovery_approved",
+            "identity.recovery_cancelled",
+            "achievement.issued",
+        ] {
+            assert!(!needs_author_signature(kind), "{kind}");
+        }
     }
 }

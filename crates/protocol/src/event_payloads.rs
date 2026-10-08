@@ -137,6 +137,8 @@ pub struct IdentityRecoveryConfiguredPayload {
 pub struct IdentityRecoveryRequestedPayload {
     pub request_id: Uuid,
     pub threshold: i32,
+    /// Base64 of the Ed25519 key the recovered identity will sign with; its key id is `request_id`.
+    pub new_signing_public_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -147,6 +149,10 @@ pub struct IdentityRecoveryApprovedPayload {
     pub threshold: i32,
     #[serde(with = "time::serde::rfc3339::option")]
     pub delay_ends_at: Option<OffsetDateTime>,
+    /// The guardian's own active key and its base64 signature over
+    /// `recovery_approval_signing_bytes` for this request.
+    pub signing_key_id: Uuid,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -161,6 +167,19 @@ pub struct IdentityRecoveryCancelledPayload {
 pub struct IdentityRecoveredPayload {
     pub request_id: Uuid,
     pub device_label: Option<String>,
+    /// Base64 of the new Ed25519 key (key id `request_id`); the event is signed by it.
+    pub new_signing_public_key: String,
+    /// Guardian approvals of exactly this request and key; at least the threshold must verify.
+    pub approvals: Vec<RecoveryApprovalProof>,
+}
+
+/// One guardian's signed approval, carried inside `identity.recovered` so any node verifies it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecoveryApprovalProof {
+    pub guardian_id: IdentityId,
+    pub signing_key_id: Uuid,
+    /// Base64 Ed25519 signature over `recovery_approval_signing_bytes`.
+    pub signature: String,
 }
 
 // --- profile.updated --------------------------------------------------------
@@ -927,10 +946,12 @@ mod tests {
         let payload = IdentityRecoveryRequestedPayload {
             request_id: Uuid::nil(),
             threshold: 2,
+            new_signing_public_key: "AAAA".to_string(),
         };
         let json = serde_json::json!({
             "request_id": "00000000-0000-0000-0000-000000000000",
             "threshold": 2,
+            "new_signing_public_key": "AAAA",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
@@ -947,6 +968,8 @@ mod tests {
             approvals_count: 1,
             threshold: 2,
             delay_ends_at: Some(OffsetDateTime::UNIX_EPOCH),
+            signing_key_id: Uuid::nil(),
+            signature: "AAAA".to_string(),
         };
         let json = serde_json::json!({
             "request_id": "00000000-0000-0000-0000-000000000000",
@@ -954,6 +977,8 @@ mod tests {
             "approvals_count": 1,
             "threshold": 2,
             "delay_ends_at": "1970-01-01T00:00:00Z",
+            "signing_key_id": "00000000-0000-0000-0000-000000000000",
+            "signature": "AAAA",
         });
         assert_eq!(serde_json::to_value(&with_delay).unwrap(), json);
         assert_eq!(
@@ -994,10 +1019,22 @@ mod tests {
         let payload = IdentityRecoveredPayload {
             request_id: Uuid::nil(),
             device_label: Some("New Phone".to_string()),
+            new_signing_public_key: "AAAA".to_string(),
+            approvals: vec![RecoveryApprovalProof {
+                guardian_id: test_id(),
+                signing_key_id: Uuid::nil(),
+                signature: "BBBB".to_string(),
+            }],
         };
         let json = serde_json::json!({
             "request_id": "00000000-0000-0000-0000-000000000000",
             "device_label": "New Phone",
+            "new_signing_public_key": "AAAA",
+            "approvals": [{
+                "guardian_id": test_id().to_string(),
+                "signing_key_id": "00000000-0000-0000-0000-000000000000",
+                "signature": "BBBB",
+            }],
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
