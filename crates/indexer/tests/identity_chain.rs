@@ -68,7 +68,13 @@ fn indexer(pool: &PgPool) -> PostgresIndexer {
 
 /// A signed `identity.signing_key_added` payload for a fresh device key, approved by `approver`
 /// at the first chain position (seq 1, no previous event).
-fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> serde_json::Value {
+fn device_grant_payload(
+    who: &TestIdentity,
+    approver_key_id: Uuid,
+    seed: u8,
+    seq: u64,
+    prev: Option<&ProtocolEvent>,
+) -> serde_json::Value {
     use base64::Engine as _;
     use ed25519_dalek::Signer as _;
     let device = TestIdentity::from_seed([seed; 32]);
@@ -79,8 +85,8 @@ fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> 
         &who.id,
         approver_key_id,
         &device.public_key(),
-        1,
-        None,
+        seq,
+        prev.map(|p| event_hash(p).unwrap()).as_ref(),
     );
     let b64 = base64::engine::general_purpose::STANDARD;
     serde_json::json!({
@@ -263,46 +269,96 @@ async fn conflicting_profile_edits_converge_in_any_arrival_order() {
 #[tokio::test]
 #[ignore]
 async fn conflicting_key_events_fork_and_recovery_resolves() {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
     let pool = test_pool().await;
     let indexer = indexer(&pool);
     let who = seed_identity(&pool).await;
     let id = who.id;
     let inception = add_inception_key(&pool, &indexer, &who).await;
+    let mut guardians = Vec::new();
+    for _ in 0..2 {
+        let g = seed_identity(&pool).await;
+        let key = add_inception_key(&pool, &indexer, &g).await;
+        guardians.push((g, key));
+    }
 
+    let configured = chained(
+        &who,
+        inception,
+        "identity.recovery_configured",
+        "recovery_configured",
+        serde_json::json!({
+            "guardian_ids": guardians.iter().map(|(g, _)| g.id).collect::<Vec<_>>(),
+            "threshold": 2,
+        }),
+        50,
+        1,
+        None,
+    );
     let mut a = chained(
         &who,
         inception,
         "identity.signing_key_added",
         "signing_key_added",
-        device_grant_payload(&who, inception, 7),
+        device_grant_payload(&who, inception, 7, 2, Some(&configured)),
         100,
-        1,
-        None,
+        2,
+        Some(&configured),
     );
     let mut b = chained(
         &who,
         inception,
         "identity.signing_key_added",
         "signing_key_added",
-        device_grant_payload(&who, inception, 8),
+        device_grant_payload(&who, inception, 8, 2, Some(&configured)),
         100,
-        1,
-        None,
+        2,
+        Some(&configured),
     );
     a.version = 2;
     b.version = 2;
-    let recovered = chained(
+
+    let new_key = TestIdentity::new();
+    let request_id = Uuid::new_v4();
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let approvals: Vec<_> = guardians
+        .iter()
+        .map(|(g, key)| {
+            let bytes = avalon_protocol::identity_id::recovery_approval_signing_bytes(
+                TEST_NETWORK_ID,
+                &id,
+                request_id,
+                &g.id,
+                *key,
+                &new_key.public_key(),
+            );
+            serde_json::json!({
+                "guardian_id": g.id,
+                "signing_key_id": key,
+                "signature": b64.encode(g.signing_key.sign(&bytes).to_bytes()),
+            })
+        })
+        .collect();
+    let mut recovered = chained(
         &who,
         inception,
         "identity.recovered",
         "recovered",
-        serde_json::json!({"request_id": Uuid::nil()}),
+        serde_json::json!({
+            "request_id": request_id,
+            "device_label": null,
+            "new_signing_public_key": b64.encode(new_key.public_key()),
+            "approvals": approvals,
+        }),
         400,
-        1,
-        None,
+        2,
+        Some(&configured),
     );
+    new_key.sign_event(&mut recovered, request_id);
 
-    reset(&pool, id, &[&a, &b, &recovered]).await;
+    reset(&pool, id, &[&configured, &a, &b, &recovered]).await;
+    indexer.apply(&configured).await.unwrap();
     assert!(!identity_chain_store::is_forked(&pool, id).await.unwrap());
     indexer.apply(&a).await.unwrap();
     assert!(!identity_chain_store::is_forked(&pool, id).await.unwrap());
@@ -315,7 +371,7 @@ async fn conflicting_key_events_fork_and_recovery_resolves() {
         .unwrap()
         .unwrap();
     assert_eq!(state.forked_at_seq, None);
-    assert_eq!(state.seq, 1);
+    assert_eq!(state.seq, 2);
     assert_eq!(
         state.head_hash.unwrap(),
         hex::encode(event_hash(&recovered).unwrap())
@@ -362,7 +418,7 @@ async fn a_chained_event_without_a_valid_author_signature_cannot_take_a_chain_po
         inception,
         "identity.signing_key_added",
         "signing_key_added",
-        device_grant_payload(&who, inception, 7),
+        device_grant_payload(&who, inception, 7, 1, None),
         200,
         1,
         None,
