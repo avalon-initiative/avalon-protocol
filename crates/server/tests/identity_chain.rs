@@ -2,6 +2,8 @@
 //! key-dependent operations while its chain is forked. Gated `--ignored`:
 //! needs a running `avalon-server` and migrated Postgres.
 
+mod chain_sign;
+
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
@@ -27,6 +29,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .unwrap();
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("chain-live-{identity_id}"))
@@ -44,10 +47,17 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-async fn patch_bio(http: &reqwest::Client, token: &str, bio: &str) -> reqwest::StatusCode {
+async fn patch_bio(
+    http: &reqwest::Client,
+    identity_id: avalon_protocol::ids::IdentityId,
+    token: &str,
+    bio: &str,
+) -> reqwest::StatusCode {
+    let chain_event =
+        chain_sign::profile_updated(identity_id, serde_json::json!({ "bio": bio })).await;
     http.patch(format!("{}/me", server_url()))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "bio": bio }))
+        .json(&serde_json::json!({ "bio": bio, "chain_event": chain_event }))
         .send()
         .await
         .expect("request failed — is the server running?")
@@ -61,8 +71,12 @@ async fn profile_edits_are_chained_and_reach_the_ledger_with_their_position() {
     let http = reqwest::Client::new();
     let (identity_id, token) = seed_identity_session(&pool).await;
 
-    assert!(patch_bio(&http, &token, "one").await.is_success());
-    assert!(patch_bio(&http, &token, "two").await.is_success());
+    assert!(patch_bio(&http, identity_id, &token, "one")
+        .await
+        .is_success());
+    assert!(patch_bio(&http, identity_id, &token, "two")
+        .await
+        .is_success());
 
     let state =
         sqlx::query("SELECT seq, forked_at_seq FROM identity_chain_state WHERE identity_id = $1")
@@ -107,13 +121,15 @@ async fn profile_edits_are_chained_and_reach_the_ledger_with_their_position() {
 
 #[tokio::test]
 #[ignore]
-async fn a_forked_identity_refuses_key_dependent_operations_but_allows_profile_edits() {
+async fn a_forked_identity_refuses_key_dependent_operations_and_profile_edits() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
     let (identity_id, token) = seed_identity_session(&pool).await;
 
-    assert!(patch_bio(&http, &token, "before").await.is_success());
+    assert!(patch_bio(&http, identity_id, &token, "before")
+        .await
+        .is_success());
     sqlx::query("UPDATE identity_chain_state SET forked_at_seq = 2 WHERE identity_id = $1")
         .bind(identity_id)
         .execute(&pool)
@@ -138,14 +154,19 @@ async fn a_forked_identity_refuses_key_dependent_operations_but_allows_profile_e
     let revoke_passkey = http
         .post(format!("{base}/me/passkeys/{}/revoke", Uuid::new_v4()))
         .bearer_auth(&token)
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({
+            "chain_event": chain_sign::passkey_revoked(identity_id, Uuid::new_v4()).await,
+        }))
         .send()
         .await
         .unwrap();
     assert_eq!(revoke_passkey.status(), reqwest::StatusCode::CONFLICT);
 
-    // Profile edits stay available; they are simply unchained while forked.
-    assert!(patch_bio(&http, &token, "after").await.is_success());
+    // A chained profile edit cannot extend a forked chain.
+    assert_eq!(
+        patch_bio(&http, identity_id, &token, "after").await,
+        reqwest::StatusCode::CONFLICT
+    );
     let seq: i64 =
         sqlx::query_scalar("SELECT seq FROM identity_chain_state WHERE identity_id = $1")
             .bind(identity_id)

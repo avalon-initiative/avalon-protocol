@@ -14,6 +14,8 @@
 //! seeding), since account *creation* itself is already covered by #55's
 //! existing coverage — this file is scoped to what #200 actually adds.
 
+mod chain_sign;
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -104,6 +106,7 @@ fn new_virtual_client() -> VirtualClient {
 /// key, since `register_finish` requires one even though this test has no
 /// further use for it.
 async fn create_identity_with_one_passkey(
+    pool: &PgPool,
     http: &reqwest::Client,
     base: &str,
 ) -> (avalon_protocol::ids::IdentityId, VirtualClient) {
@@ -159,6 +162,7 @@ async fn create_identity_with_one_passkey(
         .unwrap()
         .error_for_status()
         .expect("register/finish should succeed");
+    chain_sign::remember_registered(pool, identity_id, &signing_key).await;
 
     (identity_id, client)
 }
@@ -218,7 +222,7 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (identity_id, mut client_a) = create_identity_with_one_passkey(&http, &base).await;
+    let (identity_id, mut client_a) = create_identity_with_one_passkey(&pool, &http, &base).await;
     let token = login_with_client(&http, &base, identity_id, &mut client_a).await;
 
     let passkeys_after_registration: serde_json::Value =
@@ -230,6 +234,13 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
             .await
             .unwrap();
     assert_eq!(passkeys_after_registration.as_array().unwrap().len(), 1);
+    let first_id: Uuid = passkeys_after_registration[0]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let announced = chain_sign::announce_passkey(&http, &token, identity_id, first_id).await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
 
     // Add a second passkey — the authenticated flow #200 adds, distinct
     // from the unauthenticated account-creation ceremony above.
@@ -274,6 +285,14 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
     .unwrap();
     assert_eq!(added["label"], "second device");
     let second_passkey_id = added["id"].as_str().unwrap().to_string();
+    let announced = chain_sign::announce_passkey(
+        &http,
+        &token,
+        identity_id,
+        second_passkey_id.parse().unwrap(),
+    )
+    .await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
 
     let passkeys: serde_json::Value = auth(http.get(format!("{base}/me/passkeys")), &token)
         .send()
@@ -321,7 +340,9 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
         http.post(format!("{base}/me/passkeys/{first_passkey_id}/revoke")),
         &token,
     )
-    .json(&serde_json::json!({}))
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::passkey_revoked(identity_id, first_passkey_id.parse().unwrap()).await,
+    }))
     .send()
     .await
     .unwrap()
@@ -358,7 +379,9 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
         http.post(format!("{base}/me/passkeys/{second_passkey_id}/revoke")),
         &token_via_b,
     )
-    .json(&serde_json::json!({}))
+    .json(&serde_json::json!({
+        "chain_event": chain_sign::passkey_revoked(identity_id, second_passkey_id.parse().unwrap()).await,
+    }))
     .send()
     .await
     .unwrap();
@@ -377,6 +400,7 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
         &token_via_b,
     )
     .json(&serde_json::json!({
+        "chain_event": chain_sign::passkey_revoked(identity_id, second_passkey_id.parse().unwrap()).await,
         "signing_key_id": signing_key_id,
         "signature": signature,
     }))

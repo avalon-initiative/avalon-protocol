@@ -432,3 +432,51 @@ pub async fn unregister(pool: &PgPool, id: IdentityId) {
         .expect("failed to remove projected signing key");
     KEYS.lock().unwrap().remove(&id);
 }
+
+/// Remembers the key an identity registered with over HTTP (looked up by its public key).
+pub async fn remember_registered(pool: &PgPool, id: IdentityId, key: &ed25519_dalek::SigningKey) {
+    let key_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM identity_signing_keys WHERE identity_id = $1 AND public_key = $2",
+    )
+    .bind(id)
+    .bind(key.verifying_key().to_bytes().to_vec())
+    .fetch_one(pool)
+    .await
+    .expect("registered signing key not found");
+    KEYS.lock().unwrap().insert(id, (key.clone(), key_id));
+}
+
+/// The owner announces `passkey_id`: fetches the event the server builds and signs exactly that.
+pub async fn announce_passkey(
+    http: &reqwest::Client,
+    token: &str,
+    identity: IdentityId,
+    passkey_id: Uuid,
+) -> reqwest::Response {
+    let base = server_url();
+    let draft: serde_json::Value = http
+        .get(format!("{base}/me/passkeys/{passkey_id}/announcement"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .expect("announcement draft should be available")
+        .json()
+        .await
+        .unwrap();
+    let chain_event = sign(
+        identity,
+        draft["kind"].as_str().unwrap(),
+        serde_json::from_value(draft["issuer"].clone()).unwrap(),
+        serde_json::from_value(draft["subject"].clone()).unwrap(),
+        draft["payload"].clone(),
+    )
+    .await;
+    http.post(format!("{base}/me/passkeys/{passkey_id}/announce"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "chain_event": chain_event }))
+        .send()
+        .await
+        .unwrap()
+}
