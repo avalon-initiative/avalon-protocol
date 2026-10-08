@@ -226,7 +226,7 @@ pub async fn apply_created(
     .bind(created.inception_key.as_slice())
     .execute(&mut **tx)
     .await?;
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO indexer_identity_signing_keys \
          (signing_key_id, identity_id, public_key, label, added_at, revoked_at) \
          VALUES ($1, $2, $3, NULL, $4, \
@@ -240,6 +240,21 @@ pub async fn apply_created(
     .bind(created_at)
     .execute(&mut **tx)
     .await?;
+    if inserted.rows_affected() == 0 {
+        let stored: Option<Uuid> = sqlx::query_scalar(
+            "SELECT signing_key_id FROM indexer_identity_signing_keys \
+             WHERE identity_id = $1 AND public_key = $2",
+        )
+        .bind(identity_id)
+        .bind(created.inception_key.as_slice())
+        .fetch_optional(&mut **tx)
+        .await?;
+        if stored.is_some_and(|id| id != created.ticket_id) {
+            return Err(IndexError::Rejected(format!(
+                "identity {identity_id} was already created with another ticket"
+            )));
+        }
+    }
 
     let existing: Option<String> =
         sqlx::query_scalar("SELECT display_name FROM profiles WHERE identity_id = $1")

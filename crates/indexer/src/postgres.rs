@@ -232,6 +232,8 @@ impl PostgresIndexer {
         event: &ProtocolEvent,
         origin: Option<&EventOrigin>,
     ) -> Result<(), IndexError> {
+        // The claim is per (event id, shard): a relabelled copy can only occupy the id on the
+        // shard that delivered it, never on the shard that carries the genuine event.
         let claimed = sqlx::query(
             "INSERT INTO indexer_applied_events (event_id, shard_id) VALUES ($1, $2) \
              ON CONFLICT DO NOTHING RETURNING event_id",

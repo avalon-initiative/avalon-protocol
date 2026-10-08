@@ -295,8 +295,16 @@ async fn a_second_creation_never_changes_an_existing_profile() {
     ));
     assert_eq!(profile_name(&pool, &who).await, Some(name.clone()));
 
-    // A re-creation naming the same name changes nothing.
-    apply(&pool, &created(&who, &name), &core()).await.unwrap();
+    // A re-creation naming the same name under the same ticket changes nothing; another ticket
+    // would give nodes different inception key ids and is refused.
+    let mut again = first.clone();
+    again.id = Uuid::new_v4();
+    apply(&pool, &again, &core()).await.unwrap();
+    assert_eq!(profile_name(&pool, &who).await, Some(name.clone()));
+    assert!(matches!(
+        apply(&pool, &created(&who, &name), &core()).await,
+        Err(IndexError::Rejected(_))
+    ));
     assert_eq!(profile_name(&pool, &who).await, Some(name));
 }
 
@@ -1071,4 +1079,74 @@ async fn pre_claiming_every_candidate_name_cannot_keep_an_identity_out() {
     assert!(!avalon_protocol::identity_id::display_name_permitted(
         &newcomer.id.to_string()
     ));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_relabelled_key_event_cannot_squat_another_events_id() {
+    let pool = pool().await;
+    let (victim, device, second) = (
+        TestIdentity::new(),
+        TestIdentity::new(),
+        TestIdentity::new(),
+    );
+    let inception_id = register(&pool, &victim).await;
+    let first = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &device,
+        Uuid::new_v4(),
+        None,
+    );
+    let second_key = Uuid::new_v4();
+    let next = grant(
+        &victim,
+        &victim,
+        inception_id,
+        &second,
+        second_key,
+        Some(&first),
+    );
+
+    // The second grant's content arrives first, under the first grant's event id, from another shard.
+    let mut relabelled = next.clone();
+    relabelled.id = first.id;
+    let _ = apply(&pool, &relabelled, &other()).await;
+    // The genuine first grant still lands, then the genuine second one (a copy of held content).
+    apply(&pool, &first, &game()).await.unwrap();
+    apply(&pool, &next, &game()).await.unwrap();
+    assert_eq!(chain_rows(&pool, &victim).await, 2);
+    assert!(active(&pool, &victim, first_key_id(&first)).await);
+    assert!(active(&pool, &victim, second_key).await);
+}
+
+fn first_key_id(grant: &ProtocolEvent) -> Uuid {
+    serde_json::from_value(grant.payload["signing_key_id"].clone()).unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_redelivered_inception_event_keeps_the_first_label() {
+    let pool = pool().await;
+    let who = TestIdentity::new();
+    let creation = created(&who, &unique_name("label"));
+    apply(&pool, &creation, &game()).await.unwrap();
+    let key_id = ticket_of(&creation);
+    let labelled = |label: &str| {
+        let mut e = inception(&who, key_id);
+        e.payload["device_label"] = serde_json::json!(label);
+        e
+    };
+    apply(&pool, &labelled("first"), &game()).await.unwrap();
+    apply(&pool, &labelled("second"), &other()).await.unwrap();
+    let label: Option<String> = sqlx::query_scalar(
+        "SELECT label FROM indexer_identity_signing_keys WHERE identity_id = $1 AND signing_key_id = $2",
+    )
+    .bind(who.id)
+    .bind(key_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(label.as_deref(), Some("first"));
 }
