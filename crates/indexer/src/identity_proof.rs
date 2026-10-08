@@ -130,10 +130,10 @@ fn verify_with_key(key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool
 
 /// Checks an `identity.created` event: v2 payload, an inception key that derives the id, issuer
 /// and subject naming that id, a permitted display name, and the inception key's signature over
-/// the bytes bound to `origin`'s network and shard.
+/// the bytes bound to `network_id`. The shard that delivered the event is not part of the proof.
 pub fn verify_created(
     event: &ProtocolEvent,
-    origin: &EventOrigin,
+    network_id: &str,
 ) -> Result<VerifiedCreation, IndexError> {
     if event.version != 2 {
         return Err(reject("identity.created must be version 2"));
@@ -150,8 +150,7 @@ pub fn verify_created(
     }
     let signature = decode_signature(&created.signature)?;
     let bytes = identity_created_signing_bytes(
-        &origin.network_id,
-        &origin.shard_id,
+        network_id,
         created.ticket_id,
         &created.identity_id,
         &key,
@@ -159,7 +158,7 @@ pub fn verify_created(
     );
     if !verify_with_key(&key, &bytes, &signature) {
         return Err(reject(
-            "identity.created signature does not verify for this network and shard",
+            "identity.created signature does not verify for this network",
         ));
     }
     Ok(VerifiedCreation {
@@ -230,22 +229,20 @@ async fn signer_key(
     }
 }
 
-/// Key events change what authenticates as the identity. The signatures cover key ids and chain
-/// position, but the chain hash also covers unsigned fields (timestamp, label), so a delivering
-/// shard could still fork the chain; only a shard the identity itself created on, the core shard
-/// or this node's own shard may deliver them. Residual: the inception key's id is not signed or
-/// checked at projection, so a hostile home shard could deliver it under a fresh `signing_key_id`.
-async fn require_key_authority(
+/// Key events change what authenticates as the identity. The signatures cover the network, key ids and
+/// chain position, not the unsigned fields the chain hash covers (#1354). A home shard is no longer
+/// proven by the creation signature; the home concept is being removed (#1305).
+async fn require_key_authority<'a>(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
-    origin: Option<&EventOrigin>,
+    origin: Option<&'a EventOrigin>,
     local_network: Option<&str>,
-) -> Result<(), IndexError> {
+) -> Result<&'a str, IndexError> {
     let Some(origin) = origin else {
         return Err(reject("no origin to authorize a key event"));
     };
     if origin.is_authoritative(local_network) {
-        return Ok(());
+        return Ok(&origin.network_id);
     }
     let home: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM indexer_identity_homes \
@@ -257,7 +254,7 @@ async fn require_key_authority(
     .fetch_one(&mut **tx)
     .await?;
     if home {
-        Ok(())
+        Ok(&origin.network_id)
     } else {
         Err(reject(format!(
             "shard {} is not a shard this identity was created on",
@@ -278,7 +275,7 @@ async fn verify_key_added(
     let added: IdentitySigningKeyAddedPayload = serde_json::from_value(event.payload.clone())
         .map_err(|_| reject("identity.signing_key_added payload is malformed"))?;
     require_issuer_is(event, added.identity_id)?;
-    require_key_authority(tx, added.identity_id, origin, local_network).await?;
+    let network_id = require_key_authority(tx, added.identity_id, origin, local_network).await?;
     let key = decode_key(&added.public_key)?;
     match added.kind.as_str() {
         SIGNING_KEY_KIND_INCEPTION => {
@@ -304,6 +301,7 @@ async fn verify_key_added(
             }
             let (seq, prev_hash) = signed_position(event)?;
             let bytes = device_grant_approval_signing_bytes(
+                network_id,
                 grant_id,
                 &added.identity_id,
                 added.approved_by_signing_key_id,
@@ -339,7 +337,7 @@ async fn verify_key_revoked(
         serde_json::from_value(event.payload.clone())
             .map_err(|_| reject("identity.signing_key_revoked payload is malformed"))?;
     require_issuer_is(event, revoked.identity_id)?;
-    require_key_authority(tx, revoked.identity_id, origin, local_network).await?;
+    let network_id = require_key_authority(tx, revoked.identity_id, origin, local_network).await?;
     let signature = decode_signature(&revoked.signature)?;
     let revoker = signer_key(
         tx,
@@ -350,6 +348,7 @@ async fn verify_key_revoked(
     .await?;
     let (seq, prev_hash) = signed_position(event)?;
     let bytes = signing_key_revoked_signing_bytes(
+        network_id,
         &revoked.identity_id,
         revoked.signing_key_id,
         revoked.revoked_by_signing_key_id,
@@ -387,7 +386,7 @@ pub async fn verify(
     match event.kind.as_str() {
         "identity.created" => {
             let origin = origin.ok_or_else(|| reject("no origin to verify identity.created"))?;
-            verify_created(event, origin).map(Verified::Creation)
+            verify_created(event, &origin.network_id).map(Verified::Creation)
         }
         "identity.signing_key_added" => verify_key_added(tx, event, origin, local_network)
             .await
@@ -410,7 +409,7 @@ pub async fn verify(
 
 #[cfg(test)]
 mod tests {
-    use avalon_protocol::identity_id::{TestIdentity, TEST_NETWORK_ID, TEST_SHARD_ID};
+    use avalon_protocol::identity_id::{TestIdentity, TEST_NETWORK_ID};
     use time::OffsetDateTime;
 
     use super::*;
@@ -429,27 +428,21 @@ mod tests {
         }
     }
 
-    fn origin() -> EventOrigin {
-        EventOrigin::mirrored(TEST_NETWORK_ID, TEST_SHARD_ID)
-    }
-
     #[test]
     fn a_correctly_signed_creation_verifies() {
         let who = TestIdentity::new();
         let event = created_event(&who, who.created_payload("Ada"));
-        let verified = verify_created(&event, &origin()).unwrap();
+        let verified = verify_created(&event, TEST_NETWORK_ID).unwrap();
         assert_eq!(verified.identity_id, who.id);
         assert_eq!(verified.display_name, "Ada");
     }
 
     #[test]
-    fn a_creation_signed_for_another_shard_or_network_is_refused() {
+    fn a_creation_signed_for_another_network_is_refused_but_any_shard_verifies() {
         let who = TestIdentity::new();
         let event = created_event(&who, who.created_payload("Ada"));
-        let other_shard = EventOrigin::mirrored(TEST_NETWORK_ID, "game:slug/1");
-        let other_network = EventOrigin::mirrored("another-network", TEST_SHARD_ID);
-        assert!(verify_created(&event, &other_shard).is_err());
-        assert!(verify_created(&event, &other_network).is_err());
+        assert!(verify_created(&event, "another-network").is_err());
+        assert!(verify_created(&event, TEST_NETWORK_ID).is_ok());
     }
 
     #[test]
@@ -459,15 +452,15 @@ mod tests {
         // Right id and key, signature by another key.
         let mut forged = who.created_payload("Ada");
         forged.signature = attacker.created_payload("Ada").signature;
-        assert!(verify_created(&created_event(&who, forged), &origin()).is_err());
+        assert!(verify_created(&created_event(&who, forged), TEST_NETWORK_ID).is_err());
         // The attacker's own key under the victim's id.
         let mut swapped = attacker.created_payload("Ada");
         swapped.identity_id = who.id;
-        assert!(verify_created(&created_event(&who, swapped), &origin()).is_err());
+        assert!(verify_created(&created_event(&who, swapped), TEST_NETWORK_ID).is_err());
         // A name altered after signing.
         let mut renamed = who.created_payload("Ada");
         renamed.display_name = "Mallory".to_string();
-        assert!(verify_created(&created_event(&who, renamed), &origin()).is_err());
+        assert!(verify_created(&created_event(&who, renamed), TEST_NETWORK_ID).is_err());
     }
 
     #[test]
@@ -479,7 +472,6 @@ mod tests {
         let ticket = Uuid::new_v4();
         let bytes = identity_created_signing_bytes(
             TEST_NETWORK_ID,
-            TEST_SHARD_ID,
             ticket,
             &victim.id,
             &attacker.public_key(),
@@ -489,7 +481,7 @@ mod tests {
         payload.ticket_id = ticket;
         payload.public_key = BASE64.encode(attacker.public_key());
         payload.signature = BASE64.encode(attacker.signing_key.sign(&bytes).to_bytes());
-        let err = verify_created(&created_event(&victim, payload), &origin()).unwrap_err();
+        let err = verify_created(&created_event(&victim, payload), TEST_NETWORK_ID).unwrap_err();
         assert!(err.to_string().contains("not derived"), "{err}");
     }
 
@@ -499,7 +491,7 @@ mod tests {
         let victim = TestIdentity::new();
         let mut event = created_event(&who, who.created_payload("Ada"));
         event.issuer = GlobalId::new("identity", &victim.id.to_string(), "self", "created");
-        assert!(verify_created(&event, &origin()).is_err());
+        assert!(verify_created(&event, TEST_NETWORK_ID).is_err());
     }
 
     #[test]

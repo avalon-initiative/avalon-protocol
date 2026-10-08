@@ -1131,7 +1131,6 @@ fn identity_created_signing_matches_shared_vectors() {
         assert!(id.matches_key(pk.as_bytes()));
         identity_created_signing_bytes(
             input["networkId"].as_str().unwrap(),
-            input["shardId"].as_str().unwrap(),
             parse_uuid(input, "ticketId"),
             &id,
             pk.as_bytes(),
@@ -1146,6 +1145,7 @@ fn device_grant_approval_matches_shared_vectors() {
     assert_identity_signing_vectors("device-grant-approval.json", |_, input| {
         let requested = verifying_key_from_hex(input["requestedPublicKeyHex"].as_str().unwrap());
         device_grant_approval_signing_bytes(
+            input["networkId"].as_str().unwrap(),
             parse_uuid(input, "grantId"),
             &identity_id_of(input, "identityId"),
             parse_uuid(input, "approverSigningKeyId"),
@@ -1161,6 +1161,7 @@ fn signing_key_revoked_matches_shared_vectors() {
     use avalon_protocol::identity_id::signing_key_revoked_signing_bytes;
     assert_identity_signing_vectors("signing-key-revoked.json", |_, input| {
         signing_key_revoked_signing_bytes(
+            input["networkId"].as_str().unwrap(),
             &identity_id_of(input, "identityId"),
             parse_uuid(input, "signingKeyId"),
             parse_uuid(input, "revokedBySigningKeyId"),

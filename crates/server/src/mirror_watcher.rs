@@ -4415,7 +4415,7 @@ mod tests {
     }
 
     fn created_payload(who: &TestIdentity, network_id: &str, name: &str) -> serde_json::Value {
-        let payload = who.created_payload_for(network_id, "core", Uuid::new_v4(), name);
+        let payload = who.created_payload_for(network_id, Uuid::new_v4(), name);
         serde_json::to_value(payload).unwrap()
     }
 
@@ -4703,6 +4703,7 @@ mod tests {
         let b64k = |k: [u8; 32]| b64(&k);
         let grant_id = Uuid::new_v4();
         let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+            &network_id,
             grant_id,
             &who.id,
             approver,
@@ -4820,6 +4821,7 @@ mod tests {
         let grant_for = |seq: i64, device: &TestIdentity, key_id: Uuid, prev: Option<[u8; 32]>| {
             let chain_seq = seq as u64 - 2;
             let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+                &network_id,
                 key_id,
                 &who.id,
                 inception,
@@ -4847,6 +4849,7 @@ mod tests {
         };
         let stolen_grant = grant_for(3, &stolen, stolen_key, None);
         let revoke_bytes = avalon_protocol::identity_id::signing_key_revoked_signing_bytes(
+            &network_id,
             &who.id,
             stolen_key,
             second_key,
@@ -4976,7 +4979,6 @@ mod tests {
             Some(
                 serde_json::to_value(who.created_payload_for(
                     &network_id,
-                    "game:slug/1",
                     Uuid::new_v4(),
                     "ordered-user",
                 ))
@@ -5108,6 +5110,7 @@ mod tests {
         let device = TestIdentity::new();
         let (approver, grant_id) = (Uuid::new_v4(), Uuid::new_v4());
         let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+            network_id,
             grant_id,
             &who.id,
             approver,
@@ -5384,6 +5387,7 @@ mod tests {
         let (inception, device_key) = (Uuid::new_v4(), Uuid::new_v4());
         let device = TestIdentity::new();
         let bytes = avalon_protocol::identity_id::device_grant_approval_signing_bytes(
+            &network_id,
             device_key,
             &who.id,
             inception,

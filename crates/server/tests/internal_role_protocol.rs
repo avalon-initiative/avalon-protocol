@@ -158,7 +158,6 @@ fn identity_created_event(who: &TestIdentity, display_name: &str) -> ProtocolEve
         subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
         payload: serde_json::to_value(who.created_payload_for(
             &network_id(),
-            "core",
             Uuid::new_v4(),
             display_name,
         ))

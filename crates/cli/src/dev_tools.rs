@@ -205,9 +205,6 @@ pub(crate) async fn create_identity() {
         start["network_id"]
             .as_str()
             .expect("register/start response missing network_id"),
-        start["shard_id"]
-            .as_str()
-            .expect("register/start response missing shard_id"),
         ticket_id.parse().expect("ticket id is a UUID"),
         &identity_id,
         &public_key,

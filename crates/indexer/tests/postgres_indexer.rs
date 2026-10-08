@@ -10,6 +10,7 @@ use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
 use avalon_protocol::identity_id::{
     device_grant_approval_signing_bytes, signing_key_revoked_signing_bytes, TestIdentity,
+    TEST_NETWORK_ID,
 };
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
@@ -26,7 +27,7 @@ async fn test_pool() -> PgPool {
 }
 
 fn indexer(pool: &PgPool) -> PostgresIndexer {
-    PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core")
+    PostgresIndexer::new(pool.clone()).with_local_origin(TEST_NETWORK_ID, "core")
 }
 
 fn global(who: &TestIdentity, verb: &str) -> GlobalId {
@@ -93,6 +94,7 @@ fn grant_event(
     let grant_id = key_id;
     let (seq, prev) = next_position(after);
     let bytes = device_grant_approval_signing_bytes(
+        TEST_NETWORK_ID,
         grant_id,
         &who.id,
         approver_key_id,
@@ -128,8 +130,14 @@ fn revoke_event(
 ) -> ProtocolEvent {
     use ed25519_dalek::Signer as _;
     let (seq, prev) = next_position(after);
-    let bytes =
-        signing_key_revoked_signing_bytes(&who.id, key_id, signer_key_id, seq, prev.as_ref());
+    let bytes = signing_key_revoked_signing_bytes(
+        TEST_NETWORK_ID,
+        &who.id,
+        key_id,
+        signer_key_id,
+        seq,
+        prev.as_ref(),
+    );
     let event = key_event(
         who,
         "identity.signing_key_revoked",

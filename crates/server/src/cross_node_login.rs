@@ -636,14 +636,13 @@ async fn resolve_signing_key_cross_shard(
 /// — cross-shard `display_name` uniqueness isn't and can't be enforced
 /// globally by a single node's unique index).
 /// The display name and inception key of the first valid v2 `identity.created` entry for
-/// `identity_id` fetched from `shard_id` on `network_id`: id derived from an acceptable key,
+/// `identity_id` fetched on `network_id`: id derived from an acceptable key,
 /// permitted display name, and the inception key's strict self-signature over the bytes bound to
-/// this network and shard.
+/// this network.
 fn valid_creation(
     created: &[crate::cross_shard_fetch::VerifiedEntry],
     identity_id: IdentityId,
     network_id: &str,
-    shard_id: &str,
 ) -> Option<(String, [u8; 32])> {
     created.iter().find_map(|entry| {
         let payload: avalon_protocol::event_payloads::IdentityCreatedPayload =
@@ -662,7 +661,6 @@ fn valid_creation(
         let signature = <[u8; 64]>::try_from(BASE64.decode(&payload.signature).ok()?).ok()?;
         let bytes = avalon_protocol::identity_id::identity_created_signing_bytes(
             network_id,
-            shard_id,
             payload.ticket_id,
             &identity_id,
             &key,
@@ -703,12 +701,9 @@ async fn provision_local_identity_stub(state: &AppState, identity_id: IdentityId
         else {
             continue;
         };
-        let Some((display_name, inception_key)) = valid_creation(
-            &created,
-            identity_id,
-            state.chain.network_id(),
-            IDENTITY_SIGNING_KEY_SHARD_ID,
-        ) else {
+        let Some((display_name, inception_key)) =
+            valid_creation(&created, identity_id, state.chain.network_id())
+        else {
             continue;
         };
         let display_name = display_name.as_str();
@@ -1050,33 +1045,31 @@ mod tests {
     }
 
     const NET: &str = "avalon-test-network";
-    const SHARD: &str = "core";
 
     #[test]
     fn a_remote_creation_is_accepted_only_when_valid() {
         let who = avalon_protocol::identity_id::TestIdentity::new();
         let other = avalon_protocol::identity_id::TestIdentity::new();
-        let ok = valid_creation(&[entry(&who, "Nova", 2)], who.id, NET, SHARD).unwrap();
+        let ok = valid_creation(&[entry(&who, "Nova", 2)], who.id, NET).unwrap();
         assert_eq!(ok.0, "Nova");
         assert_eq!(ok.1, who.public_key());
-        assert!(valid_creation(&[entry(&who, "Nova", 1)], who.id, NET, SHARD).is_none());
-        assert!(valid_creation(&[entry(&who, "Nova", 2)], other.id, NET, SHARD).is_none());
+        assert!(valid_creation(&[entry(&who, "Nova", 1)], who.id, NET).is_none());
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], other.id, NET).is_none());
         for bad in [
             other.id.to_string().to_uppercase(),
             "a\u{202E}b".to_string(),
             "n".repeat(500),
         ] {
             assert!(
-                valid_creation(&[entry(&who, &bad, 2)], who.id, NET, SHARD).is_none(),
+                valid_creation(&[entry(&who, &bad, 2)], who.id, NET).is_none(),
                 "{bad:?}"
             );
         }
-        // Signed for another shard or network, or with a tampered signature.
-        assert!(valid_creation(&[entry(&who, "Nova", 2)], who.id, NET, "game:x/1").is_none());
-        assert!(valid_creation(&[entry(&who, "Nova", 2)], who.id, "other-net", SHARD).is_none());
+        // Signed for another network, or with a tampered signature.
+        assert!(valid_creation(&[entry(&who, "Nova", 2)], who.id, "other-net").is_none());
         let mut tampered = entry(&who, "Nova", 2);
         tampered.payload["display_name"] = serde_json::json!("Mallory");
-        assert!(valid_creation(&[tampered], who.id, NET, SHARD).is_none());
+        assert!(valid_creation(&[tampered], who.id, NET).is_none());
     }
 
     #[test]
@@ -1086,7 +1079,7 @@ mod tests {
         // Key swapped for another identity's: the id no longer derives from it.
         let mut swapped = entry(&who, "Nova", 2);
         swapped.payload["public_key"] = serde_json::json!(BASE64.encode(other.public_key()));
-        assert!(valid_creation(&[swapped], who.id, NET, SHARD).is_none());
+        assert!(valid_creation(&[swapped], who.id, NET).is_none());
         // The identity point is small order: an id can be derived from it, but the key is refused.
         let mut weak_key = [0u8; 32];
         weak_key[0] = 1;
@@ -1094,6 +1087,6 @@ mod tests {
         let mut weak = entry(&who, "Nova", 2);
         weak.payload["identity_id"] = serde_json::json!(weak_id.to_string());
         weak.payload["public_key"] = serde_json::json!(BASE64.encode(weak_key));
-        assert!(valid_creation(&[weak], weak_id, NET, SHARD).is_none());
+        assert!(valid_creation(&[weak], weak_id, NET).is_none());
     }
 }

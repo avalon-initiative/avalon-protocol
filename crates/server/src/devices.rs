@@ -361,6 +361,7 @@ pub async fn approve_device_grant(
         .try_into()
         .map_err(|_| AppError::InvalidGrantSignature)?;
     let signing_bytes = device_grant_approval_signing_bytes(
+        state.chain.network_id(),
         grant_id,
         &identity_id,
         body.approver_signing_key_id,
@@ -607,6 +608,7 @@ pub async fn revoke_device(
         .map_err(|_| AppError::InvalidEventSignature)?;
     let prev_hash = crate::identity_chain::parse_prev_hash(body.prev_hash.as_deref())?;
     let signing_bytes = signing_key_revoked_signing_bytes(
+        state.chain.network_id(),
         &identity_id,
         signing_key_id,
         body.revoked_by_signing_key_id,

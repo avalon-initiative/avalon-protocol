@@ -19,7 +19,7 @@
 //! `avalon-docs/architecture/disaster-recovery.md`.
 
 use avalon_chain::PostgresSettlementProvider;
-use avalon_indexer::identity_proof::{verify_created, EventOrigin};
+use avalon_indexer::identity_proof::verify_created;
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::PgPool;
@@ -39,18 +39,12 @@ pub struct RebuildReport {
     pub entries_skipped_undecodable: usize,
 }
 
-/// How many `identity.created` events in `events` do not verify as created on
-/// (`network_id`, `own_shard_id`). A rebuild that assumes the wrong own shard would refuse them.
-pub fn unverifiable_creations(
-    events: &[ProtocolEvent],
-    network_id: &str,
-    own_shard_id: &str,
-) -> usize {
-    let origin = EventOrigin::local(network_id, own_shard_id);
+/// How many `identity.created` events in `events` do not verify as created on `network_id`.
+pub fn unverifiable_creations(events: &[ProtocolEvent], network_id: &str) -> usize {
     events
         .iter()
         .filter(|e| e.kind == "identity.created")
-        .filter(|e| verify_created(e, &origin).is_err())
+        .filter(|e| verify_created(e, network_id).is_err())
         .count()
 }
 
@@ -124,20 +118,15 @@ mod tests {
     use time::OffsetDateTime;
     use uuid::Uuid;
 
-    fn created_on(who: &TestIdentity, network: &str, shard: &str) -> ProtocolEvent {
+    fn created_on(who: &TestIdentity, network: &str) -> ProtocolEvent {
         let gid = GlobalId::new("identity", &who.id.to_string(), "self", "created");
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "identity.created".to_string(),
             issuer: gid.clone(),
             subject: gid,
-            payload: serde_json::to_value(who.created_payload_for(
-                network,
-                shard,
-                Uuid::new_v4(),
-                "Ada",
-            ))
-            .unwrap(),
+            payload: serde_json::to_value(who.created_payload_for(network, Uuid::new_v4(), "Ada"))
+                .unwrap(),
             timestamp: OffsetDateTime::now_utc(),
             version: 2,
             identity_chain: None,
@@ -145,14 +134,11 @@ mod tests {
     }
 
     #[test]
-    fn creations_for_another_shard_are_counted_before_a_rebuild() {
+    fn creations_for_another_network_are_counted_before_a_rebuild() {
         let (a, b) = (TestIdentity::new(), TestIdentity::new());
-        let events = vec![
-            created_on(&a, "net", "core"),
-            created_on(&b, "net", "game:slug/1"),
-        ];
-        assert_eq!(unverifiable_creations(&events, "net", "core"), 1);
-        assert_eq!(unverifiable_creations(&events, "net", "game:slug/1"), 1);
-        assert_eq!(unverifiable_creations(&events, "other", "core"), 2);
+        let events = vec![created_on(&a, "net"), created_on(&b, "other")];
+        assert_eq!(unverifiable_creations(&events, "net"), 1);
+        assert_eq!(unverifiable_creations(&events, "other"), 1);
+        assert_eq!(unverifiable_creations(&events, "third"), 2);
     }
 }

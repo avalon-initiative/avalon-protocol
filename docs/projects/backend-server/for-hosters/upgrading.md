@@ -310,6 +310,7 @@ silently.
   versions and signing bytes change in the same release; a node on the old version cannot register
   or verify identities from a new one.
 - **Clients:** `POST /identities/register/start` now takes the inception public key and returns a
-  `network_id`; the `identity.created` signature covers that network id and the ticket id; device
-  revocation requires a signature. SDKs and the Hub must be updated before they can register
+  `network_id`; the `identity.created` signature covers that network id and the ticket id (not the
+  shard); device grant approval and signing-key revocation signatures cover the network id too;
+  device revocation requires a signature. SDKs and the Hub must be updated before they can register
   identities against a migrated node.

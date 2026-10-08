@@ -8,7 +8,9 @@ use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::{IdentityChainPosition, ProtocolEvent};
 use avalon_protocol::identity_chain_wire::event_hash;
-use avalon_protocol::identity_id::{device_grant_approval_signing_bytes, TestIdentity};
+use avalon_protocol::identity_id::{
+    device_grant_approval_signing_bytes, TestIdentity, TEST_NETWORK_ID,
+};
 use avalon_protocol::ids::{GlobalId, IdentityId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -54,7 +56,7 @@ fn chained(
 }
 
 fn indexer(pool: &PgPool) -> PostgresIndexer {
-    PostgresIndexer::new(pool.clone()).with_local_origin("avalon-test-network", "core")
+    PostgresIndexer::new(pool.clone()).with_local_origin(TEST_NETWORK_ID, "core")
 }
 
 /// A signed `identity.signing_key_added` payload for a fresh device key, approved by `approver`
@@ -65,6 +67,7 @@ fn device_grant_payload(who: &TestIdentity, approver_key_id: Uuid, seed: u8) -> 
     let device = TestIdentity::from_seed([seed; 32]);
     let grant_id = Uuid::new_v4();
     let bytes = device_grant_approval_signing_bytes(
+        TEST_NETWORK_ID,
         grant_id,
         &who.id,
         approver_key_id,

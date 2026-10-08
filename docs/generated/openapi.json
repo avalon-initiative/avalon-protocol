@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.13.1"
+    "version": "0.13.2"
   },
   "paths": {
     "/attestations/{id}": {
@@ -9929,11 +9929,11 @@
           },
           "network_id": {
             "type": "string",
-            "description": "The ledger network id; the client signs it, with the shard id and ticket, into `identity.created`."
+            "description": "The ledger network id; the client signs it, with the ticket, into `identity.created`."
           },
           "shard_id": {
             "type": "string",
-            "description": "The shard this node authors; part of the signed bytes."
+            "description": "The shard this node authors; informational, not part of the signed bytes."
           },
           "ticket_id": {
             "type": "string",
