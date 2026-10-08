@@ -8,6 +8,8 @@
 //! that it's a valid bearer token, so seeding `identities`/`sessions` rows
 //! directly keeps this test focused on what it's actually verifying.
 
+mod chain_sign;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -36,6 +38,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .execute(pool)
         .await
         .expect("failed to seed identity");
+    chain_sign::register(pool, &who).await;
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
         .bind(format!("friends-test-{identity_id}"))
@@ -70,7 +73,7 @@ async fn request_then_accept_creates_exactly_one_friendship() {
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
     let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": bob_id }))
+        .json(&serde_json::json!({ "to": bob_id, "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
         .send()
         .await
         .expect("create friend request failed — is `make start` running?");
@@ -82,6 +85,7 @@ async fn request_then_accept_creates_exactly_one_friendship() {
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::friend_accepted(bob_id, alice_id, bob_id).await }))
     .send()
     .await
     .expect("accept friend request failed");
@@ -113,10 +117,10 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (bob_id, alice_token) = {
-        let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_id, bob_id, alice_token) = {
+        let (alice_id, alice_token) = seed_identity_session(&pool).await;
         let (bob_id, _bob_token) = seed_identity_session(&pool).await;
-        (bob_id, alice_token)
+        (alice_id, bob_id, alice_token)
     };
 
     use sqlx::Row;
@@ -146,7 +150,7 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
     );
 
     let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": resolved_body["identity_id"] }))
+        .json(&serde_json::json!({ "to": resolved_body["identity_id"], "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
         .send()
         .await
         .unwrap();
@@ -177,11 +181,11 @@ async fn declining_a_request_leaves_no_friendship() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
     let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": bob_id }))
+        .json(&serde_json::json!({ "to": bob_id, "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
         .send()
         .await
         .unwrap();
@@ -217,7 +221,7 @@ async fn removing_a_friendship_is_visible_to_both_parties() {
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
     let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
-        .json(&serde_json::json!({ "to": bob_id }))
+        .json(&serde_json::json!({ "to": bob_id, "chain_event": chain_sign::friend_requested(alice_id, bob_id).await }))
         .send()
         .await
         .unwrap();
@@ -227,6 +231,7 @@ async fn removing_a_friendship_is_visible_to_both_parties() {
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::friend_accepted(bob_id, alice_id, bob_id).await }))
     .send()
     .await
     .unwrap();
@@ -235,6 +240,7 @@ async fn removing_a_friendship_is_visible_to_both_parties() {
         http.delete(format!("{base}/friends/{alice_id}")),
         &bob_token,
     )
+    .json(&serde_json::json!({ "chain_event": chain_sign::friend_removed(bob_id, alice_id).await }))
     .send()
     .await
     .unwrap();
