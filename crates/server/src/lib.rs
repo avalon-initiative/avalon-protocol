@@ -58,6 +58,7 @@ pub mod integrators;
 pub mod interest;
 pub mod internal_role;
 pub mod issuer_registration;
+pub(crate) mod json_nul;
 pub mod known_list;
 pub(crate) mod log_throttle;
 pub mod migrate;
@@ -328,6 +329,7 @@ fn apply_common_layers(
     // in place of axum's implicit 2 MiB — routes that need a smaller ceiling
     // (`crate::node_coordination_max_body_bytes_from_env`) override it with
     // their own `DefaultBodyLimit::max(...)` layer at the route level.
+    let router = router.layer(axum::middleware::from_fn(json_nul::reject_nul));
     let router = router.layer(DefaultBodyLimit::max(max_body_bytes_from_env()));
 
     // Bounds request-body read plus handler processing; a WebSocket upgrade
