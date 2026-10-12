@@ -373,7 +373,7 @@ impl Envelope {
 }
 
 /// An [`Envelope`] as it travels in JSON and sits in stored rows: plain integers and hex.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct EnvelopeWire {
     pub layout_version: u16,
     pub rules_version: u32,

@@ -1,22 +1,21 @@
 //! The generated OpenAPI schema for
 //! `server`'s SDK-facing API surface (identity/auth, profile/presence,
 //! social graph, chat, devices/passkeys/recovery, guilds, integrator/
-//! achievements/registry) — deliberately excludes `/ledger/*`, `/mirror/*`,
-//! `/internal/*` and the node-infra `/nodes/*` routes, except the public
-//! topology endpoints a client app calls (`/nodes/topology`, `/nodes/probe`,
-//! `/nodes/trace`). The SDKs do call some excluded routes (STH and tree-head
-//! reads, `/nodes/discover`, `/nodes/status`, batch prepare/finalize); those
-//! calls are hand-written and pinned by conformance vectors, not generated.
+//! achievements/registry) plus `GET /ledger/entries` — deliberately excludes the other
+//! `/ledger/*`, `/mirror/*`, `/internal/*` and node-infra `/nodes/*` routes, except the
+//! public topology endpoints a client app calls (`/nodes/topology`,
+//! `/nodes/probe`, `/nodes/trace`). The SDKs do call some excluded routes (STH
+//! and tree-head reads, `/nodes/discover`, `/nodes/status`, batch
+//! prepare/finalize); those calls are hand-written and pinned by conformance
+//! vectors, not generated.
 //!
 //! Generated from the real handler signatures/types via
 //! `#[utoipa::path]`/`#[derive(ToSchema)]` on each in-scope handler, not
 //! hand-written — the whole point. `make openapi`
 //! regenerates `docs/generated/openapi.json`; `make openapi-check` (part
 //! of `make check`) fails CI if that file is stale relative to this
-//! module's annotations. This module's own `paths(...)` list staying in
-//! sync with `full_routes()`'s real route table over time is #728's job
-//! (an automated route-table-vs-schema coverage check), not duplicated
-//! here.
+//! module's annotations. `tests/openapi_route_coverage.rs` keeps `paths(...)` in
+//! sync with the mounted route table, with a reviewed list of routes left out.
 
 use utoipa::OpenApi;
 
@@ -32,7 +31,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node-to-node, ledger, mirror and internal routes are not described here. The SDKs call a few of them (tree heads, network verification, node discovery) with hand-written code pinned by conformance vectors, not generated from this schema.",
-        version = "0.13.3"
+        version = "0.14.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -193,6 +192,7 @@ use utoipa::OpenApi;
         crate::rollback::list_rollback_candidates,
         crate::rollback::reverse_event,
         crate::registry::get_integrator_registry,
+        crate::settlement::list_entries,
         crate::name_claims::list_names_for_shard,
         crate::name_claims::resolve_name,
         crate::name_claims::submit_name_claim,
@@ -202,6 +202,8 @@ use utoipa::OpenApi;
     ),
     components(schemas(
         crate::error::ChainPositionStaleBody,
+        crate::settlement::LedgerEntryResponse,
+        avalon_protocol::signing_bytes::EnvelopeWire,
         crate::topology::TopologyResponse,
         crate::topology::SelfView,
         crate::topology::ShardHead,
