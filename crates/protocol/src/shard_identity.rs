@@ -28,7 +28,7 @@
 //! certifies — still no database, no network call beyond whatever already
 //! delivered the key and the head being verified.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -188,7 +188,7 @@ pub fn verify_name_binding_claim(claim: &NameBindingClaim) -> bool {
         return false;
     };
     let signature = Signature::from_bytes(&signature_array);
-    verifying_key.verify(&message, &signature).is_ok()
+    verifying_key.verify_strict(&message, &signature).is_ok()
 }
 
 #[cfg(test)]

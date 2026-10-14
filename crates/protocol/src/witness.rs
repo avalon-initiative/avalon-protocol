@@ -15,7 +15,7 @@
 //! Both signed messages use the structured layout in [`crate::signing_bytes`]
 //! (tags `avalon.witness.cosign` and `avalon.witness.announce`, layout version 1).
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use time::OffsetDateTime;
 
 use crate::ledger_entry::parse_hash;
@@ -174,7 +174,9 @@ pub fn verify_witness_cosignature(
         return false;
     };
     let signature = Signature::from_bytes(&signature_array);
-    witness_verifying_key.verify(&message, &signature).is_ok()
+    witness_verifying_key
+        .verify_strict(&message, &signature)
+        .is_ok()
 }
 
 /// How far `announced_at` may differ from the verifier's clock for a witness
@@ -244,7 +246,7 @@ pub fn verify_witness_announce(
         return false;
     };
     verifying_key
-        .verify(&message, &Signature::from_bytes(&sig_array))
+        .verify_strict(&message, &Signature::from_bytes(&sig_array))
         .is_ok()
 }
 
@@ -431,6 +433,29 @@ mod tests {
                 .unwrap_err(),
             WitnessSigningError::InvalidAuthorSignature
         );
+    }
+
+    #[test]
+    fn small_order_witness_key_with_a_trivial_signature_is_rejected() {
+        let mut weak_bytes = [0u8; 32];
+        weak_bytes[0] = 1;
+        let weak = VerifyingKey::from_bytes(&weak_bytes).unwrap();
+        let mut trivial = [0u8; 64];
+        trivial[0] = 1;
+        let mut cosig = cosign(
+            &SigningKey::generate(&mut rand::rng()),
+            &author_head(&SigningKey::generate(&mut rand::rng())),
+        );
+        cosig.signature = hex::encode(trivial);
+        assert!(!verify_witness_cosignature(&weak, &cosig));
+        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(100);
+        assert!(!verify_witness_announce(
+            "http://a.example",
+            &hex::encode(weak_bytes),
+            now,
+            &hex::encode(trivial),
+            now
+        ));
     }
 
     #[test]

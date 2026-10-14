@@ -829,6 +829,44 @@ fn witness_announce_matches_shared_vectors() {
 }
 
 #[test]
+fn name_binding_matches_shared_vectors() {
+    use avalon_protocol::shard_identity::{verify_name_binding_claim, NameBindingClaim};
+    use time::format_description::well_known::Rfc3339;
+
+    let doc = load("name-binding.json");
+    let key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(key.verifying_key().to_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap()
+    );
+    let vectors = doc["vectors"].as_array().expect("vectors array");
+    assert!(vectors.len() >= 5);
+    for v in vectors {
+        let name = v["name"].as_str().unwrap();
+        let input = &v["input"];
+        let created_at =
+            OffsetDateTime::parse(input["createdAtRfc3339"].as_str().unwrap(), &Rfc3339).unwrap();
+        assert_eq!(
+            created_at.unix_timestamp(),
+            input["createdAtUnixSeconds"].as_i64().unwrap(),
+            "{name}"
+        );
+        let claim = NameBindingClaim {
+            self_certifying_id: input["selfCertifyingId"].as_str().unwrap().to_string(),
+            public_key: input["publicKeyHex"].as_str().unwrap().to_string(),
+            name: input["name"].as_str().unwrap().to_string(),
+            created_at,
+            signature: input["signatureHex"].as_str().unwrap().to_string(),
+        };
+        assert_eq!(
+            verify_name_binding_claim(&claim),
+            v["expected"]["valid"].as_bool().unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn node_request_matches_shared_vectors() {
     use avalon_protocol::node_request::{
         encode_node_request_header, node_request_signing_message, parse_node_request_header,

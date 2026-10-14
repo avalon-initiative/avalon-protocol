@@ -27,7 +27,7 @@
 //! not a foreign key into anything; nothing here enforces its shape beyond
 //! "non-empty text."
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use time::OffsetDateTime;
 
 use crate::ledger_entry::parse_hash;
@@ -186,7 +186,7 @@ pub fn verify_tree_head(verifying_key: &VerifyingKey, sth: &SignedTreeHead) -> b
         return false;
     };
     let signature = Signature::from_bytes(&signature_array);
-    verifying_key.verify(&message, &signature).is_ok()
+    verifying_key.verify_strict(&message, &signature).is_ok()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -423,6 +423,39 @@ mod tests {
         assert!(!verify_tree_head(&signing_key.verifying_key(), &sth));
     }
 
+    #[test]
+    fn verify_rejects_a_small_order_key_that_non_strict_verification_accepts() {
+        use ed25519_dalek::Verifier;
+        let mut weak_key = [0u8; 32];
+        weak_key[0] = 1;
+        let weak = VerifyingKey::from_bytes(&weak_key).unwrap();
+        let mut sth = sign_tree_head(
+            &SigningKey::generate(&mut rand::rng()),
+            "test-key",
+            1,
+            &root_hash_fixture(),
+            "avalon-test",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        let mut trivial = [0u8; 64];
+        trivial[0] = 1;
+        sth.signature = hex::encode(trivial);
+        let message = signing_message(
+            sth.tree_size,
+            &sth.root_hash,
+            &sth.network_id,
+            &sth.signing_key_id,
+            sth.created_at,
+            &sth.envelope,
+        )
+        .unwrap();
+        assert!(weak
+            .verify(&message, &Signature::from_bytes(&trivial))
+            .is_ok());
+        assert!(!verify_tree_head(&weak, &sth));
+    }
+
     /// Independent cross-implementation reference vector for issue #234
     /// (the `ed25519-dalek` 2.x -> 3.0.0 / `rand` 0.8 -> 0.10 bump) — the
     /// same rigor #210/#211 applied to the Merkle side
@@ -480,7 +513,7 @@ mod tests {
         assert!(
             signing_key
                 .verifying_key()
-                .verify(message, &externally_produced_signature)
+                .verify_strict(message, &externally_produced_signature)
                 .is_ok(),
             "failed to verify a signature produced by an independent Ed25519 implementation"
         );
