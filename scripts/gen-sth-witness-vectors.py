@@ -803,7 +803,7 @@ def gen_name_binding():
     add("non-canonical S (S + L)", False, sig=s_plus_l(honest))
     add("small-order R (the identity) with s = k*a", False, sig=identity_r_forgery(seed, honest_msg))
     small = bytes.fromhex("01" + "00" * 31)
-    add("small-order key with the trivial signature", False, key_bytes=small, sig=small + bytes(32))
+    add("small-order key with the trivial signature (rejected by key policy before signature verification)", False, key_bytes=small, sig=small + bytes(32))
     doc = {
         "$schema": "./SCHEMA.md#name-binding",
         "description": (

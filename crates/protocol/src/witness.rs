@@ -447,6 +447,11 @@ mod tests {
             &author_head(&SigningKey::generate(&mut rand::rng())),
         );
         cosig.signature = hex::encode(trivial);
+        use ed25519_dalek::Verifier;
+        let message = [0u8; 8];
+        assert!(weak
+            .verify(&message, &Signature::from_bytes(&trivial))
+            .is_ok());
         assert!(!verify_witness_cosignature(&weak, &cosig));
         let now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(100);
         assert!(!verify_witness_announce(

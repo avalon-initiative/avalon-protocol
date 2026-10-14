@@ -71,7 +71,7 @@
       }
     },
     {
-      "name": "small-order key with the trivial signature",
+      "name": "small-order key with the trivial signature (rejected by key policy before signature verification)",
       "input": {
         "selfCertifyingId": "node:01d0fabd251fcbbe2b93b4b927b26ad2a1a99077152e45ded1e678afa45dbec5",
         "publicKeyHex": "0100000000000000000000000000000000000000000000000000000000000000",
