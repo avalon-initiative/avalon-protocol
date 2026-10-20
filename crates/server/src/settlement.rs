@@ -71,6 +71,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -827,7 +828,8 @@ async fn mirror_inclusion_proof(
 const MAX_ENTRIES_LIMIT: i64 = 1000;
 const DEFAULT_ENTRIES_LIMIT: i64 = 500;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct EntriesQuery {
     #[serde(default)]
     pub since_seq: i64,
@@ -847,7 +849,7 @@ fn default_entries_limit() -> i64 {
     DEFAULT_ENTRIES_LIMIT
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct LedgerEntryResponse {
     pub seq: i64,
     pub event_id: Uuid,
@@ -942,6 +944,16 @@ impl From<mirror::MirroredEntry> for LedgerEntryResponse {
 /// Issue #520: falls back to this node's own `mirrored_entries` when it has
 /// no locally-authored entries — see [`latest_sth`]'s doc comment for the
 /// "never blended" rationale shared by every handler in this module.
+#[utoipa::path(
+    get,
+    path = "/ledger/entries",
+    tag = "ledger",
+    params(EntriesQuery),
+    responses(
+        (status = 200, description = "Entries with seq greater than since_seq, oldest first", body = Vec<LedgerEntryResponse>),
+        (status = 400, description = "INVALID_ENTRIES_QUERY: negative since_seq or non-positive limit"),
+    ),
+)]
 pub async fn list_entries(
     State(state): State<AppState>,
     Query(query): Query<EntriesQuery>,

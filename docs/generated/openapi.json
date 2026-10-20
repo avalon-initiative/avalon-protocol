@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.13.3"
+    "version": "0.14.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -4325,6 +4325,71 @@
         }
       }
     },
+    "/ledger/entries": {
+      "get": {
+        "tags": [
+          "ledger"
+        ],
+        "summary": "`GET /ledger/entries?since_seq={n}&limit={m}&subject={id}` — the\nbulk entries endpoint, the read path a mirror needs to hold real\nledger content rather than only verify STHs. Public, unauthenticated,\nsame rationale as every other endpoint in this module (see module\ndocs).",
+        "description": "Returns entries with `seq` strictly greater than `since_seq`, oldest\nfirst, capped at [`MAX_ENTRIES_LIMIT`] rows regardless of what `limit`\nasks for. When `subject` is given, pre-filters to that subject's own\nentries — same pagination/ordering semantics, just scoped, so an\nintegrator that only cares about one of its own users doesn't have to\nreplay the whole ledger to find their entries. A subject with no\nentries yet returns an empty list, not an error. **Not itself a\nverified read** — see\n[`avalon_chain::PostgresSettlementProvider::list_entries_since`]'s doc\ncomment: a caller that needs to trust this content (a mirror\nbackfilling) must independently verify each entry against a\nsignature-checked STH via `GET /ledger/proof/inclusion` before\naccepting it. Filtering by `subject` never changes an entry's\nhash-chain position — inclusion proofs for a filtered row still verify\nagainst the same global tree.\n\nIssue #520: falls back to this node's own `mirrored_entries` when it has\nno locally-authored entries — see [`latest_sth`]'s doc comment for the\n\"never blended\" rationale shared by every handler in this module.",
+        "operationId": "list_entries",
+        "parameters": [
+          {
+            "name": "since_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "description": "#364: pre-filter to one subject's own entries, e.g.\n`identity:<uuid>` — the exact same `subject` string\n`LedgerEntryResponse::subject` echoes back. `None` (the default)\nkeeps this endpoint's original unfiltered, mirror-facing behavior.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shard_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries with seq greater than since_seq, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerEntryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_ENTRIES_QUERY: negative since_seq or non-positive limit"
+          }
+        }
+      }
+    },
     "/me": {
       "get": {
         "tags": [
@@ -7438,6 +7503,37 @@
           }
         }
       },
+      "EnvelopeWire": {
+        "type": "object",
+        "description": "An [`Envelope`] as it travels in JSON and sits in stored rows: plain integers and hex.",
+        "required": [
+          "layout_version",
+          "rules_version",
+          "hash_algo",
+          "extensions"
+        ],
+        "properties": {
+          "extensions": {
+            "type": "string",
+            "description": "Hex of the extensions region; `0000` when there are none."
+          },
+          "hash_algo": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "layout_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "rules_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "EventResponse": {
         "type": "object",
         "required": [
@@ -8629,6 +8725,78 @@
             }
           }
         }
+      },
+      "LedgerEntryResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EnvelopeWire",
+            "description": "Layout version, rules version, hash algorithm and extensions the entry hash was made under."
+          },
+          {
+            "type": "object",
+            "required": [
+              "seq",
+              "event_id",
+              "kind",
+              "issuer",
+              "subject",
+              "payload_pruned",
+              "payload_hash",
+              "version",
+              "event_timestamp",
+              "prev_hash",
+              "entry_hash",
+              "batch_id"
+            ],
+            "properties": {
+              "batch_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "entry_hash": {
+                "type": "string"
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "event_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "description": "`None` if this row's payload has been pruned — same\nmeaning as `avalon_chain::LedgerEntryView::payload_pruned`."
+              },
+              "payload_hash": {
+                "type": "string",
+                "description": "Hex SHA-256 of the canonical payload; the entry hash commits to it, so a pruned row verifies."
+              },
+              "payload_pruned": {
+                "type": "boolean"
+              },
+              "prev_hash": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        ]
       },
       "ListIntegratorsResponse": {
         "type": "object",
