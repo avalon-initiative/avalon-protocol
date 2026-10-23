@@ -1409,6 +1409,113 @@ async fn finalize_revokes_old_credentials_without_per_passkey_events() {
     remove_head(&pool, added_head).await;
 }
 
+type MirroredPasskey = (Uuid, Vec<u8>, serde_json::Value, Option<String>);
+
+/// The identity's active passkeys as a mirror derives them: its emitted events replayed in
+/// order through the production projections into empty temp copies of the mirror tables.
+async fn replayed_active_passkeys(
+    pool: &PgPool,
+    owner: avalon_protocol::ids::IdentityId,
+) -> Vec<MirroredPasskey> {
+    let mut tx = pool.begin().await.unwrap();
+    for create in [
+        "CREATE TEMP TABLE indexer_identity_passkeys (LIKE indexer_identity_passkeys INCLUDING ALL) ON COMMIT DROP",
+        "CREATE TEMP TABLE indexer_identity_passkey_revocations (LIKE indexer_identity_passkey_revocations INCLUDING ALL) ON COMMIT DROP",
+        "CREATE TEMP TABLE indexer_identity_signing_keys (LIKE indexer_identity_signing_keys INCLUDING ALL) ON COMMIT DROP",
+    ] {
+        sqlx::query(create).execute(&mut *tx).await.unwrap();
+    }
+    let events: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event FROM protocol_outbox WHERE event->>'issuer' LIKE $1 ORDER BY seq",
+    )
+    .bind(format!("identity:{owner}:%"))
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    for raw in events {
+        let event: avalon_protocol::events::ProtocolEvent = serde_json::from_value(raw).unwrap();
+        match event.kind.as_str() {
+            "identity.recovered" => {
+                avalon_indexer::projections::identity_signing_keys::apply_recovered(
+                    &mut tx, &event, owner,
+                )
+                .await
+                .unwrap()
+            }
+            _ => {
+                if let Some(write) = avalon_indexer::projections::identity_passkeys::decode(&event)
+                {
+                    avalon_indexer::projections::identity_passkeys::apply(&mut tx, &write)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+    sqlx::query_as(
+        "SELECT passkey_id, credential_id, passkey_data, label FROM indexer_identity_passkeys \
+         WHERE identity_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(owner)
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn after_recovery_a_mirror_sees_exactly_the_announced_replacement_passkey() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (owner_id, _token, request_id, old_passkeys, new_key, added_head) =
+        recovery_ready_to_finalize(&pool, &http, &base).await;
+    http.post(format!("{base}/recovery/requests/{request_id}/finalize"))
+        .json(&finalize_body(&http, &base, owner_id, &request_id, &new_key).await)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    remove_head(&pool, added_head).await;
+
+    let (passkey_id, credential_id, passkey_data, label, announced_at): (
+        Uuid,
+        Vec<u8>,
+        serde_json::Value,
+        Option<String>,
+        Option<OffsetDateTime>,
+    ) = sqlx::query_as(
+        "SELECT id, credential_id, passkey_data, label, announced_at FROM identity_keys \
+         WHERE identity_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!old_passkeys.contains(&passkey_id));
+    assert!(announced_at.is_none());
+    assert!(replayed_active_passkeys(&pool, owner_id).await.is_empty());
+
+    // The owner holds a session from the replacement passkey and signs with the recovery key.
+    let token = format!("test-token-{}", Uuid::new_v4());
+    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, now() + interval '1 hour')")
+        .bind(&token)
+        .bind(owner_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    chain_sign::remember(owner_id, new_key, request_id.parse().unwrap());
+    let announced = chain_sign::announce_passkey(&http, &token, owner_id, passkey_id).await;
+    assert!(announced.status().is_success(), "{:?}", announced.status());
+
+    let active = replayed_active_passkeys(&pool, owner_id).await;
+    assert_eq!(
+        active,
+        vec![(passkey_id, credential_id, passkey_data, label)]
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn a_finalize_that_fails_after_the_passkey_delete_changes_nothing() {
