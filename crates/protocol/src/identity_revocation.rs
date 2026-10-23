@@ -63,11 +63,20 @@ fn prev_of(event: &ProtocolEvent) -> Option<EventHash> {
 /// event's own line (neither its ancestor nor its descendant): the revoker's own history and its
 /// descendants are judged by chain position alone.
 pub fn revocation_conflicts(events: &[(ProtocolEvent, EventHash)]) -> Vec<Conflict> {
+    let all: BTreeSet<EventHash> = events.iter().map(|(_, hash)| *hash).collect();
+    conflicts_among(events, &all)
+}
+
+/// [`revocation_conflicts`] between the events in `active`, with ancestry read from all of `events`.
+fn conflicts_among(
+    events: &[(ProtocolEvent, EventHash)],
+    active: &BTreeSet<EventHash>,
+) -> Vec<Conflict> {
     let parents: BTreeMap<EventHash, Option<EventHash>> = events
         .iter()
         .map(|(event, hash)| (*hash, prev_of(event)))
         .collect();
-    let ancestors = |start: &EventHash| -> BTreeSet<EventHash> {
+    let ancestors_of = |start: &EventHash| -> BTreeSet<EventHash> {
         let mut out = BTreeSet::new();
         let mut at = parents.get(start).copied().flatten();
         while let Some(hash) = at {
@@ -78,14 +87,17 @@ pub fn revocation_conflicts(events: &[(ProtocolEvent, EventHash)]) -> Vec<Confli
         }
         out
     };
+    let ancestors: BTreeMap<EventHash, BTreeSet<EventHash>> = events
+        .iter()
+        .map(|(_, hash)| (*hash, ancestors_of(hash)))
+        .collect();
     let mut out = Vec::new();
-    for (revoker, revoker_hash) in events {
+    for (revoker, revoker_hash) in events.iter().filter(|(_, h)| active.contains(h)) {
         let Some(revokes) = revokes(revoker) else {
             continue;
         };
-        let revoker_ancestors = ancestors(revoker_hash);
-        for (victim, victim_hash) in events {
-            if victim_hash == revoker_hash || revoker_ancestors.contains(victim_hash) {
+        for (victim, victim_hash) in events.iter().filter(|(_, h)| active.contains(h)) {
+            if victim_hash == revoker_hash || ancestors[revoker_hash].contains(victim_hash) {
                 continue;
             }
             let Some(key) = signing_key_of(victim) else {
@@ -95,7 +107,7 @@ pub fn revocation_conflicts(events: &[(ProtocolEvent, EventHash)]) -> Vec<Confli
                 Revokes::Key(revoked) => key == revoked,
                 Revokes::AllBut(spared) => key != spared,
             };
-            if hit && !ancestors(victim_hash).contains(revoker_hash) {
+            if hit && !ancestors[victim_hash].contains(revoker_hash) {
                 out.push((*revoker_hash, *victim_hash));
             }
         }
@@ -173,6 +185,69 @@ pub fn judge_conflicts(
         pending,
         awaiting_revocation,
     }
+}
+
+/// What keeps stored events out of the chain: recoveries the owner vetoed, and what the revocation rule
+/// supersedes or holds pending.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Settled {
+    pub vetoed: BTreeSet<EventHash>,
+    pub judged: Judged,
+}
+
+impl Settled {
+    /// Whether the chain keeps the event.
+    pub fn keeps(&self, hash: &EventHash) -> bool {
+        !self.vetoed.contains(hash) && !self.judged.is_excluded(hash)
+    }
+
+    /// Every event the chain leaves out.
+    pub fn excluded(&self) -> BTreeSet<EventHash> {
+        self.vetoed
+            .iter()
+            .chain(&self.judged.superseded)
+            .chain(&self.judged.pending)
+            .copied()
+            .collect()
+    }
+}
+
+/// Decides which of `events` stand, to a fixed point: a vetoed recovery revokes nothing, and a cancel
+/// that is superseded vetoes nothing. Each pass changes the vetoed set or ends, so `events.len() + 1`
+/// passes always settle; `settle_within` exposes the bound for tests.
+pub fn settle(
+    events: &[(ProtocolEvent, EventHash)],
+    anchors: &BTreeMap<EventHash, OffsetDateTime>,
+) -> Settled {
+    settle_within(events, anchors, events.len() + 1)
+}
+
+pub fn settle_within(
+    events: &[(ProtocolEvent, EventHash)],
+    anchors: &BTreeMap<EventHash, OffsetDateTime>,
+    rounds: usize,
+) -> Settled {
+    let mut vetoed = BTreeSet::new();
+    let mut judged = Judged::default();
+    for _ in 0..rounds {
+        let base: BTreeSet<EventHash> = events
+            .iter()
+            .map(|(_, hash)| *hash)
+            .filter(|hash| !vetoed.contains(hash))
+            .collect();
+        judged = judge_conflicts(&conflicts_among(events, &base), anchors);
+        let standing: Vec<(ProtocolEvent, EventHash)> = events
+            .iter()
+            .filter(|(_, hash)| !judged.is_excluded(hash))
+            .cloned()
+            .collect();
+        let next = crate::identity_chain_wire::vetoed_recoveries(&standing);
+        if next == vetoed {
+            break;
+        }
+        vetoed = next;
+    }
+    Settled { vetoed, judged }
 }
 
 #[cfg(test)]
@@ -358,5 +433,72 @@ mod tests {
             let judged = judge_conflicts(&revocation_conflicts(&order), &anchors);
             assert_eq!(judged, expected);
         }
+    }
+
+    #[test]
+    fn a_chain_of_six_interdependent_revocations_settles_by_time() {
+        let chain = Chain(IdentityId::random_for_tests());
+        let e1 = chain.profile(1, None, OWNER_KEY, 1);
+        let keys: Vec<Uuid> = (0..7).map(|i| Uuid::from_u128(0x100 + i)).collect();
+        // r_i is signed by key i and revokes key i + 1; each is dated one hour after the last.
+        let revocations: Vec<_> = (0..6)
+            .map(|i| chain.revocation(2, Some(&e1.1), keys[i + 1], keys[i]))
+            .collect();
+        let mut all = vec![e1];
+        all.extend(revocations.iter().cloned());
+        let anchors: BTreeMap<_, _> = revocations
+            .iter()
+            .enumerate()
+            .map(|(i, (_, hash))| (*hash, at(i as i64)))
+            .collect();
+        let settled = settle(&all, &anchors);
+        // Each is superseded by its predecessor unless that one was itself superseded.
+        let expected: BTreeSet<_> = [1, 3, 5].iter().map(|i| revocations[*i].1).collect();
+        assert_eq!(settled.judged.superseded, expected);
+        assert!(settled.judged.pending.is_empty());
+    }
+
+    #[test]
+    fn the_veto_fixed_point_does_not_depend_on_a_round_bound() {
+        let chain = Chain(IdentityId::random_for_tests());
+        let e1 = chain.profile(1, None, OWNER_KEY, 1);
+        let mut all = vec![e1.clone()];
+        let mut anchors = BTreeMap::new();
+        // Seven recoveries, each cancelled by an owner event the recoveries' revocations supersede.
+        for level in 0..7u128 {
+            let request = Uuid::from_u128(0x500 + level);
+            let rec = chain.event(
+                "identity.recovered",
+                2,
+                Some(&e1.1),
+                request,
+                json!({ "request_id": request, "level": level }),
+            );
+            let cancel = chain.event(
+                "identity.recovery_cancelled",
+                2,
+                Some(&e1.1),
+                Uuid::from_u128(0x600 + level),
+                json!({ "request_id": request }),
+            );
+            // Higher levels are dated earlier, so each recovery supersedes the cancels below it.
+            anchors.insert(rec.1, at(10 - level as i64));
+            anchors.insert(cancel.1, at(50));
+            all.push(rec);
+            all.push(cancel);
+        }
+        let settled = settle(&all, &anchors);
+        let reference = settle_within(&all, &anchors, 1000);
+        assert_eq!(settled, reference);
+        let standing: Vec<_> = all
+            .iter()
+            .filter(|(_, h)| !settled.judged.is_excluded(h))
+            .cloned()
+            .collect();
+        assert_eq!(
+            crate::identity_chain_wire::vetoed_recoveries(&standing),
+            settled.vetoed,
+            "the vetoed set is a fixed point"
+        );
     }
 }
