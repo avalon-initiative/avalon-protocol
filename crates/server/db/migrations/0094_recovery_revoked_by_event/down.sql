@@ -1,0 +1,2 @@
+ALTER TABLE indexer_identity_passkeys DROP COLUMN revoked_by_event_id;
+ALTER TABLE indexer_identity_signing_keys DROP COLUMN revoked_by_event_id;

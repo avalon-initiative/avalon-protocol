@@ -590,6 +590,10 @@ async fn check_approval(
     let Some(key) = key else {
         return Ok(Counted::No);
     };
+    // A key the guardian's chain has since revoked no longer vouches for anything.
+    if chain.is_revoked(proof.signing_key_id) {
+        return Ok(Counted::No);
+    }
     let bytes = recovery_approval_signing_bytes(
         ctx.network_id,
         &ctx.owner,
@@ -729,7 +733,12 @@ async fn verify_recovered(
     .bind(new_key.as_slice())
     .fetch_one(&mut **tx)
     .await?;
-    if key_known && chain.events.iter().any(|e| e.id == event.id) {
+    let this_hash = event_hash(event).map_err(|_| reject("identity.recovered cannot be hashed"))?;
+    let redelivered = chain
+        .events
+        .iter()
+        .any(|e| e.id == event.id && event_hash(e).ok() == Some(this_hash));
+    if key_known && redelivered {
         // The same recovery redelivered from another shard.
         return Ok(());
     }
@@ -796,11 +805,13 @@ async fn verify_recovered(
         request_entry_hash: &entry_hash,
         config_event_hash: &config_hash,
     };
+    let mut judged = BTreeSet::new();
     let mut approved = BTreeSet::new();
     let mut awaiting = false;
     for proof in &payload.approvals {
+        // Only a guardian's first proof is judged, so repeats cannot multiply the chain loads.
         if !configured.guardian_ids.contains(&proof.guardian_id)
-            || approved.contains(&proof.guardian_id)
+            || !judged.insert(proof.guardian_id)
         {
             continue;
         }

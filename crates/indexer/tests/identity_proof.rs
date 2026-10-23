@@ -1791,6 +1791,24 @@ async fn a_cancel_at_the_recoverys_position_displaces_it_and_restores_the_old_ke
     );
 }
 
+/// Records `e`'s ledger entry as first cosigned `hours_ago` hours back (the node has seen later heads).
+fn anchor_event(e: &ProtocolEvent, hours_ago: i64) {
+    let position = e.identity_chain.as_ref().unwrap();
+    let stored = payload_hash(&embed_position(&e.payload, position)).unwrap();
+    let now = OffsetDateTime::now_utc();
+    heads().put(
+        format!("anchor-{}", hex::encode(event_hash(e).unwrap())),
+        avalon_indexer::head_attestor::EntryAttestation {
+            kind: e.kind.clone(),
+            event_id: e.id,
+            subject: e.subject.to_string(),
+            payload_hash: hex::encode(stored),
+            anchor_at: Some(now - time::Duration::hours(hours_ago)),
+            reference_at: Some(now),
+        },
+    );
+}
+
 /// The owner's `identity.recovery_configured` at the position after `after`, signed by `key`.
 fn reconfigured_after(
     f: &RecoveryFixture,
@@ -1898,6 +1916,96 @@ async fn identity_chain_is_forked(pool: &PgPool, f: &RecoveryFixture) -> bool {
 
 #[tokio::test]
 #[ignore]
+async fn an_approval_whose_guardian_key_was_revoked_does_not_count() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let g0 = &f.guardians[0];
+    let approvals = vec![approval(&f, &req, g0), approval(&f, &req, &f.guardians[1])];
+    // The guardian later revokes the key that signed the approval; the key was valid at the
+    // approval's position, but its chain now carries the revocation.
+    let revocation = revoke(&g0.0, &g0.0, g0.1, g0.1, None);
+    apply(&pool, &revocation, &game()).await.unwrap();
+    let e = recovered(&f, &req, approvals);
+    assert!(is_refusal(apply(&pool, &e, &game()).await));
+    assert!(!active(&pool, &f.owner, req.id).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn duplicate_approval_proofs_of_one_guardian_are_judged_once() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let g0 = &f.guardians[0];
+    // The first proof of guardian 0 is forged; a second, genuine one follows it.
+    let mut forged = approval(&f, &req, g0);
+    forged["signature"] = serde_json::json!(b64(&[7u8; 64]));
+    let approvals = vec![
+        forged,
+        approval(&f, &req, g0),
+        approval(&f, &req, &f.guardians[1]),
+    ];
+    let e = recovered(&f, &req, approvals);
+    assert!(
+        is_refusal(apply(&pool, &e, &game()).await),
+        "only the first proof of a guardian is judged"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_recovery_displacement_restores_only_the_keys_that_recovery_revoked() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let ts = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    // The owner revokes a device key; the revocation's unsigned time is whatever a relay stamped.
+    let device = TestIdentity::new();
+    let device_key = Uuid::new_v4();
+    let add = grant(
+        &f.owner,
+        &f.owner,
+        f.owner_key,
+        &device,
+        device_key,
+        Some(&f.configured),
+    );
+    apply(&pool, &add, &game()).await.unwrap();
+    let mut revocation = revoke(&f.owner, &device, device_key, device_key, Some(&add));
+    revocation.timestamp = ts;
+    apply(&pool, &revocation, &game()).await.unwrap();
+    assert!(!active(&pool, &f.owner, device_key).await);
+
+    // A recovery with the same time is applied and then displaced by the owner's earlier cancel.
+    let mut e = recovered_after(
+        &f,
+        &req,
+        vec![
+            approval(&f, &req, &f.guardians[0]),
+            approval(&f, &req, &f.guardians[1]),
+        ],
+        &revocation,
+    );
+    e.timestamp = ts;
+    req.new_key.sign_event(&mut e, req.id);
+    apply(&pool, &e, &game()).await.unwrap();
+    assert!(active(&pool, &f.owner, req.id).await);
+    let cancel = cancel_after(&f, req.id, &revocation);
+    anchor_event(&cancel, 120);
+    anchor_event(&e, 100);
+    apply(&pool, &cancel, &other()).await.unwrap();
+
+    assert!(!active(&pool, &f.owner, req.id).await);
+    assert!(active(&pool, &f.owner, f.owner_key).await);
+    assert!(
+        !active(&pool, &f.owner, device_key).await,
+        "a key the owner revoked stays revoked"
+    );
+}
+
+#[tokio::test]
+#[ignore]
 async fn a_guardians_signed_withdrawal_inside_the_proof_withdraws_the_approval() {
     let pool = pool().await;
     let f = recovery_fixture(&pool).await;
@@ -1961,9 +2069,9 @@ async fn a_guardians_key_is_judged_at_the_chain_position_of_their_approval() {
     // A position that does not extend the guardian's accepted chain never counts.
     let off_chain = try_with(at((2, Some([9; 32]))));
     assert!(is_refusal(apply(&pool, &off_chain, &game()).await));
-    // An approval judged below the revocation still counts, however late it is delivered.
-    apply(&pool, &good_position, &game()).await.unwrap();
-    assert!(active(&pool, &f.owner, req.id).await);
+    // An approval valid at its position stops counting once the guardian's chain revokes its key.
+    assert!(is_refusal(apply(&pool, &good_position, &game()).await));
+    assert!(!active(&pool, &f.owner, req.id).await);
 }
 
 #[tokio::test]
@@ -2081,6 +2189,11 @@ async fn a_recovered_cannot_be_replayed_after_the_recovery_key_is_revoked_or_at_
     fresh_request.payload["request_id"] = serde_json::json!(other_request);
     req.new_key.sign_event(&mut fresh_request, other_request);
     assert!(apply(&pool, &fresh_request, &game()).await.is_err());
+    // The same event id at the new head is another event, not a redelivery of the first.
+    let mut same_id = replay.clone();
+    same_id.id = first.id;
+    req.new_key.sign_event(&mut same_id, req.id);
+    assert!(is_refusal(apply(&pool, &same_id, &game()).await));
     assert!(!active(&pool, &f.owner, req.id).await);
     let _ = owner;
 }

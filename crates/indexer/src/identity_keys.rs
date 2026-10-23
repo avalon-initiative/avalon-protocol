@@ -88,6 +88,13 @@ impl AcceptedChain {
         }
     }
 
+    /// Whether the accepted chain revokes the key at any position.
+    pub fn is_revoked(&self, signing_key_id: Uuid) -> bool {
+        self.records
+            .iter()
+            .any(|r| r.signing_key_id == signing_key_id && r.revoked_seq.is_some())
+    }
+
     /// The key as it stood at `position`. Waits when the chain below it is incomplete; a key the
     /// complete prefix never added is refused.
     pub fn key_at(&self, signing_key_id: Uuid, position: u64) -> Result<KeyAt, IndexError> {
