@@ -242,3 +242,58 @@ async fn a_cosignature_dated_far_ahead_cannot_push_the_reference_time() {
         "reference pushed to {reference}"
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn an_entry_hash_held_on_several_shards_is_timed_by_the_earliest_copy() {
+    let pool = pool().await;
+    let network = Uuid::new_v4().to_string();
+    let now = OffsetDateTime::now_utc();
+    let hash = format!("shared-{}", Uuid::new_v4());
+    for shard in ["a-late", "z-early"] {
+        sqlx::query(
+            "INSERT INTO mirrored_entries (source_url, network_id, shard_id, seq, event_id, kind, \
+             issuer, subject, payload, payload_hash, event_timestamp, version, prev_hash, entry_hash, \
+             batch_id, verified_tree_size, layout_version, rules_version, hash_algo, extensions) \
+             VALUES ('http://peer.invalid', $1, $2, 1, $3, 'profile.updated', 'a', 'b', '{}', \
+                     repeat('0', 64), now(), 1, 'p', $4, $5, 1, 1, 1, 1, '\\x0000'::bytea)",
+        )
+        .bind(&network)
+        .bind(shard)
+        .bind(Uuid::new_v4())
+        .bind(&hash)
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // The "late" copy is listed first and was cosigned a day ago; the "early" one 50 hours ago.
+    head(
+        &pool,
+        &network,
+        "a-late",
+        1,
+        now - hours(30),
+        &[now - hours(24), now - hours(24)],
+    )
+    .await;
+    head(
+        &pool,
+        &network,
+        "z-early",
+        1,
+        now - hours(60),
+        &[now - hours(50), now - hours(50)],
+    )
+    .await;
+    let found = attestor(&network, 2)
+        .by_entry_hash(&mut pool.acquire().await.unwrap(), &hash)
+        .await
+        .unwrap()
+        .unwrap();
+    let anchor = found.anchor_at.unwrap();
+    assert!(
+        (anchor - (now - hours(50))).abs() < Duration::seconds(2),
+        "{anchor}"
+    );
+}

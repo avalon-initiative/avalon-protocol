@@ -47,6 +47,18 @@ impl IndexerHandle {
         }
     }
 
+    /// Re-resolves identities whose chain depends on cosigned head dates that arrived after their
+    /// events (a no-op for a remote indexer, which does this itself).
+    pub async fn reconcile_anchor_dependent(
+        &self,
+        limit: usize,
+    ) -> Result<usize, avalon_indexer::IndexError> {
+        match self {
+            IndexerHandle::Local(indexer) => indexer.reconcile_anchor_dependent(limit).await,
+            IndexerHandle::Remote(_) => Ok(0),
+        }
+    }
+
     /// The same-transaction, atomic half of an indexer write.
     ///
     /// For [`Self::Local`], this is exactly `PostgresIndexer::apply_in_tx`

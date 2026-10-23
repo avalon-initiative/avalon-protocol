@@ -281,8 +281,8 @@ impl PostgresIndexer {
         // Proof comes before the identity chain: a refused event must not reach it either.
         let verified = identity_proof::verify(tx, event, origin, self.heads.as_deref()).await?;
 
-        // Chained events are recorded and resolved first; only `profile.updated`
-        // is projected through the resolved chain (see `apply_profile_chained`).
+        // Chained events are recorded and resolved first; what they change is projected through the
+        // resolved chain, so an event outside it changes nothing (see `reconcile`).
         match identity_chain_store::record(
             tx,
             self.heads.as_deref(),
@@ -297,70 +297,11 @@ impl PostgresIndexer {
                 eprintln!("indexer: dropping chained event {}: {err:?}", event.id);
                 return Ok(());
             }
-            Recorded::Chained {
-                accepted,
-                displaced,
-                newly_accepted,
-                accepted_events,
-            } => {
-                // An event the chain no longer holds is undone: a recovery's keys come back, a
-                // displaced key addition goes and a displaced revocation lifts.
-                for gone in &displaced {
-                    let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(gone)
-                    else {
-                        continue;
-                    };
-                    match gone.kind.as_str() {
-                        "identity.recovered" => {
-                            identity_signing_keys::revert_recovered(tx, gone, owner).await?
-                        }
-                        "identity.signing_key_added" | "identity.signing_key_revoked" => {
-                            identity_signing_keys::revert_key_event(tx, gone, owner).await?
-                        }
-                        _ => {}
-                    }
+            Recorded::Chained { .. } => {
+                if let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(event) {
+                    self.reconcile(tx, owner).await?;
                 }
-                // Events that joined the chain only now (a fork resolved, a revocation lifted)
-                // take effect in chain order.
-                for joined in &newly_accepted {
-                    let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(joined)
-                    else {
-                        continue;
-                    };
-                    match joined.kind.as_str() {
-                        "identity.recovered" => {
-                            identity_signing_keys::apply_recovered(tx, joined, owner).await?
-                        }
-                        "identity.signing_key_added" | "identity.signing_key_revoked" => {
-                            if let Some(write) = identity_signing_keys::decode(joined) {
-                                identity_signing_keys::apply(tx, &write).await?;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // A key event outside the chain changes no key.
-                let alters_keys = matches!(
-                    event.kind.as_str(),
-                    "identity.recovered"
-                        | "identity.signing_key_added"
-                        | "identity.signing_key_revoked"
-                );
-                if alters_keys && !accepted {
-                    return Ok(());
-                }
-                if event.kind == "profile.updated" {
-                    apply_profile_chained(
-                        tx,
-                        event,
-                        accepted,
-                        &displaced,
-                        !newly_accepted.is_empty(),
-                        &accepted_events,
-                    )
-                    .await?;
-                    return Ok(());
-                }
+                return Ok(());
             }
         }
 
@@ -507,41 +448,189 @@ impl PostgresIndexer {
     }
 }
 
-/// Projects a chained `profile.updated`: a rejected or superseded event is
-/// skipped, and any change to which events are accepted (a winner displacing
-/// an applied loser, or an out-of-order gap filling) reverts the displaced
-/// events' fields and replays every accepted profile event in chain order, so
-/// the resulting row is a function of the accepted set alone.
-async fn apply_profile_chained(
+/// The projections a chained event's effect is tracked in as a group: undoing one member undoes all of
+/// them and the accepted ones are applied again in chain order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Keys,
+    Profile,
+    Social,
+}
+
+fn group_of(kind: &str) -> Option<Group> {
+    match kind {
+        "identity.recovered"
+        | "identity.signing_key_added"
+        | "identity.signing_key_revoked"
+        | "identity.passkey_registered"
+        | "identity.passkey_revoked" => Some(Group::Keys),
+        "profile.updated" => Some(Group::Profile),
+        "friend.requested"
+        | "friend.accepted"
+        | "friend.removed"
+        | "friend.relationship_reversed"
+        | "guild.member_added"
+        | "guild.member_removed"
+        | "guild.membership_reversed" => Some(Group::Social),
+        _ => None,
+    }
+}
+
+async fn project_chained(
     tx: &mut Transaction<'_, Postgres>,
     event: &ProtocolEvent,
-    accepted: bool,
-    displaced: &[ProtocolEvent],
-    gap_filled: bool,
-    accepted_events: &[ProtocolEvent],
 ) -> Result<(), IndexError> {
-    if displaced.is_empty() && !gap_filled {
-        if accepted {
+    let owner = avalon_protocol::identity_chain_wire::chain_owner(event);
+    match event.kind.as_str() {
+        "profile.updated" => {
             if let Some(write) = profiles::decode(event) {
                 profiles::apply(tx, &write).await?;
             }
         }
-        return Ok(());
-    }
-    for old in displaced.iter().filter(|e| e.kind == "profile.updated") {
-        if let Some(write) = profiles::decode(old) {
-            profiles::apply(tx, &profiles::revert_of(&write)).await?;
+        "identity.passkey_registered" | "identity.passkey_revoked" => {
+            if let Some(write) = identity_passkeys::decode(event) {
+                identity_passkeys::apply(tx, &write).await?;
+            }
         }
-    }
-    for ev in accepted_events
-        .iter()
-        .filter(|e| e.kind == "profile.updated")
-    {
-        if let Some(write) = profiles::decode(ev) {
-            profiles::apply(tx, &write).await?;
+        "identity.recovered" => {
+            if let Some(owner) = owner {
+                identity_signing_keys::apply_recovered(tx, event, owner).await?;
+            }
         }
+        "identity.signing_key_added" | "identity.signing_key_revoked" => {
+            if let Some(write) = identity_signing_keys::decode(event) {
+                identity_signing_keys::apply(tx, &write).await?;
+            }
+        }
+        "friend.requested"
+        | "friend.accepted"
+        | "friend.removed"
+        | "friend.relationship_reversed" => {
+            if let Some(write) = friendships::decode(event) {
+                friendships::apply(tx, &write).await?;
+            }
+        }
+        "guild.member_added" | "guild.member_removed" | "guild.membership_reversed" => {
+            if let Some(write) = guild_rosters::decode(event) {
+                guild_rosters::apply(tx, &write).await?;
+            }
+        }
+        _ => {}
     }
     Ok(())
+}
+
+async fn revert_chained(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+) -> Result<(), IndexError> {
+    let owner = avalon_protocol::identity_chain_wire::chain_owner(event);
+    match event.kind.as_str() {
+        "profile.updated" => {
+            if let Some(write) = profiles::decode(event) {
+                profiles::apply(tx, &profiles::revert_of(&write)).await?;
+            }
+        }
+        "identity.passkey_registered" | "identity.passkey_revoked" => {
+            identity_passkeys::revert(tx, event).await?
+        }
+        "identity.recovered" => {
+            if let Some(owner) = owner {
+                identity_signing_keys::revert_recovered(tx, event, owner).await?;
+            }
+        }
+        "identity.signing_key_added" | "identity.signing_key_revoked" => {
+            if let Some(owner) = owner {
+                identity_signing_keys::revert_key_event(tx, event, owner).await?;
+            }
+        }
+        // Friendship and roster rows have no inverse of their own; they follow later events.
+        _ => {}
+    }
+    Ok(())
+}
+
+fn seq_of(event: &ProtocolEvent) -> u64 {
+    event.identity_chain.as_ref().map_or(0, |p| p.seq)
+}
+
+impl PostgresIndexer {
+    /// Makes what is projected for the identity's chained events match the chain it resolves now:
+    /// events the chain no longer holds are undone, events it holds are applied. A change among key,
+    /// passkey or profile events undoes every projected one of that group and applies the accepted
+    /// ones again in chain order, so the rows are a function of the accepted set alone.
+    async fn reconcile(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        owner: avalon_protocol::identity_id::IdentityId,
+    ) -> Result<(), IndexError> {
+        let view = identity_chain_store::reconcile_view(tx, self.heads.as_deref(), owner).await?;
+        let fresh_hashes: std::collections::BTreeSet<_> = view
+            .fresh
+            .iter()
+            .filter_map(|e| avalon_protocol::identity_chain_wire::event_hash(e).ok())
+            .collect();
+        let is_fresh = |e: &ProtocolEvent| {
+            avalon_protocol::identity_chain_wire::event_hash(e)
+                .is_ok_and(|h| fresh_hashes.contains(&h))
+        };
+        for group in [Group::Keys, Group::Profile] {
+            let in_group = |e: &&ProtocolEvent| group_of(&e.kind) == Some(group);
+            let stale: Vec<&ProtocolEvent> = view.stale.iter().filter(in_group).collect();
+            let fresh: Vec<&ProtocolEvent> = view.fresh.iter().filter(in_group).collect();
+            if stale.is_empty() && fresh.is_empty() {
+                continue;
+            }
+            let kept: Vec<&ProtocolEvent> = view
+                .accepted
+                .iter()
+                .filter(in_group)
+                .filter(|e| !is_fresh(e))
+                .collect();
+            let last_kept = kept.iter().map(|e| seq_of(e)).max().unwrap_or(0);
+            let appended = stale.is_empty() && fresh.iter().all(|e| seq_of(e) > last_kept);
+            if appended {
+                for event in fresh {
+                    project_chained(tx, event).await?;
+                }
+                continue;
+            }
+            let mut undo: Vec<&ProtocolEvent> =
+                stale.iter().copied().chain(kept.iter().copied()).collect();
+            undo.sort_by_key(|e| std::cmp::Reverse(seq_of(e)));
+            for event in undo {
+                revert_chained(tx, event).await?;
+            }
+            for event in view.accepted.iter().filter(in_group) {
+                project_chained(tx, event).await?;
+            }
+        }
+        for event in view
+            .fresh
+            .iter()
+            .filter(|e| group_of(&e.kind) == Some(Group::Social))
+        {
+            project_chained(tx, event).await?;
+        }
+        identity_chain_store::mark_projected(tx, owner, &view.stale, false).await?;
+        identity_chain_store::mark_projected(tx, owner, &view.accepted, true).await?;
+        Ok(())
+    }
+
+    /// Re-resolves up to `limit` identities whose chain depends on cosigned head dates, so projections
+    /// follow dates that arrive after the events themselves. Returns how many were examined.
+    pub async fn reconcile_anchor_dependent(&self, limit: usize) -> Result<usize, IndexError> {
+        let mut tx = self.pool.begin().await?;
+        let owners =
+            identity_chain_store::anchor_dependent_identities(&mut tx, limit as i64).await?;
+        tx.commit().await?;
+        for owner in &owners {
+            let mut tx = self.pool.begin().await?;
+            self.reconcile(&mut tx, *owner).await?;
+            tx.commit().await?;
+        }
+        Ok(owners.len())
+    }
 }
 
 #[async_trait]

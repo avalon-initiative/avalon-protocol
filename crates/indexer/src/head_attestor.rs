@@ -260,15 +260,15 @@ impl HeadAttestor for SqlHeadAttestor {
         conn: &mut PgConnection,
         entry_hash: &str,
     ) -> Result<Option<EntryAttestation>, IndexError> {
+        let mut found = Vec::new();
         let own = sqlx::query(
             "SELECT seq, kind, event_id, subject, payload_hash FROM ledger_entries WHERE entry_hash = $1",
         )
         .bind(entry_hash)
-        .fetch_optional(&mut *conn)
+        .fetch_all(&mut *conn)
         .await?;
-        if let Some(row) = own {
-            let located = Self::located(&row, self.own_shard_id.clone(), true)?;
-            return self.attest(conn, located).await.map(Some);
+        for row in own {
+            found.push(Self::located(&row, self.own_shard_id.clone(), true)?);
         }
         let mirrored = sqlx::query(
             "SELECT shard_id, seq, kind, event_id, subject, payload_hash FROM mirrored_entries \
@@ -276,16 +276,17 @@ impl HeadAttestor for SqlHeadAttestor {
         )
         .bind(&self.network_id)
         .bind(entry_hash)
-        .fetch_optional(&mut *conn)
+        .fetch_all(&mut *conn)
         .await?;
-        match mirrored {
-            Some(row) => {
-                let shard_id: String = row.try_get("shard_id")?;
-                let located = Self::located(&row, shard_id, false)?;
-                self.attest(conn, located).await.map(Some)
-            }
-            None => Ok(None),
+        for row in mirrored {
+            let shard_id: String = row.try_get("shard_id")?;
+            found.push(Self::located(&row, shard_id, false)?);
         }
+        let mut copies = Vec::new();
+        for located in found {
+            copies.push(self.attest(conn, located).await?);
+        }
+        Ok(EntryAttestation::earliest(copies))
     }
 
     async fn by_event_id(

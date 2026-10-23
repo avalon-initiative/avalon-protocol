@@ -11,11 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::identity_chain::{ChainOutcome, ChainedEvent, ClockSkewBounds, EventHash};
 use avalon_protocol::identity_chain_wire::{
-    chain_owner, event_hash, resolve_identity_chain, to_chained_event, vetoed_recoveries,
-    ChainEventError,
+    chain_owner, event_hash, resolve_identity_chain, to_chained_event, ChainEventError,
 };
 use avalon_protocol::identity_id::IdentityId;
-use avalon_protocol::identity_revocation::{judge_conflicts, revocation_conflicts, Judged};
+use avalon_protocol::identity_revocation::{revocation_conflicts, settle, Settled};
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -44,19 +43,25 @@ pub enum Recorded {
     Chained {
         /// The event is part of the identity's resolved chain.
         accepted: bool,
-        /// Events accepted before this record that no longer are.
-        displaced: Vec<ProtocolEvent>,
-        /// Events other than this one accepted only now (e.g. a gap filled).
-        newly_accepted: Vec<ProtocolEvent>,
-        /// Every accepted event, in chain order.
-        accepted_events: Vec<ProtocolEvent>,
     },
+}
+
+/// What differs between an identity's resolved chain and what is projected.
+#[derive(Debug, Default)]
+pub struct Reconciliation {
+    /// Every event of the resolved chain, in chain order.
+    pub accepted: Vec<ProtocolEvent>,
+    /// Projected events the chain no longer holds, in chain order.
+    pub stale: Vec<ProtocolEvent>,
+    /// Events of the chain not projected yet, in chain order.
+    pub fresh: Vec<ProtocolEvent>,
 }
 
 #[derive(Clone)]
 struct Stored {
     event: ProtocolEvent,
     chained: ChainedEvent,
+    projected: bool,
 }
 
 pub async fn state<'e>(
@@ -128,7 +133,7 @@ async fn load(
     identity_id: IdentityId,
 ) -> Result<Vec<Stored>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT event, chain_timestamp FROM identity_chain_events \
+        "SELECT event, chain_timestamp, projected FROM identity_chain_events \
          WHERE identity_id = $1 ORDER BY seq, event_hash",
     )
     .bind(identity_id)
@@ -148,24 +153,29 @@ async fn load(
         let mut chained = to_chained_event(&event, ts, &far)
             .map_err(|e| sqlx::Error::Decode(format!("{e:?}").into()))?;
         chained.timestamp = ts;
-        out.push(Stored { event, chained });
+        out.push(Stored {
+            event,
+            chained,
+            projected: row.try_get("projected")?,
+        });
     }
     Ok(out)
 }
 
-/// Rounds of re-deriving which recoveries the owner vetoed once the revocation rule has dropped
-/// events (a dropped cancel no longer vetoes). The result is a function of the stored set alone.
-const VERDICT_ROUNDS: usize = 4;
-
-/// What keeps a stored event out of the chain: an owner veto of a recovery, or the revocation rule.
+/// What keeps a stored event out of the chain, and whether that rests on cosigned head dates.
 struct Verdict {
-    vetoed: BTreeSet<EventHash>,
-    judged: Judged,
+    settled: Settled,
+    /// Some revocation conflict exists, so a head date arriving or lowering can change the chain.
+    anchor_dependent: bool,
 }
 
 impl Verdict {
     fn keeps(&self, hash: &EventHash) -> bool {
-        !self.vetoed.contains(hash) && !self.judged.is_excluded(hash)
+        self.settled.keeps(hash)
+    }
+
+    fn excluded_count(&self) -> usize {
+        self.settled.excluded().len()
     }
 }
 
@@ -177,50 +187,32 @@ fn hashed<'a>(events: impl Iterator<Item = &'a Stored>) -> Vec<(ProtocolEvent, E
 
 /// Decides which stored events stand: a recovery the owner cancelled at or below its position is
 /// invalid, and an event signed by a revoked key stands only if it is older than the revocation by
-/// cosigned head time. Anchors come from `heads`; with none, every such event waits.
+/// cosigned head time. Anchors of every event in a possible conflict are read once from `heads`; with
+/// none, such events are undated.
 async fn verdict_of(
     tx: &mut Transaction<'_, Postgres>,
     heads: Option<&dyn HeadAttestor>,
     stored: &[Stored],
 ) -> Result<Verdict, IndexError> {
-    let mut vetoed = BTreeSet::new();
+    let events = hashed(stored.iter());
+    let conflicts = revocation_conflicts(&events);
     let mut anchors: BTreeMap<EventHash, OffsetDateTime> = BTreeMap::new();
-    let mut asked: BTreeSet<EventHash> = BTreeSet::new();
-    let mut judged = Judged::default();
-    for _ in 0..VERDICT_ROUNDS {
-        let base = hashed(
-            stored
-                .iter()
-                .filter(|s| !vetoed.contains(&s.chained.event_hash)),
-        );
-        let conflicts = revocation_conflicts(&base);
-        if let Some(heads) = heads {
-            for hash in conflicts.iter().flat_map(|(r, v)| [*r, *v]) {
-                if !asked.insert(hash) {
-                    continue;
-                }
-                let Some(held) = stored.iter().find(|s| s.chained.event_hash == hash) else {
-                    continue;
-                };
-                let attested = chain_event_attestation(tx, heads, &held.event).await?;
-                if let Some(at) = attested.and_then(|a| a.anchor_at) {
-                    anchors.insert(hash, at);
-                }
+    if let Some(heads) = heads {
+        let involved: BTreeSet<EventHash> = conflicts.iter().flat_map(|(r, v)| [*r, *v]).collect();
+        for held in stored
+            .iter()
+            .filter(|s| involved.contains(&s.chained.event_hash))
+        {
+            let attested = chain_event_attestation(tx, heads, &held.event).await?;
+            if let Some(at) = attested.and_then(|a| a.anchor_at) {
+                anchors.insert(held.chained.event_hash, at);
             }
         }
-        judged = judge_conflicts(&conflicts, &anchors);
-        let standing = hashed(
-            stored
-                .iter()
-                .filter(|s| !judged.is_excluded(&s.chained.event_hash)),
-        );
-        let next = vetoed_recoveries(&standing);
-        if next == vetoed {
-            break;
-        }
-        vetoed = next;
     }
-    Ok(Verdict { vetoed, judged })
+    Ok(Verdict {
+        settled: settle(&events, &anchors),
+        anchor_dependent: !conflicts.is_empty(),
+    })
 }
 
 fn resolve_live(live: &[&Stored]) -> ChainOutcome {
@@ -236,13 +228,13 @@ async fn outcome_of(
     tx: &mut Transaction<'_, Postgres>,
     heads: Option<&dyn HeadAttestor>,
     stored: &[Stored],
-) -> Result<ChainOutcome, IndexError> {
+) -> Result<(ChainOutcome, Verdict), IndexError> {
     let verdict = verdict_of(tx, heads, stored).await?;
     let live: Vec<&Stored> = stored
         .iter()
         .filter(|s| verdict.keeps(&s.chained.event_hash))
         .collect();
-    Ok(resolve_live(&live))
+    Ok((resolve_live(&live), verdict))
 }
 
 fn accepted_of<'a>(stored: &'a [Stored], outcome: &ChainOutcome) -> Vec<&'a Stored> {
@@ -257,16 +249,18 @@ async fn persist_state(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
     outcome: &ChainOutcome,
+    anchor_dependent: bool,
 ) -> Result<(), sqlx::Error> {
     let head = outcome.head();
     sqlx::query(
-        "UPDATE identity_chain_state SET seq = $2, head_hash = $3, forked_at_seq = $4 \
-         WHERE identity_id = $1",
+        "UPDATE identity_chain_state SET seq = $2, head_hash = $3, forked_at_seq = $4, \
+         anchor_dependent = $5 WHERE identity_id = $1",
     )
     .bind(identity_id)
     .bind(head.map(|h| h.seq as i64).unwrap_or(0))
     .bind(head.map(|h| hex::encode(h.event_hash)))
     .bind(outcome.forked_at.map(|s| s as i64))
+    .bind(anchor_dependent)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -322,6 +316,7 @@ fn with_event(mut stored: Vec<Stored>, event: &ProtocolEvent) -> Result<Vec<Stor
         stored.push(Stored {
             event: event.clone(),
             chained,
+            projected: false,
         });
     }
     Ok(stored)
@@ -335,38 +330,34 @@ pub async fn stored_events(
     Ok(hashed(load(tx, identity_id).await?.iter()))
 }
 
-/// How the revocation rule treats an event about to be recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Supersession {
-    Stands,
-    /// Signed by a key revoked by an event on the ledger no later than it.
-    Superseded,
-    /// A cosigned head date is still missing for it or for the revocation.
-    Pending,
-}
+/// The most events of one identity that the chain keeps out (vetoed, superseded or undated) before more
+/// are refused, so a flood of events signed by a revoked key stays bounded.
+pub const MAX_EXCLUDED_PER_IDENTITY: usize = 64;
 
-/// Judges `event` together with the events already recorded for its owner, by the same rule
-/// that resolves the chain.
-pub async fn supersession(
+/// Refuses `event` when the identity already holds [`MAX_EXCLUDED_PER_IDENTITY`] events the chain
+/// keeps out and this one would be kept out too. Anything else is recorded: whether an event
+/// stands is decided by the chain, from the events and cosigned head dates held, not by arrival.
+pub async fn admit(
     tx: &mut Transaction<'_, Postgres>,
     heads: Option<&dyn HeadAttestor>,
     event: &ProtocolEvent,
-) -> Result<Supersession, IndexError> {
+) -> Result<(), IndexError> {
     let Some(owner) = chain_owner(event) else {
-        return Ok(Supersession::Stands);
+        return Ok(());
     };
-    let stored = with_event(load(tx, owner).await?, event)?;
+    let stored = load(tx, owner).await?;
     let hash = event_hash(event).map_err(|e| IndexError::Rejected(format!("{e:?}")))?;
-    let verdict = verdict_of(tx, heads, &stored).await?;
-    Ok(if verdict.judged.superseded.contains(&hash) {
-        Supersession::Superseded
-    } else if verdict.judged.pending.contains(&hash)
-        || verdict.judged.awaiting_revocation.contains(&hash)
-    {
-        Supersession::Pending
-    } else {
-        Supersession::Stands
-    })
+    if stored.iter().any(|s| s.chained.event_hash == hash) {
+        return Ok(());
+    }
+    let with = with_event(stored, event)?;
+    let verdict = verdict_of(tx, heads, &with).await?;
+    if !verdict.keeps(&hash) && verdict.excluded_count() > MAX_EXCLUDED_PER_IDENTITY {
+        return Err(IndexError::Rejected(
+            "too many events of this identity are kept out of its chain".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Records a locally authored event at the position its author signed. The caller has locked the
@@ -423,11 +414,6 @@ async fn record_locked(
     if held.is_some_and(|id| id != event.id) {
         return Ok(Recorded::Duplicate);
     }
-    let before = load(tx, owner).await?;
-    let old_outcome = outcome_of(tx, heads, &before).await?;
-    let old_hashes: BTreeSet<EventHash> =
-        old_outcome.accepted.iter().map(|a| a.event_hash).collect();
-
     let position = event.identity_chain.as_ref().expect("checked by caller");
     sqlx::query(
         "INSERT INTO identity_chain_events \
@@ -445,28 +431,73 @@ async fn record_locked(
     .await?;
 
     let after = load(tx, owner).await?;
-    let outcome = outcome_of(tx, heads, &after).await?;
-    persist_state(tx, owner, &outcome).await?;
-
-    let new_hashes: BTreeSet<EventHash> = outcome.accepted.iter().map(|a| a.event_hash).collect();
-    let accepted_stored = accepted_of(&after, &outcome);
-    let displaced = before
-        .iter()
-        .filter(|s| {
-            old_hashes.contains(&s.chained.event_hash)
-                && !new_hashes.contains(&s.chained.event_hash)
-        })
-        .map(|s| s.event.clone())
-        .collect();
-    let newly_accepted = accepted_stored
-        .iter()
-        .filter(|s| s.event.id != event.id && !old_hashes.contains(&s.chained.event_hash))
-        .map(|s| s.event.clone())
-        .collect();
+    let (outcome, verdict) = outcome_of(tx, heads, &after).await?;
+    persist_state(tx, owner, &outcome, verdict.anchor_dependent).await?;
     Ok(Recorded::Chained {
-        accepted: new_hashes.contains(&hash),
-        displaced,
-        newly_accepted,
-        accepted_events: accepted_stored.iter().map(|s| s.event.clone()).collect(),
+        accepted: outcome.accepted.iter().any(|a| a.event_hash == hash),
     })
+}
+
+/// Re-resolves the identity's chain with the dates now known, stores its head, and reports which
+/// projected events the chain no longer holds and which of its events are not projected yet.
+pub async fn reconcile_view(
+    tx: &mut Transaction<'_, Postgres>,
+    heads: Option<&dyn HeadAttestor>,
+    owner: IdentityId,
+) -> Result<Reconciliation, IndexError> {
+    lock_state(tx, owner).await?;
+    let stored = load(tx, owner).await?;
+    let (outcome, verdict) = outcome_of(tx, heads, &stored).await?;
+    persist_state(tx, owner, &outcome, verdict.anchor_dependent).await?;
+    let accepted = accepted_of(&stored, &outcome);
+    let held: BTreeSet<EventHash> = accepted.iter().map(|s| s.chained.event_hash).collect();
+    Ok(Reconciliation {
+        accepted: accepted.iter().map(|s| s.event.clone()).collect(),
+        stale: stored
+            .iter()
+            .filter(|s| s.projected && !held.contains(&s.chained.event_hash))
+            .map(|s| s.event.clone())
+            .collect(),
+        fresh: accepted
+            .iter()
+            .filter(|s| !s.projected)
+            .map(|s| s.event.clone())
+            .collect(),
+    })
+}
+
+/// Records whether the chain event with this id is projected.
+pub async fn mark_projected(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: IdentityId,
+    events: &[ProtocolEvent],
+    projected: bool,
+) -> Result<(), sqlx::Error> {
+    for event in events {
+        let hash = event_hash(event).map_err(|e| sqlx::Error::Decode(format!("{e:?}").into()))?;
+        sqlx::query(
+            "UPDATE identity_chain_events SET projected = $3 \
+             WHERE identity_id = $1 AND event_hash = $2",
+        )
+        .bind(owner)
+        .bind(hex::encode(hash))
+        .bind(projected)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Identities whose chain depends on cosigned head dates, up to `limit`.
+pub async fn anchor_dependent_identities(
+    tx: &mut Transaction<'_, Postgres>,
+    limit: i64,
+) -> Result<Vec<IdentityId>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT identity_id FROM identity_chain_state WHERE anchor_dependent \
+         ORDER BY identity_id LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(&mut **tx)
+    .await
 }

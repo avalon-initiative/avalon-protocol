@@ -257,11 +257,17 @@ fn ticket_of(created: &ProtocolEvent) -> Uuid {
 
 /// Creates `who` (valid) and its inception key; returns the inception key id.
 async fn register(pool: &PgPool, who: &TestIdentity) -> Uuid {
+    register_with_events(pool, who).await.0
+}
+
+/// [`register`], also returning the two events it applied.
+async fn register_with_events(pool: &PgPool, who: &TestIdentity) -> (Uuid, Vec<ProtocolEvent>) {
     let creation = created(who, &unique_name("reg"));
     apply(pool, &creation, &game()).await.unwrap();
     let key_id = ticket_of(&creation);
-    apply(pool, &inception(who, key_id), &game()).await.unwrap();
-    key_id
+    let key_event = inception(who, key_id);
+    apply(pool, &key_event, &game()).await.unwrap();
+    (key_id, vec![creation, key_event])
 }
 
 async fn active(pool: &PgPool, who: &TestIdentity, key_id: Uuid) -> bool {
@@ -583,7 +589,8 @@ async fn a_chained_event_is_accepted_from_any_shard_only_with_the_authors_signat
     )
     .await
     .unwrap();
-    assert_eq!(count_passkeys().await, 3);
+    // The three share a position, so the chain keeps one of them.
+    assert_eq!(count_passkeys().await, 1);
 }
 
 #[tokio::test]
@@ -2192,7 +2199,7 @@ async fn a_recovered_cannot_be_replayed_after_the_recovery_key_is_revoked_or_at_
     replay.id = Uuid::new_v4();
     replay.identity_chain = Some(IdentityChainPosition::current(seq, prev.map(hex::encode)));
     req.new_key.sign_event(&mut replay, req.id);
-    assert!(is_refusal(apply(&pool, &replay, &game()).await));
+    assert!(is_wait(apply(&pool, &replay, &game()).await));
     let other_request = Uuid::new_v4();
     let mut fresh_request = replay.clone();
     fresh_request.id = Uuid::new_v4();
@@ -2203,7 +2210,7 @@ async fn a_recovered_cannot_be_replayed_after_the_recovery_key_is_revoked_or_at_
     let mut same_id = replay.clone();
     same_id.id = first.id;
     req.new_key.sign_event(&mut same_id, req.id);
-    assert!(is_refusal(apply(&pool, &same_id, &game()).await));
+    assert!(is_wait(apply(&pool, &same_id, &game()).await));
     assert!(!active(&pool, &f.owner, req.id).await);
     let _ = owner;
 }
@@ -2302,6 +2309,8 @@ async fn a_signature_by_one_identity_cannot_act_on_another_identitys_state() {
 
 /// An owner whose device key `t` was granted and then stolen.
 struct Compromise {
+    /// The owner's creation and inception events.
+    setup: Vec<ProtocolEvent>,
     owner: TestIdentity,
     k0: Uuid,
     thief: TestIdentity,
@@ -2311,11 +2320,12 @@ struct Compromise {
 
 async fn compromise(pool: &PgPool) -> Compromise {
     let owner = TestIdentity::new();
-    let k0 = register(pool, &owner).await;
+    let (k0, setup) = register_with_events(pool, &owner).await;
     let thief = TestIdentity::new();
     let t = Uuid::new_v4();
     let grant = grant(&owner, &owner, k0, &thief, t, None);
     Compromise {
+        setup,
         owner,
         k0,
         thief,
@@ -2392,13 +2402,15 @@ async fn a_revoked_key_cannot_fork_the_chain_at_its_own_revocation_position() {
     let thief = critical_after(&c.owner, &c.thief, c.t, Some(&c.grant), guardian);
     assert_ne!(thief.id, revocation.id);
 
-    // Not yet on a cosigned head: it waits and cannot fork the chain.
-    assert!(is_wait(apply(&pool, &thief, &other()).await));
-    // On the ledger after the revocation: it never counts.
+    // Neither is on a cosigned head yet: the thief's event is recorded, and the chain is held at a
+    // fork until the heads date both.
+    apply(&pool, &thief, &other()).await.unwrap();
+    assert_eq!(head_of(&pool, &c.owner).await.1, Some(2));
+    // On the ledger after the revocation: it never counts, and the fork lifts without any new event.
     anchor_event(&c.grant, 300);
     anchor_event(&revocation, 100);
     anchor_event(&thief, 10);
-    assert!(is_wait(apply(&pool, &thief, &other()).await));
+    reconcile(&pool).await;
     assert_eq!(
         head_of(&pool, &c.owner).await,
         (hash_hex(&revocation), None)
@@ -2479,7 +2491,7 @@ async fn a_thief_event_delivered_after_the_revocation_does_not_displace_it_eithe
     );
     anchor_event(&revocation, 100);
     anchor_event(&thiefs, 10);
-    assert!(is_wait(apply(&pool, &thiefs, &other()).await));
+    apply(&pool, &thiefs, &other()).await.unwrap();
     assert_eq!(
         head_of(&pool, &c.owner).await,
         (hash_hex(&revocation), None)
@@ -2677,4 +2689,416 @@ async fn a_key_a_thief_added_with_the_stolen_key_never_becomes_active() {
     assert!(!active(&pool, &c.owner, t2_key).await);
     assert!(!active(&pool, &c.owner, c.t).await);
     assert!(active(&pool, &c.owner, c.k0).await);
+}
+
+async fn reconcile(pool: &PgPool) {
+    PostgresIndexer::new(pool.clone())
+        .with_local_origin(TEST_NETWORK_ID, TEST_SHARD_ID)
+        .with_head_attestor(heads())
+        .reconcile_anchor_dependent(1000)
+        .await
+        .unwrap();
+}
+
+/// Delivers `events` in `order`, redelivering waiting ones until a pass makes no progress.
+async fn deliver(pool: &PgPool, events: &[ProtocolEvent], order: &[usize]) {
+    let mut pending: Vec<usize> = order.to_vec();
+    loop {
+        let mut waiting = Vec::new();
+        for &i in &pending {
+            match apply(pool, &events[i], &game()).await {
+                Ok(()) => {}
+                Err(err) if err.is_deferred() => waiting.push(i),
+                Err(err) => panic!("order {order:?}: event {i}: {err}"),
+            }
+        }
+        let progressed = waiting.len() < pending.len();
+        pending = waiting;
+        if pending.is_empty() || !progressed {
+            break;
+        }
+    }
+}
+
+/// An identity's key and passkey rows as (id, revoked), sorted.
+async fn tables_of(
+    pool: &PgPool,
+    who: &TestIdentity,
+) -> (Vec<(String, bool)>, Vec<(String, bool)>) {
+    let keys = sqlx::query_as(
+        "SELECT signing_key_id::text, revoked_at IS NOT NULL FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 ORDER BY 1",
+    )
+    .bind(who.id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    let passkeys = sqlx::query_as(
+        "SELECT passkey_id::text, revoked_at IS NOT NULL FROM indexer_identity_passkeys \
+         WHERE identity_id = $1 ORDER BY 1",
+    )
+    .bind(who.id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    (keys, passkeys)
+}
+
+/// Rebuilds every projection from `events` and checks the identity's tables match the live ones.
+async fn assert_rebuild_matches(pool: &PgPool, who: &TestIdentity, events: &[ProtocolEvent]) {
+    let live = tables_of(pool, who).await;
+    PostgresIndexer::new(pool.clone())
+        .with_local_origin(TEST_NETWORK_ID, TEST_SHARD_ID)
+        .with_head_attestor(heads())
+        .rebuild_from_scratch(events)
+        .await
+        .unwrap();
+    assert_eq!(
+        live,
+        tables_of(pool, who).await,
+        "live and rebuilt tables differ"
+    );
+}
+
+fn passkey_after(
+    who: &TestIdentity,
+    signer: &TestIdentity,
+    key: Uuid,
+    after: Option<&ProtocolEvent>,
+    kind: &str,
+    passkey_id: Uuid,
+    at: OffsetDateTime,
+) -> ProtocolEvent {
+    let (seq, prev) = next_position(after);
+    let payload = if kind == "identity.passkey_registered" {
+        serde_json::json!({
+            "passkey_id": passkey_id, "identity_id": who.id,
+            "credential_id": b64(passkey_id.as_bytes()),
+            "passkey_data": {"k": 1}, "label": null,
+        })
+    } else {
+        serde_json::json!({ "passkey_id": passkey_id, "identity_id": who.id })
+    };
+    let mut e = positioned(event(who, kind, 1, payload), seq, prev);
+    e.timestamp = at;
+    signer.sign_event(&mut e, key);
+    e
+}
+
+async fn passkey_state(pool: &PgPool, who: &TestIdentity, passkey_id: Uuid) -> Option<bool> {
+    sqlx::query_scalar(
+        "SELECT revoked_at IS NOT NULL FROM indexer_identity_passkeys \
+         WHERE identity_id = $1 AND passkey_id = $2",
+    )
+    .bind(who.id)
+    .bind(passkey_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_thief_event_anchored_before_the_recovery_does_not_change_where_it_lands() {
+    let pool = pool().await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    for order in [[0usize, 1, 2], [0, 2, 1]] {
+        let f = unapplied_recovery_fixture(&pool).await;
+        let req = request(&f);
+        let approvals = vec![
+            approval(&f, &req, &f.guardians[0]),
+            approval(&f, &req, &f.guardians[1]),
+        ];
+        let recovery = recovered_after(&f, &req, approvals, &f.configured);
+        // The thief used the stolen key and was on the ledger before the recovery.
+        let stolen = profile_after(
+            &f.owner,
+            &f.owner,
+            f.owner_key,
+            Some(&f.configured),
+            "stolen",
+            now,
+        );
+        attest_config(&f.configured, 100);
+        anchor_event(&stolen, 70);
+        anchor_event(&recovery, 60);
+        let events = [f.configured.clone(), recovery.clone(), stolen.clone()];
+        deliver(&pool, &events, &order).await;
+        assert_eq!(
+            head_of(&pool, &f.owner).await,
+            (hash_hex(&recovery), None),
+            "order {order:?}"
+        );
+        assert!(active(&pool, &f.owner, req.id).await, "order {order:?}");
+        assert!(
+            !active(&pool, &f.owner, f.owner_key).await,
+            "order {order:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_undated_recovery_lands_beside_a_thief_event_like_a_dated_one() {
+    let pool = pool().await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let f = unapplied_recovery_fixture(&pool).await;
+    let req = request(&f);
+    let approvals = vec![
+        approval(&f, &req, &f.guardians[0]),
+        approval(&f, &req, &f.guardians[1]),
+    ];
+    let recovery = recovered_after(&f, &req, approvals, &f.configured);
+    let stolen = profile_after(
+        &f.owner,
+        &f.owner,
+        f.owner_key,
+        Some(&f.configured),
+        "x",
+        now,
+    );
+    attest_config(&f.configured, 100);
+    anchor_event(&stolen, 70);
+    // The recovery has no cosigned head yet.
+    deliver(
+        &pool,
+        &[f.configured.clone(), stolen, recovery.clone()],
+        &[0, 1, 2],
+    )
+    .await;
+    assert_eq!(head_of(&pool, &f.owner).await, (hash_hex(&recovery), None));
+    assert!(active(&pool, &f.owner, req.id).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_projection_is_reverted_when_a_revocation_is_dated_without_any_further_event() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    let thiefs = profile_after(
+        &c.owner,
+        &c.thief,
+        c.t,
+        Some(&c.grant),
+        "thief",
+        now + time::Duration::minutes(4),
+    );
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    anchor_event(&c.grant, 300);
+    anchor_event(&owners, 200);
+    anchor_event(&thiefs, 10);
+    let bio = |pool: PgPool, who: IdentityId| async move {
+        sqlx::query_scalar::<_, Option<String>>("SELECT bio FROM profiles WHERE identity_id = $1")
+            .bind(who)
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+            .flatten()
+    };
+    let events = [
+        c.grant.clone(),
+        owners.clone(),
+        thiefs.clone(),
+        revocation.clone(),
+    ];
+    deliver(&pool, &events, &[0, 1, 2, 3]).await;
+    // The revocation is not dated: the thief's event stands and is projected.
+    assert_eq!(
+        bio(pool.clone(), c.owner.id).await.as_deref(),
+        Some("thief")
+    );
+    // It is cosigned now; no further event for this identity arrives.
+    anchor_event(&revocation, 100);
+    PostgresIndexer::new(pool.clone())
+        .with_local_origin(TEST_NETWORK_ID, TEST_SHARD_ID)
+        .with_head_attestor(heads())
+        .reconcile_anchor_dependent(100)
+        .await
+        .unwrap();
+    assert_eq!(
+        bio(pool.clone(), c.owner.id).await.as_deref(),
+        Some("owner")
+    );
+    assert!(!active(&pool, &c.owner, c.t).await);
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    let mut all = c.setup.clone();
+    all.extend(events);
+    assert_rebuild_matches(&pool, &c.owner, &all).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn passkeys_of_a_later_revoked_key_end_the_same_whatever_the_order() {
+    let pool = pool().await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    for order in [[0usize, 1, 2, 3, 4], [0, 1, 3, 4, 2], [0, 1, 4, 2, 3]] {
+        let c = compromise(&pool).await;
+        let (q, p) = (Uuid::new_v4(), Uuid::new_v4());
+        // The owner's passkey, then the owner's revocation of the stolen key beside a thief's
+        // revocation of that passkey; and a thief's passkey at an old position.
+        let owners_passkey = passkey_after(
+            &c.owner,
+            &c.owner,
+            c.k0,
+            Some(&c.grant),
+            "identity.passkey_registered",
+            q,
+            now,
+        );
+        let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners_passkey));
+        let thief_revokes = passkey_after(
+            &c.owner,
+            &c.thief,
+            c.t,
+            Some(&owners_passkey),
+            "identity.passkey_revoked",
+            q,
+            now,
+        );
+        let thief_registers = passkey_after(
+            &c.owner,
+            &c.thief,
+            c.t,
+            Some(&c.grant),
+            "identity.passkey_registered",
+            p,
+            now + time::Duration::minutes(4),
+        );
+        let events = [
+            c.grant.clone(),
+            owners_passkey.clone(),
+            revocation.clone(),
+            thief_revokes.clone(),
+            thief_registers.clone(),
+        ];
+        for (e, hours) in events.iter().zip([300, 200, 100, 10, 9]) {
+            anchor_event(e, hours);
+        }
+        deliver(&pool, &events, &order).await;
+        assert_eq!(
+            passkey_state(&pool, &c.owner, q).await,
+            Some(false),
+            "order {order:?}"
+        );
+        assert_eq!(
+            passkey_state(&pool, &c.owner, p).await,
+            None,
+            "order {order:?}"
+        );
+        assert_eq!(
+            head_of(&pool, &c.owner).await,
+            (hash_hex(&revocation), None),
+            "order {order:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_key_a_recovery_revoked_stays_revoked_when_an_earlier_revocation_is_displaced() {
+    let pool = pool().await;
+    let f = unapplied_recovery_fixture(&pool).await;
+    let req = request(&f);
+    let device = TestIdentity::new();
+    let device_key = Uuid::new_v4();
+    let add = grant(
+        &f.owner,
+        &f.owner,
+        f.owner_key,
+        &device,
+        device_key,
+        Some(&f.configured),
+    );
+    // The owner revokes the device at position 3; a recovery competes at that position.
+    let revocation = revoke(&f.owner, &f.owner, f.owner_key, device_key, Some(&add));
+    let recovery = recovered_after(
+        &f,
+        &req,
+        vec![
+            approval(&f, &req, &f.guardians[0]),
+            approval(&f, &req, &f.guardians[1]),
+        ],
+        &add,
+    );
+    attest_config(&f.configured, 100);
+    anchor_event(&add, 90);
+    anchor_event(&revocation, 70);
+    anchor_event(&recovery, 60);
+    deliver(
+        &pool,
+        &[f.configured.clone(), add.clone(), revocation.clone()],
+        &[0, 1, 2],
+    )
+    .await;
+    assert!(!active(&pool, &f.owner, device_key).await);
+    // The recovery resolves its fork with the revocation and displaces it; it revoked the
+    // device too.
+    deliver(&pool, std::slice::from_ref(&recovery), &[0]).await;
+    assert_eq!(head_of(&pool, &f.owner).await, (hash_hex(&recovery), None));
+    assert!(
+        !active(&pool, &f.owner, device_key).await,
+        "the recovery still revokes the device"
+    );
+    assert!(active(&pool, &f.owner, req.id).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_flood_of_superseded_events_is_bounded_and_does_not_wait() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    for e in [&c.grant, &owners, &revocation] {
+        anchor_event(e, 200);
+    }
+    for e in [&c.grant, &owners, &revocation] {
+        apply(&pool, e, &game()).await.unwrap();
+    }
+    let mut deferred = 0;
+    for i in 0..120 {
+        let spam = profile_after(
+            &c.owner,
+            &c.thief,
+            c.t,
+            Some(&c.grant),
+            &format!("spam-{i}"),
+            now + time::Duration::seconds(i),
+        );
+        anchor_event(&spam, 10);
+        if apply(&pool, &spam, &other())
+            .await
+            .is_err_and(|e| e.is_deferred())
+        {
+            deferred += 1;
+        }
+    }
+    assert_eq!(
+        deferred, 0,
+        "superseded events must not take deferral slots"
+    );
+    assert!(
+        chain_rows(&pool, &c.owner).await <= 80,
+        "stored events are bounded per identity"
+    );
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    // Another identity's events are unaffected.
+    let who = TestIdentity::new();
+    let key = register(&pool, &who).await;
+    let own = authored(
+        &who,
+        key,
+        "profile.updated",
+        serde_json::json!({ "bio": "fine" }),
+    );
+    apply(&pool, &own, &game()).await.unwrap();
 }

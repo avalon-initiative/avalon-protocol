@@ -39,7 +39,7 @@ use uuid::Uuid;
 use std::collections::BTreeSet;
 
 use crate::head_attestor::{chain_event_attestation, EntryAttestation, HeadAttestor};
-use crate::identity_chain_store::{self, Supersession};
+use crate::identity_chain_store;
 use crate::identity_keys::{self, AcceptedChain};
 use crate::IndexError;
 
@@ -706,41 +706,32 @@ async fn verify_recovered(
 
     let (seq, prev_hash) = signed_position(event)?;
     let chain = identity_keys::load_beside(tx, heads, owner, Some(event)).await?;
-    // A recovery is single-use: its request id and its new key can never be installed twice, so
-    // a stolen recovery key cannot replay an old recovered at a later head.
+    // A recovery is single-use: its request id and its new key can never be installed twice, so a
+    // stolen recovery key cannot replay an old recovered. Judged from the chain, which can change,
+    // so the verdict waits rather than refuses.
     let consumed = chain.events.iter().any(|e| {
-        e.id != event.id
-            && e.kind == "identity.recovered"
+        e.kind == "identity.recovered"
             && e.payload.get("request_id") == Some(&serde_json::json!(payload.request_id))
     });
-    let key_known: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM indexer_identity_signing_keys \
-         WHERE identity_id = $1 AND (signing_key_id = $2 OR public_key = $3))",
-    )
-    .bind(owner)
-    .bind(payload.request_id)
-    .bind(new_key.as_slice())
-    .fetch_one(&mut **tx)
-    .await?;
-    let this_hash = event_hash(event).map_err(|_| reject("identity.recovered cannot be hashed"))?;
-    let redelivered = chain
-        .events
-        .iter()
-        .any(|e| e.id == event.id && event_hash(e).ok() == Some(this_hash));
-    if key_known && redelivered {
-        // The same recovery redelivered from another shard.
-        return Ok(());
-    }
-    if consumed || key_known {
-        return Err(reject(
-            "identity.recovered reuses a consumed recovery request or an existing key",
+    if consumed || chain.has_key(payload.request_id, &new_key) {
+        return Err(IndexError::AwaitingKey(
+            "identity.recovered reuses a consumed recovery request or an existing key".to_string(),
         ));
     }
     chain.require_extends(seq, prev_hash.as_ref())?;
-    // Only the accepted head (the last unforked one) can be extended, so no recovery sits below an
-    // owner event it would otherwise skip.
-    if seq != chain.head_seq() + 1 {
-        return Err(reject("identity.recovered must extend the accepted head"));
+    // It extends the accepted head, or competes at the head's own position (so it can resolve a fork
+    // there, as when another event sits where it was signed); it never sits below the head, and two
+    // recoveries do not compete.
+    let head = chain.head_seq();
+    let competes = seq == head
+        && chain
+            .events
+            .last()
+            .is_some_and(|e| e.kind != "identity.recovered");
+    if seq != head + 1 && !competes {
+        return Err(reject(
+            "identity.recovered must extend or compete at the accepted head",
+        ));
     }
 
     let vetoed = chain.events.iter().any(|e| {
@@ -825,27 +816,6 @@ async fn verify_recovered(
     Ok(())
 }
 
-/// Waits when a revocation of the event's signing key is on the ledger no later than the event, or
-/// when either is not dated by a cosigned head yet: revocation is final. The same rule resolves the
-/// chain, so an event kept out here stays out when it is delivered in any other order.
-async fn require_not_superseded(
-    tx: &mut Transaction<'_, Postgres>,
-    event: &ProtocolEvent,
-    heads: Option<&dyn HeadAttestor>,
-) -> Result<(), IndexError> {
-    match identity_chain_store::supersession(tx, heads, event).await? {
-        Supersession::Stands => Ok(()),
-        Supersession::Superseded => Err(IndexError::AwaitingKey(format!(
-            "{} is signed by a key revoked on the ledger no later than it",
-            event.kind
-        ))),
-        Supersession::Pending => Err(IndexError::AwaitingKey(format!(
-            "{} and a revocation of its key are not both dated by cosigned heads yet",
-            event.kind
-        ))),
-    }
-}
-
 /// Verifies `event` before any table (including the identity chain) is touched.
 /// `origin` is `None` when the indexer was built without a local origin: nothing that needs one
 /// is accepted then.
@@ -868,7 +838,7 @@ pub async fn verify(
     };
     verified?;
     if event.identity_chain.is_some() && chain_owner(event).is_some() {
-        require_not_superseded(tx, event, heads).await?;
+        identity_chain_store::admit(tx, heads, event).await?;
     }
     Ok(Verified::Other)
 }

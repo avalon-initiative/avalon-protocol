@@ -28,6 +28,8 @@ pub enum PasskeyWrite {
         passkey_id: Uuid,
         identity_id: IdentityId,
         revoked_at: OffsetDateTime,
+        /// The revoking event, so displacing it restores exactly what it revoked.
+        event_id: Uuid,
     },
 }
 
@@ -63,10 +65,43 @@ pub fn decode(event: &ProtocolEvent) -> Option<PasskeyWrite> {
                 passkey_id,
                 identity_id,
                 revoked_at: event.timestamp,
+                event_id: event.id,
             })
         }
         _ => None,
     }
+}
+
+/// Undoes a displaced passkey registration (the row goes) or revocation (what it revoked is restored
+/// unless another event still revokes it).
+pub async fn revert(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+) -> Result<(), IndexError> {
+    match decode(event) {
+        Some(PasskeyWrite::Registered {
+            passkey_id,
+            identity_id,
+            ..
+        }) => {
+            sqlx::query(
+                "DELETE FROM indexer_identity_passkeys WHERE passkey_id = $1 AND identity_id = $2",
+            )
+            .bind(passkey_id)
+            .bind(identity_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Some(PasskeyWrite::Revoked {
+            identity_id,
+            event_id,
+            ..
+        }) => {
+            super::identity_signing_keys::forget_revocations_by(tx, identity_id, event_id).await?;
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 pub async fn apply(
@@ -88,7 +123,7 @@ pub async fn apply(
                 "INSERT INTO indexer_identity_passkeys AS k \
                  (passkey_id, identity_id, credential_id, passkey_data, label, added_at, revoked_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, \
-                         (SELECT revoked_at FROM indexer_identity_passkey_revocations \
+                         (SELECT MIN(revoked_at) FROM indexer_identity_passkey_revocations \
                           WHERE identity_id = $2 AND passkey_id = $1)) \
                  ON CONFLICT (passkey_id) DO UPDATE SET \
                      label = EXCLUDED.label, added_at = EXCLUDED.added_at \
@@ -114,26 +149,29 @@ pub async fn apply(
             passkey_id,
             identity_id,
             revoked_at,
+            event_id,
         } => {
-            sqlx::query(
-                "UPDATE indexer_identity_passkeys SET revoked_at = $2 \
-                 WHERE passkey_id = $1 AND identity_id = $3 AND revoked_at IS NULL",
-            )
-            .bind(passkey_id)
-            .bind(revoked_at)
-            .bind(identity_id)
-            .execute(&mut **tx)
-            .await?;
             // Recorded even when it arrives before the registration, so that registration
             // comes up revoked.
             sqlx::query(
                 "INSERT INTO indexer_identity_passkey_revocations \
-                 (identity_id, passkey_id, revoked_at) VALUES ($1, $2, $3) \
+                 (identity_id, passkey_id, event_id, revoked_at) VALUES ($1, $2, $3, $4) \
                  ON CONFLICT DO NOTHING",
             )
             .bind(identity_id)
             .bind(passkey_id)
+            .bind(event_id)
             .bind(revoked_at)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "UPDATE indexer_identity_passkeys k SET revoked_at = \
+                 (SELECT MIN(r.revoked_at) FROM indexer_identity_passkey_revocations r \
+                  WHERE r.identity_id = k.identity_id AND r.passkey_id = k.passkey_id) \
+                 WHERE k.identity_id = $1 AND k.passkey_id = $2",
+            )
+            .bind(identity_id)
+            .bind(passkey_id)
             .execute(&mut **tx)
             .await?;
         }
@@ -274,6 +312,7 @@ mod tests {
                 passkey_id,
                 identity_id,
                 revoked_at: source_event.timestamp,
+                event_id: source_event.id,
             }
         );
     }

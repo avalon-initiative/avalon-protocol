@@ -154,6 +154,13 @@ impl AcceptedChain {
         }
     }
 
+    /// Whether the chain has a key with this id or this public key, whatever became of it.
+    pub fn has_key(&self, signing_key_id: Uuid, public_key: &[u8; 32]) -> bool {
+        self.records
+            .iter()
+            .any(|r| r.signing_key_id == signing_key_id || &r.public_key == public_key)
+    }
+
     /// Whether the accepted chain revokes the key at any position.
     pub fn is_revoked(&self, signing_key_id: Uuid) -> bool {
         self.records

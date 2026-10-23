@@ -203,6 +203,26 @@ pub fn parse_prev_hash(prev_hash: Option<&str>) -> Result<Option<[u8; 32]>, AppE
         .transpose()
 }
 
+/// How often identities whose chain depends on cosigned head dates are re-resolved.
+const RECONCILE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Identities re-resolved per pass.
+const RECONCILE_BATCH: usize = 50;
+
+/// Re-resolves identities with conflicting revocations on a timer, so projections follow cosigned
+/// head dates that arrive after the events (no event for the identity need arrive).
+pub async fn run_reconcile_worker(state: AppState) {
+    loop {
+        tokio::time::sleep(RECONCILE_INTERVAL).await;
+        if let Err(err) = state
+            .indexer
+            .reconcile_anchor_dependent(RECONCILE_BATCH)
+            .await
+        {
+            tracing::warn!("identity chain reconcile: {err}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

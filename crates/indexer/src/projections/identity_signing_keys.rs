@@ -114,18 +114,23 @@ pub async fn apply_recovered(
         return Ok(());
     }
     for sql in [
-        "UPDATE indexer_identity_signing_keys SET revoked_at = $2, revoked_by_event_id = $3 \
-         WHERE identity_id = $1 AND revoked_at IS NULL",
-        "UPDATE indexer_identity_passkeys SET revoked_at = $2, revoked_by_event_id = $3 \
-         WHERE identity_id = $1 AND revoked_at IS NULL",
+        "INSERT INTO indexer_identity_signing_key_revocations \
+         (identity_id, signing_key_id, event_id, revoked_at) \
+         SELECT identity_id, signing_key_id, $2, $3 FROM indexer_identity_signing_keys \
+         WHERE identity_id = $1 ON CONFLICT DO NOTHING",
+        "INSERT INTO indexer_identity_passkey_revocations \
+         (identity_id, passkey_id, event_id, revoked_at) \
+         SELECT identity_id, passkey_id, $2, $3 FROM indexer_identity_passkeys \
+         WHERE identity_id = $1 ON CONFLICT DO NOTHING",
     ] {
         sqlx::query(sql)
             .bind(identity_id)
-            .bind(event.timestamp)
             .bind(event.id)
+            .bind(event.timestamp)
             .execute(&mut **tx)
             .await?;
     }
+    recompute_revoked(tx, identity_id).await?;
     apply(
         tx,
         &SigningKeyWrite::Added {
@@ -140,6 +145,48 @@ pub async fn apply_recovered(
     .await
 }
 
+/// Sets every key and passkey of the identity to be revoked since the earliest event that revoked it.
+pub async fn recompute_revoked(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+) -> Result<(), IndexError> {
+    for sql in [
+        "UPDATE indexer_identity_signing_keys k SET revoked_at = \
+         (SELECT MIN(r.revoked_at) FROM indexer_identity_signing_key_revocations r \
+          WHERE r.identity_id = k.identity_id AND r.signing_key_id = k.signing_key_id) \
+         WHERE k.identity_id = $1",
+        "UPDATE indexer_identity_passkeys k SET revoked_at = \
+         (SELECT MIN(r.revoked_at) FROM indexer_identity_passkey_revocations r \
+          WHERE r.identity_id = k.identity_id AND r.passkey_id = k.passkey_id) \
+         WHERE k.identity_id = $1",
+    ] {
+        sqlx::query(sql)
+            .bind(identity_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Drops the revocations `event_id` made and restores whatever no other event still revokes.
+pub async fn forget_revocations_by(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+    event_id: Uuid,
+) -> Result<(), IndexError> {
+    for sql in [
+        "DELETE FROM indexer_identity_signing_key_revocations WHERE identity_id = $1 AND event_id = $2",
+        "DELETE FROM indexer_identity_passkey_revocations WHERE identity_id = $1 AND event_id = $2",
+    ] {
+        sqlx::query(sql)
+            .bind(identity_id)
+            .bind(event_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    recompute_revoked(tx, identity_id).await
+}
+
 /// Undoes [`apply_recovered`] for a recovery the owner's veto displaced: the keys and passkeys it
 /// revoked are active again and its new key is gone.
 pub async fn revert_recovered(
@@ -150,18 +197,7 @@ pub async fn revert_recovered(
     let payload: avalon_protocol::event_payloads::IdentityRecoveredPayload =
         serde_json::from_value(event.payload.clone())
             .map_err(|_| IndexError::Rejected("identity.recovered payload is malformed".into()))?;
-    for sql in [
-        "UPDATE indexer_identity_signing_keys SET revoked_at = NULL, revoked_by_event_id = NULL \
-         WHERE identity_id = $1 AND revoked_by_event_id = $2",
-        "UPDATE indexer_identity_passkeys SET revoked_at = NULL, revoked_by_event_id = NULL \
-         WHERE identity_id = $1 AND revoked_by_event_id = $2",
-    ] {
-        sqlx::query(sql)
-            .bind(identity_id)
-            .bind(event.id)
-            .execute(&mut **tx)
-            .await?;
-    }
+    forget_revocations_by(tx, identity_id, event.id).await?;
     sqlx::query(
         "DELETE FROM indexer_identity_signing_keys WHERE identity_id = $1 AND signing_key_id = $2",
     )
@@ -196,20 +232,8 @@ pub async fn revert_key_event(
             .execute(&mut **tx)
             .await?;
         }
-        Some(SigningKeyWrite::Revoked {
-            signing_key_id,
-            event_id,
-            ..
-        }) => {
-            sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = NULL, revoked_by_event_id = NULL \
-                 WHERE identity_id = $1 AND signing_key_id = $2 AND revoked_by_event_id = $3",
-            )
-            .bind(identity_id)
-            .bind(signing_key_id)
-            .bind(event_id)
-            .execute(&mut **tx)
-            .await?;
+        Some(SigningKeyWrite::Revoked { event_id, .. }) => {
+            forget_revocations_by(tx, identity_id, event_id).await?;
         }
         _ => {}
     }
@@ -251,7 +275,7 @@ pub async fn apply(
                 "INSERT INTO indexer_identity_signing_keys AS k \
                  (signing_key_id, identity_id, public_key, label, added_at, inception, revoked_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, \
-                         (SELECT revoked_at FROM indexer_identity_signing_key_revocations \
+                         (SELECT MIN(revoked_at) FROM indexer_identity_signing_key_revocations \
                           WHERE identity_id = $2 AND signing_key_id = $1)) \
                  ON CONFLICT (identity_id, signing_key_id) DO UPDATE SET \
                      label = COALESCE(k.label, EXCLUDED.label), \
@@ -278,26 +302,27 @@ pub async fn apply(
             revoked_at,
             event_id,
         } => {
-            sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = $3, revoked_by_event_id = $4 \
-                 WHERE signing_key_id = $1 AND identity_id = $2 AND revoked_at IS NULL",
-            )
-            .bind(signing_key_id)
-            .bind(identity_id)
-            .bind(revoked_at)
-            .bind(event_id)
-            .execute(&mut **tx)
-            .await?;
             // Recorded unconditionally: a revocation delivered before the key's addition must
             // still leave the key revoked when the addition arrives.
             sqlx::query(
                 "INSERT INTO indexer_identity_signing_key_revocations \
-                 (identity_id, signing_key_id, revoked_at) VALUES ($1, $2, $3) \
+                 (identity_id, signing_key_id, event_id, revoked_at) VALUES ($1, $2, $3, $4) \
                  ON CONFLICT DO NOTHING",
             )
             .bind(identity_id)
             .bind(signing_key_id)
+            .bind(event_id)
             .bind(revoked_at)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "UPDATE indexer_identity_signing_keys k SET revoked_at = \
+                 (SELECT MIN(r.revoked_at) FROM indexer_identity_signing_key_revocations r \
+                  WHERE r.identity_id = k.identity_id AND r.signing_key_id = k.signing_key_id) \
+                 WHERE k.identity_id = $1 AND k.signing_key_id = $2",
+            )
+            .bind(identity_id)
+            .bind(signing_key_id)
             .execute(&mut **tx)
             .await?;
         }
