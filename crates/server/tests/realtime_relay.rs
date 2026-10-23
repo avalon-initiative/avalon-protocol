@@ -21,14 +21,11 @@
 use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 /// The second, independently-running `avalon-server` process this test
 /// observes relayed events on — `None` means the two-node scenario isn't
@@ -48,14 +45,6 @@ fn require_peer_server_url() -> String {
              comment)"
         )
     })
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
@@ -222,9 +211,9 @@ fn ws_url(base: &str, path: &str) -> String {
 #[ignore]
 async fn a_presence_update_from_node_a_is_visible_on_node_b() {
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     wait_until_peered(&http, &node_b, &node_a).await;
 
@@ -275,9 +264,9 @@ async fn a_presence_update_from_node_a_is_visible_on_node_b() {
 #[ignore]
 async fn a_channel_message_from_node_a_is_pushed_to_a_subscriber_on_node_b() {
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     wait_until_peered(&http, &node_b, &node_a).await;
 

@@ -11,9 +11,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     signing_key: SigningKey,
@@ -118,7 +116,7 @@ async fn publish_schema(
 #[ignore]
 async fn publishing_a_mapping_round_trips_and_is_fetchable() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
     let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
     let v2 = publish_schema(&http, &base, &integrator, PROTO_V2).await;
@@ -169,7 +167,7 @@ async fn publishing_a_mapping_round_trips_and_is_fetchable() {
 #[ignore]
 async fn a_mapping_containing_nul_is_rejected_as_invalid_payload() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
     let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
     let v2 = publish_schema(&http, &base, &integrator, PROTO_V2).await;
@@ -201,7 +199,7 @@ async fn a_mapping_containing_nul_is_rejected_as_invalid_payload() {
 #[ignore]
 async fn publishing_a_mapping_against_a_schema_not_owned_by_the_caller_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let owner = register_integrator(&http, &base).await;
     let other = register_integrator(&http, &base).await;
     let owner_v1 = publish_schema(&http, &base, &owner, PROTO_V1).await;
@@ -227,7 +225,7 @@ async fn publishing_a_mapping_against_a_schema_not_owned_by_the_caller_is_reject
 #[ignore]
 async fn publishing_a_mapping_against_a_nonexistent_schema_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
     let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
 
@@ -249,7 +247,7 @@ async fn publishing_a_mapping_against_a_nonexistent_schema_is_rejected() {
 #[ignore]
 async fn publishing_a_mapping_with_identical_from_and_to_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
     let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
 
@@ -268,7 +266,7 @@ async fn publishing_a_mapping_with_identical_from_and_to_is_rejected() {
 #[ignore]
 async fn a_integrator_publishing_a_mapping_under_another_slug_is_forbidden() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator_a = register_integrator(&http, &base).await;
     let integrator_b = register_integrator(&http, &base).await;
     let a_v1 = publish_schema(&http, &base, &integrator_a, PROTO_V1).await;
@@ -292,7 +290,7 @@ async fn a_integrator_publishing_a_mapping_under_another_slug_is_forbidden() {
 #[ignore]
 async fn listing_a_integrators_mappings_is_public_and_unauthenticated() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
     let v1 = publish_schema(&http, &base, &integrator, PROTO_V1).await;
     let v2 = publish_schema(&http, &base, &integrator, PROTO_V2).await;
@@ -321,7 +319,7 @@ async fn listing_a_integrators_mappings_is_public_and_unauthenticated() {
 #[ignore]
 async fn a_integrator_with_no_published_mappings_lists_empty() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let listed: Vec<serde_json::Value> = http

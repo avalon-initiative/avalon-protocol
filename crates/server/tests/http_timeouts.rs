@@ -16,19 +16,16 @@
 //! ```
 
 use futures_util::{SinkExt, StreamExt};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn server_addr() -> String {
-    server_url()
+    common::server_url()
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .to_string()
@@ -111,7 +108,7 @@ async fn slow_headers_close_after_the_header_read_timeout() {
 async fn well_behaved_requests_are_unaffected_by_the_header_read_timeout() {
     let http = reqwest::Client::new();
     let res = http
-        .get(format!("{}/nodes/status", server_url()))
+        .get(format!("{}/nodes/status", common::server_url()))
         .send()
         .await
         .expect("request failed — is `make start` running?");
@@ -162,14 +159,6 @@ async fn a_stalled_body_gets_408_after_the_request_timeout() {
     );
 }
 
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
-
 /// Direct-insert fixture, same shape
 /// `crates/server/tests/realtime_reconnect.rs::seed_identity_session` uses —
 /// bypasses the real WebAuthn ceremony since this test only needs a valid
@@ -208,7 +197,7 @@ async fn a_live_websocket_outlasts_the_request_timeout() {
         eprintln!("skipping: set AVALON_HTTP_REQUEST_TIMEOUT_SECS (e.g. 2) before `make start`");
         return;
     };
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let token = seed_identity_session(&pool).await;
     let ws_url = format!("ws://{}/ws/presence?token={token}", server_addr());
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)

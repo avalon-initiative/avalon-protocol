@@ -24,9 +24,7 @@
 //! cargo test -p avalon-server --test resource_limits concurrency -- --ignored
 //! ```
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn hub_origin() -> String {
     std::env::var("AVALON_HUB_ORIGIN")
@@ -49,7 +47,7 @@ async fn requests_past_the_rate_limit_get_429_with_retry_after() {
     };
 
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     // The configured burst is exactly `per_minute` requests (crate::router's
     // `.burst_size(rate_limit_per_minute as u32)`) — a public, unauthenticated,
@@ -110,7 +108,7 @@ async fn a_burst_beyond_the_concurrency_ceiling_backpressures_rather_than_failin
     };
 
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     // Baseline: one request's own latency, unconcurrent.
     let baseline_start = std::time::Instant::now();

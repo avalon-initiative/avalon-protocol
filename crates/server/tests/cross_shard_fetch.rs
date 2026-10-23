@@ -21,8 +21,6 @@ use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -30,26 +28,10 @@ use avalon_server::cross_shard_fetch::{fetch_verified_entries_with, CrossShardFe
 use avalon_server::node_http::NodeClient;
 use avalon_server::outbound_policy::OutboundPolicy;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
+mod common;
 
 fn network_id() -> String {
     std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 /// This sandbox's real settlement verify key, as the running server itself
@@ -111,7 +93,7 @@ async fn register_identity(
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
     let mut client = new_virtual_client();
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -157,8 +139,8 @@ async fn register_identity(
 #[ignore]
 async fn a_real_entry_is_fetched_and_verified_end_to_end() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let (identity_id, subject) = register_identity(&http, &base).await;
 
@@ -216,7 +198,7 @@ async fn a_real_entry_is_fetched_and_verified_end_to_end() {
 #[tokio::test]
 #[ignore]
 async fn an_unknown_subject_returns_no_entries() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let subject = format!("identity:{}:self:signing_key_added", Uuid::new_v4());
 
     let entries = fetch_verified_entries_with(
@@ -224,7 +206,7 @@ async fn an_unknown_subject_returns_no_entries() {
         &pool,
         &network_id(),
         "core",
-        &server_url(),
+        &common::server_url(),
         &subject,
         &core_verify_keys(),
         &[],
@@ -242,8 +224,8 @@ async fn an_unknown_subject_returns_no_entries() {
 #[ignore]
 async fn a_shard_with_no_resolvable_verify_key_fails_closed() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_identity_id, subject) = register_identity(&http, &base).await;
 
     let result = fetch_verified_entries_with(
@@ -273,8 +255,8 @@ async fn a_shard_with_no_resolvable_verify_key_fails_closed() {
 #[ignore]
 async fn a_wrong_verify_key_fails_closed() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_identity_id, subject) = register_identity(&http, &base).await;
 
     let wrong_key = SigningKey::generate(&mut rand::rng()).verifying_key();

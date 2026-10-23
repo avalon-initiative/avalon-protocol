@@ -11,22 +11,11 @@
 //! shortcut `indexer_guild_members` rows already get in this test suite's sibling
 //! files.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -71,12 +60,8 @@ async fn seed_friendship(
         .expect("failed to seed friendship");
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 async fn set_presence_visibility(http: &reqwest::Client, base: &str, token: &str, value: &str) {
-    let response = auth(http.patch(format!("{base}/me")), token)
+    let response = common::auth(http.patch(format!("{base}/me")), token)
         .json(&serde_json::json!({ "presence_visibility": value }))
         .send()
         .await
@@ -87,7 +72,7 @@ async fn set_presence_visibility(http: &reqwest::Client, base: &str, token: &str
 }
 
 async fn publish_presence(http: &reqwest::Client, base: &str, token: &str) {
-    let response = auth(http.put(format!("{base}/me/presence")), token)
+    let response = common::auth(http.put(format!("{base}/me/presence")), token)
         .json(&serde_json::json!({ "status": "Online" }))
         .send()
         .await
@@ -107,14 +92,15 @@ async fn presence_visible_to(
     viewer_token: &str,
     subject: avalon_protocol::ids::IdentityId,
 ) -> bool {
-    let response: serde_json::Value = auth(http.get(format!("{base}/presence")), viewer_token)
-        .query(&[("ids", subject.to_string())])
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let response: serde_json::Value =
+        common::auth(http.get(format!("{base}/presence")), viewer_token)
+            .query(&[("ids", subject.to_string())])
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     response[0]["status"] == "Online"
 }
 
@@ -122,8 +108,8 @@ async fn presence_visible_to(
 #[ignore]
 async fn presence_visibility_matrix() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let (subject_id, subject_token) = seed_identity_session(&pool).await;
     let (friend_id, friend_token) = seed_identity_session(&pool).await;
@@ -155,17 +141,18 @@ async fn presence_visibility_matrix() {
 
 async fn create_guild(http: &reqwest::Client, base: &str, owner_token: &str) -> Uuid {
     let suffix = Uuid::new_v4().simple().to_string();
-    let response: serde_json::Value = auth(http.post(format!("{base}/guilds")), owner_token)
-        .json(&serde_json::json!({
-            "name": format!("Visibility Test {}", &suffix[..8]),
-            "tag": suffix[..4].to_uppercase(),
-        }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let response: serde_json::Value =
+        common::auth(http.post(format!("{base}/guilds")), owner_token)
+            .json(&serde_json::json!({
+                "name": format!("Visibility Test {}", &suffix[..8]),
+                "tag": suffix[..4].to_uppercase(),
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     response["id"].as_str().unwrap().parse().unwrap()
 }
 
@@ -192,7 +179,7 @@ async fn set_roster_visibility(
     guild_id: Uuid,
     value: &str,
 ) {
-    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+    let response = common::auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
         .json(&serde_json::json!({ "roster_visibility": value }))
         .send()
         .await
@@ -201,7 +188,7 @@ async fn set_roster_visibility(
 }
 
 async fn can_list_members(http: &reqwest::Client, base: &str, token: &str, guild_id: Uuid) -> bool {
-    let response = auth(http.get(format!("{base}/guilds/{guild_id}/members")), token)
+    let response = common::auth(http.get(format!("{base}/guilds/{guild_id}/members")), token)
         .send()
         .await
         .unwrap();
@@ -212,8 +199,8 @@ async fn can_list_members(http: &reqwest::Client, base: &str, token: &str, guild
 #[ignore]
 async fn guild_roster_visibility_matrix() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
@@ -252,7 +239,7 @@ async fn set_guild_public(
     guild_id: Uuid,
     value: bool,
 ) {
-    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+    let response = common::auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
         .json(&serde_json::json!({ "public": value }))
         .send()
         .await
@@ -267,7 +254,7 @@ async fn set_recruiting(
     guild_id: Uuid,
     value: bool,
 ) {
-    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+    let response = common::auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
         .json(&serde_json::json!({ "recruiting": value }))
         .send()
         .await
@@ -284,8 +271,8 @@ async fn set_recruiting(
 #[ignore]
 async fn a_public_guilds_roster_is_visible_despite_a_private_roster_setting() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
@@ -317,8 +304,8 @@ async fn a_public_guilds_roster_is_visible_despite_a_private_roster_setting() {
 #[ignore]
 async fn recruiting_and_public_are_independent_settings() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;

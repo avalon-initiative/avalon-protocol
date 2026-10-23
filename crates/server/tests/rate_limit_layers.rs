@@ -28,21 +28,13 @@ use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn hub_origin() -> String {
     std::env::var("AVALON_HUB_ORIGIN")
         .ok()
         .and_then(|o| o.split(',').next().map(|s| s.trim().to_string()))
         .unwrap_or_else(|| "http://localhost:5173".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
 }
 
 /// Registers a fresh identity and returns a logged-in session token.
@@ -72,7 +64,7 @@ async fn create_identity_and_log_in(http: &reqwest::Client, base: &str) -> Strin
         passkey_crypto::AvailableBackend,
     ))
     .allows_insecure_localhost(true);
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -147,7 +139,7 @@ async fn principal_limit_gives_each_identity_its_own_budget_from_one_ip() {
         return;
     };
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let token_a = create_identity_and_log_in(&http, &base).await;
     let token_b = create_identity_and_log_in(&http, &base).await;
 
@@ -195,7 +187,7 @@ async fn rotating_integrator_key_id_header_still_hits_the_per_ip_ceiling() {
         return;
     };
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let mut saw_429 = false;
     for _ in 0..(per_minute * 2) {
@@ -246,7 +238,7 @@ async fn trusted_proxy_forwarded_addresses_get_separate_ip_buckets() {
         return;
     };
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let client_a = random_forwarded_address();
     let client_b = random_forwarded_address();
 
@@ -282,7 +274,7 @@ async fn untrusted_peer_cannot_choose_its_bucket_with_forwarded_for() {
         return;
     };
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let mut saw_429 = false;
     for _ in 0..(per_minute * 2) {

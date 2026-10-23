@@ -28,21 +28,10 @@
 use avalon_chain::merkle;
 use avalon_chain::mirror::{self, ObservedSth};
 use avalon_protocol::sth;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
     let suffix = Uuid::new_v4().simple().to_string();
@@ -197,9 +186,9 @@ fn sth_from_json(v: &serde_json::Value) -> sth::SignedTreeHead {
 #[tokio::test]
 #[ignore]
 async fn bulk_entries_endpoint_returns_real_content_in_seq_order_since_a_cursor() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
@@ -254,9 +243,9 @@ async fn bulk_entries_endpoint_returns_real_content_in_seq_order_since_a_cursor(
 #[tokio::test]
 #[ignore]
 async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
@@ -354,9 +343,9 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
 #[tokio::test]
 #[ignore]
 async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     // A fresh ledger has no tree head until something has been committed.
     let issuer = register_throwaway_integrator(&http, &base).await;

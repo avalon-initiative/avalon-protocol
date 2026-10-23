@@ -18,15 +18,7 @@ use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
+mod common;
 
 type VirtualClient = Client<
     MemoryStore,
@@ -109,7 +101,7 @@ async fn register(
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
     let mut client = new_virtual_client(expected_checks);
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -172,7 +164,7 @@ async fn login(
         .await
         .unwrap();
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let request_options: CredentialRequestOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let assertion = client
@@ -198,7 +190,7 @@ async fn login(
 #[ignore]
 async fn registering_a_taken_display_name_is_rejected_at_register_start() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let name = format!("taken-name-{}", Uuid::new_v4());
 
     let (_first_id, _client, result) = register(&http, &base, &name, 1).await;
@@ -219,7 +211,7 @@ async fn registering_a_taken_display_name_is_rejected_at_register_start() {
 #[ignore]
 async fn renaming_to_a_taken_display_name_is_rejected_cleanly() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let name_a = format!("owner-name-{}", Uuid::new_v4());
     let name_b = format!("other-name-{}", Uuid::new_v4());
 
@@ -262,7 +254,7 @@ async fn renaming_to_a_taken_display_name_is_rejected_cleanly() {
 async fn two_concurrent_registrations_for_the_same_name_one_wins_one_is_rejected() {
     let http_a = reqwest::Client::new();
     let http_b = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let name = format!("racing-name-{}", Uuid::new_v4());
 
     let ((_, _, result_a), (_, _, result_b)) = tokio::join!(

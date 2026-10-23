@@ -9,9 +9,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     slug: String,
@@ -21,7 +19,7 @@ struct RegisteredIntegrator {
 }
 
 async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
-    let base = server_url();
+    let base = common::server_url();
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let root_signing_key = SigningKey::generate(&mut csprng);
@@ -65,7 +63,7 @@ async fn signed_challenge_headers(
     key_id: &str,
     signing_key: &SigningKey,
 ) -> [(&'static str, String); 3] {
-    let base = server_url();
+    let base = common::server_url();
     let challenge = http
         .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
@@ -100,7 +98,7 @@ fn with_headers(
 #[ignore]
 async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
@@ -147,7 +145,7 @@ async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls
 #[ignore]
 async fn an_operational_key_cannot_authorize_a_key_set_change() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
@@ -199,7 +197,7 @@ async fn an_operational_key_cannot_authorize_a_key_set_change() {
 #[ignore]
 async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anything() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
@@ -285,7 +283,7 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
 #[ignore]
 async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator_a = register_integrator(&http).await;
     let integrator_b = register_integrator(&http).await;
 
@@ -320,7 +318,7 @@ async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
 #[ignore]
 async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());

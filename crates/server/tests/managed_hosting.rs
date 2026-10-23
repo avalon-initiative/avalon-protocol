@@ -24,9 +24,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn require_submit_key() -> String {
     std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY").unwrap_or_else(|_| {
@@ -85,7 +83,7 @@ fn require_test_signing_key_matching_the_configured_verify_key() -> SigningKey {
 #[ignore]
 async fn prepare_then_finalize_over_http_commits_the_batch() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let submit_key = require_submit_key();
     let integrator_key = require_test_signing_key_matching_the_configured_verify_key();
     let pool = test_pool().await;
@@ -164,7 +162,7 @@ async fn prepare_then_finalize_over_http_commits_the_batch() {
 #[ignore]
 async fn finalize_over_http_with_the_wrong_key_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let submit_key = require_submit_key();
     let pool = test_pool().await;
 
@@ -237,7 +235,7 @@ async fn finalize_over_http_with_the_wrong_key_is_rejected() {
 #[ignore]
 async fn prepare_batch_without_the_submit_key_is_unauthorized() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let batch = sample_batch("test.managed_hosting_http_unauth");
 
     let response = http

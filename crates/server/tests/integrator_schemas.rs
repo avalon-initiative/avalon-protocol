@@ -15,9 +15,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     signing_key: SigningKey,
@@ -110,7 +108,7 @@ const PROTO_V2: &str =
 #[ignore]
 async fn publishing_a_schema_version_round_trips_the_proto_source_verbatim() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
@@ -147,7 +145,7 @@ async fn publishing_a_schema_version_round_trips_the_proto_source_verbatim() {
 #[ignore]
 async fn publishing_a_second_version_leaves_the_first_untouched_and_links_lineage() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
@@ -189,7 +187,7 @@ async fn publishing_a_second_version_leaves_the_first_untouched_and_links_lineag
 #[ignore]
 async fn a_integrator_publishing_under_another_slug_is_forbidden() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator_a = register_integrator(&http, &base).await;
     let integrator_b = register_integrator(&http, &base).await;
 
@@ -209,7 +207,7 @@ async fn a_integrator_publishing_under_another_slug_is_forbidden() {
 #[ignore]
 async fn listing_a_integrators_schema_versions_is_public_and_unauthenticated() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
@@ -236,7 +234,7 @@ async fn listing_a_integrators_schema_versions_is_public_and_unauthenticated() {
 #[ignore]
 async fn a_integrator_with_no_publications_lists_empty() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let listed: Vec<serde_json::Value> = http
@@ -262,7 +260,7 @@ async fn two_concurrent_publishes_for_the_same_integrator_produce_distinct_seque
     // the next version instead — so both requests must succeed, and must
     // land on versions 1 and 2, in either order.
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     // Mint both single-use challenges up front so neither request waits on
@@ -315,7 +313,7 @@ async fn rejects_a_schema_declaring_more_than_the_max_field_count() {
     use avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS;
 
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let fields: String = (1..=MAX_SCHEMA_TOP_LEVEL_FIELDS + 1)
@@ -340,7 +338,7 @@ async fn accepts_a_schema_at_exactly_the_max_field_count() {
     use avalon_protocol::integrator_schemas::MAX_SCHEMA_TOP_LEVEL_FIELDS;
 
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let fields: String = (1..=MAX_SCHEMA_TOP_LEVEL_FIELDS)
@@ -386,7 +384,7 @@ async fn rejects_a_schema_nested_deeper_than_the_max_depth() {
     );
 
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;

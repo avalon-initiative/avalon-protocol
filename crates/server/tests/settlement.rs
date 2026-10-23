@@ -21,21 +21,10 @@
 
 use avalon_chain::merkle;
 use avalon_protocol::sth;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 /// Registers a throwaway integrator via the real, unauthenticated `POST /integrations`
 /// endpoint — the simplest real write in this codebase that goes through
@@ -134,7 +123,7 @@ fn root_hash_bytes(hex_str: &str) -> [u8; 32] {
 #[tokio::test]
 #[ignore]
 async fn latest_sth_is_a_real_signed_tree_head() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
 
     let response = http
@@ -157,9 +146,9 @@ async fn latest_sth_is_a_real_signed_tree_head() {
 #[tokio::test]
 #[ignore]
 async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
@@ -269,9 +258,9 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
 #[tokio::test]
 #[ignore]
 async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     // Burn a seq value the same way a real failed/rolled-back batch commit
     // would: insert into ledger_entries, then roll back. `batch_id`'s FK is
@@ -398,9 +387,9 @@ async fn tree_size_and_inclusion_proofs_stay_correct_after_a_rolled_back_insert(
 #[tokio::test]
 #[ignore]
 async fn consistency_proof_between_two_real_tree_sizes_verifies_client_side() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     // Two real, distinct committed tree sizes: whatever the ledger already
     // has, plus one more produced by this test's own write.
@@ -474,7 +463,7 @@ async fn consistency_proof_between_two_real_tree_sizes_verifies_client_side() {
 #[tokio::test]
 #[ignore]
 async fn inclusion_proof_for_an_uncommitted_tree_size_is_a_clear_error() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
 
     let response = http
@@ -499,7 +488,7 @@ async fn inclusion_proof_for_an_uncommitted_tree_size_is_a_clear_error() {
 #[tokio::test]
 #[ignore]
 async fn sth_at_an_uncommitted_tree_size_is_not_found() {
-    let base = server_url();
+    let base = common::server_url();
     let http = reqwest::Client::new();
 
     let response = http

@@ -27,47 +27,16 @@
 //!    server-side code branches on authenticator type.
 
 use ed25519_dalek::{Signer, SigningKey};
-use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
-use passkey_client::{Client, DefaultClientData, Origin};
-use passkey_types::ctap2::Aaguid;
+use passkey_client::{DefaultClientData, Origin};
 use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
-
-/// Named so `Client`'s ceremony state can be carried across `await` points —
-/// see `crates/server/tests/passkeys.rs`'s identical type alias for why the
-/// TLD-verifier parameter has to be spelled out explicitly.
-type VirtualClient = Client<
-    MemoryStore,
-    MockUserValidationMethod,
-    passkey_crypto::AvailableBackend,
-    public_suffix::PublicSuffixList,
-    (),
->;
-
-fn new_virtual_client() -> VirtualClient {
-    let authenticator = Authenticator::new(
-        Aaguid::new_empty(),
-        MemoryStore::new(),
-        MockUserValidationMethod::verified_user(2),
-        passkey_crypto::AvailableBackend,
-    );
-    Client::new(authenticator).allows_insecure_localhost(true)
-}
+mod common;
 
 #[tokio::test]
 #[ignore]
 async fn registration_and_login_challenges_do_not_restrict_authenticator_attachment() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let signing_key = SigningKey::generate(&mut rand::rng());
     let identity_id =
         avalon_protocol::identity_id::derive_identity_id_for_key(&signing_key.verifying_key());
@@ -101,8 +70,8 @@ async fn registration_and_login_challenges_do_not_restrict_authenticator_attachm
     // Complete a real registration with a generic virtual authenticator —
     // not tagged platform-only — so there's a credential to exercise the
     // login challenge against below.
-    let mut client = new_virtual_client();
-    let origin = rp_origin();
+    let mut client = common::new_virtual_client();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client

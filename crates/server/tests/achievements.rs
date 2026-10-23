@@ -15,9 +15,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     signing_key: SigningKey,
@@ -101,7 +99,7 @@ async fn integrator_auth_headers(
 #[ignore]
 async fn two_integrators_defining_the_same_key_both_succeed_with_distinct_ids() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator_a = register_integrator(&http, &base).await;
     let integrator_b = register_integrator(&http, &base).await;
 
@@ -163,7 +161,7 @@ async fn two_integrators_defining_the_same_key_both_succeed_with_distinct_ids() 
 #[ignore]
 async fn defining_a_duplicate_key_for_the_same_integrator_conflicts() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let body = serde_json::json!({
@@ -203,7 +201,7 @@ async fn defining_a_duplicate_key_for_the_same_integrator_conflicts() {
 #[ignore]
 async fn a_integrator_defining_under_another_slug_is_forbidden() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator_a = register_integrator(&http, &base).await;
     let integrator_b = register_integrator(&http, &base).await;
 
@@ -232,7 +230,7 @@ async fn a_integrator_defining_under_another_slug_is_forbidden() {
 #[ignore]
 async fn updating_a_definition_bumps_version_and_leaves_the_id_unchanged() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -285,7 +283,7 @@ async fn updating_a_definition_bumps_version_and_leaves_the_id_unchanged() {
 #[ignore]
 async fn listing_a_integrators_achievements_is_public_and_unauthenticated() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -324,7 +322,7 @@ async fn listing_a_integrators_achievements_is_public_and_unauthenticated() {
 #[ignore]
 async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -377,7 +375,7 @@ async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
 #[ignore]
 async fn a_definition_with_neither_icon_field_set_still_gets_a_default_icon() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -406,7 +404,7 @@ async fn a_definition_with_neither_icon_field_set_still_gets_a_default_icon() {
 #[ignore]
 async fn icon_url_takes_precedence_and_round_trips_through_create_and_update() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -458,7 +456,7 @@ async fn icon_url_takes_precedence_and_round_trips_through_create_and_update() {
 #[ignore]
 async fn a_non_http_icon_url_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({
@@ -485,7 +483,7 @@ async fn a_non_http_icon_url_is_rejected() {
 #[ignore]
 async fn an_unknown_icon_key_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http, &base).await;
 
     let create_body = serde_json::json!({

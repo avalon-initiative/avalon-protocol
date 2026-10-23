@@ -57,6 +57,8 @@
 //! Live-verified in this environment against real Postgres and two real,
 //! separately-running `avalon-server` processes.
 
+mod common;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -74,12 +76,8 @@ fn gateway_only_server_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:18082".to_string())
 }
 
-fn base_database_url() -> String {
-    std::env::var("DATABASE_URL").expect("DATABASE_URL must be set")
-}
-
 fn schema_database_url() -> String {
-    let base = base_database_url();
+    let base = common::base_database_url();
     let sep = if base.contains('?') { "&" } else { "?" };
     format!("{base}{sep}options=-c%20search_path%3D{SCHEMA}")
 }
@@ -93,7 +91,7 @@ fn migrations_dir() -> std::path::PathBuf {
 /// processes above must also be given.
 async fn setup_schema() -> PgPool {
     let admin_pool = PgPoolOptions::new()
-        .connect(&base_database_url())
+        .connect(&common::base_database_url())
         .await
         .expect("failed to connect to Postgres — is it reachable?");
     sqlx::query("CREATE SCHEMA IF NOT EXISTS test_gateway_only_662")

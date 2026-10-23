@@ -8,6 +8,7 @@
 //! reports the failure and keeps the relayed path working, so they are named `libp2p_*`.
 
 mod abuse_support;
+mod common;
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;

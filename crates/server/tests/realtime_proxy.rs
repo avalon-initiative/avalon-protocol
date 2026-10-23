@@ -73,12 +73,13 @@
 //! since (like that one) it deliberately ends a process the earlier tests
 //! in this file depend on.
 
+mod common;
+
 use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
@@ -94,14 +95,6 @@ fn realtime_role_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:8098".to_string())
 }
 
-fn base_database_url() -> String {
-    std::env::var("DATABASE_URL").expect("DATABASE_URL must be set")
-}
-
-fn migrations_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
-}
-
 /// Connects to this test's own isolated schema — see this module's own doc
 /// comment for why a shared/default-schema database can't be used here.
 /// Does **not** create or migrate it (that's [`setup_schema`]/
@@ -110,7 +103,7 @@ fn migrations_dir() -> PathBuf {
 /// server processes' own `search_path`-scoped `DATABASE_URL` needs the
 /// schema to already exist before their own boot-time migration can run.
 async fn test_pool() -> PgPool {
-    let base = base_database_url();
+    let base = common::base_database_url();
     let sep = if base.contains('?') { "&" } else { "?" };
     let scoped = format!("{base}{sep}options=-c%20search_path%3D{SCHEMA}");
     PgPoolOptions::new()
@@ -131,7 +124,7 @@ async fn test_pool() -> PgPool {
 #[ignore]
 async fn create_the_schema_once() {
     let admin_pool = PgPoolOptions::new()
-        .connect(&base_database_url())
+        .connect(&common::base_database_url())
         .await
         .expect("failed to connect to Postgres — is it reachable?");
     sqlx::query("CREATE SCHEMA IF NOT EXISTS test_realtime_proxy_663")
@@ -141,7 +134,7 @@ async fn create_the_schema_once() {
     admin_pool.close().await;
 
     let pool = test_pool().await;
-    avalon_server::migrate::migrate_up(&pool, &migrations_dir())
+    avalon_server::migrate::migrate_up(&pool, &common::migrations_dir())
         .await
         .expect("failed to migrate the test schema");
 }

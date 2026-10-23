@@ -3,16 +3,8 @@
 //! identity row whose id is not derived from its inception key.
 
 use avalon_protocol::identity_id::TestIdentity;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
 
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 /// Identity-typed columns that carry no foreign key (projections and replicas).
 const UNREFERENCED_IDENTITY_COLUMNS: &[(&str, &str)] = &[
@@ -67,7 +59,7 @@ const NON_IDENTITY_UUID_COLUMNS: &[(&str, &str)] = &[];
 #[tokio::test]
 #[ignore]
 async fn every_identity_column_is_text_with_a_shape_check() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     let referencing: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.conrelid::regclass::text, a.attname::text \
@@ -186,7 +178,7 @@ async fn every_identity_column_is_text_with_a_shape_check() {
 #[tokio::test]
 #[ignore]
 async fn the_database_refuses_an_identity_not_derived_from_its_key() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let honest = TestIdentity::new();
     let other = TestIdentity::new();
 

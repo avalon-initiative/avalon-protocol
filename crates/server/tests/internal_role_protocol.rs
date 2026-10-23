@@ -62,6 +62,8 @@
 //! that test's own doc comment for the exact manual step if run by hand
 //! instead) and asserts the very next request fails fast and clearly.
 
+mod common;
+
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_indexer::{IndexError, Indexer};
 use avalon_protocol::events::ProtocolEvent;
@@ -70,7 +72,6 @@ use avalon_protocol::ids::GlobalId;
 use avalon_server::internal_role::RemoteIndexer;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -91,22 +92,14 @@ fn remote_indexer_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:8097".to_string())
 }
 
-fn base_database_url() -> String {
-    std::env::var("DATABASE_URL").expect("DATABASE_URL must be set")
-}
-
 /// This test's own schema-scoped `DATABASE_URL`, matching the connection
 /// string the manually-started "Indexer role" process above must also be
 /// given — same construction `docs/projects/backend-server/architecture/nodes.md`'s
 /// `feedback_live_verify_two_local_processes`-style live tests already use.
 fn schema_database_url() -> String {
-    let base = base_database_url();
+    let base = common::base_database_url();
     let sep = if base.contains('?') { "&" } else { "?" };
     format!("{base}{sep}options=-c%20search_path%3D{SCHEMA}")
-}
-
-fn migrations_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
 }
 
 /// Creates (if needed) and migrates this test's own isolated schema, then
@@ -117,7 +110,7 @@ fn migrations_dir() -> PathBuf {
 /// make this idempotent.
 async fn setup_schema() -> PgPool {
     let admin_pool = PgPoolOptions::new()
-        .connect(&base_database_url())
+        .connect(&common::base_database_url())
         .await
         .expect("failed to connect to Postgres — is it reachable?");
     sqlx::query("CREATE SCHEMA IF NOT EXISTS test_internal_role_661")
@@ -130,7 +123,7 @@ async fn setup_schema() -> PgPool {
         .connect(&schema_database_url())
         .await
         .expect("failed to connect to the test schema");
-    avalon_server::migrate::migrate_up(&pool, &migrations_dir())
+    avalon_server::migrate::migrate_up(&pool, &common::migrations_dir())
         .await
         .expect("failed to migrate the test schema");
     pool

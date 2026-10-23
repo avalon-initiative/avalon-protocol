@@ -10,80 +10,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 mod attestation_support;
+mod common;
 use attestation_support::{issue_bytes, now_micros, revoke_bytes};
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
-
-async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
-    let who = avalon_protocol::identity_id::TestIdentity::new();
-    let identity_id = who.id;
-    sqlx::query("INSERT INTO identities (id, inception_public_key) VALUES ($1, $2)")
-        .bind(identity_id)
-        .bind(who.public_key().to_vec())
-        .execute(pool)
-        .await
-        .expect("failed to seed identity");
-    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
-        .bind(identity_id)
-        .bind(format!("revoke-test-{identity_id}"))
-        .execute(pool)
-        .await
-        .expect("failed to seed profile");
-    let token = format!("test-token-{}", Uuid::new_v4());
-    let expires_at = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
-    sqlx::query("INSERT INTO sessions (token_hash, identity_id, expires_at) VALUES (sha256(convert_to($1::text, 'UTF8')), $2, $3)")
-        .bind(&token)
-        .bind(identity_id)
-        .bind(expires_at)
-        .execute(pool)
-        .await
-        .expect("failed to seed session");
-    (identity_id, token)
-}
-
-/// #697/#698: `POST /integrations/{slug}/connect` is signature-required
-/// -- seeds a real signing key for `identity_id` so a connect call can
-/// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(
-    pool: &PgPool,
-    identity_id: avalon_protocol::ids::IdentityId,
-) -> (Uuid, SigningKey) {
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let public_key = signing_key.verifying_key().to_bytes();
-    let row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(identity_id)
-    .bind(public_key.as_slice())
-    .fetch_one(pool)
-    .await
-    .expect("failed to seed signing key");
-    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
-    let message = format!(
-        "avalon:integration.connect:v1:{slug}:{}",
-        capabilities.join(",")
-    );
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
 
 struct RegisteredIntegrator {
     signing_key: SigningKey,
@@ -165,7 +97,7 @@ async fn issue_one(
     base: &str,
     pool: &PgPool,
 ) -> (RegisteredIntegrator, String, Uuid) {
-    let (identity_id, token) = seed_identity_session(pool).await;
+    let (identity_id, token) = common::seed_identity_session(pool).await;
     let integrator = register_integrator(http, base).await;
 
     let headers = auth_headers(http, base, &integrator).await;
@@ -188,14 +120,14 @@ async fn issue_one(
         .unwrap()
         .to_string();
 
-    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let (signing_key_id, signing_key) = common::seed_signing_key(pool, identity_id).await;
     let connect_capabilities = ["achievements.issue"];
     http.post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({
             "capabilities": connect_capabilities,
             "signing_key_id": signing_key_id,
-            "signature": sign_connect(&signing_key, &integrator.slug, &connect_capabilities),
+            "signature": common::sign_connect(&signing_key, &integrator.slug, &connect_capabilities),
         }))
         .send()
         .await
@@ -246,8 +178,8 @@ async fn issue_one(
 #[ignore]
 async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (integrator, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     let before = http
@@ -310,8 +242,8 @@ async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
 #[ignore]
 async fn revoking_twice_is_rejected_not_silently_accepted() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (integrator, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     let revoke_once = |reason_code: &'static str| {
@@ -374,8 +306,8 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
 #[ignore]
 async fn only_the_original_issuer_may_revoke() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_original_integrator, _issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     // A completely unrelated integrator tries to revoke it.

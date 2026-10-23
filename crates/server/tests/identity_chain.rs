@@ -9,9 +9,7 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 async fn test_pool() -> PgPool {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -45,7 +43,7 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
 }
 
 async fn patch_bio(http: &reqwest::Client, token: &str, bio: &str) -> reqwest::StatusCode {
-    http.patch(format!("{}/me", server_url()))
+    http.patch(format!("{}/me", common::server_url()))
         .bearer_auth(token)
         .json(&serde_json::json!({ "bio": bio }))
         .send()
@@ -110,7 +108,7 @@ async fn profile_edits_are_chained_and_reach_the_ledger_with_their_position() {
 async fn a_forked_identity_refuses_key_dependent_operations_but_allows_profile_edits() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (identity_id, token) = seed_identity_session(&pool).await;
 
     assert!(patch_bio(&http, &token, "before").await.is_success());

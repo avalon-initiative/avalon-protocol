@@ -11,24 +11,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 mod attestation_support;
+mod common;
 use attestation_support::{issue_bytes, now_micros};
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -57,35 +45,6 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .expect("failed to seed session");
 
     (identity_id, token)
-}
-
-/// #697/#698: `POST /integrations/{slug}/connect` is signature-required
-/// -- seeds a real signing key for `identity_id` so a connect call can
-/// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(
-    pool: &PgPool,
-    identity_id: avalon_protocol::ids::IdentityId,
-) -> (Uuid, SigningKey) {
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let public_key = signing_key.verifying_key().to_bytes();
-    let row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(identity_id)
-    .bind(public_key.as_slice())
-    .fetch_one(pool)
-    .await
-    .expect("failed to seed signing key");
-    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
-    let message = format!(
-        "avalon:integration.connect:v1:{slug}:{}",
-        capabilities.join(",")
-    );
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
 }
 
 struct RegisteredIssuer {
@@ -186,7 +145,7 @@ async fn issue_achievement_attestation(
         .unwrap()
         .to_string();
 
-    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let (signing_key_id, signing_key) = common::seed_signing_key(pool, identity_id).await;
     let connect_capabilities = ["achievements.issue"];
     let connect = http
         .post(format!("{base}/integrations/{}/connect", issuer.slug))
@@ -194,7 +153,7 @@ async fn issue_achievement_attestation(
         .json(&serde_json::json!({
             "capabilities": connect_capabilities,
             "signing_key_id": signing_key_id,
-            "signature": sign_connect(&signing_key, &issuer.slug, &connect_capabilities),
+            "signature": common::sign_connect(&signing_key, &issuer.slug, &connect_capabilities),
         }))
         .send()
         .await
@@ -237,8 +196,8 @@ async fn issue_achievement_attestation(
 #[ignore]
 async fn a_never_before_seen_key_auto_registers_on_the_dev_network() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let issuer = register_issuer(&http, &base).await;
 
@@ -267,8 +226,8 @@ async fn a_never_before_seen_key_auto_registers_on_the_dev_network() {
 #[ignore]
 async fn explicit_registration_round_trips_and_write_path_no_longer_needs_to_auto_register() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let issuer = register_issuer(&http, &base).await;
     let issuer_ref = format!("game:{}", issuer.slug);
@@ -337,7 +296,7 @@ async fn explicit_registration_round_trips_and_write_path_no_longer_needs_to_aut
 #[ignore]
 async fn a_registration_challenge_is_single_use() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let issuer = register_issuer(&http, &base).await;
     let issuer_ref = format!("game:{}", issuer.slug);
     let pubkey_b64 = BASE64.encode(issuer.signing_key.verifying_key().as_bytes());
@@ -394,7 +353,7 @@ async fn a_registration_challenge_is_single_use() {
 #[ignore]
 async fn a_declared_network_id_that_does_not_match_this_server_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let issuer = register_issuer(&http, &base).await;
     let issuer_ref = format!("game:{}", issuer.slug);
     let pubkey_b64 = BASE64.encode(issuer.signing_key.verifying_key().as_bytes());
@@ -433,7 +392,7 @@ async fn a_declared_network_id_that_does_not_match_this_server_is_rejected() {
 #[ignore]
 async fn a_proof_of_possession_signed_by_the_wrong_key_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let issuer = register_issuer(&http, &base).await;
     let impostor = SigningKey::generate(&mut rand::rng());
     let issuer_ref = format!("game:{}", issuer.slug);

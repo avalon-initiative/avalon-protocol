@@ -8,22 +8,11 @@
 //! doesn't care how an entry got into `ledger_entries`, only that it reads
 //! back correctly filtered by issuer.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -102,16 +91,12 @@ async fn seed_ledger_entry(
     .expect("failed to seed ledger entry");
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 #[tokio::test]
 #[ignore]
 async fn my_history_returns_only_the_callers_own_events() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
@@ -121,7 +106,7 @@ async fn my_history_returns_only_the_callers_own_events() {
     seed_ledger_entry(&pool, bob_id, "identity.created", "created").await;
 
     let alice_history: serde_json::Value =
-        auth(http.get(format!("{base}/me/history")), &alice_token)
+        common::auth(http.get(format!("{base}/me/history")), &alice_token)
             .send()
             .await
             .expect("history request failed — is `make start` running?")
@@ -135,13 +120,14 @@ async fn my_history_returns_only_the_callers_own_events() {
         .unwrap()
         .contains(&alice_id.to_string())));
 
-    let bob_history: serde_json::Value = auth(http.get(format!("{base}/me/history")), &bob_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let bob_history: serde_json::Value =
+        common::auth(http.get(format!("{base}/me/history")), &bob_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     assert_eq!(bob_history.as_array().unwrap().len(), 1);
 
     // These rows carry junk (non-hex) entry_hash/prev_hash values by
@@ -171,7 +157,7 @@ async fn cleanup_seeded_ledger_entries(
 #[ignore]
 async fn my_history_requires_a_session() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let response = http.get(format!("{base}/me/history")).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);

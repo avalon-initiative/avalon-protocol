@@ -14,20 +14,12 @@ use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod common;
+
 type Identity = avalon_protocol::ids::IdentityId;
 
 fn network_id() -> String {
     std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
-}
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
 }
 
 async fn test_pool() -> PgPool {
@@ -122,17 +114,8 @@ async fn seed_signing_key(pool: &PgPool, identity_id: Identity) -> (Uuid, Signin
     (row.try_get("id").unwrap(), signing_key)
 }
 
-fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
-    let mut message = format!("avalon:{action_tag}:v1");
-    for field in fields {
-        message.push(':');
-        message.push_str(field);
-    }
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
-
 async fn me_status(http: &reqwest::Client, token: &str) -> u16 {
-    http.get(format!("{}/me", server_url()))
+    http.get(format!("{}/me", common::server_url()))
         .bearer_auth(token)
         .send()
         .await
@@ -177,7 +160,7 @@ async fn create_identity_with_one_passkey(
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
         .register(
-            Origin::from(&rp_origin()),
+            Origin::from(&common::rp_origin()),
             creation_options,
             DefaultClientData,
         )
@@ -224,7 +207,7 @@ async fn login(
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let assertion = client
         .authenticate(
-            Origin::from(&rp_origin()),
+            Origin::from(&common::rp_origin()),
             request_options,
             DefaultClientData,
         )
@@ -252,7 +235,7 @@ async fn login(
 async fn tokens_are_stored_hashed_and_logout_ends_only_the_presented_session() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (identity_id, mut client) = create_identity_with_one_passkey(&http, &base, 3).await;
     let first = login(&http, &base, identity_id, &mut client).await;
     let second = login(&http, &base, identity_id, &mut client).await;
@@ -303,7 +286,7 @@ async fn tokens_are_stored_hashed_and_logout_ends_only_the_presented_session() {
 async fn sessions_can_be_listed_and_revoked_one_at_a_time_but_only_by_their_owner() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let owner = seed_identity(&pool).await;
     let stranger = seed_identity(&pool).await;
     let mine = plain_session(&pool, owner).await;
@@ -353,7 +336,7 @@ async fn sessions_can_be_listed_and_revoked_one_at_a_time_but_only_by_their_owne
 async fn revoking_a_passkey_ends_the_sessions_it_created_and_no_others() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (identity_id, mut client_a) = create_identity_with_one_passkey(&http, &base, 3).await;
     let token_a = login(&http, &base, identity_id, &mut client_a).await;
     let token_a_again = login(&http, &base, identity_id, &mut client_a).await;
@@ -372,7 +355,7 @@ async fn revoking_a_passkey_ends_the_sessions_it_created_and_no_others() {
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client_b
         .register(
-            Origin::from(&rp_origin()),
+            Origin::from(&common::rp_origin()),
             creation_options,
             DefaultClientData,
         )
@@ -445,7 +428,7 @@ async fn revoking_a_passkey_ends_the_sessions_it_created_and_no_others() {
 async fn revoking_a_signing_key_ends_the_sessions_it_approved_and_no_others() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let (keep_key, keep_signer) = seed_signing_key(&pool, identity_id).await;
     let (stolen_key, _) = seed_signing_key(&pool, identity_id).await;
@@ -605,7 +588,7 @@ async fn an_expired_session_is_refused_and_pruning_is_bounded() {
 async fn pairing_stores_no_usable_secret_and_records_the_approving_key() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let approver = plain_session(&pool, identity_id).await;
     let (key_id, signer) = seed_signing_key(&pool, identity_id).await;
@@ -628,7 +611,7 @@ async fn pairing_stores_no_usable_secret_and_records_the_approving_key() {
             .unwrap();
     assert_eq!(stored_matches_plaintext, 0);
 
-    let signature = sign_action(
+    let signature = common::sign_action(
         &signer,
         "device_pairing.approve",
         &[&identity_id.to_string(), &user_code],
@@ -674,7 +657,7 @@ async fn pairing_stores_no_usable_secret_and_records_the_approving_key() {
 async fn an_approved_pairing_cannot_be_collected_after_it_expires() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let approver = plain_session(&pool, identity_id).await;
     let (key_id, signer) = seed_signing_key(&pool, identity_id).await;
@@ -689,7 +672,7 @@ async fn an_approved_pairing_cannot_be_collected_after_it_expires() {
         .unwrap();
     let device_code = start["device_code"].as_str().unwrap().to_string();
     let user_code = start["user_code"].as_str().unwrap().to_string();
-    let signature = sign_action(
+    let signature = common::sign_action(
         &signer,
         "device_pairing.approve",
         &[&identity_id.to_string(), &user_code],
@@ -747,7 +730,7 @@ async fn start_and_approve_pairing(
         .await
         .unwrap();
     let user_code = start["user_code"].as_str().unwrap().to_string();
-    let signature = sign_action(
+    let signature = common::sign_action(
         signer,
         "device_pairing.approve",
         &[&identity_id.to_string(), &user_code],
@@ -783,7 +766,7 @@ async fn poll_pairing(http: &reqwest::Client, base: &str, device_code: &str) -> 
 async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let approver = plain_session(&pool, identity_id).await;
     let (stolen_key, stolen_signer) = seed_signing_key(&pool, identity_id).await;
@@ -832,7 +815,7 @@ async fn a_pairing_approved_by_a_key_revoked_before_the_poll_mints_nothing() {
 async fn a_poll_waits_for_an_in_flight_revocation_of_the_approving_key() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let approver = plain_session(&pool, identity_id).await;
     let (key, signer) = seed_signing_key(&pool, identity_id).await;
@@ -869,7 +852,7 @@ async fn a_poll_waits_for_an_in_flight_revocation_of_the_approving_key() {
 async fn two_concurrent_polls_of_one_approved_pairing_yield_exactly_one_token() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
     let approver = plain_session(&pool, identity_id).await;
     let (key, signer) = seed_signing_key(&pool, identity_id).await;
@@ -890,7 +873,7 @@ async fn two_concurrent_polls_of_one_approved_pairing_yield_exactly_one_token() 
 async fn a_login_whose_passkey_is_revoked_mid_ceremony_mints_nothing() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (identity_id, mut client) = create_identity_with_one_passkey(&http, &base, 2).await;
     let passkey: Uuid = sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1")
         .bind(identity_id)
@@ -911,7 +894,7 @@ async fn a_login_whose_passkey_is_revoked_mid_ceremony_mints_nothing() {
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let assertion = client
         .authenticate(
-            Origin::from(&rp_origin()),
+            Origin::from(&common::rp_origin()),
             request_options,
             DefaultClientData,
         )
@@ -925,7 +908,7 @@ async fn a_login_whose_passkey_is_revoked_mid_ceremony_mints_nothing() {
         .await
         .unwrap();
     let finisher = {
-        let (http, base) = (http.clone(), server_url());
+        let (http, base) = (http.clone(), common::server_url());
         let body = serde_json::json!({ "ticket_id": start["ticket_id"], "credential": assertion });
         tokio::spawn(async move {
             http.post(format!("{base}/sessions/finish"))
@@ -954,7 +937,7 @@ async fn a_login_whose_passkey_is_revoked_mid_ceremony_mints_nothing() {
 async fn no_session_is_minted_without_an_origin_credential() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let identity_id = seed_identity(&pool).await;
 
     let direct = avalon_server::sessions::mint(

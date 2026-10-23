@@ -10,26 +10,9 @@ use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 type VirtualClient = Client<
     MemoryStore,
@@ -86,7 +69,7 @@ async fn create_identity_with_one_passkey(
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
     let mut client = new_virtual_client(expected_ceremonies);
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -146,9 +129,9 @@ async fn active_mirrored_passkey_count(
 #[tokio::test]
 #[ignore]
 async fn the_first_passkey_at_registration_populates_the_mirror_projection() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (identity_id, _client) = create_identity_with_one_passkey(&http, &base, 1).await;
 
@@ -190,9 +173,9 @@ async fn the_first_passkey_at_registration_populates_the_mirror_projection() {
 #[tokio::test]
 #[ignore]
 async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (identity_id, mut client_a) = create_identity_with_one_passkey(&http, &base, 2).await;
     assert_eq!(active_mirrored_passkey_count(&pool, identity_id).await, 1);
@@ -212,7 +195,7 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
         .await
         .unwrap();
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let request_options: CredentialRequestOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let assertion = client_a
@@ -307,9 +290,9 @@ async fn registering_and_revoking_a_second_passkey_updates_the_mirror_projection
 #[tokio::test]
 #[ignore]
 async fn registration_ledgers_identity_created_before_its_child_events() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (identity_id, _client) = create_identity_with_one_passkey(&http, &base, 1).await;
 

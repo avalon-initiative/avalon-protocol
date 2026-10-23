@@ -19,10 +19,11 @@
 //! write path on the one connection its transaction already holds, so
 //! concurrent writers should queue and complete instead.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
+
+mod common;
 
 /// Comfortably above realistic queuing delay for a handful of writes on a
 /// pool of 2-3 connections, and comfortably below the 30s acquire timeout
@@ -33,18 +34,6 @@ const PER_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// the acquire timeout before failing.
 const OVERALL_BUDGET: Duration = Duration::from_secs(25);
 const CONCURRENT_WRITERS: usize = 20;
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
 
 async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -82,8 +71,8 @@ async fn seed_identity_session(pool: &PgPool, label: &str) -> String {
 #[tokio::test]
 #[ignore]
 async fn concurrent_profile_writes_queue_and_complete_on_a_small_pool() {
-    let pool = test_pool().await;
-    let base = server_url();
+    let pool = common::test_pool().await;
+    let base = common::server_url();
 
     let mut tokens = Vec::with_capacity(CONCURRENT_WRITERS);
     for i in 0..CONCURRENT_WRITERS {
