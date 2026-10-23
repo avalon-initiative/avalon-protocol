@@ -610,6 +610,7 @@ struct ParkedPeer {
     waiting: Vec<ParkedHttp>,
     /// The dial this queue started, so only its failure fails the queue.
     own_dial: Option<ConnectionId>,
+    lookup: Option<QueryId>,
 }
 
 /// Most requests parked behind one peer's dial.
@@ -638,6 +639,7 @@ enum HttpDial {
     Started(ConnectionId),
     /// Another dial to the peer is already in flight.
     Joined,
+    NoAddresses,
     Failed,
 }
 
@@ -658,11 +660,57 @@ fn dial_for_http(swarm: &mut Swarm<DhtBehaviour>, peers: &PeerTable, peer: PeerI
     match swarm.dial(opts) {
         Ok(()) => HttpDial::Started(id),
         Err(DialError::DialPeerConditionFalse(_)) => HttpDial::Joined,
+        Err(DialError::NoAddresses)
+            if crate::mirror_watcher::parse_mirror_peers(
+                &crate::mirror_watcher::effective_mirror_peers(),
+                false,
+            )
+            .iter()
+            .any(|(_, url)| crate::node_http::parse_p2p_base(url) == Some(peer)) =>
+        {
+            HttpDial::NoAddresses
+        }
         Err(e) => {
             tracing::debug!(%peer, "avalon-dht: node-http dial not started: {e}");
             HttpDial::Failed
         }
     }
+}
+
+fn finish_http_lookup(swarm: &mut Swarm<DhtBehaviour>, entry: &mut ParkedPeer) {
+    if let Some(id) = entry.lookup.take() {
+        if let Some(mut query) = swarm.behaviour_mut().kad.query_mut(&id) {
+            query.finish();
+        }
+    }
+}
+
+/// Starts or joins a dial, looking up an addressless peer within the parked requests' budget.
+fn dial_parked(
+    swarm: &mut Swarm<DhtBehaviour>,
+    peers: &PeerTable,
+    peer: PeerId,
+    entry: &mut ParkedPeer,
+) -> bool {
+    match dial_for_http(swarm, peers, peer) {
+        HttpDial::Started(id) => {
+            entry.own_dial = Some(id);
+            finish_http_lookup(swarm, entry);
+        }
+        HttpDial::Joined => {}
+        HttpDial::NoAddresses => {
+            // A query started before bootstrap became ready may finish empty; retry on the
+            // parked timer, without extending any request's deadline or duplicating a live query.
+            if entry
+                .lookup
+                .is_none_or(|id| swarm.behaviour().kad.query(&id).is_none())
+            {
+                entry.lookup = Some(swarm.behaviour_mut().kad.get_closest_peers(peer));
+            }
+        }
+        HttpDial::Failed => return false,
+    }
+    true
 }
 
 /// Sends `request` to a connected `peer` and tracks its response.
@@ -707,20 +755,15 @@ fn start_http(
             .send(Err(local_failure("too many requests waiting for the peer")));
         return;
     }
-    if entry.own_dial.is_none() {
-        match dial_for_http(swarm, peers, peer) {
-            HttpDial::Started(id) => entry.own_dial = Some(id),
-            HttpDial::Joined => {}
-            HttpDial::Failed => {
-                let entry = parked.remove(&peer).unwrap_or_default();
-                for w in entry.waiting.into_iter().chain([parked_request]) {
-                    let _ = w
-                        .respond_to
-                        .send(Err(local_failure("no address to dial the peer")));
-                }
-                return;
-            }
+    if entry.own_dial.is_none() && !dial_parked(swarm, peers, peer, entry) {
+        let mut entry = parked.remove(&peer).unwrap_or_default();
+        finish_http_lookup(swarm, &mut entry);
+        for w in entry.waiting.into_iter().chain([parked_request]) {
+            let _ = w
+                .respond_to
+                .send(Err(local_failure("no address to dial the peer")));
         }
+        return;
     }
     entry.waiting.push(parked_request);
 }
@@ -731,8 +774,12 @@ fn flush_parked(
     pending: &mut HashMap<OutboundRequestId, HttpResponder>,
     parked: &mut ParkedRequests,
     peer: PeerId,
+    now: Instant,
 ) {
-    for w in live_waiting(parked.remove(&peer).unwrap_or_default()) {
+    expire_parked(swarm, parked, now);
+    let mut entry = parked.remove(&peer).unwrap_or_default();
+    finish_http_lookup(swarm, &mut entry);
+    for w in live_waiting(entry) {
         send_http(swarm, pending, peer, w.request, w.respond_to);
     }
 }
@@ -761,17 +808,12 @@ fn parked_dial_failed(
     if swarm.is_connected(&peer) || entry.own_dial.is_some_and(|own| own != failed) {
         return;
     }
-    if entry.own_dial.is_none() {
-        match dial_for_http(swarm, peers, peer) {
-            HttpDial::Started(id) => {
-                entry.own_dial = Some(id);
-                return;
-            }
-            HttpDial::Joined => return,
-            HttpDial::Failed => {}
-        }
+    if entry.own_dial.is_none() && dial_parked(swarm, peers, peer, entry) {
+        return;
     }
-    for w in parked.remove(&peer).unwrap_or_default().waiting {
+    let mut entry = parked.remove(&peer).unwrap_or_default();
+    finish_http_lookup(swarm, &mut entry);
+    for w in entry.waiting {
         let _ = w
             .respond_to
             .send(Err(connect_failure("failed to dial the peer")));
@@ -813,7 +855,7 @@ fn scan_dial(swarm: &mut Swarm<DhtBehaviour>, peer_id: PeerId, addr: Multiaddr) 
 }
 
 /// Drops parked requests whose caller gave up and fails those past their deadline.
-fn expire_parked(parked: &mut ParkedRequests, now: Instant) {
+fn expire_parked(swarm: &mut Swarm<DhtBehaviour>, parked: &mut ParkedRequests, now: Instant) {
     for entry in parked.values_mut() {
         entry.waiting.retain_mut(|w| {
             if w.respond_to.is_closed() {
@@ -833,7 +875,30 @@ fn expire_parked(parked: &mut ParkedRequests, now: Instant) {
             true
         });
     }
-    parked.retain(|_, e| !e.waiting.is_empty());
+    parked.retain(|_, entry| {
+        if entry.waiting.is_empty() {
+            finish_http_lookup(swarm, entry);
+            return false;
+        }
+        true
+    });
+}
+
+/// Retries resolution/dialing as bootstrap or gossip learns addresses, within the same budget.
+fn retry_parked(swarm: &mut Swarm<DhtBehaviour>, peers: &PeerTable, parked: &mut ParkedRequests) {
+    expire_parked(swarm, parked, Instant::now());
+    parked.retain(|peer, entry| {
+        if entry.own_dial.is_some() || dial_parked(swarm, peers, *peer, entry) {
+            return true;
+        }
+        finish_http_lookup(swarm, entry);
+        for w in entry.waiting.drain(..) {
+            let _ = w
+                .respond_to
+                .send(Err(local_failure("no address to dial the peer")));
+        }
+        false
+    });
 }
 
 /// Maps a stream failure to the error call sites see.
@@ -1383,7 +1448,7 @@ async fn run_worker(
                     DhtCommand::HttpRequest { peer, request, respond_to } => {
                         // Callers that gave up leave a closed responder behind; drop those first.
                         pending_http.retain(|_, r| !r.is_closed());
-                        expire_parked(&mut parked_http, Instant::now());
+                        expire_parked(&mut swarm, &mut parked_http, Instant::now());
                         let parked = ParkedHttp {
                             request,
                             respond_to,
@@ -1396,9 +1461,9 @@ async fn run_worker(
             Some((channel, response)) = inbound.finished.recv() => {
                 let _ = swarm.behaviour_mut().node_http.send_response(channel, response);
             }
-            _ = parked_tick.tick() => expire_parked(&mut parked_http, Instant::now()),
+            _ = parked_tick.tick() => retry_parked(&mut swarm, &peers, &mut parked_http),
             _ = scan_interval.tick() => {
-                expire_parked(&mut parked_http, Instant::now());
+                expire_parked(&mut swarm, &mut parked_http, Instant::now());
                 // Gossip-learned peers that cannot be reached over HTTP (a relayed node has no
                 // reachable URL) sit in the unverified pool; dial a few per scan so a libp2p
                 // connection can confirm them.
@@ -1448,7 +1513,7 @@ async fn run_worker(
                     continue;
                 }
                 if let Some(peer_id) = flushable_connection(&event) {
-                    flush_parked(&mut swarm, &mut pending_http, &mut parked_http, peer_id);
+                    flush_parked(&mut swarm, &mut pending_http, &mut parked_http, peer_id, Instant::now());
                 }
                 if let SwarmEvent::OutgoingConnectionError {
                     peer_id: Some(peer_id),
@@ -1597,12 +1662,14 @@ mod tests {
         let entry = ParkedPeer {
             waiting: vec![parked(gone_tx), parked(live_tx)],
             own_dial: None,
+            ..ParkedPeer::default()
         };
         assert_eq!(live_waiting(entry).count(), 1);
     }
 
-    #[test]
-    fn a_request_parked_past_its_dial_deadline_fails_as_never_sent() {
+    #[tokio::test]
+    async fn a_request_parked_past_its_dial_deadline_fails_as_never_sent() {
+        let mut swarm = test_swarm();
         let (tx, mut rx) = oneshot::channel();
         let peer = PeerId::random();
         let mut parked = ParkedRequests::new();
@@ -1618,9 +1685,9 @@ mod tests {
             respond_to: tx,
             deadline: now + Duration::from_secs(5),
         });
-        expire_parked(&mut parked, now);
+        expire_parked(&mut swarm, &mut parked, now);
         assert!(rx.try_recv().is_err() && parked.contains_key(&peer));
-        expire_parked(&mut parked, now + Duration::from_secs(5));
+        expire_parked(&mut swarm, &mut parked, now + Duration::from_secs(5));
         match rx.try_recv() {
             Ok(Err(NodeHttpError::Stream { kind, .. })) => {
                 assert_eq!(kind, StreamErrorKind::Connect)
@@ -1754,6 +1821,408 @@ mod tests {
         )
     }
 
+    async fn listening_swarm() -> (Swarm<DhtBehaviour>, Multiaddr) {
+        let mut swarm = test_swarm();
+        swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
+        swarm
+            .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .unwrap();
+        let address = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
+                    break address;
+                }
+            }
+        })
+        .await
+        .expect("the test listener did not report its address");
+        (swarm, address)
+    }
+
+    fn spawn_test_worker(
+        swarm: Swarm<DhtBehaviour>,
+        workers: &mut tokio::task::JoinSet<()>,
+    ) -> DhtCommandSender {
+        let peers = PeerTable::new();
+        let settings = NodeHttpSettings::default();
+        let reachability = ReachabilityHandle::unknown();
+        let relay = RelayRuntime {
+            client: RelayClient::new(
+                RelaySettings::default().client,
+                *swarm.local_peer_id(),
+                reachability.clone(),
+            ),
+            stats: RelayServerStats::new(),
+            serves: false,
+            gate: RelayGate::new(RelayResilience::default().private_grace),
+            resilience: RelayResilience::default(),
+            has_external_addr: false,
+            reconcile_interval: Duration::from_secs(30),
+        };
+        let slot = RouterSlot::new();
+        slot.set(
+            axum::Router::new().route("/nodes/status", axum::routing::get(|| async { "ready" })),
+        );
+        let inbound = NodeHttpInbound::new(
+            InboundService::new(slot, settings, peers.clone()),
+            settings.max_inflight,
+            settings.connect_timeout,
+        );
+        let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        workers.spawn(run_worker(
+            swarm,
+            peers,
+            rx,
+            Duration::from_secs(30),
+            identify_protocol_version("net"),
+            reachability,
+            relay,
+            inbound,
+        ));
+        tx
+    }
+
+    struct ConfiguredMirrorSource {
+        previous: Option<std::ffi::OsString>,
+        _env: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ConfiguredMirrorSource {
+        fn new(peer: PeerId) -> Self {
+            let env = crate::test_env::guard();
+            let previous = std::env::var_os("AVALON_MIRROR_PEERS");
+            unsafe {
+                std::env::set_var("AVALON_MIRROR_PEERS", format!("node:source=p2p://{peer}"));
+            }
+            Self {
+                previous,
+                _env: env,
+            }
+        }
+    }
+
+    impl Drop for ConfiguredMirrorSource {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var("AVALON_MIRROR_PEERS", value),
+                    None => std::env::remove_var("AVALON_MIRROR_PEERS"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_addressless_peer_fails_locally_without_waiting() {
+        let _configured = ConfiguredMirrorSource::new(sample_peer_id());
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let (request, mut rx) = parked_request();
+        let mut parked = ParkedRequests::new();
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        let result = rx.try_recv();
+        assert!(
+            matches!(&result, Ok(Err(NodeHttpError::Stream { kind: StreamErrorKind::Local, message })) if message == "no address to dial the peer"),
+            "an unconfigured peer must fail locally without waiting: {result:?}"
+        );
+        assert!(parked.is_empty());
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 0);
+
+        unsafe {
+            std::env::set_var("AVALON_MIRROR_PEERS", format!("node:source=p2p://{peer}"));
+        }
+        let (request, mut rx) = parked_request();
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        assert!(parked.contains_key(&peer));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_first_http_request_resolves_a_peer_known_only_to_bootstrap() {
+        let (target, target_address) = listening_swarm().await;
+        let target_peer = *target.local_peer_id();
+        let _configured = ConfiguredMirrorSource::new(target_peer);
+        let (mut bootstrap, bootstrap_address) = listening_swarm().await;
+        bootstrap
+            .behaviour_mut()
+            .kad
+            .add_address(&target_peer, target_address);
+        let mut client = test_swarm();
+        client
+            .behaviour_mut()
+            .kad
+            .add_address(bootstrap.local_peer_id(), bootstrap_address);
+        let mut workers = tokio::task::JoinSet::new();
+        let target_commands = spawn_test_worker(target, &mut workers);
+        let bootstrap_commands = spawn_test_worker(bootstrap, &mut workers);
+        let commands = spawn_test_worker(client, &mut workers);
+        let (request, rx) = parked_request();
+        commands
+            .send(DhtCommand::HttpRequest {
+                peer: target_peer,
+                request: request.request,
+                respond_to: request.respond_to,
+            })
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(30), rx).await;
+        assert!(
+            matches!(&response, Ok(Ok(Ok(r))) if r.status == 200 && r.body == b"ready"),
+            "the first request must reach the peer through bootstrap lookup: {response:?}"
+        );
+        drop((commands, bootstrap_commands, target_commands));
+        let stopped = tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(result) = workers.join_next().await {
+                result.unwrap();
+            }
+        })
+        .await;
+        assert!(
+            stopped.is_ok(),
+            "workers must stop when their command channels close"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_addressless_http_peer_is_looked_up_before_failing() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let (request, mut rx) = parked_request();
+        let mut parked = ParkedRequests::new();
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        assert!(
+            parked.contains_key(&peer),
+            "an addressless peer must wait for lookup instead of failing immediately"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_addressless_http_peer_keeps_its_original_deadline() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let (request, mut rx) = parked_request();
+        let deadline = request.deadline;
+        let mut parked = ParkedRequests::new();
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        expire_parked(&mut swarm, &mut parked, deadline - Duration::from_nanos(1));
+        assert!(
+            matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "lookup must not fail before the connection deadline"
+        );
+        expire_parked(&mut swarm, &mut parked, deadline);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Err(NodeHttpError::Stream {
+                kind: StreamErrorKind::Connect,
+                ..
+            }))
+        ));
+        assert!(parked.is_empty());
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn lookup_retries_share_the_queue_and_send_after_an_address_arrives() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let peers = PeerTable::new();
+        let mut pending = HashMap::new();
+        let mut parked = ParkedRequests::new();
+        let (request, mut first) = parked_request();
+        let deadline = request.deadline;
+        start_http(&mut swarm, &peers, &mut pending, &mut parked, peer, request);
+        let query = parked[&peer].lookup.unwrap();
+        let (second_request, mut second) = parked_request();
+        start_http(
+            &mut swarm,
+            &peers,
+            &mut pending,
+            &mut parked,
+            peer,
+            second_request,
+        );
+        assert_eq!(parked[&peer].lookup, Some(query));
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 1);
+        assert_eq!(parked[&peer].waiting.len(), 2);
+
+        swarm
+            .behaviour_mut()
+            .kad
+            .query_mut(&query)
+            .unwrap()
+            .finish();
+        retry_parked(&mut swarm, &peers, &mut parked);
+        assert_ne!(parked[&peer].lookup, Some(query));
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 1);
+        assert_eq!(parked[&peer].waiting[0].deadline, deadline);
+        assert!(matches!(
+            first.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+
+        swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer, "/ip4/127.0.0.1/tcp/9".parse().unwrap());
+        retry_parked(&mut swarm, &peers, &mut parked);
+        assert!(parked[&peer].own_dial.is_some());
+        assert!(parked[&peer].lookup.is_none());
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 0);
+        expire_parked(&mut swarm, &mut parked, deadline - Duration::from_nanos(1));
+        assert!(matches!(
+            first.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        flush_parked(
+            &mut swarm,
+            &mut pending,
+            &mut parked,
+            peer,
+            deadline - Duration::from_nanos(1),
+        );
+        assert_eq!(pending.len(), 2);
+        assert!(parked.is_empty());
+        assert!(matches!(
+            second.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn abandoning_an_addressless_request_finishes_its_lookup() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let peers = PeerTable::new();
+        let mut parked = ParkedRequests::new();
+        let (request, rx) = parked_request();
+        start_http(
+            &mut swarm,
+            &peers,
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 1);
+        drop(rx);
+        retry_parked(&mut swarm, &peers, &mut parked);
+        assert!(parked.is_empty());
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_connection_after_the_lookup_deadline_does_not_send_the_request() {
+        let mut swarm = test_swarm();
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let mut parked = ParkedRequests::new();
+        let (mut request, mut rx) = parked_request();
+        request.deadline = Instant::now() - Duration::from_secs(1);
+        start_http(
+            &mut swarm,
+            &PeerTable::new(),
+            &mut HashMap::new(),
+            &mut parked,
+            peer,
+            request,
+        );
+        let mut pending = HashMap::new();
+        flush_parked(&mut swarm, &mut pending, &mut parked, peer, Instant::now());
+        assert!(pending.is_empty());
+        assert!(parked.is_empty());
+        assert_eq!(swarm.behaviour().kad.iter_queries().count(), 0);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Err(NodeHttpError::Stream {
+                kind: StreamErrorKind::Connect,
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_http_request_does_not_hold_the_worker_open() {
+        let peer = sample_peer_id();
+        let _configured = ConfiguredMirrorSource::new(peer);
+        let mut workers = tokio::task::JoinSet::new();
+        let commands = spawn_test_worker(test_swarm(), &mut workers);
+        let (request, mut rx) = parked_request();
+        commands
+            .send(DhtCommand::HttpRequest {
+                peer,
+                request: request.request,
+                respond_to: request.respond_to,
+            })
+            .await
+            .unwrap();
+        let (barrier, done) = oneshot::channel();
+        commands
+            .send(DhtCommand::GetRecord {
+                key: b"missing".to_vec(),
+                respond_to: barrier,
+            })
+            .await
+            .unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(30), done)
+            .await
+            .is_ok());
+        assert!(matches!(
+            rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        drop(commands);
+        let stopped = tokio::time::timeout(Duration::from_secs(30), workers.join_next()).await;
+        assert!(
+            matches!(stopped, Ok(Some(Ok(())))),
+            "resolution must not delay shutdown: {stopped:?}"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+    }
+
     #[tokio::test]
     async fn only_the_queues_own_dial_failing_fails_its_parked_requests() {
         let mut swarm = test_swarm();
@@ -1769,6 +2238,7 @@ mod tests {
             ParkedPeer {
                 waiting: vec![w],
                 own_dial: Some(own),
+                ..ParkedPeer::default()
             },
         );
         let peers = PeerTable::new();
