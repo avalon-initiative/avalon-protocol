@@ -1,5 +1,5 @@
-//! When the first cosigned head covered a ledger entry and the latest cosigned head time of its shard.
-//! The recovery delay runs between the two, never on a node's clock; a head counts at a witness quorum.
+//! When witnesses first had a ledger entry cosigned and the latest such time of its shard. Both are the
+//! witness-signed time a quorum had seen a head, never a shard's own head time or a node's clock.
 
 use std::sync::Arc;
 
@@ -18,10 +18,43 @@ pub struct EntryAttestation {
     pub subject: String,
     /// Lowercase hex of the entry's payload hash.
     pub payload_hash: String,
-    /// Time of the earliest cosigned head covering the entry; `None` until one does.
-    pub covered_at: Option<OffsetDateTime>,
-    /// Time of the latest cosigned head of the entry's shard.
+    /// Quorum time of the earliest cosigned head covering the entry; `None` until one does.
+    pub anchor_at: Option<OffsetDateTime>,
+    /// Latest quorum time of any cosigned head of the entry's shard.
     pub reference_at: Option<OffsetDateTime>,
+}
+
+impl EntryAttestation {
+    /// One view of an entry held as several copies (an event id is not unique across shards): the
+    /// earliest anchor of any copy and the latest reference.
+    pub fn earliest(copies: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut copies = copies.into_iter();
+        let mut merged = copies.next()?;
+        for copy in copies {
+            merged.anchor_at = match (merged.anchor_at, copy.anchor_at) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            merged.reference_at = merged.reference_at.max(copy.reference_at);
+        }
+        Some(merged)
+    }
+}
+
+/// The time by which `quorum` witnesses had cosigned a head: the `quorum`-th earliest cosignature time.
+/// With `quorum == 0` (a known list of at most one member) there are no witnesses to wait for and the
+/// head's own time stands in; that is a single-node dev setting.
+pub fn quorum_time(
+    cosigned: &[OffsetDateTime],
+    quorum: usize,
+    head_created_at: OffsetDateTime,
+) -> Option<OffsetDateTime> {
+    if quorum == 0 {
+        return Some(head_created_at);
+    }
+    let mut times = cosigned.to_vec();
+    times.sort();
+    times.get(quorum - 1).copied()
 }
 
 #[async_trait]
@@ -82,14 +115,14 @@ struct Located {
 }
 
 impl SqlHeadAttestor {
-    /// The shard's heads by ascending size, each with its quorum time when cosigned by enough witnesses.
-    async fn cosigned_heads(
+    /// The quorum time of every head of the shard covering `from_size` that enough witnesses cosigned.
+    async fn quorum_times(
         &self,
         conn: &mut PgConnection,
         shard_id: &str,
         own: bool,
         from_size: i64,
-    ) -> Result<Vec<(Head, OffsetDateTime)>, IndexError> {
+    ) -> Result<Vec<OffsetDateTime>, IndexError> {
         let rows = if own {
             sqlx::query(
                 "SELECT tree_size, root_hash, created_at FROM signed_tree_heads \
@@ -101,8 +134,9 @@ impl SqlHeadAttestor {
             .await?
         } else {
             sqlx::query(
-                "SELECT DISTINCT tree_size, root_hash, created_at FROM observed_sths \
-                 WHERE network_id = $1 AND shard_id = $2 AND tree_size >= $3 ORDER BY tree_size",
+                "SELECT tree_size, root_hash, MIN(created_at) AS created_at FROM observed_sths \
+                 WHERE network_id = $1 AND shard_id = $2 AND tree_size >= $3 \
+                 GROUP BY tree_size, root_hash ORDER BY tree_size",
             )
             .bind(&self.network_id)
             .bind(shard_id)
@@ -118,16 +152,9 @@ impl SqlHeadAttestor {
                 root_hash: row.try_get("root_hash")?,
                 created_at: row.try_get("created_at")?,
             };
-            if quorum == 0 {
-                let at = head.created_at;
-                out.push((head, at));
-                continue;
-            }
-            // The quorum-th latest cosignature time: at least `quorum` witnesses had seen the head by then.
             let times: Vec<OffsetDateTime> = sqlx::query_scalar(
                 "SELECT observed_at FROM witness_cosignatures \
-                 WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND root_hash = $4 \
-                 ORDER BY observed_at DESC",
+                 WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND root_hash = $4",
             )
             .bind(&self.network_id)
             .bind(shard_id)
@@ -135,10 +162,7 @@ impl SqlHeadAttestor {
             .bind(&head.root_hash)
             .fetch_all(&mut *conn)
             .await?;
-            if let Some(at) = times.get(quorum - 1) {
-                let at = (*at).max(head.created_at);
-                out.push((head, at));
-            }
+            out.extend(quorum_time(&times, quorum, head.created_at));
         }
         Ok(out)
     }
@@ -148,18 +172,16 @@ impl SqlHeadAttestor {
         conn: &mut PgConnection,
         entry: Located,
     ) -> Result<EntryAttestation, IndexError> {
-        let heads = self
-            .cosigned_heads(conn, &entry.shard_id, entry.own, entry.seq)
+        let times = self
+            .quorum_times(conn, &entry.shard_id, entry.own, entry.seq)
             .await?;
-        // `covered_at` is the signed head time; `reference_at` is the cosignature time of the latest head.
-        let covered_at = heads.first().map(|(head, _)| head.created_at);
-        let reference_at = heads.last().map(|(_, at)| *at);
+        let (anchor_at, reference_at) = (times.iter().min().copied(), times.iter().max().copied());
         Ok(EntryAttestation {
             kind: entry.kind,
             event_id: entry.event_id,
             subject: entry.subject,
             payload_hash: entry.payload_hash,
-            covered_at,
+            anchor_at,
             reference_at,
         })
     }
@@ -248,5 +270,57 @@ impl HeadAttestor for SqlHeadAttestor {
             out.push(self.attest(conn, located).await?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use time::Duration;
+
+    use super::*;
+
+    fn t(hours: i64) -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH + Duration::hours(hours)
+    }
+
+    fn entry(anchor: Option<i64>, reference: Option<i64>) -> EntryAttestation {
+        EntryAttestation {
+            kind: "profile.updated".into(),
+            event_id: Uuid::nil(),
+            subject: String::new(),
+            payload_hash: String::new(),
+            anchor_at: anchor.map(t),
+            reference_at: reference.map(t),
+        }
+    }
+
+    #[test]
+    fn the_quorum_time_is_the_quorum_th_earliest_cosignature_and_ignores_the_head_time() {
+        let times = [t(9), t(3), t(5), t(4)];
+        assert_eq!(quorum_time(&times, 3, t(-100)), Some(t(5)));
+        assert_eq!(quorum_time(&times, 1, t(-100)), Some(t(3)));
+        assert_eq!(quorum_time(&times, 5, t(-100)), None);
+    }
+
+    #[test]
+    fn without_a_quorum_requirement_the_head_time_stands_in() {
+        assert_eq!(quorum_time(&[], 0, t(7)), Some(t(7)));
+    }
+
+    #[test]
+    fn copies_of_an_entry_merge_to_the_earliest_anchor_and_latest_reference() {
+        let merged = EntryAttestation::earliest([
+            entry(Some(50), Some(60)),
+            entry(Some(10), Some(70)),
+            entry(None, None),
+        ])
+        .unwrap();
+        assert_eq!(
+            (merged.anchor_at, merged.reference_at),
+            (Some(t(10)), Some(t(70)))
+        );
+        let uncovered = EntryAttestation::earliest([entry(None, None), entry(None, None)]).unwrap();
+        assert_eq!(uncovered.anchor_at, None);
+        assert!(EntryAttestation::earliest([]).is_none());
     }
 }

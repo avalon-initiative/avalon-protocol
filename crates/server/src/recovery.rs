@@ -879,7 +879,7 @@ async fn delay_ends_at(state: &AppState, entry_hash: Option<&str>) -> Option<Off
     let (heads, entry_hash) = (state.indexer.head_attestor()?, entry_hash?);
     let mut conn = state.pool.acquire().await.ok()?;
     let entry = heads.by_entry_hash(&mut conn, entry_hash).await.ok()??;
-    entry.covered_at.map(|covered| covered + RECOVERY_DELAY)
+    entry.anchor_at.map(|anchor| anchor + RECOVERY_DELAY)
 }
 
 async fn request_response(

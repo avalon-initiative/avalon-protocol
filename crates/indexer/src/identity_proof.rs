@@ -515,8 +515,8 @@ fn identity_of_ref(text: &str) -> Option<IdentityId> {
     parts.next()?.parse().ok()
 }
 
-/// The ledger entry an accepted chain event sits in: the entry of its id whose payload hash is that of
-/// the event's stored payload (the payload with its chain position embedded).
+/// The ledger entry an accepted chain event sits in: the copies of its id whose payload hash is that of
+/// the event's stored payload (the payload with its chain position embedded), timed by the earliest.
 async fn attest_chain_event(
     tx: &mut Transaction<'_, Postgres>,
     heads: &dyn HeadAttestor,
@@ -529,21 +529,21 @@ async fn attest_chain_event(
     let stored = payload_hash(&embed_position(&event.payload, position))
         .map_err(|_| reject("chained event payload is not canonical"))?;
     let wanted = hex::encode(stored);
-    heads
+    let copies = heads
         .by_event_id(tx, event.id)
         .await?
         .into_iter()
-        .find(|e| e.kind == event.kind && e.payload_hash == wanted)
-        .ok_or_else(|| {
-            IndexError::AwaitingKey(format!("{} is not in a ledger entry yet", event.kind))
-        })
+        .filter(|e| e.kind == event.kind && e.payload_hash == wanted);
+    EntryAttestation::earliest(copies).ok_or_else(|| {
+        IndexError::AwaitingKey(format!("{} is not in a ledger entry yet", event.kind))
+    })
 }
 
 /// Waits until cosigned heads cover the entry and the latest cosigned head is a full recovery delay
-/// later than the first covering one.
+/// later than the one that first covered it, both by witness-signed quorum time.
 fn require_old_enough(entry: &EntryAttestation, what: &str) -> Result<(), IndexError> {
-    match (entry.covered_at, entry.reference_at) {
-        (Some(covered), Some(latest)) if delay_elapsed(covered, latest) => Ok(()),
+    match (entry.anchor_at, entry.reference_at) {
+        (Some(anchor), Some(latest)) if delay_elapsed(anchor, latest) => Ok(()),
         (Some(_), Some(_)) => Err(IndexError::AwaitingKey(format!(
             "{what} is not older than the recovery delay yet"
         ))),

@@ -72,7 +72,7 @@ pub fn attestation(
         event_id,
         subject,
         payload_hash: hex::encode(stored_payload_hash),
-        covered_at: Some(covered),
+        anchor_at: Some(covered),
         reference_at: Some(covered + time::Duration::hours(reference_hours_after)),
     }
 }

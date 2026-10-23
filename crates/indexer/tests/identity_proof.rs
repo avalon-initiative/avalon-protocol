@@ -1590,7 +1590,7 @@ async fn the_delay_runs_between_cosigned_heads_never_on_the_nodes_clock() {
         payload_hash(&serde_json::to_value(&req.marker).unwrap()).unwrap(),
         100,
     );
-    uncovered.covered_at = None;
+    uncovered.anchor_at = None;
     heads().put(hex::encode(req.entry_hash), uncovered);
     assert!(is_wait(apply(&pool, &e, &game()).await));
     // The ledger entry is not held at all.
@@ -1616,6 +1616,41 @@ async fn the_delay_runs_between_cosigned_heads_never_on_the_nodes_clock() {
     );
 
     // Once cosigned heads show the delay has run, the same event applies.
+    attest_config(&f.configured, 100);
+    apply(&pool, &e, &game()).await.unwrap();
+    assert!(active(&pool, &f.owner, req.id).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_event_held_on_several_shards_is_timed_by_its_earliest_cosigned_copy() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let e = recovered(
+        &f,
+        &req,
+        vec![
+            approval(&f, &req, &f.guardians[0]),
+            approval(&f, &req, &f.guardians[1]),
+        ],
+    );
+    // Another shard republished the configuration and its head was cosigned only recently; this copy
+    // is listed before the genuine one.
+    let position = f.configured.identity_chain.as_ref().unwrap();
+    let stored = payload_hash(&embed_position(&f.configured.payload, position)).unwrap();
+    let late = OffsetDateTime::now_utc() - time::Duration::hours(10);
+    heads().put(
+        format!("late-copy-{}", f.configured.id),
+        avalon_indexer::head_attestor::EntryAttestation {
+            kind: f.configured.kind.clone(),
+            event_id: f.configured.id,
+            subject: f.configured.subject.to_string(),
+            payload_hash: hex::encode(stored),
+            anchor_at: Some(late),
+            reference_at: Some(late + time::Duration::hours(5)),
+        },
+    );
     attest_config(&f.configured, 100);
     apply(&pool, &e, &game()).await.unwrap();
     assert!(active(&pool, &f.owner, req.id).await);

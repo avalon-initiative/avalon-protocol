@@ -16,9 +16,9 @@ pub fn required_approvals(configured_threshold: i32) -> usize {
 }
 
 /// Whether `reference` (the time of the latest cosigned head) is at least [`RECOVERY_DELAY`] after
-/// `covered_at` (the time of the first cosigned head covering the entry).
-pub fn delay_elapsed(covered_at: OffsetDateTime, reference: OffsetDateTime) -> bool {
-    reference - covered_at >= RECOVERY_DELAY
+/// `anchor` (the witness-signed quorum time of the first cosigned head covering the entry).
+pub fn delay_elapsed(anchor: OffsetDateTime, reference: OffsetDateTime) -> bool {
+    reference - anchor >= RECOVERY_DELAY
 }
 
 /// A 32-byte hash from its 64 lowercase hex characters.
