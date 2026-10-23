@@ -132,3 +132,91 @@ async fn different_shards_of_the_same_network_have_independent_checkpoints() {
     assert_eq!(a.tree_size, 3);
     assert_eq!(b.tree_size, 7);
 }
+
+#[tokio::test]
+#[ignore]
+async fn same_head_with_a_new_witness_key_updates_the_checkpoint() {
+    let pool = test_pool().await;
+    let network_id = fresh_network_id();
+
+    record_witness_checkpoint(&pool, &network_id, "core", 11, &root(3), "witness-old")
+        .await
+        .unwrap();
+    record_witness_checkpoint(&pool, &network_id, "core", 11, &root(3), "witness-new")
+        .await
+        .unwrap();
+
+    let found = witness_checkpoint_for(&pool, &network_id, "core")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.tree_size, 11);
+    assert_eq!(found.root_hash, root(3));
+    assert_eq!(found.witness_key_id, "witness-new");
+}
+
+#[tokio::test]
+#[ignore]
+async fn same_size_with_a_different_root_and_key_keeps_the_checkpoint() {
+    let pool = test_pool().await;
+    let network_id = fresh_network_id();
+
+    record_witness_checkpoint(&pool, &network_id, "core", 13, &root(4), "witness-old")
+        .await
+        .unwrap();
+    record_witness_checkpoint(&pool, &network_id, "core", 13, &root(5), "witness-new")
+        .await
+        .unwrap();
+
+    let found = witness_checkpoint_for(&pool, &network_id, "core")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.tree_size, 13);
+    assert_eq!(found.root_hash, root(4));
+    assert_eq!(found.witness_key_id, "witness-old");
+}
+
+#[tokio::test]
+#[ignore]
+async fn smaller_size_with_a_new_witness_key_keeps_the_checkpoint() {
+    let pool = test_pool().await;
+    let network_id = fresh_network_id();
+
+    record_witness_checkpoint(&pool, &network_id, "core", 17, &root(6), "witness-old")
+        .await
+        .unwrap();
+    record_witness_checkpoint(&pool, &network_id, "core", 7, &root(7), "witness-new")
+        .await
+        .unwrap();
+
+    let found = witness_checkpoint_for(&pool, &network_id, "core")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.tree_size, 17);
+    assert_eq!(found.root_hash, root(6));
+    assert_eq!(found.witness_key_id, "witness-old");
+}
+
+#[tokio::test]
+#[ignore]
+async fn smaller_size_with_the_same_root_and_a_new_witness_key_keeps_the_checkpoint() {
+    let pool = test_pool().await;
+    let network_id = fresh_network_id();
+
+    record_witness_checkpoint(&pool, &network_id, "core", 23, &root(8), "witness-old")
+        .await
+        .unwrap();
+    record_witness_checkpoint(&pool, &network_id, "core", 19, &root(8), "witness-new")
+        .await
+        .unwrap();
+
+    let found = witness_checkpoint_for(&pool, &network_id, "core")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.tree_size, 23);
+    assert_eq!(found.root_hash, root(8));
+    assert_eq!(found.witness_key_id, "witness-old");
+}

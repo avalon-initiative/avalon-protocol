@@ -751,7 +751,8 @@ fn reattested(
 
 /// Refreshes this node's cosignature over the head it last cosigned for every log it holds a
 /// checkpoint for, so an unchanged head keeps a fresh attestation. Returns how many were
-/// refreshed. Logs with a recorded equivocation are skipped.
+/// refreshed. A changed witness key gets a new cosignature row and updates the checkpoint's
+/// key. Logs with a recorded equivocation are skipped.
 pub async fn reattest_once(
     chain: &PostgresSettlementProvider,
     pool: &PgPool,
@@ -768,9 +769,7 @@ pub async fn reattest_once(
     };
     let mut refreshed = 0;
     for checkpoint in checkpoints {
-        if checkpoint.witness_key_id != config.witness_key_id
-            || head_gossip.is_equivocating(&checkpoint.shard_id)
-        {
+        if head_gossip.is_equivocating(&checkpoint.shard_id) {
             continue;
         }
         let existing = match chain
@@ -788,13 +787,37 @@ pub async fn reattest_once(
             }
         };
         let Some(own) = existing.iter().find(|c| {
-            c.witness_key_id == config.witness_key_id && c.root_hash == checkpoint.root_hash
+            c.witness_key_id == checkpoint.witness_key_id && c.root_hash == checkpoint.root_hash
         }) else {
             continue;
         };
         let Some(fresh) = reattested(config, own, now) else {
             continue;
         };
+        if checkpoint.witness_key_id != config.witness_key_id {
+            if let Err(err) = chain
+                .store_witness_cosignature(&checkpoint.shard_id, &fresh)
+                .await
+            {
+                tracing::error!(error = %err, "witness-reattest: failed to store rotated cosignature");
+                continue;
+            }
+            if let Err(err) = mirror::record_witness_checkpoint(
+                pool,
+                &checkpoint.network_id,
+                &checkpoint.shard_id,
+                checkpoint.tree_size,
+                &checkpoint.root_hash,
+                &config.witness_key_id,
+            )
+            .await
+            {
+                tracing::error!(error = %err, "witness-reattest: failed to record rotated witness key");
+                continue;
+            }
+            refreshed += 1;
+            continue;
+        }
         match chain
             .refresh_witness_cosignature(&checkpoint.shard_id, &fresh)
             .await

@@ -1614,9 +1614,9 @@ pub async fn all_witness_checkpoints(
 
 /// Advances this node's checkpoint for `network_id`/`shard_id` to
 /// `tree_size`/`root_hash` after a cosigning decision has actually
-/// produced and stored a cosignature for it. Upserts, but only ever
-/// forward: the `WHERE` clause on the update arm refuses to move
-/// `tree_size` backward or sideways, so a stale or reordered write racing
+/// produced and stored a cosignature for it. Upserts forward, or updates
+/// the witness key for the same size and root: the `WHERE` clause refuses
+/// smaller sizes and same-size conflicting roots, so a stale or reordered write racing
 /// against a newer one can never regress this node's own record of what
 /// it last cosigned — the exact state the no-double-cosign and
 /// consistency-extension checks both depend on staying monotonic.
@@ -1638,6 +1638,9 @@ pub async fn record_witness_checkpoint(
             witness_key_id = EXCLUDED.witness_key_id,
             cosigned_at = EXCLUDED.cosigned_at
         WHERE witness_checkpoints.tree_size < EXCLUDED.tree_size
+           OR (witness_checkpoints.tree_size = EXCLUDED.tree_size
+               AND witness_checkpoints.root_hash = EXCLUDED.root_hash
+               AND witness_checkpoints.witness_key_id <> EXCLUDED.witness_key_id)
         "#,
     )
     .bind(network_id)
