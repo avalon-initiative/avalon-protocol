@@ -2,6 +2,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/rust-workspace-orange.svg" alt="Rust workspace">
   <a href="https://discord.gg/FFDsFw9F4g"><img src="https://img.shields.io/badge/discord-join%20the%20chat-5865F2.svg?logo=discord&logoColor=white" alt="Join the Avalon Discord"></a>
+  <a href="https://hub.xerj.org/contributors/LunarVagabond"><img src="https://hub.xerj.org/contributors/LunarVagabond/badge.svg" alt="XERJ Corpus Hub contributor"></a>
 </p>
 
 # Avalon Protocol
