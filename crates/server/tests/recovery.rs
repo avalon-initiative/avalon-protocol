@@ -22,6 +22,11 @@
 //! comparison logic, not the wall-clock wait" approach `presence.rs`'s
 //! `stale_presence_expires_to_offline` uses for TTL expiry.
 
+use avalon_indexer::projections::identity_passkeys;
+use avalon_protocol::event_payloads::{
+    IdentityPasskeyRegisteredPayload, IdentityPasskeyRevokedPayload,
+};
+use avalon_protocol::events::ProtocolEvent;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -30,7 +35,7 @@ use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -1128,6 +1133,305 @@ async fn passkey_revoked_event_count(
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+async fn emitted_recovery_events(
+    pool: &PgPool,
+    owner_id: avalon_protocol::ids::IdentityId,
+) -> Vec<ProtocolEvent> {
+    let events: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event FROM protocol_outbox WHERE event->>'issuer' LIKE $1 ORDER BY seq",
+    )
+    .bind(format!("identity:{owner_id}:%"))
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    events
+        .into_iter()
+        .map(|event| serde_json::from_value(event).unwrap())
+        .collect()
+}
+
+async fn replay_recovery_passkeys(
+    pool: &PgPool,
+    events: &[ProtocolEvent],
+) -> Vec<sqlx::postgres::PgRow> {
+    let mut tx = pool.begin().await.unwrap();
+    // Empty temporary projections keep the author's local writes from masking missing events.
+    sqlx::query(
+        "CREATE TEMP TABLE indexer_identity_passkeys \
+         (LIKE indexer_identity_passkeys INCLUDING ALL) ON COMMIT DROP",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TEMP TABLE indexer_identity_passkey_revocations \
+         (LIKE indexer_identity_passkey_revocations INCLUDING ALL) ON COMMIT DROP",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    for event in events {
+        if matches!(
+            event.kind.as_str(),
+            "identity.passkey_registered" | "identity.passkey_revoked"
+        ) {
+            let write = identity_passkeys::decode(event).expect("valid emitted passkey event");
+            identity_passkeys::apply(&mut tx, &write).await.unwrap();
+        }
+    }
+    let rows = sqlx::query("SELECT * FROM indexer_identity_passkeys")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    rows
+}
+
+#[tokio::test]
+#[ignore]
+async fn finalize_registers_the_replacement_passkey_for_mirror_replay() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (owner_id, _token, request_id, old_passkeys) =
+        recovery_ready_to_finalize(&pool, &http, &base).await;
+
+    http.post(format!("{base}/recovery/requests/{request_id}/finalize"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let replacement = sqlx::query("SELECT * FROM identity_keys WHERE identity_id = $1")
+        .bind(owner_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(replacement.len(), 1);
+    let replacement = &replacement[0];
+    let events = emitted_recovery_events(&pool, owner_id).await;
+    let registrations: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "identity.passkey_registered")
+        .collect();
+    assert_eq!(
+        registrations.len(),
+        1,
+        "replacement registration must be emitted"
+    );
+    let registration = registrations[0];
+    assert_eq!(
+        registration.timestamp,
+        replacement.get::<OffsetDateTime, _>("added_at")
+    );
+    let payload: IdentityPasskeyRegisteredPayload =
+        serde_json::from_value(registration.payload.clone()).unwrap();
+    assert_eq!(payload.passkey_id, replacement.get::<Uuid, _>("id"));
+    assert_eq!(
+        payload.identity_id,
+        replacement.get::<avalon_protocol::ids::IdentityId, _>("identity_id")
+    );
+    assert_eq!(
+        payload.credential_id,
+        BASE64.encode(replacement.get::<Vec<u8>, _>("credential_id"))
+    );
+    assert_eq!(
+        payload.passkey_data,
+        replacement.get::<serde_json::Value, _>("passkey_data")
+    );
+    assert_eq!(payload.label, replacement.get::<Option<String>, _>("label"));
+
+    let finalization: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind.as_str(),
+                "identity.passkey_revoked" | "identity.passkey_registered" | "identity.recovered"
+            )
+        })
+        .collect();
+    assert_eq!(
+        finalization
+            .iter()
+            .map(|event| event.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "identity.passkey_revoked",
+            "identity.passkey_revoked",
+            "identity.passkey_registered",
+            "identity.recovered",
+        ]
+    );
+    let mut revoked = Vec::new();
+    for event in &finalization {
+        let chain: serde_json::Value = sqlx::query_scalar(
+            "SELECT event FROM identity_chain_events WHERE identity_id = $1 AND event_id = $2",
+        )
+        .bind(owner_id)
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(chain, serde_json::to_value(event).unwrap());
+        if event.kind == "identity.passkey_revoked" {
+            let payload: IdentityPasskeyRevokedPayload =
+                serde_json::from_value(event.payload.clone()).unwrap();
+            assert_eq!(payload.identity_id, owner_id);
+            revoked.push(payload.passkey_id);
+        }
+    }
+    revoked.sort();
+    let mut expected_revoked = old_passkeys.clone();
+    expected_revoked.sort();
+    assert_eq!(revoked, expected_revoked);
+    for pair in finalization.windows(2) {
+        assert_eq!(
+            pair[0].identity_chain.as_ref().unwrap().seq + 1,
+            pair[1].identity_chain.as_ref().unwrap().seq
+        );
+    }
+
+    let local = sqlx::query("SELECT * FROM indexer_identity_passkeys WHERE identity_id = $1")
+        .bind(owner_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].get::<Uuid, _>("passkey_id"), payload.passkey_id);
+    assert_eq!(
+        local[0].get::<Option<OffsetDateTime>, _>("revoked_at"),
+        None
+    );
+
+    let mirrored = replay_recovery_passkeys(&pool, &events).await;
+    let active: Vec<_> = mirrored
+        .iter()
+        .filter(|row| row.get::<Option<OffsetDateTime>, _>("revoked_at").is_none())
+        .collect();
+    assert_eq!(active.len(), 1, "mirror must retain one active passkey");
+    assert_eq!(mirrored.len(), 1, "mirror must have no extra passkey rows");
+    let active = active[0];
+    assert_eq!(active.get::<Uuid, _>("passkey_id"), payload.passkey_id);
+    assert_eq!(
+        active.get::<avalon_protocol::ids::IdentityId, _>("identity_id"),
+        payload.identity_id
+    );
+    assert_eq!(
+        active.get::<Vec<u8>, _>("credential_id"),
+        replacement.get::<Vec<u8>, _>("credential_id")
+    );
+    assert_eq!(
+        active.get::<serde_json::Value, _>("passkey_data"),
+        payload.passkey_data
+    );
+    assert_eq!(active.get::<Option<String>, _>("label"), payload.label);
+    assert_eq!(
+        active.get::<OffsetDateTime, _>("added_at"),
+        replacement.get::<OffsetDateTime, _>("added_at")
+    );
+    assert!(mirrored
+        .iter()
+        .all(|row| !old_passkeys.contains(&row.get::<Uuid, _>("passkey_id"))));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_finalize_with_a_replacement_projection_conflict_rolls_back_registration() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (owner_id, owner_token, request_id, old_passkeys) =
+        recovery_ready_to_finalize(&pool, &http, &base).await;
+    let before = emitted_recovery_events(&pool, owner_id).await;
+    assert!(
+        !before.is_empty(),
+        "event reader must observe the recovery setup"
+    );
+    let chain_before: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event FROM identity_chain_events WHERE identity_id = $1 ORDER BY seq",
+    )
+    .bind(owner_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    // A mirror credential conflict fails after enqueueing the replacement registration.
+    let (other_id, _) = seed_identity_session(&pool).await;
+    sqlx::query(
+        "INSERT INTO indexer_identity_passkeys \
+         (passkey_id, identity_id, credential_id, passkey_data, added_at, revoked_at) \
+         SELECT $1, $2, pending_credential_id, pending_passkey_data, now(), now() \
+         FROM recovery_requests WHERE id = $3",
+    )
+    .bind(Uuid::new_v4())
+    .bind(other_id)
+    .bind(Uuid::parse_str(&request_id).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let finalize = http
+        .post(format!("{base}/recovery/requests/{request_id}/finalize"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        finalize.status().is_server_error(),
+        "projection conflict must abort finalize: {}",
+        finalize.status()
+    );
+
+    let remaining: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM identity_keys WHERE identity_id = $1 ORDER BY id")
+            .bind(owner_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let mut expected = old_passkeys;
+    expected.sort();
+    assert_eq!(remaining, expected);
+    let status: String = sqlx::query_scalar("SELECT status FROM recovery_requests WHERE id = $1")
+        .bind(Uuid::parse_str(&request_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "delay");
+    let after = emitted_recovery_events(&pool, owner_id).await;
+    assert_eq!(
+        serde_json::to_value(&after).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    assert!(!after
+        .iter()
+        .any(|event| event.kind == "identity.passkey_registered"));
+    let chain_after: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event FROM identity_chain_events WHERE identity_id = $1 ORDER BY seq",
+    )
+    .bind(owner_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(chain_after, chain_before);
+    let mirrored = replay_recovery_passkeys(&pool, &after).await;
+    assert!(
+        mirrored.is_empty(),
+        "failed finalize must leave no mirrored replacement"
+    );
+    let revocations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM indexer_identity_passkey_revocations WHERE identity_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revocations, 0);
+    let me = auth(http.get(format!("{base}/me")), &owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status().as_u16(), 200);
 }
 
 #[tokio::test]

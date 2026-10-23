@@ -9,15 +9,17 @@ use avalon_protocol::ids::IdentityId;
 use std::collections::HashSet;
 
 use avalon_protocol::event_payloads::{
-    IdentityPasskeyRevokedPayload, IdentityRecoveredPayload, IdentityRecoveryApprovedPayload,
-    IdentityRecoveryCancelledPayload, IdentityRecoveryConfiguredPayload,
-    IdentityRecoveryRequestedPayload,
+    IdentityPasskeyRegisteredPayload, IdentityPasskeyRevokedPayload, IdentityRecoveredPayload,
+    IdentityRecoveryApprovedPayload, IdentityRecoveryCancelledPayload,
+    IdentityRecoveryConfiguredPayload, IdentityRecoveryRequestedPayload,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
@@ -1141,15 +1143,44 @@ pub async fn finalize_request(
         revoked_events.push(event);
     }
 
-    sqlx::query(
-        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data, label) VALUES ($1, $2, $3, $4)",
+    let inserted = sqlx::query(
+        "INSERT INTO identity_keys (identity_id, credential_id, passkey_data, label) \
+         VALUES ($1, $2, $3, $4) RETURNING id, added_at",
     )
     .bind(request.identity_id)
     .bind(&pending_credential_id)
     .bind(&pending_passkey_data)
     .bind(&pending_device_label)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    let passkey_id: Uuid = inserted.try_get("id")?;
+    let added_at: OffsetDateTime = inserted.try_get("added_at")?;
+
+    let mut registered_event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: ProtocolEventKindVariant::IdentityPasskeyRegistered
+            .as_str()
+            .to_string(),
+        issuer: identity_ref(request.identity_id, "passkey_registered"),
+        subject: identity_ref(request.identity_id, "passkey_registered"),
+        payload: serde_json::to_value(IdentityPasskeyRegisteredPayload {
+            passkey_id,
+            identity_id: request.identity_id,
+            credential_id: BASE64.encode(&pending_credential_id),
+            passkey_data: pending_passkey_data,
+            label: pending_device_label.clone(),
+        })
+        .expect("IdentityPasskeyRegisteredPayload should serialize"),
+        timestamp: added_at,
+        version: 1,
+        identity_chain: None,
+    };
+    crate::identity_chain::assign(&mut tx, &mut registered_event).await?;
+    outbox::enqueue(&mut tx, &registered_event).await?;
+    state
+        .indexer
+        .apply_in_tx(&mut tx, &registered_event)
+        .await?;
 
     // Whoever held a session before recovery is exactly who recovery is meant to lock out.
     crate::sessions::end_all_for_identity(&mut tx, request.identity_id).await?;
@@ -1186,6 +1217,7 @@ pub async fn finalize_request(
     for event in &revoked_events {
         state.indexer.apply_after_commit(event).await?;
     }
+    state.indexer.apply_after_commit(&registered_event).await?;
 
     let approvals = approvals_count(&state, request_id).await?;
     Ok(Json(RecoveryRequestResponse {
