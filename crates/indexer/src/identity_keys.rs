@@ -54,13 +54,6 @@ impl AcceptedChain {
             .map_or(0, |p| p.seq)
     }
 
-    /// The accepted events below `position`, in chain order.
-    pub fn below(&self, position: u64) -> impl Iterator<Item = &ProtocolEvent> {
-        self.events
-            .iter()
-            .filter(move |e| e.identity_chain.as_ref().is_some_and(|p| p.seq < position))
-    }
-
     /// Waits unless the chain is accepted up to `position - 1`.
     pub fn require_prefix(&self, position: u64) -> Result<(), IndexError> {
         if self.head_seq() + 1 < position {

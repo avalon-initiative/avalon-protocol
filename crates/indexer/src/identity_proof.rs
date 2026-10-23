@@ -739,8 +739,13 @@ async fn verify_recovered(
         ));
     }
     chain.require_extends(seq, prev_hash.as_ref())?;
+    // Only the accepted head (the last unforked one) can be extended, so no recovery sits below an
+    // owner event it would otherwise skip.
+    if seq != chain.head_seq() + 1 {
+        return Err(reject("identity.recovered must extend the accepted head"));
+    }
 
-    let vetoed = chain.below(seq).any(|e| {
+    let vetoed = chain.events.iter().any(|e| {
         e.kind == "identity.recovery_cancelled"
             && e.payload.get("request_id") == Some(&serde_json::json!(payload.request_id))
     });
@@ -748,9 +753,9 @@ async fn verify_recovered(
         return Err(reject("the owner cancelled this recovery request"));
     }
     let config_event = chain
-        .below(seq)
-        .filter(|e| e.kind == "identity.recovery_configured")
-        .last()
+        .events
+        .iter()
+        .rfind(|e| e.kind == "identity.recovery_configured")
         .ok_or_else(|| reject("the owner has no recovery configuration below the recovery"))?;
     if event_hash(config_event).ok() != Some(config_hash) {
         return Err(reject(

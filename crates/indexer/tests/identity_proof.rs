@@ -1791,6 +1791,111 @@ async fn a_cancel_at_the_recoverys_position_displaces_it_and_restores_the_old_ke
     );
 }
 
+/// The owner's `identity.recovery_configured` at the position after `after`, signed by `key`.
+fn reconfigured_after(
+    f: &RecoveryFixture,
+    after: &ProtocolEvent,
+    threshold: i32,
+    key: Uuid,
+) -> ProtocolEvent {
+    let (seq, prev) = next_position(Some(after));
+    let mut e = positioned(
+        event(
+            &f.owner,
+            "identity.recovery_configured",
+            1,
+            serde_json::json!({
+                "guardian_ids": f.guardians.iter().map(|(g, _)| g.id).collect::<Vec<_>>(),
+                "threshold": threshold,
+            }),
+        ),
+        seq,
+        prev,
+    );
+    f.owner.sign_event(&mut e, key);
+    e
+}
+
+/// The owner's cancel of `request` at the position after `after`.
+fn cancel_after(f: &RecoveryFixture, request: Uuid, after: &ProtocolEvent) -> ProtocolEvent {
+    let (seq, prev) = next_position(Some(after));
+    let mut e = positioned(
+        event(
+            &f.owner,
+            "identity.recovery_cancelled",
+            1,
+            serde_json::json!({"request_id": request, "cancelled_by": f.owner.id}),
+        ),
+        seq,
+        prev,
+    );
+    f.owner.sign_event(&mut e, f.owner_key);
+    e
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_recovery_cannot_be_placed_below_the_owners_later_reconfiguration_and_cancel() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let approvals = vec![
+        approval(&f, &req, &f.guardians[0]),
+        approval(&f, &req, &f.guardians[1]),
+    ];
+    // The owner reconfigures and then cancels this very request; both sit above position 1.
+    let reconfigured = reconfigured_after(&f, &f.configured, 3, f.owner_key);
+    apply(&pool, &reconfigured, &game()).await.unwrap();
+    let cancel = cancel_after(&f, req.id, &reconfigured);
+    apply(&pool, &cancel, &game()).await.unwrap();
+
+    // A recovery signed for position 2 still names the old configuration and sees no cancel below it.
+    let below = recovered(&f, &req, approvals);
+    assert!(
+        is_refusal(apply(&pool, &below, &game()).await),
+        "a recovery below the accepted head must not displace the owner's later events"
+    );
+    assert!(!active(&pool, &f.owner, req.id).await);
+    assert!(active(&pool, &f.owner, f.owner_key).await);
+    let state = avalon_indexer::identity_chain_store::state(&pool, f.owner.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.head_hash,
+        Some(hex::encode(event_hash(&cancel).unwrap()))
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_recovery_at_the_fork_position_still_resolves_the_fork() {
+    let pool = pool().await;
+    let f = recovery_fixture(&pool).await;
+    let req = request(&f);
+    let approvals = vec![
+        approval(&f, &req, &f.guardians[0]),
+        approval(&f, &req, &f.guardians[1]),
+    ];
+    // Two conflicting reconfigurations at position 2 fork the chain.
+    let one = reconfigured_after(&f, &f.configured, 2, f.owner_key);
+    let two = reconfigured_after(&f, &f.configured, 3, f.owner_key);
+    apply(&pool, &one, &game()).await.unwrap();
+    apply(&pool, &two, &other()).await.unwrap();
+    assert!(identity_chain_is_forked(&pool, &f).await);
+
+    let e = recovered(&f, &req, approvals);
+    apply(&pool, &e, &game()).await.unwrap();
+    assert!(!identity_chain_is_forked(&pool, &f).await);
+    assert!(active(&pool, &f.owner, req.id).await);
+}
+
+async fn identity_chain_is_forked(pool: &PgPool, f: &RecoveryFixture) -> bool {
+    avalon_indexer::identity_chain_store::is_forked(pool, f.owner.id)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 #[ignore]
 async fn a_guardians_signed_withdrawal_inside_the_proof_withdraws_the_approval() {
