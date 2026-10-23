@@ -1244,6 +1244,14 @@ fn attest_config(configured: &ProtocolEvent, hours: i64) {
 }
 
 async fn recovery_fixture(pool: &PgPool) -> RecoveryFixture {
+    let f = unapplied_recovery_fixture(pool).await;
+    apply(pool, &f.configured, &game()).await.unwrap();
+    attest_config(&f.configured, 100);
+    f
+}
+
+/// The fixture with its configuration signed but not delivered.
+async fn unapplied_recovery_fixture(pool: &PgPool) -> RecoveryFixture {
     let owner = TestIdentity::new();
     let owner_key = register(pool, &owner).await;
     let mut guardians = Vec::new();
@@ -1261,8 +1269,6 @@ async fn recovery_fixture(pool: &PgPool) -> RecoveryFixture {
             "threshold": 2,
         }),
     );
-    apply(pool, &configured, &game()).await.unwrap();
-    attest_config(&configured, 100);
     RecoveryFixture {
         owner,
         owner_key,
@@ -1776,6 +1782,10 @@ async fn a_cancel_at_the_recoverys_position_displaces_it_and_restores_the_old_ke
         prev,
     );
     f.owner.sign_event(&mut cancel, f.owner_key);
+    // The cosigned heads show the cancel was on the ledger before the recovery: the revoked key's
+    // event still counts.
+    anchor_event(&cancel, 120);
+    anchor_event(&e, 100);
     apply(&pool, &cancel, &other()).await.unwrap();
 
     assert!(!active(&pool, &f.owner, req.id).await);
@@ -2288,4 +2298,383 @@ async fn a_signature_by_one_identity_cannot_act_on_another_identitys_state() {
         0,
         "no forged event reaches the signer's chain"
     );
+}
+
+/// An owner whose device key `t` was granted and then stolen.
+struct Compromise {
+    owner: TestIdentity,
+    k0: Uuid,
+    thief: TestIdentity,
+    t: Uuid,
+    grant: ProtocolEvent,
+}
+
+async fn compromise(pool: &PgPool) -> Compromise {
+    let owner = TestIdentity::new();
+    let k0 = register(pool, &owner).await;
+    let thief = TestIdentity::new();
+    let t = Uuid::new_v4();
+    let grant = grant(&owner, &owner, k0, &thief, t, None);
+    Compromise {
+        owner,
+        k0,
+        thief,
+        t,
+        grant,
+    }
+}
+
+/// A `profile.updated` of `who` signed by `signer`'s `key` at the position after `after`, stamped `at`.
+fn profile_after(
+    who: &TestIdentity,
+    signer: &TestIdentity,
+    key: Uuid,
+    after: Option<&ProtocolEvent>,
+    bio: &str,
+    at: OffsetDateTime,
+) -> ProtocolEvent {
+    let (seq, prev) = next_position(after);
+    let mut e = positioned(
+        event(who, "profile.updated", 1, serde_json::json!({ "bio": bio })),
+        seq,
+        prev,
+    );
+    e.timestamp = at;
+    signer.sign_event(&mut e, key);
+    e
+}
+
+/// A chain-critical event (a recovery configuration) of `who` signed by `signer`'s `key` after `after`.
+fn critical_after(
+    who: &TestIdentity,
+    signer: &TestIdentity,
+    key: Uuid,
+    after: Option<&ProtocolEvent>,
+    guardian: IdentityId,
+) -> ProtocolEvent {
+    let (seq, prev) = next_position(after);
+    let mut e = positioned(
+        event(
+            who,
+            "identity.recovery_configured",
+            1,
+            serde_json::json!({ "guardian_ids": [guardian], "threshold": 1 }),
+        ),
+        seq,
+        prev,
+    );
+    signer.sign_event(&mut e, key);
+    e
+}
+
+async fn head_of(pool: &PgPool, who: &TestIdentity) -> (Option<String>, Option<i64>) {
+    let state = avalon_indexer::identity_chain_store::state(pool, who.id)
+        .await
+        .unwrap()
+        .unwrap();
+    (state.head_hash, state.forked_at_seq)
+}
+
+fn hash_hex(e: &ProtocolEvent) -> Option<String> {
+    Some(hex::encode(event_hash(e).unwrap()))
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_revoked_key_cannot_fork_the_chain_at_its_own_revocation_position() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    apply(&pool, &c.grant, &game()).await.unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&c.grant));
+    apply(&pool, &revocation, &game()).await.unwrap();
+    let guardian = TestIdentity::new().id;
+    // The thief signs a chain-critical event with the key at the revocation's own position.
+    let thief = critical_after(&c.owner, &c.thief, c.t, Some(&c.grant), guardian);
+    assert_ne!(thief.id, revocation.id);
+
+    // Not yet on a cosigned head: it waits and cannot fork the chain.
+    assert!(is_wait(apply(&pool, &thief, &other()).await));
+    // On the ledger after the revocation: it never counts.
+    anchor_event(&c.grant, 300);
+    anchor_event(&revocation, 100);
+    anchor_event(&thief, 10);
+    assert!(is_wait(apply(&pool, &thief, &other()).await));
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    assert!(!active(&pool, &c.owner, c.t).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_key_event_on_the_ledger_before_its_keys_revocation_still_forks_honestly() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    apply(&pool, &c.grant, &game()).await.unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&c.grant));
+    apply(&pool, &revocation, &game()).await.unwrap();
+    let guardian = TestIdentity::new().id;
+    let thief = critical_after(&c.owner, &c.thief, c.t, Some(&c.grant), guardian);
+    // The thief's event was on a cosigned head before the owner's revocation: a genuine race.
+    anchor_event(&thief, 200);
+    anchor_event(&revocation, 100);
+    apply(&pool, &thief, &other()).await.unwrap();
+    assert_eq!(head_of(&pool, &c.owner).await.1, Some(2));
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_thief_event_at_an_old_position_cannot_displace_a_later_revocation() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    apply(&pool, &c.grant, &game()).await.unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    apply(&pool, &owners, &game()).await.unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    // The thief signs at the same old position with a later time, which wins an ordinary tie.
+    let thiefs = profile_after(
+        &c.owner,
+        &c.thief,
+        c.t,
+        Some(&c.grant),
+        "thief",
+        now + time::Duration::minutes(4),
+    );
+    anchor_event(&c.grant, 300);
+    anchor_event(&owners, 200);
+    anchor_event(&revocation, 100);
+    anchor_event(&thiefs, 10);
+
+    // Delivered before the revocation, the thief's event takes the position...
+    apply(&pool, &thiefs, &other()).await.unwrap();
+    // ...and the revocation, which extends the owner's event, must still land and prevail.
+    apply(&pool, &revocation, &game()).await.unwrap();
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    assert!(!active(&pool, &c.owner, c.t).await);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_thief_event_delivered_after_the_revocation_does_not_displace_it_either() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    apply(&pool, &c.grant, &game()).await.unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    apply(&pool, &owners, &game()).await.unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    apply(&pool, &revocation, &game()).await.unwrap();
+    let thiefs = profile_after(
+        &c.owner,
+        &c.thief,
+        c.t,
+        Some(&c.grant),
+        "thief",
+        now + time::Duration::minutes(4),
+    );
+    anchor_event(&revocation, 100);
+    anchor_event(&thiefs, 10);
+    assert!(is_wait(apply(&pool, &thiefs, &other()).await));
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    assert!(!active(&pool, &c.owner, c.t).await);
+}
+
+/// Every order of delivery ends in the same chain: events a revocation supersedes wait for
+/// the next pass and never count, and the ones delivered early are dropped when it arrives.
+#[tokio::test]
+#[ignore]
+async fn the_accepted_chain_does_not_depend_on_the_order_events_arrive_in() {
+    let pool = pool().await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let guardian = TestIdentity::new().id;
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut orders: Vec<Vec<usize>> = vec![(0..6).collect(), (0..6).rev().collect()];
+    for _ in 0..60 {
+        let mut order: Vec<usize> = (0..6).collect();
+        for i in (1..order.len()).rev() {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            order.swap(i, (seed >> 33) as usize % (i + 1));
+        }
+        orders.push(order);
+    }
+    for order in orders {
+        let c = compromise(&pool).await;
+        let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner-2", now);
+        let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+        let after = profile_after(&c.owner, &c.owner, c.k0, Some(&revocation), "owner-4", now);
+        let thief_old = profile_after(
+            &c.owner,
+            &c.thief,
+            c.t,
+            Some(&c.grant),
+            "thief",
+            now + time::Duration::minutes(4),
+        );
+        let thief_fork = critical_after(&c.owner, &c.thief, c.t, Some(&owners), guardian);
+        let events = [
+            c.grant.clone(),
+            owners.clone(),
+            revocation.clone(),
+            after.clone(),
+            thief_old.clone(),
+            thief_fork.clone(),
+        ];
+        for (e, hours) in events.iter().zip([300, 200, 100, 90, 50, 40]) {
+            anchor_event(e, hours);
+        }
+        let mut pending: Vec<usize> = order.clone();
+        loop {
+            let mut waiting = Vec::new();
+            for &i in &pending {
+                match apply(&pool, &events[i], &game()).await {
+                    Ok(()) => {}
+                    Err(err) if err.is_deferred() => waiting.push(i),
+                    Err(err) => panic!("order {order:?}: event {i}: {err}"),
+                }
+            }
+            let progressed = waiting.len() < pending.len();
+            pending = waiting;
+            if pending.is_empty() || !progressed {
+                break;
+            }
+        }
+        let (head, forked) = head_of(&pool, &c.owner).await;
+        let bio = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT bio FROM profiles WHERE identity_id = $1",
+        )
+        .bind(c.owner.id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap()
+        .flatten();
+        assert_eq!(head, hash_hex(&after), "order {order:?}");
+        assert_eq!(forked, None, "order {order:?}");
+        assert_eq!(bio.as_deref(), Some("owner-4"), "order {order:?}");
+        assert!(!active(&pool, &c.owner, c.t).await, "order {order:?}");
+    }
+}
+
+/// A recovery and the owner's stolen inception key: whichever of the key's events arrive first, the
+/// recovery (cosigned before them) still lands and ends the key.
+#[tokio::test]
+#[ignore]
+async fn a_recovery_lands_whatever_order_the_stolen_keys_events_arrive_in() {
+    let pool = pool().await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let mut orders: Vec<[usize; 4]> = Vec::new();
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    let order = [a, b, c, d];
+                    if (0..4).all(|i| order.contains(&i)) {
+                        orders.push(order);
+                    }
+                }
+            }
+        }
+    }
+    for order in orders {
+        let f = unapplied_recovery_fixture(&pool).await;
+        let req = request(&f);
+        let approvals = vec![
+            approval(&f, &req, &f.guardians[0]),
+            approval(&f, &req, &f.guardians[1]),
+        ];
+        let recovery = recovered_after(&f, &req, approvals, &f.configured);
+        let stolen_1 = profile_after(
+            &f.owner,
+            &f.owner,
+            f.owner_key,
+            None,
+            "stolen-1",
+            now + time::Duration::minutes(4),
+        );
+        let stolen_2 = profile_after(
+            &f.owner,
+            &f.owner,
+            f.owner_key,
+            Some(&f.configured),
+            "stolen-2",
+            now + time::Duration::minutes(4),
+        );
+        let events = [
+            f.configured.clone(),
+            recovery.clone(),
+            stolen_1.clone(),
+            stolen_2.clone(),
+        ];
+        attest_config(&f.configured, 100);
+        for (e, hours) in events.iter().skip(1).zip([60, 10, 5]) {
+            anchor_event(e, hours);
+        }
+        let mut pending: Vec<usize> = order.to_vec();
+        loop {
+            let mut waiting = Vec::new();
+            for &i in &pending {
+                match apply(&pool, &events[i], &game()).await {
+                    Ok(()) => {}
+                    Err(err) if err.is_deferred() => waiting.push(i),
+                    Err(err) => panic!("order {order:?}: event {i}: {err}"),
+                }
+            }
+            let progressed = waiting.len() < pending.len();
+            pending = waiting;
+            if pending.is_empty() || !progressed {
+                break;
+            }
+        }
+        assert_eq!(
+            head_of(&pool, &f.owner).await,
+            (hash_hex(&recovery), None),
+            "order {order:?}"
+        );
+        assert!(active(&pool, &f.owner, req.id).await, "order {order:?}");
+        assert!(
+            !active(&pool, &f.owner, f.owner_key).await,
+            "order {order:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_key_a_thief_added_with_the_stolen_key_never_becomes_active() {
+    let pool = pool().await;
+    let c = compromise(&pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    apply(&pool, &c.grant, &game()).await.unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    apply(&pool, &owners, &game()).await.unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    // The thief grants a second key at the owner's position, signed with the stolen key, and
+    // it reaches this node before the revocation does.
+    let t2 = TestIdentity::new();
+    let t2_key = Uuid::new_v4();
+    let thiefs = grant(&c.owner, &c.thief, c.t, &t2, t2_key, Some(&c.grant));
+    anchor_event(&revocation, 100);
+    anchor_event(&thiefs, 10);
+    apply(&pool, &thiefs, &other()).await.unwrap();
+    assert!(
+        !active(&pool, &c.owner, t2_key).await,
+        "a key event outside the accepted chain changes no key"
+    );
+    apply(&pool, &revocation, &game()).await.unwrap();
+    assert_eq!(
+        head_of(&pool, &c.owner).await,
+        (hash_hex(&revocation), None)
+    );
+    assert!(!active(&pool, &c.owner, t2_key).await);
+    assert!(!active(&pool, &c.owner, c.t).await);
+    assert!(active(&pool, &c.owner, c.k0).await);
 }

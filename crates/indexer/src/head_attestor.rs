@@ -4,6 +4,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity_chain_wire::embed_position;
+use avalon_protocol::ledger_entry::payload_hash;
 use sqlx::{PgConnection, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -72,6 +75,28 @@ pub trait HeadAttestor: Send + Sync {
         conn: &mut PgConnection,
         event_id: Uuid,
     ) -> Result<Vec<EntryAttestation>, IndexError>;
+}
+
+/// The ledger entry of a chained `event`: the copies of its id (an id is not unique across shards)
+/// whose kind and payload hash are those of the event as stored (payload with its chain position
+/// embedded), merged to the earliest anchor. `None` while no node held entry matches.
+pub async fn chain_event_attestation(
+    conn: &mut PgConnection,
+    heads: &dyn HeadAttestor,
+    event: &ProtocolEvent,
+) -> Result<Option<EntryAttestation>, IndexError> {
+    let Some(position) = event.identity_chain.as_ref() else {
+        return Ok(None);
+    };
+    let stored = payload_hash(&embed_position(&event.payload, position))
+        .map_err(|_| IndexError::Rejected("chained event payload is not canonical".into()))?;
+    let wanted = hex::encode(stored);
+    let copies = heads
+        .by_event_id(conn, event.id)
+        .await?
+        .into_iter()
+        .filter(|e| e.kind == event.kind && e.payload_hash == wanted);
+    Ok(EntryAttestation::earliest(copies))
 }
 
 /// Witnesses that must cosign a head before it counts; 0 when the known list has at most one member.

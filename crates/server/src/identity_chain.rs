@@ -94,7 +94,8 @@ pub async fn place_signed(
     }
     let resolves_fork = event.kind == "identity.recovered";
     require_signed_position(tx, owner, sig.seq, sig.prev_hash.as_deref(), resolves_fork).await?;
-    identity_chain_store::record_local(tx, event).await?;
+    let heads = state.indexer.head_attestor();
+    identity_chain_store::record_local(tx, heads.as_deref(), event).await?;
     Ok(())
 }
 
@@ -140,17 +141,19 @@ pub async fn chain_head(
 /// Places an owner-signed key event (whose signature the caller verified) at the position it
 /// signed, which the caller checked with [`require_signed_position`].
 pub async fn place_key_event(
+    state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     event: &mut ProtocolEvent,
     seq: u64,
     prev_hash: Option<&str>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), avalon_indexer::IndexError> {
     event.timestamp = avalon_protocol::identity_chain_wire::truncate_to_micros(event.timestamp);
     event.identity_chain = Some(IdentityChainPosition::current(
         seq,
         prev_hash.map(str::to_string),
     ));
-    identity_chain_store::record_local(tx, event).await?;
+    let heads = state.indexer.head_attestor();
+    identity_chain_store::record_local(tx, heads.as_deref(), event).await?;
     Ok(())
 }
 

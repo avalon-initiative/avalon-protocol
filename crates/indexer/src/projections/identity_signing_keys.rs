@@ -35,6 +35,8 @@ pub enum SigningKeyWrite {
         signing_key_id: Uuid,
         identity_id: IdentityId,
         revoked_at: OffsetDateTime,
+        /// The revoking event, so displacing it restores exactly what it revoked.
+        event_id: Uuid,
     },
 }
 
@@ -78,6 +80,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<SigningKeyWrite> {
                 signing_key_id: revoked.signing_key_id,
                 identity_id: revoked.identity_id,
                 revoked_at: event.timestamp,
+                event_id: event.id,
             })
         }
         _ => None,
@@ -169,6 +172,50 @@ pub async fn revert_recovered(
     Ok(())
 }
 
+/// Undoes a displaced `identity.signing_key_added` (the key row goes) or `identity.signing_key_revoked`
+/// (the keys that event revoked are active again).
+pub async fn revert_key_event(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    identity_id: IdentityId,
+) -> Result<(), IndexError> {
+    match decode(event) {
+        Some(SigningKeyWrite::Added {
+            signing_key_id,
+            public_key,
+            inception: false,
+            ..
+        }) => {
+            sqlx::query(
+                "DELETE FROM indexer_identity_signing_keys \
+                 WHERE identity_id = $1 AND signing_key_id = $2 AND public_key = $3 AND NOT inception",
+            )
+            .bind(identity_id)
+            .bind(signing_key_id)
+            .bind(public_key)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Some(SigningKeyWrite::Revoked {
+            signing_key_id,
+            event_id,
+            ..
+        }) => {
+            sqlx::query(
+                "UPDATE indexer_identity_signing_keys SET revoked_at = NULL, revoked_by_event_id = NULL \
+                 WHERE identity_id = $1 AND signing_key_id = $2 AND revoked_by_event_id = $3",
+            )
+            .bind(identity_id)
+            .bind(signing_key_id)
+            .bind(event_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &SigningKeyWrite,
@@ -229,14 +276,16 @@ pub async fn apply(
             signing_key_id,
             identity_id,
             revoked_at,
+            event_id,
         } => {
             sqlx::query(
-                "UPDATE indexer_identity_signing_keys SET revoked_at = $3 \
+                "UPDATE indexer_identity_signing_keys SET revoked_at = $3, revoked_by_event_id = $4 \
                  WHERE signing_key_id = $1 AND identity_id = $2 AND revoked_at IS NULL",
             )
             .bind(signing_key_id)
             .bind(identity_id)
             .bind(revoked_at)
+            .bind(event_id)
             .execute(&mut **tx)
             .await?;
             // Recorded unconditionally: a revocation delivered before the key's addition must
@@ -393,6 +442,7 @@ mod tests {
                 signing_key_id,
                 identity_id,
                 revoked_at: source_event.timestamp,
+                event_id: source_event.id,
             }
         );
     }

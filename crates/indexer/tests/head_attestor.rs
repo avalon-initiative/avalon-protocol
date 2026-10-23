@@ -111,7 +111,7 @@ async fn a_backdated_head_does_not_make_an_entry_old_enough() {
     head(&pool, &network, "hostile", 2, now, &[now, now]).await;
 
     let copies = attestor(&network, 2)
-        .by_event_id(&mut *pool.acquire().await.unwrap(), event_id)
+        .by_event_id(&mut pool.acquire().await.unwrap(), event_id)
         .await
         .unwrap();
     let [copy] = copies.as_slice() else {
@@ -147,7 +147,7 @@ async fn the_quorum_time_is_the_quorum_th_earliest_cosignature() {
     )
     .await;
     let copies = attestor(&network, 3)
-        .by_event_id(&mut *pool.acquire().await.unwrap(), event_id)
+        .by_event_id(&mut pool.acquire().await.unwrap(), event_id)
         .await
         .unwrap();
     let anchor = copies[0].anchor_at.unwrap();

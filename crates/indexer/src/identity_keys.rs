@@ -1,18 +1,23 @@
 //! An identity's signing keys judged at a chain position from its accepted chain and inception key.
 //! When the chain below the position is not accepted yet the answer is "wait", never a guess.
 
+use std::collections::BTreeMap;
+
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::identity_chain_wire::event_hash;
+use avalon_protocol::identity_chain::EventHash;
+use avalon_protocol::identity_chain_wire::{event_hash, parse_hash};
 use avalon_protocol::identity_id::IdentityId;
 use avalon_protocol::identity_keys::{key_at, key_records, KeyAt, KeyRecord};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::head_attestor::HeadAttestor;
 use crate::{identity_chain_store, IndexError};
 
-/// The accepted chain of one identity with its key records.
+/// A chain of one identity (its accepted chain, or the branch below a signed position) with its key
+/// records.
 pub struct AcceptedChain {
-    /// Accepted events in chain order; contiguous from seq 1.
+    /// Events in chain order; contiguous from seq 1.
     pub events: Vec<ProtocolEvent>,
     records: Vec<KeyRecord>,
 }
@@ -21,11 +26,10 @@ fn awaiting(what: &str) -> IndexError {
     IndexError::AwaitingKey(format!("{what} is not accepted for this identity yet"))
 }
 
-/// Loads `owner`'s accepted chain and inception keys. Waits when the identity's creation is unknown.
-pub async fn load(
+async fn inception_keys(
     tx: &mut Transaction<'_, Postgres>,
     owner: IdentityId,
-) -> Result<AcceptedChain, IndexError> {
+) -> Result<Vec<(Uuid, [u8; 32])>, IndexError> {
     let inception: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
         "SELECT signing_key_id, public_key FROM indexer_identity_signing_keys \
          WHERE identity_id = $1 AND inception",
@@ -40,7 +44,69 @@ pub async fn load(
     if inception.is_empty() {
         return Err(awaiting("the inception key"));
     }
-    let events = identity_chain_store::accepted_events(tx, owner).await?;
+    Ok(inception)
+}
+
+/// Loads `owner`'s accepted chain and inception keys. Waits when the identity's creation is unknown.
+pub async fn load(
+    tx: &mut Transaction<'_, Postgres>,
+    heads: Option<&dyn HeadAttestor>,
+    owner: IdentityId,
+) -> Result<AcceptedChain, IndexError> {
+    load_beside(tx, heads, owner, None).await
+}
+
+/// [`load`] with `candidate` judged beside the chain: its own revocations apply, it is not in it.
+pub async fn load_beside(
+    tx: &mut Transaction<'_, Postgres>,
+    heads: Option<&dyn HeadAttestor>,
+    owner: IdentityId,
+    candidate: Option<&ProtocolEvent>,
+) -> Result<AcceptedChain, IndexError> {
+    let inception = inception_keys(tx, owner).await?;
+    let events = identity_chain_store::accepted_events_beside(tx, heads, owner, candidate).await?;
+    let records = key_records(&inception, &events);
+    Ok(AcceptedChain { events, records })
+}
+
+/// The chain a signed position builds on: the ancestors reached from `prev_hash` through recorded
+/// events, on whichever branch they sit, so an event is judged by the history its signature covers
+/// and not by which branch currently wins. Waits while an ancestor is not recorded yet.
+pub async fn load_branch(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: IdentityId,
+    seq: u64,
+    prev_hash: Option<&[u8; 32]>,
+) -> Result<AcceptedChain, IndexError> {
+    let refused = |what: &str| IndexError::Rejected(format!("the signed position {what}"));
+    if (seq == 1) != prev_hash.is_none() || seq == 0 {
+        return Err(refused("does not extend any chain"));
+    }
+    let inception = inception_keys(tx, owner).await?;
+    let stored = identity_chain_store::stored_events(tx, owner).await?;
+    let by_hash: BTreeMap<EventHash, &ProtocolEvent> =
+        stored.iter().map(|(e, h)| (*h, e)).collect();
+    let mut events = Vec::new();
+    let mut wanted = prev_hash.copied();
+    let mut expect = seq - 1;
+    while let Some(hash) = wanted {
+        let event = by_hash
+            .get(&hash)
+            .ok_or_else(|| awaiting("the chain below the signed position"))?;
+        let position = event.identity_chain.as_ref();
+        if position.map(|p| p.seq) != Some(expect) {
+            return Err(refused("names an event at another position"));
+        }
+        wanted = position
+            .and_then(|p| p.prev_hash.as_deref())
+            .and_then(parse_hash);
+        events.push((*event).clone());
+        expect -= 1;
+    }
+    if expect != 0 {
+        return Err(refused("does not reach the start of the chain"));
+    }
+    events.reverse();
     let records = key_records(&inception, &events);
     Ok(AcceptedChain { events, records })
 }

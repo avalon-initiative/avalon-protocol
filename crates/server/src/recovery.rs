@@ -494,8 +494,13 @@ async fn current_config_hash(
     identity_id: IdentityId,
 ) -> Result<Option<[u8; 32]>, AppError> {
     let mut tx = state.pool.begin().await?;
-    let events =
-        avalon_indexer::identity_chain_store::accepted_events(&mut tx, identity_id).await?;
+    let heads = state.indexer.head_attestor();
+    let events = avalon_indexer::identity_chain_store::accepted_events(
+        &mut tx,
+        heads.as_deref(),
+        identity_id,
+    )
+    .await?;
     Ok(events
         .iter()
         .rev()
@@ -927,7 +932,8 @@ async fn guardian_key_at(
         other => other.into(),
     };
     let mut tx = state.pool.begin().await?;
-    let chain = avalon_indexer::identity_keys::load(&mut tx, guardian)
+    let heads = state.indexer.head_attestor();
+    let chain = avalon_indexer::identity_keys::load(&mut tx, heads.as_deref(), guardian)
         .await
         .map_err(refused)?;
     chain.require_extends(seq, prev_hash).map_err(refused)?;

@@ -41,6 +41,7 @@ pub mod identity_chain;
 pub mod identity_chain_wire;
 pub mod identity_id;
 pub mod identity_keys;
+pub mod identity_revocation;
 pub mod ids;
 pub mod integrator_schema_mappings;
 pub mod integrator_schemas;

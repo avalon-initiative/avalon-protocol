@@ -432,6 +432,7 @@ pub async fn approve_device_grant(
         identity_chain: None,
     };
     crate::identity_chain::place_key_event(
+        &state,
         &mut tx,
         &mut event,
         body.seq,
@@ -665,6 +666,7 @@ pub async fn revoke_device(
         identity_chain: None,
     };
     crate::identity_chain::place_key_event(
+        &state,
         &mut tx,
         &mut event,
         body.seq,

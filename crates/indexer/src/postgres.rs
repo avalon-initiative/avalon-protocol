@@ -283,7 +283,14 @@ impl PostgresIndexer {
 
         // Chained events are recorded and resolved first; only `profile.updated`
         // is projected through the resolved chain (see `apply_profile_chained`).
-        match identity_chain_store::record(tx, event, OffsetDateTime::now_utc()).await? {
+        match identity_chain_store::record(
+            tx,
+            self.heads.as_deref(),
+            event,
+            OffsetDateTime::now_utc(),
+        )
+        .await?
+        {
             Recorded::Unchained => {}
             Recorded::Duplicate => return Ok(()),
             Recorded::Rejected(err) => {
@@ -296,13 +303,50 @@ impl PostgresIndexer {
                 newly_accepted,
                 accepted_events,
             } => {
-                // A recovery the owner's veto displaced no longer stands: its keys come back.
-                for gone in displaced.iter().filter(|e| e.kind == "identity.recovered") {
-                    if let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(gone) {
-                        identity_signing_keys::revert_recovered(tx, gone, owner).await?;
+                // An event the chain no longer holds is undone: a recovery's keys come back, a
+                // displaced key addition goes and a displaced revocation lifts.
+                for gone in &displaced {
+                    let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(gone)
+                    else {
+                        continue;
+                    };
+                    match gone.kind.as_str() {
+                        "identity.recovered" => {
+                            identity_signing_keys::revert_recovered(tx, gone, owner).await?
+                        }
+                        "identity.signing_key_added" | "identity.signing_key_revoked" => {
+                            identity_signing_keys::revert_key_event(tx, gone, owner).await?
+                        }
+                        _ => {}
                     }
                 }
-                if event.kind == "identity.recovered" && !accepted {
+                // Events that joined the chain only now (a fork resolved, a revocation lifted)
+                // take effect in chain order.
+                for joined in &newly_accepted {
+                    let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(joined)
+                    else {
+                        continue;
+                    };
+                    match joined.kind.as_str() {
+                        "identity.recovered" => {
+                            identity_signing_keys::apply_recovered(tx, joined, owner).await?
+                        }
+                        "identity.signing_key_added" | "identity.signing_key_revoked" => {
+                            if let Some(write) = identity_signing_keys::decode(joined) {
+                                identity_signing_keys::apply(tx, &write).await?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // A key event outside the chain changes no key.
+                let alters_keys = matches!(
+                    event.kind.as_str(),
+                    "identity.recovered"
+                        | "identity.signing_key_added"
+                        | "identity.signing_key_revoked"
+                );
+                if alters_keys && !accepted {
                     return Ok(());
                 }
                 if event.kind == "profile.updated" {

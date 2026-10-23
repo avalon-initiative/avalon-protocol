@@ -19,8 +19,7 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::identity_chain_wire::{
-    chain_owner, embed_position, event_hash, needs_author_signature, parse_hash, signer_of,
-    verify_author_signature,
+    chain_owner, event_hash, needs_author_signature, parse_hash, signer_of, verify_author_signature,
 };
 use avalon_protocol::identity_id::{
     device_grant_approval_signing_bytes, display_name_permitted, identity_created_signing_bytes,
@@ -39,7 +38,8 @@ use uuid::Uuid;
 
 use std::collections::BTreeSet;
 
-use crate::head_attestor::{EntryAttestation, HeadAttestor};
+use crate::head_attestor::{chain_event_attestation, EntryAttestation, HeadAttestor};
+use crate::identity_chain_store::{self, Supersession};
 use crate::identity_keys::{self, AcceptedChain};
 use crate::IndexError;
 
@@ -241,7 +241,7 @@ async fn require_ticket_key(
 }
 
 /// The public key `signing_key_id` of `identity_id` had at the chain position `seq` (extending
-/// `prev_hash`), judged from the identity's accepted chain. Waits while the chain below is incomplete.
+/// `prev_hash`), judged from the history that position builds on. Waits while that history is incomplete.
 async fn judge_signer(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: IdentityId,
@@ -250,8 +250,7 @@ async fn judge_signer(
     prev_hash: Option<&[u8; 32]>,
     role: &str,
 ) -> Result<[u8; 32], IndexError> {
-    let chain = identity_keys::load(tx, identity_id).await?;
-    chain.require_extends(seq, prev_hash)?;
+    let chain = identity_keys::load_branch(tx, identity_id, seq, prev_hash).await?;
     identity_keys::require_valid(chain.key_at(signing_key_id, seq)?, role)
 }
 
@@ -515,28 +514,17 @@ fn identity_of_ref(text: &str) -> Option<IdentityId> {
     parts.next()?.parse().ok()
 }
 
-/// The ledger entry an accepted chain event sits in: the copies of its id whose payload hash is that of
-/// the event's stored payload (the payload with its chain position embedded), timed by the earliest.
+/// The ledger entry an accepted chain event sits in (see [`chain_event_attestation`]).
 async fn attest_chain_event(
     tx: &mut Transaction<'_, Postgres>,
     heads: &dyn HeadAttestor,
     event: &ProtocolEvent,
 ) -> Result<EntryAttestation, IndexError> {
-    let position = event
-        .identity_chain
-        .as_ref()
-        .ok_or_else(|| reject("a chained event carries its position"))?;
-    let stored = payload_hash(&embed_position(&event.payload, position))
-        .map_err(|_| reject("chained event payload is not canonical"))?;
-    let wanted = hex::encode(stored);
-    let copies = heads
-        .by_event_id(tx, event.id)
+    chain_event_attestation(tx, heads, event)
         .await?
-        .into_iter()
-        .filter(|e| e.kind == event.kind && e.payload_hash == wanted);
-    EntryAttestation::earliest(copies).ok_or_else(|| {
-        IndexError::AwaitingKey(format!("{} is not in a ledger entry yet", event.kind))
-    })
+        .ok_or_else(|| {
+            IndexError::AwaitingKey(format!("{} is not in a ledger entry yet", event.kind))
+        })
 }
 
 /// Waits until cosigned heads cover the entry and the latest cosigned head is a full recovery delay
@@ -555,6 +543,7 @@ fn require_old_enough(entry: &EntryAttestation, what: &str) -> Result<(), IndexE
 
 /// What a recovery's guardian approvals must all bind.
 struct ApprovalContext<'a> {
+    heads: &'a dyn HeadAttestor,
     network_id: &'a str,
     owner: IdentityId,
     request_id: Uuid,
@@ -579,7 +568,7 @@ async fn check_approval(
     let Some(prev) = position_hash(&proof.prev_hash) else {
         return Ok(Counted::No);
     };
-    let chain = match identity_keys::load(tx, proof.guardian_id).await {
+    let chain = match identity_keys::load(tx, Some(ctx.heads), proof.guardian_id).await {
         Ok(chain) => chain,
         Err(IndexError::AwaitingKey(_)) => return Ok(Counted::Awaiting),
         Err(other) => return Err(other),
@@ -716,7 +705,7 @@ async fn verify_recovered(
     }
 
     let (seq, prev_hash) = signed_position(event)?;
-    let chain = identity_keys::load(tx, owner).await?;
+    let chain = identity_keys::load_beside(tx, heads, owner, Some(event)).await?;
     // A recovery is single-use: its request id and its new key can never be installed twice, so
     // a stolen recovery key cannot replay an old recovered at a later head.
     let consumed = chain.events.iter().any(|e| {
@@ -798,6 +787,7 @@ async fn verify_recovered(
     }
 
     let ctx = ApprovalContext {
+        heads,
         network_id,
         owner,
         request_id: payload.request_id,
@@ -835,6 +825,27 @@ async fn verify_recovered(
     Ok(())
 }
 
+/// Waits when a revocation of the event's signing key is on the ledger no later than the event, or
+/// when either is not dated by a cosigned head yet: revocation is final. The same rule resolves the
+/// chain, so an event kept out here stays out when it is delivered in any other order.
+async fn require_not_superseded(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+    heads: Option<&dyn HeadAttestor>,
+) -> Result<(), IndexError> {
+    match identity_chain_store::supersession(tx, heads, event).await? {
+        Supersession::Stands => Ok(()),
+        Supersession::Superseded => Err(IndexError::AwaitingKey(format!(
+            "{} is signed by a key revoked on the ledger no later than it",
+            event.kind
+        ))),
+        Supersession::Pending => Err(IndexError::AwaitingKey(format!(
+            "{} and a revocation of its key are not both dated by cosigned heads yet",
+            event.kind
+        ))),
+    }
+}
+
 /// Verifies `event` before any table (including the identity chain) is touched.
 /// `origin` is `None` when the indexer was built without a local origin: nothing that needs one
 /// is accepted then.
@@ -844,25 +855,22 @@ pub async fn verify(
     origin: Option<&EventOrigin>,
     heads: Option<&dyn HeadAttestor>,
 ) -> Result<Verified, IndexError> {
-    match event.kind.as_str() {
+    let verified = match event.kind.as_str() {
         "identity.created" => {
             let origin = origin.ok_or_else(|| reject("no origin to verify identity.created"))?;
-            verify_created(event, &origin.network_id).map(Verified::Creation)
+            return verify_created(event, &origin.network_id).map(Verified::Creation);
         }
-        "identity.signing_key_added" => verify_key_added(tx, event, origin)
-            .await
-            .map(|()| Verified::Other),
-        "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin)
-            .await
-            .map(|()| Verified::Other),
-        "identity.recovered" => verify_recovered(tx, event, origin, heads)
-            .await
-            .map(|()| Verified::Other),
-        kind if needs_author_signature(kind) => verify_author(tx, event, origin)
-            .await
-            .map(|()| Verified::Other),
-        _ => Ok(Verified::Other),
+        "identity.signing_key_added" => verify_key_added(tx, event, origin).await,
+        "identity.signing_key_revoked" => verify_key_revoked(tx, event, origin).await,
+        "identity.recovered" => verify_recovered(tx, event, origin, heads).await,
+        kind if needs_author_signature(kind) => verify_author(tx, event, origin).await,
+        _ => return Ok(Verified::Other),
+    };
+    verified?;
+    if event.identity_chain.is_some() && chain_owner(event).is_some() {
+        require_not_superseded(tx, event, heads).await?;
     }
+    Ok(Verified::Other)
 }
 
 #[cfg(test)]
