@@ -13,6 +13,7 @@ pub fn head_attestor(
     own_shard_id: &str,
     known_list: KnownListHandle,
 ) -> Arc<dyn HeadAttestor> {
+    let members = known_list.clone();
     Arc::new(SqlHeadAttestor::new(
         network_id,
         own_shard_id,
@@ -24,5 +25,6 @@ pub fn head_attestor(
                 avalon_protocol::witness::majority_threshold(size)
             }
         }),
+        Arc::new(move || members.witness_key_ids()),
     ))
 }

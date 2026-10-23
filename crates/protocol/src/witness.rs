@@ -35,6 +35,10 @@ pub enum WitnessSigningError {
     Layout(#[from] SigningBytesError),
 }
 
+/// How far after a verifier's own clock a cosignature's `observed_at` may lie (clock skew between
+/// nodes); anything later is never stored or counted.
+pub const MAX_OBSERVED_FUTURE_SKEW: time::Duration = time::Duration::seconds(60);
+
 /// One witness's cosignature over an author-signed tree head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WitnessCosignature {

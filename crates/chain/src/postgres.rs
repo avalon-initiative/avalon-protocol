@@ -799,8 +799,8 @@ impl PostgresSettlementProvider {
             INSERT INTO witness_cosignatures
                 (network_id, shard_id, tree_size, witness_key_id, root_hash, author_created_at,
                  author_key_id, author_signature, observed_at, signature,
-                 layout_version, rules_version, hash_algo, extensions)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 layout_version, rules_version, hash_algo, extensions, first_seen_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $9)
             ON CONFLICT (network_id, shard_id, tree_size, witness_key_id) DO NOTHING
             "#,
         )
@@ -864,18 +864,48 @@ impl PostgresSettlementProvider {
         if existing_root_hash == cosig.root_hash
             && existing_author_key_id == cosig.author_key_id
             && existing_author_signature == cosig.author_signature
-            && existing_observed_at < cosig.observed_at
         {
-            // Same witness, same head, a fresher observation — a relayed
-            // re-attestation, not an equivocation. Update in place.
-            self.refresh_witness_cosignature(shard_id, cosig).await?;
-            return Ok(());
+            // Same witness, same head: a relayed re-attestation, not an equivocation. A later
+            // observation refreshes in place; an earlier one lowers the first-seen time.
+            if existing_observed_at < cosig.observed_at {
+                self.refresh_witness_cosignature(shard_id, cosig).await?;
+                return Ok(());
+            }
+            if cosig.observed_at < existing_observed_at {
+                self.lower_cosignature_first_seen(shard_id, cosig).await?;
+                return Ok(());
+            }
         }
         Err(SettlementError::Storage(format!(
             "witness {} already cosigned tree_size {} for network {} shard {} with a \
              different signature — refusing to overwrite a possible equivocation",
             cosig.witness_key_id, cosig.tree_size, cosig.network_id, shard_id
         )))
+    }
+
+    /// Lowers the first-seen time of a stored cosignature to `cosig.observed_at` when that is earlier,
+    /// so nodes that saw the same cosignatures in any order agree on the earliest.
+    async fn lower_cosignature_first_seen(
+        &self,
+        shard_id: &str,
+        cosig: &WitnessCosignature,
+    ) -> Result<(), SettlementError> {
+        sqlx::query(
+            r#"
+            UPDATE witness_cosignatures SET first_seen_at = LEAST(first_seen_at, $5)
+            WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND witness_key_id = $4
+              AND first_seen_at > $5
+            "#,
+        )
+        .bind(&cosig.network_id)
+        .bind(shard_id)
+        .bind(cosig.tree_size)
+        .bind(&cosig.witness_key_id)
+        .bind(cosig.observed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        Ok(())
     }
 
     /// Replaces this witness's stored cosignature for a head with a newer one over the same

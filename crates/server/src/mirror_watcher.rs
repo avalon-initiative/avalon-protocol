@@ -1454,7 +1454,12 @@ async fn store_valid_cosignatures(
         else {
             continue;
         };
-        if !avalon_protocol::witness::verify_witness_cosignature(verifying_key, cosig) {
+        if !avalon_protocol::witness::verify_witness_cosignature(verifying_key, cosig)
+            || !crate::witness_refresh::not_dated_ahead(
+                cosig.observed_at,
+                OffsetDateTime::now_utc(),
+            )
+        {
             continue;
         }
         if let Err(err) = chain.store_witness_cosignature(shard_id, cosig).await {

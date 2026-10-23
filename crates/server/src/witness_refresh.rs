@@ -322,7 +322,13 @@ pub fn attempt_for(outcome: &crate::cosign_gather::GatherOutcome, now: OffsetDat
 
 /// How far in the future a cosignature's `observed_at` may be (clock skew between nodes); a
 /// verifier rejects anything after its own clock, so more than this is never useful to store.
-pub const MAX_FUTURE_SKEW: Duration = Duration::seconds(60);
+pub const MAX_FUTURE_SKEW: Duration = avalon_protocol::witness::MAX_OBSERVED_FUTURE_SKEW;
+
+/// Whether `observed_at` is no later than the skew allowance after `now`: a cosignature dated further
+/// ahead is never stored, so it cannot stretch the time a recovery delay is measured to.
+pub fn not_dated_ahead(observed_at: OffsetDateTime, now: OffsetDateTime) -> bool {
+    observed_at <= now + MAX_FUTURE_SKEW
+}
 
 /// Whether `observed_at` is within the freshness window before `now` and the skew allowance
 /// after it.
@@ -598,6 +604,14 @@ mod tests {
             n += Duration::seconds(3);
         }
         assert_eq!(seen.len(), 40);
+    }
+
+    #[test]
+    fn a_cosignature_dated_ahead_is_not_stored() {
+        let n = now();
+        assert!(not_dated_ahead(n - Duration::days(30), n));
+        assert!(not_dated_ahead(n + Duration::seconds(59), n));
+        assert!(!not_dated_ahead(n + Duration::seconds(61), n));
     }
 
     #[test]

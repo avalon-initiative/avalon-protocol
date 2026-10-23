@@ -102,11 +102,15 @@ pub async fn chain_event_attestation(
 /// Witnesses that must cosign a head before it counts; 0 when the known list has at most one member.
 pub type QuorumFn = Arc<dyn Fn() -> usize + Send + Sync>;
 
+/// The witness key ids whose cosignatures count: the known list the quorum is computed from.
+pub type KnownWitnessesFn = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 /// Reads heads from `signed_tree_heads` (this node's shard) and `observed_sths` (mirrored shards).
 pub struct SqlHeadAttestor {
     network_id: String,
     own_shard_id: String,
     quorum: QuorumFn,
+    known: KnownWitnessesFn,
 }
 
 impl SqlHeadAttestor {
@@ -114,11 +118,13 @@ impl SqlHeadAttestor {
         network_id: impl Into<String>,
         own_shard_id: impl Into<String>,
         quorum: QuorumFn,
+        known: KnownWitnessesFn,
     ) -> Self {
         Self {
             network_id: network_id.into(),
             own_shard_id: own_shard_id.into(),
             quorum,
+            known,
         }
     }
 }
@@ -140,14 +146,15 @@ struct Located {
 }
 
 impl SqlHeadAttestor {
-    /// The quorum time of every head of the shard covering `from_size` that enough witnesses cosigned.
+    /// For every head of the shard covering `from_size` that enough known witnesses cosigned: the quorum
+    /// time of their first-seen cosignature times (the anchor) and of their latest observations.
     async fn quorum_times(
         &self,
         conn: &mut PgConnection,
         shard_id: &str,
         own: bool,
         from_size: i64,
-    ) -> Result<Vec<OffsetDateTime>, IndexError> {
+    ) -> Result<Vec<(OffsetDateTime, OffsetDateTime)>, IndexError> {
         let rows = if own {
             sqlx::query(
                 "SELECT tree_size, root_hash, created_at FROM signed_tree_heads \
@@ -170,6 +177,9 @@ impl SqlHeadAttestor {
             .await?
         };
         let quorum = (self.quorum)();
+        let known = (self.known)();
+        // A cosignature dated beyond the skew allowance is never counted.
+        let latest = OffsetDateTime::now_utc() + avalon_protocol::witness::MAX_OBSERVED_FUTURE_SKEW;
         let mut out = Vec::new();
         for row in rows {
             let head = Head {
@@ -177,17 +187,31 @@ impl SqlHeadAttestor {
                 root_hash: row.try_get("root_hash")?,
                 created_at: row.try_get("created_at")?,
             };
-            let times: Vec<OffsetDateTime> = sqlx::query_scalar(
-                "SELECT observed_at FROM witness_cosignatures \
-                 WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND root_hash = $4",
+            if quorum == 0 {
+                out.push((head.created_at, head.created_at));
+                continue;
+            }
+            let seen: Vec<(OffsetDateTime, OffsetDateTime)> = sqlx::query_as(
+                "SELECT first_seen_at, observed_at FROM witness_cosignatures \
+                 WHERE network_id = $1 AND shard_id = $2 AND tree_size = $3 AND root_hash = $4 \
+                   AND witness_key_id = ANY($5) AND observed_at <= $6",
             )
             .bind(&self.network_id)
             .bind(shard_id)
             .bind(head.tree_size)
             .bind(&head.root_hash)
+            .bind(&known)
+            .bind(latest)
             .fetch_all(&mut *conn)
             .await?;
-            out.extend(quorum_time(&times, quorum, head.created_at));
+            let first: Vec<OffsetDateTime> = seen.iter().map(|(first, _)| *first).collect();
+            let last: Vec<OffsetDateTime> = seen.iter().map(|(_, last)| *last).collect();
+            if let (Some(anchor), Some(reference)) = (
+                quorum_time(&first, quorum, head.created_at),
+                quorum_time(&last, quorum, head.created_at),
+            ) {
+                out.push((anchor, reference));
+            }
         }
         Ok(out)
     }
@@ -200,7 +224,8 @@ impl SqlHeadAttestor {
         let times = self
             .quorum_times(conn, &entry.shard_id, entry.own, entry.seq)
             .await?;
-        let (anchor_at, reference_at) = (times.iter().min().copied(), times.iter().max().copied());
+        let anchor_at = times.iter().map(|(anchor, _)| *anchor).min();
+        let reference_at = times.iter().map(|(_, reference)| *reference).max();
         Ok(EntryAttestation {
             kind: entry.kind,
             event_id: entry.event_id,

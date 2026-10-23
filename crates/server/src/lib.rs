@@ -1143,6 +1143,7 @@ mod node_auth_wiring {
                             "avalon-test",
                             "core",
                             std::sync::Arc::new(|| 0),
+                            std::sync::Arc::new(Vec::new),
                         ),
                     )),
             ),
