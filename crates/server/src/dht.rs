@@ -4,9 +4,10 @@
 //! rest of the process — the swarm itself still lives entirely
 //! inside [`run_worker`]'s spawned task, so any other code that wants to
 //! touch the DHT does it by sending a [`DhtCommand`] rather than reaching
-//! into the swarm directly. `crate::interest` is the one real caller today,
-//! for guild-channel/conversation interest registration and lookup; no
-//! actual relay re-scoping happens here.
+//! into the swarm directly. `crate::interest` sends the record commands, for
+//! guild-channel/conversation interest registration and lookup, and
+//! `crate::node_http` sends `DhtCommand::HttpRequest` for every node-to-node
+//! stream exchange; no actual relay re-scoping happens here.
 //!
 //! **A libp2p `PeerId` is a brand-new identity domain, not a reuse of any
 //! existing key.** This codebase already has three separate key domains

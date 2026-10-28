@@ -1613,8 +1613,9 @@ pub async fn all_witness_checkpoints(
 }
 
 /// Advances this node's checkpoint for `network_id`/`shard_id` to
-/// `tree_size`/`root_hash` after a cosigning decision has actually
-/// produced and stored a cosignature for it. Upserts, but only ever
+/// `tree_size`/`root_hash` once a cosigning decision is made, before the
+/// cosignature itself is stored (see `cosign_and_record` in the server's
+/// `witness_cosign`, which relies on that order). Upserts, but only ever
 /// forward: the `WHERE` clause on the update arm refuses to move
 /// `tree_size` backward or sideways, so a stale or reordered write racing
 /// against a newer one can never regress this node's own record of what
