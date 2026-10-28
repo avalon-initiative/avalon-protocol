@@ -6,10 +6,11 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use ed25519_dalek::{Signer, SigningKey};
-use sqlx::postgres::PgPoolOptions;
+use ed25519_dalek::SigningKey;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+mod common;
 
 /// Seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
@@ -32,16 +33,6 @@ async fn seed_signing_key(
     (key_id, signing_key)
 }
 
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
-    let mut message = format!("avalon:{action_tag}:v1");
-    for field in fields {
-        message.push(':');
-        message.push_str(field);
-    }
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
-
 /// Signs a `POST /integrations/{slug}/connect` request for `identity_id`
 /// requesting exactly `capabilities`, seeding a fresh signing key each
 /// call — every `connect` in this file needs one now.
@@ -52,7 +43,7 @@ async fn connect_body(
     capabilities: &[&str],
 ) -> serde_json::Value {
     let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
-    let signature = sign_action(
+    let signature = common::sign_action(
         &signing_key,
         "integration.connect",
         &[slug, &capabilities.join(",")],
@@ -62,18 +53,6 @@ async fn connect_body(
         "signing_key_id": signing_key_id,
         "signature": signature,
     })
-}
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 /// Same pattern `crates/server/tests/guilds.rs` established: seed a bare
@@ -140,8 +119,8 @@ async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> serde
 #[ignore]
 async fn connecting_creates_a_binding_and_grants_approved_capabilities() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -179,8 +158,8 @@ async fn connecting_creates_a_binding_and_grants_approved_capabilities() {
 #[ignore]
 async fn connecting_with_an_undeclared_capability_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -199,8 +178,8 @@ async fn connecting_with_an_undeclared_capability_is_rejected() {
 #[ignore]
 async fn reconnecting_does_not_duplicate_the_binding() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -258,8 +237,8 @@ async fn reconnecting_does_not_duplicate_the_binding() {
 #[ignore]
 async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -318,8 +297,8 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
 #[ignore]
 async fn disconnecting_revokes_every_active_grant() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -375,8 +354,8 @@ async fn disconnecting_revokes_every_active_grant() {
 #[ignore]
 async fn connecting_without_a_signature_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();

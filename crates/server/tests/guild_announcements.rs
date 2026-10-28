@@ -2,22 +2,11 @@
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -66,10 +55,6 @@ async fn seed_membership(
     .expect("failed to seed membership");
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 fn unique_guild_body() -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
     serde_json::json!({
@@ -87,7 +72,7 @@ async fn create_guild_with_general_channel(
     base: &str,
     owner_token: &str,
 ) -> (Uuid, Uuid) {
-    let create = auth(http.post(format!("{base}/guilds")), owner_token)
+    let create = common::auth(http.post(format!("{base}/guilds")), owner_token)
         .json(&unique_guild_body())
         .send()
         .await
@@ -96,7 +81,7 @@ async fn create_guild_with_general_channel(
     let guild: serde_json::Value = create.json().await.unwrap();
     let guild_id: Uuid = guild["id"].as_str().unwrap().parse().unwrap();
 
-    let channels: serde_json::Value = auth(
+    let channels: serde_json::Value = common::auth(
         http.get(format!("{base}/guilds/{guild_id}/channels")),
         owner_token,
     )
@@ -125,7 +110,7 @@ async fn set_announcement_only(
     channel_id: Uuid,
     announcement_only: bool,
 ) {
-    let resp = auth(
+    let resp = common::auth(
         http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
         token,
     )
@@ -147,7 +132,7 @@ async fn post_message(
     channel_id: Uuid,
     body: &str,
 ) {
-    let resp = auth(
+    let resp = common::auth(
         http.post(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
         )),
@@ -165,7 +150,7 @@ async fn my_guild_announcements(
     base: &str,
     token: &str,
 ) -> Vec<serde_json::Value> {
-    auth(http.get(format!("{base}/me/guild-announcements")), token)
+    common::auth(http.get(format!("{base}/me/guild-announcements")), token)
         .send()
         .await
         .unwrap()
@@ -178,8 +163,8 @@ async fn my_guild_announcements(
 #[ignore]
 async fn a_post_in_an_announcement_channel_shows_up_for_a_fellow_member() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
 
@@ -211,8 +196,8 @@ async fn a_post_in_an_announcement_channel_shows_up_for_a_fellow_member() {
 #[ignore]
 async fn a_post_in_a_regular_non_announcement_channel_is_not_included() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
 
@@ -241,8 +226,8 @@ async fn a_post_in_a_regular_non_announcement_channel_is_not_included() {
 #[ignore]
 async fn leaving_a_guild_stops_its_announcements_from_appearing() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
 

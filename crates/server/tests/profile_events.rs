@@ -9,22 +9,11 @@
 
 use std::time::Duration;
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -89,9 +78,9 @@ async fn wait_for_history(
 #[tokio::test]
 #[ignore]
 async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     // Issue #510: display_name is now globally unique, so a fixed literal
@@ -126,9 +115,9 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
 #[tokio::test]
 #[ignore]
 async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     for body in [
@@ -177,9 +166,9 @@ async fn a_self_description_update_round_trips_through_get_me() {
     // Issue #155: `bio`/`favorite_genres`/`pronouns` are promised-durable
     // and user-optional, same as `display_name`/`avatar_url` — a `PATCH
     // /me` setting them must be reflected back by a subsequent `GET /me`.
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
@@ -244,9 +233,9 @@ async fn expanded_profile_fields_round_trip_through_get_me() {
     // Issue #372: banner_url/status/links/timezone/theme_color/location
     // follow the same durable/three-state (two-state for links) contract
     // #155 already established for bio/favorite_genres/pronouns.
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
@@ -323,9 +312,9 @@ async fn expanded_profile_fields_round_trip_through_get_me() {
 #[tokio::test]
 #[ignore]
 async fn an_invalid_theme_color_is_rejected_not_silently_dropped() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
@@ -342,9 +331,9 @@ async fn an_invalid_theme_color_is_rejected_not_silently_dropped() {
 #[tokio::test]
 #[ignore]
 async fn an_unknown_genre_is_rejected_not_silently_dropped() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
@@ -361,9 +350,9 @@ async fn an_unknown_genre_is_rejected_not_silently_dropped() {
 #[tokio::test]
 #[ignore]
 async fn a_request_that_changes_nothing_emits_nothing() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
     let update = http
@@ -391,9 +380,9 @@ async fn get_identity_profile_exposes_the_same_fields_get_me_does() {
     // Issue #403: viewing another identity's profile card sees the same
     // self-description fields the identity's own GET /me already exposes —
     // a single-identity read, not the narrower batch list_profiles shape.
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (viewed_id, viewed_token) = seed_identity_session(&pool).await;
     let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
 
@@ -432,9 +421,9 @@ async fn get_identity_profile_exposes_the_same_fields_get_me_does() {
 #[tokio::test]
 #[ignore]
 async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
 
     let response = http
@@ -454,9 +443,9 @@ async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
 #[ignore]
 async fn a_display_name_shaped_like_an_identity_id_is_refused_on_update_and_never_resolves_as_a_handle(
 ) {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_id, token) = seed_identity_session(&pool).await;
     let (victim_id, _) = seed_identity_session(&pool).await;
     let victim = victim_id.to_string();

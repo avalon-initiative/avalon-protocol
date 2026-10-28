@@ -18,24 +18,12 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 mod attestation_support;
+mod common;
 use attestation_support::{issue_bytes, now_micros};
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -64,35 +52,6 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
         .expect("failed to seed session");
 
     (identity_id, token)
-}
-
-/// #697/#698: `POST /integrations/{slug}/connect` is signature-required
-/// -- seeds a real signing key for `identity_id` so a connect call can
-/// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(
-    pool: &PgPool,
-    identity_id: avalon_protocol::ids::IdentityId,
-) -> (Uuid, SigningKey) {
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let public_key = signing_key.verifying_key().to_bytes();
-    let row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(identity_id)
-    .bind(public_key.as_slice())
-    .fetch_one(pool)
-    .await
-    .expect("failed to seed signing key");
-    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
-    let message = format!(
-        "avalon:integration.connect:v1:{slug}:{}",
-        capabilities.join(",")
-    );
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
 }
 
 struct RegisteredIntegrator {
@@ -195,7 +154,7 @@ async fn connect(
     identity_id: avalon_protocol::ids::IdentityId,
     identity_token: &str,
 ) {
-    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let (signing_key_id, signing_key) = common::seed_signing_key(pool, identity_id).await;
     let capabilities = ["achievements.issue"];
     let response = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
@@ -203,7 +162,7 @@ async fn connect(
         .json(&serde_json::json!({
             "capabilities": capabilities,
             "signing_key_id": signing_key_id,
-            "signature": sign_connect(&signing_key, &integrator.slug, &capabilities),
+            "signature": common::sign_connect(&signing_key, &integrator.slug, &capabilities),
         }))
         .send()
         .await
@@ -282,8 +241,8 @@ async fn wait_for_committed(pool: &PgPool, subject: &str) {
 #[ignore]
 async fn subject_filter_returns_only_that_subjects_entries_in_seq_order() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
 
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
@@ -331,7 +290,7 @@ async fn subject_filter_returns_only_that_subjects_entries_in_seq_order() {
 #[ignore]
 async fn subject_filter_for_a_subject_with_no_entries_returns_an_empty_list() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let nonexistent_subject = format!("identity:{}:self:achievement_issued", Uuid::new_v4());
     let filtered: Vec<serde_json::Value> = http

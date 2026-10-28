@@ -7,6 +7,7 @@
 //! does not implement; the others exercise Avalon's own limits, binding rules and bounds.
 
 mod abuse_support;
+mod common;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};

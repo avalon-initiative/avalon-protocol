@@ -7,13 +7,14 @@ use base64::Engine;
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 async fn start(body: Value) -> (u16, Value) {
     let response = reqwest::Client::new()
-        .post(format!("{}/identities/register/start", server_url()))
+        .post(format!(
+            "{}/identities/register/start",
+            common::server_url()
+        ))
         .json(&body)
         .send()
         .await
@@ -154,7 +155,10 @@ async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
         ("short", "UNKNOWN_ID_SCHEME"),
     ] {
         let response = http
-            .get(format!("{}/identities/{bad}/locations", server_url()))
+            .get(format!(
+                "{}/identities/{bad}/locations",
+                common::server_url()
+            ))
             .send()
             .await
             .expect("request failed — is `make start` running?");
@@ -166,7 +170,10 @@ async fn identity_path_parameters_in_any_other_shape_are_a_bad_request() {
     // A valid identity id with a malformed non-identity part is a different error code.
     let (_, id) = fresh_key();
     let response = http
-        .delete(format!("{}/guilds/not-a-uuid/members/{id}", server_url()))
+        .delete(format!(
+            "{}/guilds/not-a-uuid/members/{id}",
+            common::server_url()
+        ))
         .send()
         .await
         .unwrap();

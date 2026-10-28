@@ -17,15 +17,7 @@ use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
+mod common;
 
 type VirtualClient = Client<
     MemoryStore,
@@ -72,7 +64,7 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> avalon_protoco
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
     let mut client = new_virtual_client();
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -118,7 +110,7 @@ async fn register_identity(http: &reqwest::Client, base: &str) -> avalon_protoco
 #[ignore]
 async fn a_freshly_registered_identity_becomes_resolvable_via_locations() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let identity_id = register_identity(&http, &base).await;
 
@@ -162,7 +154,7 @@ async fn a_freshly_registered_identity_becomes_resolvable_via_locations() {
 #[ignore]
 async fn an_unknown_identity_resolves_to_no_locations() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let response: serde_json::Value = http
         .get(format!("{base}/identities/{}/locations", Uuid::new_v4()))

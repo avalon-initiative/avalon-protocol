@@ -12,15 +12,7 @@ use passkey_types::webauthn::CredentialCreationOptions;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
+mod common;
 
 struct Started {
     ticket_id: Uuid,
@@ -32,7 +24,10 @@ async fn start(http: &reqwest::Client, key: &SigningKey, display_name: &str) -> 
     let public_key = key.verifying_key().to_bytes();
     let id = avalon_protocol::identity_id::derive_identity_id(&public_key);
     let response: Value = http
-        .post(format!("{}/identities/register/start", server_url()))
+        .post(format!(
+            "{}/identities/register/start",
+            common::server_url()
+        ))
         .json(&json!({
             "identity_id": id,
             "event_signing_public_key": BASE64.encode(public_key),
@@ -70,16 +65,19 @@ async fn finish(
     credential: &Value,
     event_signature: &str,
 ) -> reqwest::Response {
-    http.post(format!("{}/identities/register/finish", server_url()))
-        .json(&json!({
-            "ticket_id": started.ticket_id,
-            "webauthn_credential": credential,
-            "event_signature": event_signature,
-            "device_label": null,
-        }))
-        .send()
-        .await
-        .unwrap()
+    http.post(format!(
+        "{}/identities/register/finish",
+        common::server_url()
+    ))
+    .json(&json!({
+        "ticket_id": started.ticket_id,
+        "webauthn_credential": credential,
+        "event_signature": event_signature,
+        "device_label": null,
+    }))
+    .send()
+    .await
+    .unwrap()
 }
 
 async fn passkey(started: &Started) -> Value {
@@ -93,7 +91,11 @@ async fn passkey(started: &Started) -> Value {
     let options: CredentialCreationOptions =
         serde_json::from_value(started.challenge.clone()).unwrap();
     let credential = client
-        .register(Origin::from(&rp_origin()), options, DefaultClientData)
+        .register(
+            Origin::from(&common::rp_origin()),
+            options,
+            DefaultClientData,
+        )
         .await
         .expect("virtual authenticator registration should succeed");
     serde_json::to_value(credential).unwrap()

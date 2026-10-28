@@ -23,22 +23,11 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -69,55 +58,22 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-/// #697/#698: `POST /integrations/{slug}/connect` is signature-required —
-/// seeds a real signing key for `identity_id` so a connect call can
-/// produce a genuine fresh signature over HTTP.
-async fn seed_signing_key(
-    pool: &PgPool,
-    identity_id: avalon_protocol::ids::IdentityId,
-) -> (Uuid, SigningKey) {
-    let signing_key = SigningKey::generate(&mut rand::rng());
-    let public_key = signing_key.verifying_key().to_bytes();
-    let row = sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(identity_id)
-    .bind(public_key.as_slice())
-    .fetch_one(pool)
-    .await
-    .expect("failed to seed signing key");
-    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
-    let message = format!(
-        "avalon:integration.connect:v1:{slug}:{}",
-        capabilities.join(",")
-    );
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
-
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 #[tokio::test]
 #[ignore]
 async fn publishing_presence_is_visible_via_get() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
-    let publish = auth(http.put(format!("{base}/me/presence")), &alice_token)
+    let publish = common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "Online" }))
         .send()
         .await
         .expect("publish presence failed — is `make start` running?");
     assert!(publish.status().is_success(), "{:?}", publish.status());
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -136,22 +92,22 @@ async fn publishing_presence_is_visible_via_get() {
 #[tokio::test]
 #[ignore]
 async fn a_user_cannot_claim_to_be_playing_a_integrator() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
     // The request body has no `active_in` field at all in the wire format —
     // this is enforced by `UpdatePresenceRequest` only ever deserializing
     // `status`, not by rejecting an extra field, so this just confirms the
     // response never echoes an `active_in` value regardless of what's sent.
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "Online", "active_in": Uuid::new_v4() }))
         .send()
         .await
         .unwrap();
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -167,13 +123,13 @@ async fn a_user_cannot_claim_to_be_playing_a_integrator() {
 #[tokio::test]
 #[ignore]
 async fn missing_presence_reads_as_offline() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_alice_id, alice_token) = seed_identity_session(&pool).await;
     let never_published = avalon_protocol::ids::IdentityId::random_for_tests();
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={never_published}")),
         &alice_token,
     )
@@ -199,12 +155,12 @@ async fn stale_presence_expires_to_offline() {
         .parse()
         .expect("AVALON_PRESENCE_TTL_SECS must be a number");
 
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "Online" }))
         .send()
         .await
@@ -212,7 +168,7 @@ async fn stale_presence_expires_to_offline() {
 
     tokio::time::sleep(std::time::Duration::from_secs(ttl_secs + 1)).await;
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -241,12 +197,12 @@ async fn assert_status_sticks_past_ttl(status: &str) {
         .parse()
         .expect("AVALON_PRESENCE_TTL_SECS must be a number");
 
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": status }))
         .send()
         .await
@@ -254,7 +210,7 @@ async fn assert_status_sticks_past_ttl(status: &str) {
 
     tokio::time::sleep(std::time::Duration::from_secs(ttl_secs + 1)).await;
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -298,25 +254,25 @@ async fn explicitly_setting_online_clears_a_sticky_override_and_resumes_ttl_trac
         .parse()
         .expect("AVALON_PRESENCE_TTL_SECS must be a number");
 
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "DoNotDisturb" }))
         .send()
         .await
         .unwrap();
 
     // Clearing the override: explicitly back to Online.
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "Online" }))
         .send()
         .await
         .unwrap();
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -330,7 +286,7 @@ async fn explicitly_setting_online_clears_a_sticky_override_and_resumes_ttl_trac
 
     // Now automatic TTL tracking governs it again.
     tokio::time::sleep(std::time::Duration::from_secs(ttl_secs + 1)).await;
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -413,25 +369,25 @@ async fn integrator_auth_request(
 #[tokio::test]
 #[ignore]
 async fn a_bound_integrator_can_publish_its_own_playing_claim() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
-    let (alice_signing_key_id, alice_signing_key) = seed_signing_key(&pool, alice_id).await;
+    let (alice_signing_key_id, alice_signing_key) = common::seed_signing_key(&pool, alice_id).await;
     let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
     let integrator_id = integrator["id"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     let connect_capabilities = ["presence.publish"];
-    auth(
+    common::auth(
         http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({
         "capabilities": connect_capabilities,
         "signing_key_id": alice_signing_key_id,
-        "signature": sign_connect(&alice_signing_key, slug, &connect_capabilities),
+        "signature": common::sign_connect(&alice_signing_key, slug, &connect_capabilities),
     }))
     .send()
     .await
@@ -454,7 +410,7 @@ async fn a_bound_integrator_can_publish_its_own_playing_claim() {
         .unwrap();
     assert!(response.status().is_success(), "{:?}", response.status());
 
-    let read: serde_json::Value = auth(
+    let read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &alice_token,
     )
@@ -474,24 +430,24 @@ async fn a_bound_integrator_can_publish_its_own_playing_claim() {
 #[tokio::test]
 #[ignore]
 async fn a_integrator_cannot_claim_to_be_playing_a_different_integrator() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
-    let (alice_signing_key_id, alice_signing_key) = seed_signing_key(&pool, alice_id).await;
+    let (alice_signing_key_id, alice_signing_key) = common::seed_signing_key(&pool, alice_id).await;
     let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     let connect_capabilities = ["presence.publish"];
-    auth(
+    common::auth(
         http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({
         "capabilities": connect_capabilities,
         "signing_key_id": alice_signing_key_id,
-        "signature": sign_connect(&alice_signing_key, slug, &connect_capabilities),
+        "signature": common::sign_connect(&alice_signing_key, slug, &connect_capabilities),
     }))
     .send()
     .await
@@ -522,9 +478,9 @@ async fn a_integrator_cannot_claim_to_be_playing_a_different_integrator() {
 #[tokio::test]
 #[ignore]
 async fn a_integrator_cannot_publish_presence_for_an_unbound_identity() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, _alice_token) = seed_identity_session(&pool).await;
     let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
@@ -557,16 +513,16 @@ async fn a_integrator_cannot_publish_presence_for_an_unbound_identity() {
 #[tokio::test]
 #[ignore]
 async fn presence_visible_to_friends_only() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
     let (_carol_id, carol_token) = seed_identity_session(&pool).await;
 
     // Alice and Bob become friends; Carol never does.
     let friend_request: serde_json::Value =
-        auth(http.post(format!("{base}/friends/requests")), &alice_token)
+        common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
             .json(&serde_json::json!({ "to": bob_id }))
             .send()
             .await
@@ -575,7 +531,7 @@ async fn presence_visible_to_friends_only() {
             .await
             .unwrap();
     let request_id = friend_request["id"].as_str().unwrap();
-    auth(
+    common::auth(
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
@@ -583,13 +539,13 @@ async fn presence_visible_to_friends_only() {
     .await
     .unwrap();
 
-    auth(http.put(format!("{base}/me/presence")), &alice_token)
+    common::auth(http.put(format!("{base}/me/presence")), &alice_token)
         .json(&serde_json::json!({ "status": "Online" }))
         .send()
         .await
         .unwrap();
 
-    let bob_read: serde_json::Value = auth(
+    let bob_read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &bob_token,
     )
@@ -601,7 +557,7 @@ async fn presence_visible_to_friends_only() {
     .unwrap();
     assert_eq!(bob_read[0]["status"], "Online");
 
-    let carol_read: serde_json::Value = auth(
+    let carol_read: serde_json::Value = common::auth(
         http.get(format!("{base}/presence?ids={alice_id}")),
         &carol_token,
     )

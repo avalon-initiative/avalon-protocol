@@ -21,9 +21,7 @@
 
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn network_id() -> String {
     std::env::var("AVALON_NETWORK_ID").unwrap_or_else(|_| "avalon-dev-local".to_string())
@@ -118,7 +116,7 @@ async fn list_peers(http: &reqwest::Client, target_base: &str) -> Vec<serde_json
 #[ignore]
 async fn announcing_without_a_coordinate_is_rejected_and_the_caller_not_admitted() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     require_isolated_target(&base);
     let caller_base_url = fabricated_url();
 
@@ -145,7 +143,7 @@ async fn announcing_without_a_coordinate_is_rejected_and_the_caller_not_admitted
 #[ignore]
 async fn announcing_upserts_the_caller_and_the_response_excludes_it() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let caller_base_url = fabricated_url();
 
     let response = announce(&http, &base, &caller_base_url, &network_id()).await;
@@ -171,7 +169,7 @@ async fn announcing_upserts_the_caller_and_the_response_excludes_it() {
 async fn the_response_names_the_responder_and_announced_libp2p_addrs_are_sanitized() {
     use libp2p::{identity::Keypair, PeerId};
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let caller_base_url = fabricated_url();
     let id = PeerId::from(Keypair::generate_ed25519().public());
     let other = PeerId::from(Keypair::generate_ed25519().public());
@@ -239,7 +237,7 @@ async fn announce_as(
 #[ignore]
 async fn a_p2p_announce_over_plain_http_is_answered_but_never_stored() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let id = fresh_peer_id();
     let url = format!("p2p://{id}");
 
@@ -258,7 +256,7 @@ async fn a_p2p_announce_over_plain_http_is_answered_but_never_stored() {
 #[ignore]
 async fn a_p2p_announce_naming_another_or_no_libp2p_id_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let id = fresh_peer_id();
     let url = format!("p2p://{id}");
     for claimed in [None, Some(fresh_peer_id())] {
@@ -277,7 +275,7 @@ async fn a_p2p_announce_naming_another_or_no_libp2p_id_is_rejected() {
 #[ignore]
 async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let caller_base_url = fabricated_url();
 
     announce(&http, &base, &caller_base_url, &network_id()).await;
@@ -295,7 +293,7 @@ async fn announcing_the_same_peer_twice_refreshes_not_duplicates() {
 #[ignore]
 async fn an_announcement_naming_a_different_network_id_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let caller_base_url = fabricated_url();
 
     let response = announce(
@@ -322,7 +320,7 @@ async fn an_announcement_naming_a_different_network_id_is_rejected() {
 #[ignore]
 async fn an_announcement_below_the_version_floor_is_excluded_but_not_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let net = network_id();
     let caller_base_url = fabricated_url();
 
@@ -357,7 +355,7 @@ async fn an_announcement_below_the_version_floor_is_excluded_but_not_rejected() 
 #[ignore]
 async fn node_status_reports_internally_consistent_resource_metrics() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let response = http
         .get(format!("{base}/nodes/status"))
@@ -413,7 +411,7 @@ async fn node_status_reports_internally_consistent_resource_metrics() {
 #[ignore]
 async fn node_status_reports_own_roles() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let response = http
         .get(format!("{base}/nodes/status"))
@@ -438,7 +436,7 @@ async fn node_status_reports_own_roles() {
 #[ignore]
 async fn node_status_reports_connectivity() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let body: serde_json::Value = http
         .get(format!("{base}/nodes/status"))
@@ -469,7 +467,7 @@ async fn node_status_reports_connectivity() {
 #[ignore]
 async fn discover_matches_separate_status_and_peers_calls() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let caller_base_url = fabricated_url();
 
     // Make sure there's at least one peer on record so the comparison below
@@ -523,7 +521,7 @@ async fn two_nodes_see_each_other_via_announce() {
         return;
     };
     let http = reqwest::Client::new();
-    let first_base = server_url();
+    let first_base = common::server_url();
     let net = network_id();
 
     // Node A announces itself to node B directly (bypassing A's own
@@ -554,7 +552,7 @@ async fn two_nodes_see_each_other_via_announce() {
 async fn a_proven_witness_key_is_listed_and_a_forged_one_is_dropped_without_denying_the_peer() {
     use ed25519_dalek::SigningKey;
     let http = reqwest::Client::new();
-    let target = server_url();
+    let target = common::server_url();
     require_isolated_target(&target);
     let key = SigningKey::generate(&mut rand::rng());
     let key_id = hex::encode(key.verifying_key().to_bytes());

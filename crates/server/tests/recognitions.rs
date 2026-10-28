@@ -13,9 +13,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     signing_key: SigningKey,
@@ -96,7 +94,7 @@ async fn integrator_auth_headers(
 #[ignore]
 async fn publish_read_and_revoke_a_recognition_round_trips() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let a = register_integrator(&http, &base).await;
     let b = register_integrator(&http, &base).await;
@@ -185,7 +183,7 @@ async fn publish_read_and_revoke_a_recognition_round_trips() {
 #[ignore]
 async fn recognizing_a_different_integrators_slug_as_the_caller_is_forbidden() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let a = register_integrator(&http, &base).await;
     let b = register_integrator(&http, &base).await;
@@ -208,7 +206,7 @@ async fn recognizing_a_different_integrators_slug_as_the_caller_is_forbidden() {
 #[ignore]
 async fn recognizing_yourself_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let a = register_integrator(&http, &base).await;
     let headers = integrator_auth_headers(&http, &base, &a).await;

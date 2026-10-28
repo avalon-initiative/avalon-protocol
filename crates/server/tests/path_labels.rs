@@ -1,6 +1,8 @@
 //! Probe and trace over libp2p streams between real in-process swarms: the result names the
 //! path type of the connection that carried it. No database needed.
 
+mod common;
+
 use std::time::Duration;
 
 use avalon_protocol::connectivity::{Connectivity, PathType};
@@ -21,14 +23,6 @@ use libp2p::{identity, Multiaddr};
 
 const WAIT: Duration = Duration::from_secs(30);
 const NETWORK: &str = "avalon-test";
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 
 fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> DhtConfig {
     DhtConfig {
@@ -128,7 +122,7 @@ async fn probe_and_trace_label_direct_and_relayed_paths() {
     if std::net::TcpListener::bind("[::1]:0").is_err() {
         return eprintln!("skipping: no IPv6 loopback");
     }
-    let relay_addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let relay_addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let relay = dht::start(
         PeerTable::new(),
         config(
@@ -195,7 +189,7 @@ async fn probe_and_trace_label_direct_and_relayed_paths() {
     let direct = dht::start(
         direct_peers,
         config(
-            &format!("/ip4/127.0.0.1/tcp/{}", free_port()),
+            &format!("/ip4/127.0.0.1/tcp/{}", common::free_port()),
             None,
             RelaySettings::default(),
         ),

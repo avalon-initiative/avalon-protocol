@@ -30,14 +30,11 @@
 use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn require_peer_server_url() -> String {
     std::env::var("AVALON_REALTIME_RELAY_PEER_SERVER_URL").unwrap_or_else(|_| {
@@ -48,14 +45,6 @@ fn require_peer_server_url() -> String {
              doc comment)"
         )
     })
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
@@ -315,9 +304,9 @@ async fn expect_channel_message_body(
 #[ignore]
 async fn reconnecting_to_a_different_node_resumes_live_delivery_with_no_special_handoff() {
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
 
     wait_until_peered(&http, &node_b, &node_a).await;
     wait_until_peered(&http, &node_a, &node_b).await;

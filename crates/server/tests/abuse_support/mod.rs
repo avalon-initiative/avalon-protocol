@@ -2,6 +2,7 @@
 //! raw stream peer that writes arbitrary bytes on any protocol.
 #![allow(dead_code)]
 
+use crate::common;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -21,14 +22,6 @@ use libp2p::{
 
 pub const WAIT: Duration = Duration::from_secs(30);
 pub const NETWORK: &str = "avalon-test";
-
-pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 
 pub fn ipv6_available() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
@@ -59,7 +52,7 @@ pub fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> Dht
 
 /// A dialable relay serving with `limits`, and its direct address ending in `/p2p/<id>`.
 pub async fn relay_node(limits: RelayServerSettings) -> (DhtHandle, Multiaddr) {
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let relay = RelaySettings {
         server: Some(limits),
         ..RelaySettings::default()

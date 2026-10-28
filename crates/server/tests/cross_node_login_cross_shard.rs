@@ -43,12 +43,12 @@
 //!   cargo test -p avalon-server --test cross_node_login_cross_shard -- --ignored --test-threads=1
 //! ```
 
+mod common;
+
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
-use passkey_client::{Client, DefaultClientData, Origin};
-use passkey_types::ctap2::Aaguid;
+use passkey_client::{DefaultClientData, Origin};
 use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
 use serde_json::Value;
 use uuid::Uuid;
@@ -69,24 +69,6 @@ fn webauthn_origin() -> String {
     std::env::var("AVALON_WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
-type VirtualClient = Client<
-    MemoryStore,
-    MockUserValidationMethod,
-    passkey_crypto::AvailableBackend,
-    public_suffix::PublicSuffixList,
-    (),
->;
-
-fn new_virtual_client() -> VirtualClient {
-    let authenticator = Authenticator::new(
-        Aaguid::new_empty(),
-        MemoryStore::new(),
-        MockUserValidationMethod::verified_user(2),
-        passkey_crypto::AvailableBackend,
-    );
-    Client::new(authenticator).allows_insecure_localhost(true)
-}
-
 /// Registers a brand-new identity on node A (the owner) and logs it in
 /// once, purely to fetch its real `signing_key_id` via `GET /me/devices` —
 /// same shape `crates/sdk/tests/cross_node_login.rs`'s own
@@ -102,7 +84,7 @@ async fn register_identity_on_owner(
     let origin_url =
         url::Url::parse(&webauthn_origin()).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL");
 
-    let mut client = new_virtual_client();
+    let mut client = common::new_virtual_client();
 
     let start: Value = http
         .post(format!("{base}/identities/register/start"))

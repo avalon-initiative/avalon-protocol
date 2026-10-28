@@ -29,15 +29,16 @@ use avalon_protocol::event_payloads::{
 use avalon_protocol::events::ProtocolEvent;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
 use passkey_types::webauthn::CredentialCreationOptions;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+mod common;
 
 /// #697/#698: seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
@@ -58,34 +59,6 @@ async fn seed_signing_key(
     .expect("failed to seed signing key");
     let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
     (key_id, signing_key)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
-    let mut message = format!("avalon:{action_tag}:v1");
-    for field in fields {
-        message.push(':');
-        message.push_str(field);
-    }
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
-
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 type VirtualClient = Client<
@@ -159,10 +132,6 @@ async fn seed_friendship(
         .expect("failed to seed friendship");
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 /// Drives a real recovery-initiation ceremony (`start`/`finish`) for
 /// `identity_id` and returns the resulting `recovery_requests` row id plus
 /// its JSON body.
@@ -185,7 +154,7 @@ async fn initiate_recovery(
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
     let mut client = new_virtual_client();
-    let origin = rp_origin();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -233,7 +202,7 @@ async fn configure_guardians(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let signature = sign_action(
+    let signature = common::sign_action(
         &signing_key,
         "recovery.guardians.set",
         &[
@@ -242,7 +211,7 @@ async fn configure_guardians(
             &threshold.to_string(),
         ],
     );
-    auth(
+    common::auth(
         http.put(format!("{base}/me/recovery/guardians")),
         owner_token,
     )
@@ -262,9 +231,9 @@ async fn configure_guardians(
 #[tokio::test]
 #[ignore]
 async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -289,7 +258,7 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     let request_id = request["id"].as_str().unwrap().to_string();
 
     // A single approval never reaches the 2-of-3 threshold.
-    let after_first = auth(
+    let after_first = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g1_token,
     )
@@ -315,7 +284,7 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
 
     // The second approval clears the threshold and opens the delay
     // window.
-    let after_second = auth(
+    let after_second = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g3_token,
     )
@@ -354,7 +323,7 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
         let http = http.clone();
         let base = base.clone();
         async move {
-            auth(http.get(format!("{base}/me")), &token)
+            common::auth(http.get(format!("{base}/me")), &token)
                 .send()
                 .await
                 .unwrap()
@@ -454,9 +423,9 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
 #[tokio::test]
 #[ignore]
 async fn a_guardian_below_threshold_cannot_unilaterally_recover() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -478,7 +447,7 @@ async fn a_guardian_below_threshold_cannot_unilaterally_recover() {
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
 
-    let after_one = auth(
+    let after_one = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g1_token,
     )
@@ -522,9 +491,9 @@ async fn a_guardian_below_threshold_cannot_unilaterally_recover() {
 #[tokio::test]
 #[ignore]
 async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -546,7 +515,7 @@ async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
 
-    auth(
+    common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g1_token,
     )
@@ -555,7 +524,7 @@ async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
     .unwrap()
     .error_for_status()
     .unwrap();
-    let after_second = auth(
+    let after_second = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g2_token,
     )
@@ -573,7 +542,7 @@ async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
     // premise — a still-lost-every-device owner obviously can't hit this
     // endpoint, but that's exactly why the delay/public-visibility path
     // exists for that harder case) and vetoes.
-    let cancelled = auth(
+    let cancelled = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/cancel")),
         &owner_token,
     )
@@ -622,9 +591,9 @@ async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
 #[tokio::test]
 #[ignore]
 async fn a_guardian_removed_from_the_set_can_no_longer_approve_or_cancel() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -650,7 +619,7 @@ async fn a_guardian_removed_from_the_set_can_no_longer_approve_or_cancel() {
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
 
-    let approve_as_removed_guardian = auth(
+    let approve_as_removed_guardian = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g1_token,
     )
@@ -659,7 +628,7 @@ async fn a_guardian_removed_from_the_set_can_no_longer_approve_or_cancel() {
     .unwrap();
     assert_eq!(approve_as_removed_guardian.status().as_u16(), 403);
 
-    let cancel_as_removed_guardian = auth(
+    let cancel_as_removed_guardian = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/cancel")),
         &g1_token,
     )
@@ -674,7 +643,7 @@ async fn a_guardian_removed_from_the_set_can_no_longer_approve_or_cancel() {
 #[ignore]
 async fn changing_the_guardian_set_requires_a_valid_session() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let unauthenticated = http
         .put(format!("{base}/me/recovery/guardians"))
@@ -692,9 +661,9 @@ async fn changing_the_guardian_set_requires_a_valid_session() {
 #[tokio::test]
 #[ignore]
 async fn removing_a_guardian_requires_a_fresh_signature() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, _g1_token) = seed_identity_session(&pool).await;
@@ -714,7 +683,7 @@ async fn removing_a_guardian_requires_a_fresh_signature() {
     .await;
 
     // Dropping g1 without a signature is rejected outright.
-    let unsigned = auth(
+    let unsigned = common::auth(
         http.put(format!("{base}/me/recovery/guardians")),
         &owner_token,
     )
@@ -726,7 +695,7 @@ async fn removing_a_guardian_requires_a_fresh_signature() {
     let unsigned_body: serde_json::Value = unsigned.json().await.unwrap();
     assert_eq!(unsigned_body["code"], "FRESH_SIGNATURE_REQUIRED");
 
-    let after_unsigned_attempt: serde_json::Value = auth(
+    let after_unsigned_attempt: serde_json::Value = common::auth(
         http.get(format!("{base}/me/recovery/guardians")),
         &owner_token,
     )
@@ -747,7 +716,7 @@ async fn removing_a_guardian_requires_a_fresh_signature() {
     // The same removal, correctly signed, succeeds.
     configure_guardians(&http, &base, &pool, owner_id, &owner_token, &[g2_id], 1).await;
 
-    let after_signed: serde_json::Value = auth(
+    let after_signed: serde_json::Value = common::auth(
         http.get(format!("{base}/me/recovery/guardians")),
         &owner_token,
     )
@@ -763,15 +732,15 @@ async fn removing_a_guardian_requires_a_fresh_signature() {
 #[tokio::test]
 #[ignore]
 async fn guardians_must_be_current_friends_not_arbitrary_identities() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (stranger_id, _stranger_token) = seed_identity_session(&pool).await;
     let _ = owner_id;
 
-    let attempt = auth(
+    let attempt = common::auth(
         http.put(format!("{base}/me/recovery/guardians")),
         &owner_token,
     )
@@ -790,9 +759,9 @@ async fn guardians_must_be_current_friends_not_arbitrary_identities() {
 #[tokio::test]
 #[ignore]
 async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigured_identity() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (configured_owner, configured_token) = seed_identity_session(&pool).await;
     let (guardian_id, _guardian_token) = seed_identity_session(&pool).await;
@@ -859,9 +828,9 @@ async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigu
 #[tokio::test]
 #[ignore]
 async fn a_racing_approval_never_resurrects_a_cancelled_request() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -885,7 +854,7 @@ async fn a_racing_approval_never_resurrects_a_cancelled_request() {
 
     // First guardian approves normally, so the request is one approval
     // away from crossing the threshold.
-    auth(
+    common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g1_token,
     )
@@ -899,12 +868,12 @@ async fn a_racing_approval_never_resurrects_a_cancelled_request() {
     // whichever the database actually serializes first is authoritative;
     // what must never happen is the row ending up with `cancelled_at` set
     // while `status` says anything other than `cancelled`.
-    let cancel = auth(
+    let cancel = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/cancel")),
         &owner_token,
     )
     .send();
-    let approve = auth(
+    let approve = common::auth(
         http.post(format!("{base}/recovery/requests/{request_id}/approve")),
         &g2_token,
     )
@@ -948,9 +917,9 @@ async fn a_racing_approval_never_resurrects_a_cancelled_request() {
 #[tokio::test]
 #[ignore]
 async fn guardian_of_lists_only_identities_naming_the_caller() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (guardian_id, guardian_token) = seed_identity_session(&pool).await;
@@ -969,7 +938,7 @@ async fn guardian_of_lists_only_identities_naming_the_caller() {
     )
     .await;
 
-    let mine: Vec<serde_json::Value> = auth(
+    let mine: Vec<serde_json::Value> = common::auth(
         http.get(format!("{base}/me/recovery/guardian-of")),
         &guardian_token,
     )
@@ -985,7 +954,7 @@ async fn guardian_of_lists_only_identities_naming_the_caller() {
         owner_id.to_string()
     );
 
-    let bystanders: Vec<serde_json::Value> = auth(
+    let bystanders: Vec<serde_json::Value> = common::auth(
         http.get(format!("{base}/me/recovery/guardian-of")),
         &bystander_token,
     )
@@ -1003,9 +972,9 @@ async fn guardian_of_lists_only_identities_naming_the_caller() {
 #[tokio::test]
 #[ignore]
 async fn a_guardian_can_resign_without_the_owners_cooperation() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (g1_id, g1_token) = seed_identity_session(&pool).await;
@@ -1026,7 +995,7 @@ async fn a_guardian_can_resign_without_the_owners_cooperation() {
 
     // A guardian resigning from a designation they don't hold is a no-op
     // failure, not a way to remove someone else.
-    let wrong_target = auth(
+    let wrong_target = common::auth(
         http.delete(format!("{base}/me/recovery/guardian-of/{g1_id}")),
         &g2_token,
     )
@@ -1035,7 +1004,7 @@ async fn a_guardian_can_resign_without_the_owners_cooperation() {
     .unwrap();
     assert!(!wrong_target.status().is_success());
 
-    let resign = auth(
+    let resign = common::auth(
         http.delete(format!("{base}/me/recovery/guardian-of/{owner_id}")),
         &g1_token,
     )
@@ -1044,7 +1013,7 @@ async fn a_guardian_can_resign_without_the_owners_cooperation() {
     .unwrap();
     assert!(resign.status().is_success(), "{:?}", resign.status());
 
-    let settings: serde_json::Value = auth(
+    let settings: serde_json::Value = common::auth(
         http.get(format!("{base}/me/recovery/guardians")),
         &owner_token,
     )
@@ -1101,7 +1070,7 @@ async fn recovery_ready_to_finalize(
     let request = initiate_recovery(http, base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
     for token in [&g1_token, &g3_token] {
-        auth(
+        common::auth(
             http.post(format!("{base}/recovery/requests/{request_id}/approve")),
             token,
         )
@@ -1192,9 +1161,9 @@ async fn replay_recovery_passkeys(
 #[tokio::test]
 #[ignore]
 async fn finalize_registers_the_replacement_passkey_for_mirror_replay() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (owner_id, _token, request_id, old_passkeys) =
         recovery_ready_to_finalize(&pool, &http, &base).await;
 
@@ -1340,9 +1309,9 @@ async fn finalize_registers_the_replacement_passkey_for_mirror_replay() {
 #[tokio::test]
 #[ignore]
 async fn a_finalize_with_a_replacement_projection_conflict_rolls_back_registration() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (owner_id, owner_token, request_id, old_passkeys) =
         recovery_ready_to_finalize(&pool, &http, &base).await;
     let before = emitted_recovery_events(&pool, owner_id).await;
@@ -1427,7 +1396,7 @@ async fn a_finalize_with_a_replacement_projection_conflict_rolls_back_registrati
     .await
     .unwrap();
     assert_eq!(revocations, 0);
-    let me = auth(http.get(format!("{base}/me")), &owner_token)
+    let me = common::auth(http.get(format!("{base}/me")), &owner_token)
         .send()
         .await
         .unwrap();
@@ -1437,9 +1406,9 @@ async fn a_finalize_with_a_replacement_projection_conflict_rolls_back_registrati
 #[tokio::test]
 #[ignore]
 async fn finalize_emits_a_passkey_revoked_event_for_each_deleted_passkey() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (owner_id, _token, request_id, old_passkeys) =
         recovery_ready_to_finalize(&pool, &http, &base).await;
 
@@ -1474,9 +1443,9 @@ async fn finalize_emits_a_passkey_revoked_event_for_each_deleted_passkey() {
 #[tokio::test]
 #[ignore]
 async fn a_finalize_that_fails_after_the_passkey_delete_changes_nothing() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (owner_id, owner_token, request_id, old_passkeys) =
         recovery_ready_to_finalize(&pool, &http, &base).await;
 
@@ -1522,7 +1491,7 @@ async fn a_finalize_that_fails_after_the_passkey_delete_changes_nothing() {
     .await
     .unwrap();
     assert_eq!(revocations, 0);
-    let me = auth(http.get(format!("{base}/me")), &owner_token)
+    let me = common::auth(http.get(format!("{base}/me")), &owner_token)
         .send()
         .await
         .unwrap();

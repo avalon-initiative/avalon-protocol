@@ -5,22 +5,11 @@
 //! `crates/server/tests/presence.rs`, since this endpoint doesn't care how
 //! a session was established.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(
     pool: &PgPool,
@@ -54,16 +43,12 @@ async fn seed_identity_session(
     (identity_id, token)
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 #[tokio::test]
 #[ignore]
 async fn resolves_display_names_for_a_batch_of_ids() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     // Issue #510: display_name is globally unique now, so a fixed literal
     // would collide on any re-run against a persistent dev database —
     // embed a fresh uuid, same convention this suite's other fixtures use.
@@ -72,7 +57,7 @@ async fn resolves_display_names_for_a_batch_of_ids() {
     let (alice_id, alice_token) = seed_identity_session(&pool, &alice_name).await;
     let (bob_id, _bob_token) = seed_identity_session(&pool, &bob_name).await;
 
-    let response: serde_json::Value = auth(
+    let response: serde_json::Value = common::auth(
         http.get(format!(
             "{base}/identities/profiles?ids={alice_id},{bob_id}"
         )),
@@ -98,14 +83,14 @@ async fn resolves_display_names_for_a_batch_of_ids() {
 #[tokio::test]
 #[ignore]
 async fn unknown_ids_are_omitted_not_errors() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let alice_name = format!("alice-unknown-id-test-{}", Uuid::new_v4());
     let (alice_id, alice_token) = seed_identity_session(&pool, &alice_name).await;
     let missing_id = avalon_protocol::ids::IdentityId::random_for_tests();
 
-    let response = auth(
+    let response = common::auth(
         http.get(format!(
             "{base}/identities/profiles?ids={alice_id},{missing_id}"
         )),
@@ -125,7 +110,7 @@ async fn unknown_ids_are_omitted_not_errors() {
 #[ignore]
 async fn requires_a_session() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let some_id = Uuid::new_v4();
 
     let response = http

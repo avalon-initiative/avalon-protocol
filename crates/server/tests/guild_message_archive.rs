@@ -15,22 +15,11 @@
 //! read-access rule, and moderation deletion reaching an already-archived
 //! row.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
     let who = avalon_protocol::identity_id::TestIdentity::new();
@@ -61,10 +50,6 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 fn unique_guild_body() -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
     serde_json::json!({
@@ -78,7 +63,7 @@ async fn create_guild_with_general_channel(
     base: &str,
     owner_token: &str,
 ) -> (String, String) {
-    let create = auth(http.post(format!("{base}/guilds")), owner_token)
+    let create = common::auth(http.post(format!("{base}/guilds")), owner_token)
         .json(&unique_guild_body())
         .send()
         .await
@@ -87,7 +72,7 @@ async fn create_guild_with_general_channel(
     let guild: serde_json::Value = create.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap().to_string();
 
-    let channels: serde_json::Value = auth(
+    let channels: serde_json::Value = common::auth(
         http.get(format!("{base}/guilds/{guild_id}/channels")),
         owner_token,
     )
@@ -150,8 +135,8 @@ async fn seed_archived_message(
 #[ignore]
 async fn a_current_member_can_read_the_archive() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
@@ -164,7 +149,7 @@ async fn a_current_member_can_read_the_archive() {
     )
     .await;
 
-    let list: serde_json::Value = auth(
+    let list: serde_json::Value = common::auth(
         http.get(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages/archive"
         )),
@@ -192,8 +177,8 @@ async fn a_current_member_can_read_the_archive() {
 #[ignore]
 async fn a_non_member_cannot_read_the_archive() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
@@ -207,7 +192,7 @@ async fn a_non_member_cannot_read_the_archive() {
     )
     .await;
 
-    let list = auth(
+    let list = common::auth(
         http.get(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages/archive"
         )),
@@ -227,8 +212,8 @@ async fn a_non_member_cannot_read_the_archive() {
 #[ignore]
 async fn moderation_delete_purges_an_already_archived_message() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
@@ -241,7 +226,7 @@ async fn moderation_delete_purges_an_already_archived_message() {
     )
     .await;
 
-    let delete = auth(
+    let delete = common::auth(
         http.delete(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages/{archived_id}"
         )),
@@ -252,7 +237,7 @@ async fn moderation_delete_purges_an_already_archived_message() {
     .unwrap();
     assert!(delete.status().is_success(), "{:?}", delete.status());
 
-    let list: serde_json::Value = auth(
+    let list: serde_json::Value = common::auth(
         http.get(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages/archive"
         )),
@@ -277,12 +262,12 @@ async fn moderation_delete_purges_an_already_archived_message() {
 #[ignore]
 async fn deleting_a_nonexistent_message_id_404s_even_with_an_archive_fallback() {
     let http = reqwest::Client::new();
-    let base = server_url();
-    let pool = test_pool().await;
+    let base = common::server_url();
+    let pool = common::test_pool().await;
     let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
-    let delete = auth(
+    let delete = common::auth(
         http.delete(format!(
             "{base}/guilds/{guild_id}/channels/{channel_id}/messages/{}",
             Uuid::new_v4()

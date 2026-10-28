@@ -1,6 +1,8 @@
 //! Node-to-node HTTP over libp2p streams between real in-process swarms on loopback, served by a
 //! small axum router mounted as the node's router. No database needed.
 
+mod common;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,14 +32,6 @@ use tokio::sync::Notify;
 
 const WAIT: Duration = Duration::from_secs(30);
 const NETWORK: &str = "avalon-test";
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 
 fn config(listen: &str, external: Option<&str>, relay: RelaySettings) -> DhtConfig {
     DhtConfig {
@@ -193,7 +187,7 @@ async fn direct_node(settings: NodeHttpSettings) -> Node {
 
 async fn direct_node_with(key: identity::Keypair, settings: NodeHttpSettings) -> Node {
     let peers = PeerTable::new();
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let handle = dht::start_with_node_http(
         peers.clone(),
         DhtConfig {
@@ -769,7 +763,7 @@ async fn a_peer_reachable_only_through_a_relay_answers_over_the_stream() {
         return eprintln!("skipping: no IPv6 loopback");
     }
     // The relay, dialable on IPv4 loopback.
-    let relay_addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let relay_addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let relay = dht::start(
         PeerTable::new(),
         config(

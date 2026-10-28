@@ -8,22 +8,11 @@
 //! that it's a valid bearer token, so seeding `identities`/`sessions` rows
 //! directly keeps this test focused on what it's actually verifying.
 
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
+mod common;
 
 /// Seeds a bare identity + session, bypassing WebAuthn entirely, and
 /// returns the session's bearer token.
@@ -56,20 +45,16 @@ async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::Identity
     (identity_id, token)
 }
 
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
-}
-
 #[tokio::test]
 #[ignore]
 async fn request_then_accept_creates_exactly_one_friendship() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
-    let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+    let create = common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
         .json(&serde_json::json!({ "to": bob_id }))
         .send()
         .await
@@ -78,7 +63,7 @@ async fn request_then_accept_creates_exactly_one_friendship() {
     let request_body: serde_json::Value = create.json().await.unwrap();
     let request_id = request_body["id"].as_str().unwrap();
 
-    let accept = auth(
+    let accept = common::auth(
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
@@ -87,20 +72,22 @@ async fn request_then_accept_creates_exactly_one_friendship() {
     .expect("accept friend request failed");
     assert!(accept.status().is_success(), "{:?}", accept.status());
 
-    let alice_friends: serde_json::Value = auth(http.get(format!("{base}/friends")), &alice_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let bob_friends: serde_json::Value = auth(http.get(format!("{base}/friends")), &bob_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let alice_friends: serde_json::Value =
+        common::auth(http.get(format!("{base}/friends")), &alice_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let bob_friends: serde_json::Value =
+        common::auth(http.get(format!("{base}/friends")), &bob_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     assert_eq!(alice_friends.as_array().unwrap().len(), 1);
     assert_eq!(bob_friends.as_array().unwrap().len(), 1);
 
@@ -110,9 +97,9 @@ async fn request_then_accept_creates_exactly_one_friendship() {
 #[tokio::test]
 #[ignore]
 async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_request() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (bob_id, alice_token) = {
         let (_alice_id, alice_token) = seed_identity_session(&pool).await;
         let (bob_id, _bob_token) = seed_identity_session(&pool).await;
@@ -131,7 +118,7 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
 
     // Issue #510: `display_name` is the handle now, plain alphanumeric in
     // this test — no `#`/URL-encoding concern left.
-    let resolved = auth(
+    let resolved = common::auth(
         http.get(format!("{base}/friends/handle/{bob_handle}")),
         &alice_token,
     )
@@ -145,7 +132,7 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
         bob_id.to_string()
     );
 
-    let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+    let create = common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
         .json(&serde_json::json!({ "to": resolved_body["identity_id"] }))
         .send()
         .await
@@ -156,12 +143,12 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
 #[tokio::test]
 #[ignore]
 async fn resolving_an_unknown_handle_returns_not_found() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_id, token) = seed_identity_session(&pool).await;
 
-    let resolved = auth(
+    let resolved = common::auth(
         http.get(format!("{base}/friends/handle/nobody-here%230000")),
         &token,
     )
@@ -174,13 +161,13 @@ async fn resolving_an_unknown_handle_returns_not_found() {
 #[tokio::test]
 #[ignore]
 async fn declining_a_request_leaves_no_friendship() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (_alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
-    let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+    let create = common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
         .json(&serde_json::json!({ "to": bob_id }))
         .send()
         .await
@@ -188,7 +175,7 @@ async fn declining_a_request_leaves_no_friendship() {
     let request_body: serde_json::Value = create.json().await.unwrap();
     let request_id = request_body["id"].as_str().unwrap();
 
-    let decline = auth(
+    let decline = common::auth(
         http.delete(format!("{base}/friends/requests/{request_id}")),
         &bob_token,
     )
@@ -197,33 +184,34 @@ async fn declining_a_request_leaves_no_friendship() {
     .unwrap();
     assert!(decline.status().is_success(), "{:?}", decline.status());
 
-    let alice_friends: serde_json::Value = auth(http.get(format!("{base}/friends")), &alice_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let alice_friends: serde_json::Value =
+        common::auth(http.get(format!("{base}/friends")), &alice_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     assert_eq!(alice_friends.as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]
 #[ignore]
 async fn removing_a_friendship_is_visible_to_both_parties() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
 
-    let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+    let create = common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
         .json(&serde_json::json!({ "to": bob_id }))
         .send()
         .await
         .unwrap();
     let request_body: serde_json::Value = create.json().await.unwrap();
     let request_id = request_body["id"].as_str().unwrap();
-    auth(
+    common::auth(
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
@@ -231,7 +219,7 @@ async fn removing_a_friendship_is_visible_to_both_parties() {
     .await
     .unwrap();
 
-    let remove = auth(
+    let remove = common::auth(
         http.delete(format!("{base}/friends/{alice_id}")),
         &bob_token,
     )
@@ -240,20 +228,22 @@ async fn removing_a_friendship_is_visible_to_both_parties() {
     .unwrap();
     assert!(remove.status().is_success(), "{:?}", remove.status());
 
-    let alice_friends: serde_json::Value = auth(http.get(format!("{base}/friends")), &alice_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let bob_friends: serde_json::Value = auth(http.get(format!("{base}/friends")), &bob_token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let alice_friends: serde_json::Value =
+        common::auth(http.get(format!("{base}/friends")), &alice_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let bob_friends: serde_json::Value =
+        common::auth(http.get(format!("{base}/friends")), &bob_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
     assert_eq!(alice_friends.as_array().unwrap().len(), 0);
     assert_eq!(bob_friends.as_array().unwrap().len(), 0);
 }

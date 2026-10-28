@@ -16,9 +16,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::header::HeaderMap;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIssuer {
     signing_key: SigningKey,
@@ -94,7 +92,7 @@ async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIss
 #[ignore]
 async fn an_app_creates_a_milestone_namespaced_under_its_own_slug() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let app = register_issuer(&http, &base, "app").await;
 
     let headers = auth_headers(&http, &base, &app).await;
@@ -121,7 +119,7 @@ async fn an_app_creates_a_milestone_namespaced_under_its_own_slug() {
 #[ignore]
 async fn a_service_creates_a_milestone_namespaced_under_its_own_slug() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let service = register_issuer(&http, &base, "service").await;
 
     let headers = auth_headers(&http, &base, &service).await;
@@ -148,7 +146,7 @@ async fn a_service_creates_a_milestone_namespaced_under_its_own_slug() {
 #[ignore]
 async fn an_app_cannot_create_an_achievement_via_the_integrators_route() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let app = register_issuer(&http, &base, "app").await;
 
     let headers = auth_headers(&http, &base, &app).await;
@@ -170,7 +168,7 @@ async fn an_app_cannot_create_an_achievement_via_the_integrators_route() {
 #[ignore]
 async fn a_integrator_cannot_create_a_milestone_via_the_integrations_route() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_issuer(&http, &base, "game").await;
 
     let headers = auth_headers(&http, &base, &integrator).await;
@@ -200,7 +198,7 @@ async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
     // same underlying table, keyed by integrator_id — see achievements.rs's
     // module doc comment).
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let app = register_issuer(&http, &base, "app").await;
 
     let headers = auth_headers(&http, &base, &app).await;
@@ -227,7 +225,7 @@ async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
 #[ignore]
 async fn listing_milestones_for_an_app_is_public_and_unauthenticated() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let app = register_issuer(&http, &base, "app").await;
 
     let headers = auth_headers(&http, &base, &app).await;

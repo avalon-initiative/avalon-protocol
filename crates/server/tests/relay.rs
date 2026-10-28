@@ -2,6 +2,8 @@
 //! server needed. A node listening only on IPv6 loopback is found `private` by AutoNAT (as in
 //! `reachability.rs`) and so reserves a slot on the IPv4 relays.
 
+mod common;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,14 +35,6 @@ fn autonat() -> AutonatSettings {
         throttle_server_period: Duration::ZERO,
         ..AutonatSettings::default()
     }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 fn ipv6_available() -> bool {
@@ -78,7 +72,7 @@ async fn relay_node(limits: RelayServerSettings) -> (DhtHandle, Multiaddr) {
 
 /// [`relay_node`] on another loopback address, so relays can sit in different /24s.
 async fn relay_node_at(ip: &str, limits: RelayServerSettings) -> (DhtHandle, Multiaddr) {
-    let addr = format!("/ip4/{ip}/tcp/{}", free_port());
+    let addr = format!("/ip4/{ip}/tcp/{}", common::free_port());
     let relay = RelaySettings {
         server: Some(limits),
         ..RelaySettings::default()
@@ -451,7 +445,7 @@ async fn a_failed_hole_punch_leaves_the_relayed_connection_in_use() {
 /// one, so an idle connection has to outlive libp2p's 10s default.
 #[tokio::test]
 async fn an_idle_connection_outlives_the_default_idle_window() {
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let mut quiet = config(&addr, None, RelaySettings::default());
     quiet.autonat.enabled = false;
     let node = dht::start(PeerTable::new(), quiet).await;
@@ -714,7 +708,7 @@ impl LateRelay {
     fn at(ip: &str) -> Self {
         let key = identity::Keypair::generate_ed25519();
         let peer = key.public().to_peer_id();
-        let addr = format!("/ip4/{ip}/tcp/{}", free_port());
+        let addr = format!("/ip4/{ip}/tcp/{}", common::free_port());
         let listed = format!("{addr}/p2p/{peer}").parse().unwrap();
         Self { key, addr, listed }
     }
@@ -1189,7 +1183,7 @@ async fn a_failed_relayed_dial_is_retried_until_the_peer_is_reachable() {
 /// per peer, so the dial-back is denied and the relay turns `private`. Returns whether it still
 /// advertises the hop protocol then, with `grace` as the private grace.
 async fn relay_after_one_failed_probe_advertises_hop(grace: Duration) -> bool {
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let r_peers = PeerTable::new();
     let mut r_config = config(
         &addr,
@@ -1246,7 +1240,7 @@ async fn a_relay_keeps_serving_through_a_brief_private_verdict() {
 /// to the node must stay within its limit throughout.
 #[tokio::test]
 async fn repeated_probes_do_not_exhaust_the_probers_connection_limit() {
-    let addr = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let r_peers = PeerTable::new();
     let r = dht::start(
         r_peers.clone(),

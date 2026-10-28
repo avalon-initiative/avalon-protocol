@@ -26,9 +26,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 /// Must match whatever `AVALON_OWN_SHARD_ID=game:<slug>` the running
 /// server was actually started with — see this file's own module doc
@@ -49,7 +47,7 @@ struct RegisteredIntegrator {
 /// than a random one, since it has to match the running server's own
 /// `AVALON_OWN_SHARD_ID`.
 async fn register_owned_shard_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
-    let base = server_url();
+    let base = common::server_url();
     let name = format!("Cross-Node Login Verify Test {}", Uuid::new_v4().simple());
     let root_signing_key = SigningKey::generate(&mut rand::rng());
     let body = serde_json::json!({
@@ -82,7 +80,7 @@ async fn register_owned_shard_integrator(http: &reqwest::Client) -> RegisteredIn
 }
 
 async fn register_shard_settlement_key(http: &reqwest::Client, integrator: &RegisteredIntegrator) {
-    let base = server_url();
+    let base = common::server_url();
     let challenge: Value = http
         .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
@@ -117,7 +115,7 @@ async fn register_shard_settlement_key(http: &reqwest::Client, integrator: &Regi
 }
 
 async fn lookup(http: &reqwest::Client, user_code: &str) -> Value {
-    let base = server_url();
+    let base = common::server_url();
     http.get(format!("{base}/auth/cross-node/lookup"))
         .query(&[("user_code", user_code)])
         .send()
@@ -138,7 +136,7 @@ async fn lookup(http: &reqwest::Client, user_code: &str) -> Value {
 #[ignore]
 async fn owned_shard_verification_flips_true_once_the_integrator_registers_its_key() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let start: Value = http
         .post(format!("{base}/auth/cross-node/start"))
@@ -175,7 +173,7 @@ async fn owned_shard_verification_flips_true_once_the_integrator_registers_its_k
 #[ignore]
 async fn core_shard_is_unverified_in_this_sandbox() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let start: Value = http
         .post(format!("{base}/auth/cross-node/start"))

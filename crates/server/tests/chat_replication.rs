@@ -31,9 +31,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn require_peer_server_url() -> String {
     std::env::var("AVALON_REALTIME_RELAY_PEER_SERVER_URL").unwrap_or_else(|_| {
@@ -44,14 +42,6 @@ fn require_peer_server_url() -> String {
              comment)"
         )
     })
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
 }
 
 async fn seed_identity_session(pool: &PgPool) -> (avalon_protocol::ids::IdentityId, String) {
@@ -111,9 +101,9 @@ async fn wait_until_peered(http: &reqwest::Client, peer_base: &str, origin_base:
 #[ignore]
 async fn a_channel_message_from_node_a_is_replicated_to_node_bs_replica_table() {
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
-    let node_a_pool = test_pool().await;
+    let node_a_pool = common::test_pool().await;
 
     wait_until_peered(&http, &node_b, &node_a).await;
 

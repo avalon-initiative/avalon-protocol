@@ -3,6 +3,7 @@
 //! without running a handler and keep serving an honest peer. No database needed.
 
 mod abuse_support;
+mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -36,7 +37,7 @@ async fn served() -> Served {
             r#"{"ok":true}"#
         }),
     );
-    let listen = format!("/ip4/127.0.0.1/tcp/{}", free_port());
+    let listen = format!("/ip4/127.0.0.1/tcp/{}", common::free_port());
     let node = dht::start_with_node_http(
         PeerTable::new(),
         config(&listen, None, RelaySettings::default()),

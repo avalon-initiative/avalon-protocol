@@ -16,9 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 async fn test_pool() -> PgPool {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -263,7 +261,7 @@ async fn role_index(
 async fn owner_reverses_attacker_additions_and_voluntary_leaves() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let owner = seed_actor(&pool).await;
     let other = seed_actor(&pool).await;

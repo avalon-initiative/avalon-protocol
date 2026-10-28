@@ -32,50 +32,13 @@ use avalon_indexer::postgres::PROJECTION_TABLES;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
-use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
-use passkey_client::{Client, DefaultClientData, Origin};
-use passkey_types::ctap2::Aaguid;
+use passkey_client::{DefaultClientData, Origin};
 use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
-
-fn rp_origin() -> url::Url {
-    let origin = std::env::var("AVALON_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
-    url::Url::parse(&origin).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL")
-}
-
-async fn test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPoolOptions::new()
-        .connect(&database_url)
-        .await
-        .expect("failed to connect to Postgres — is it reachable?")
-}
-
-type VirtualClient = Client<
-    MemoryStore,
-    MockUserValidationMethod,
-    passkey_crypto::AvailableBackend,
-    public_suffix::PublicSuffixList,
-    (),
->;
-
-fn new_virtual_client() -> VirtualClient {
-    let authenticator = Authenticator::new(
-        Aaguid::new_empty(),
-        MemoryStore::new(),
-        MockUserValidationMethod::verified_user(2),
-        passkey_crypto::AvailableBackend,
-    );
-    Client::new(authenticator).allows_insecure_localhost(true)
-}
+mod common;
 
 /// Registers a brand-new identity entirely via the real HTTP ceremony (same
 /// approach `crates/server/tests/passkeys.rs::create_identity_with_one_passkey`
@@ -100,8 +63,8 @@ async fn register_and_login(
         .unwrap();
     let ticket_id = start["ticket_id"].as_str().unwrap().to_string();
 
-    let mut client = new_virtual_client();
-    let origin = rp_origin();
+    let mut client = common::new_virtual_client();
+    let origin = common::rp_origin();
     let creation_options: CredentialCreationOptions =
         serde_json::from_value(start["challenge"].clone()).unwrap();
     let credential = client
@@ -167,7 +130,7 @@ async fn register_and_login(
     // assigned id (GET /me/devices, match on public key) so a later
     // signature-required call (e.g. POST /integrations/{slug}/connect)
     // can name it.
-    let devices: serde_json::Value = auth(http.get(format!("{base}/me/devices")), &token)
+    let devices: serde_json::Value = common::auth(http.get(format!("{base}/me/devices")), &token)
         .send()
         .await
         .unwrap()
@@ -187,19 +150,6 @@ async fn register_and_login(
         .unwrap();
 
     (identity_id, token, signing_key, signing_key_id)
-}
-
-/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
-fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
-    let message = format!(
-        "avalon:integration.connect:v1:{slug}:{}",
-        capabilities.join(",")
-    );
-    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
-}
-
-fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
-    request.bearer_auth(token)
 }
 
 /// Polls `protocol_outbox` until every enqueued event has been drained into
@@ -358,23 +308,23 @@ const REBUILD_TEST_CHARACTER_PROTO: &str =
 #[tokio::test]
 #[ignore]
 async fn rebuild_reproduces_integrator_data_deletion() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let integrator = register_integrator(&http, &base).await;
     let (subject_id, subject_token, subject_signing_key, subject_signing_key_id) =
         register_and_login(&http, &base).await;
 
     let connect_capabilities: [&str; 0] = [];
-    let connect = auth(
+    let connect = common::auth(
         http.post(format!("{base}/integrations/{}/connect", integrator.slug)),
         &subject_token,
     )
     .json(&serde_json::json!({
         "capabilities": connect_capabilities,
         "signing_key_id": subject_signing_key_id,
-        "signature": sign_connect(&subject_signing_key, &integrator.slug, &connect_capabilities),
+        "signature": common::sign_connect(&subject_signing_key, &integrator.slug, &connect_capabilities),
     }))
     .send()
     .await
@@ -524,21 +474,21 @@ async fn rebuild_reproduces_integrator_data_deletion() {
 #[tokio::test]
 #[ignore]
 async fn rebuild_reproduces_projections_exactly() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (alice_id, alice_token, ..) = register_and_login(&http, &base).await;
     let (bob_id, bob_token, ..) = register_and_login(&http, &base).await;
 
-    let update = auth(http.patch(format!("{base}/me")), &alice_token)
+    let update = common::auth(http.patch(format!("{base}/me")), &alice_token)
         .json(&serde_json::json!({ "bio": "rebuild-from-events test fixture" }))
         .send()
         .await
         .expect("PATCH /me failed");
     assert!(update.status().is_success(), "{:?}", update.status());
 
-    let create_request = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+    let create_request = common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
         .json(&serde_json::json!({ "to": bob_id }))
         .send()
         .await
@@ -547,7 +497,7 @@ async fn rebuild_reproduces_projections_exactly() {
     let request_body: serde_json::Value = create_request.json().await.unwrap();
     let request_id = request_body["id"].as_str().unwrap();
 
-    let accept = auth(
+    let accept = common::auth(
         http.post(format!("{base}/friends/requests/{request_id}/accept")),
         &bob_token,
     )
@@ -557,7 +507,7 @@ async fn rebuild_reproduces_projections_exactly() {
     assert!(accept.status().is_success());
 
     let suffix = Uuid::new_v4().simple().to_string();
-    let create_guild = auth(http.post(format!("{base}/guilds")), &alice_token)
+    let create_guild = common::auth(http.post(format!("{base}/guilds")), &alice_token)
         .json(&serde_json::json!({
             "name": format!("Rebuild Test Guild {}", &suffix[..8]),
             "tag": suffix[..5].to_uppercase(),
@@ -578,7 +528,7 @@ async fn rebuild_reproduces_projections_exactly() {
     // it up so bob can `POST .../join` directly rather than needing a
     // separate invite/accept round trip this test doesn't otherwise care
     // about.
-    let open_policy = auth(
+    let open_policy = common::auth(
         http.patch(format!("{base}/guilds/{guild_id}")),
         &alice_token,
     )
@@ -592,7 +542,7 @@ async fn rebuild_reproduces_projections_exactly() {
         open_policy.status()
     );
 
-    let join = auth(
+    let join = common::auth(
         http.post(format!("{base}/guilds/{guild_id}/join")),
         &bob_token,
     )
@@ -694,9 +644,9 @@ async fn rebuild_reproduces_rollback_reversals() {
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
 
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (alice_id, alice_token, ..) = register_and_login(&http, &base).await;
     let (bob_id, bob_token, bob_key, bob_key_id) = register_and_login(&http, &base).await;
@@ -705,7 +655,7 @@ async fn rebuild_reproduces_rollback_reversals() {
         .unwrap();
 
     let request: serde_json::Value =
-        auth(http.post(format!("{base}/friends/requests")), &alice_token)
+        common::auth(http.post(format!("{base}/friends/requests")), &alice_token)
             .json(&serde_json::json!({ "to": bob_id }))
             .send()
             .await
@@ -713,7 +663,7 @@ async fn rebuild_reproduces_rollback_reversals() {
             .json()
             .await
             .unwrap();
-    auth(
+    common::auth(
         http.post(format!(
             "{base}/friends/requests/{}/accept",
             request["id"].as_str().unwrap()
@@ -729,20 +679,21 @@ async fn rebuild_reproduces_rollback_reversals() {
     let mut guilds = Vec::new();
     for _ in 0..2 {
         let suffix = Uuid::new_v4().simple().to_string();
-        let created: serde_json::Value = auth(http.post(format!("{base}/guilds")), &alice_token)
-            .json(&serde_json::json!({
-                "name": format!("Rollback Rebuild {}", &suffix[..8]),
-                "tag": suffix[..5].to_uppercase(),
-                "description": "rollback rebuild fixture",
-            }))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+        let created: serde_json::Value =
+            common::auth(http.post(format!("{base}/guilds")), &alice_token)
+                .json(&serde_json::json!({
+                    "name": format!("Rollback Rebuild {}", &suffix[..8]),
+                    "tag": suffix[..5].to_uppercase(),
+                    "description": "rollback rebuild fixture",
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
         let guild_id = created["id"].as_str().unwrap().to_string();
-        auth(
+        common::auth(
             http.patch(format!("{base}/guilds/{guild_id}")),
             &alice_token,
         )
@@ -752,7 +703,7 @@ async fn rebuild_reproduces_rollback_reversals() {
         .unwrap()
         .error_for_status()
         .unwrap();
-        auth(
+        common::auth(
             http.post(format!("{base}/guilds/{guild_id}/join")),
             &bob_token,
         )
@@ -764,7 +715,7 @@ async fn rebuild_reproduces_rollback_reversals() {
         guilds.push(guild_id);
     }
     // The second guild is left voluntarily, then restored by rollback.
-    auth(
+    common::auth(
         http.post(format!("{base}/guilds/{}/leave", guilds[1])),
         &bob_token,
     )
@@ -787,7 +738,7 @@ async fn rebuild_reproduces_rollback_reversals() {
     .await
     .unwrap();
 
-    let listing: serde_json::Value = auth(
+    let listing: serde_json::Value = common::auth(
         http.get(format!("{base}/me/rollback/candidates"))
             .query(&[("since", since.as_str())]),
         &bob_token,
@@ -815,7 +766,7 @@ async fn rebuild_reproduces_rollback_reversals() {
 
     for event_id in &to_reverse {
         let message = format!("avalon:rollback.reverse:v1:{event_id}:{bob_id}:{since}");
-        let response = auth(
+        let response = common::auth(
             http.post(format!("{base}/me/rollback/{event_id}/reverse")),
             &bob_token,
         )
@@ -895,12 +846,12 @@ async fn rebuild_reproduces_rollback_reversals() {
 #[tokio::test]
 #[ignore]
 async fn replay_onto_rebuilt_index_is_noop() {
-    let pool = test_pool().await;
+    let pool = common::test_pool().await;
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     let (_alice_id, alice_token, ..) = register_and_login(&http, &base).await;
-    auth(http.patch(format!("{base}/me")), &alice_token)
+    common::auth(http.patch(format!("{base}/me")), &alice_token)
         .json(&serde_json::json!({ "bio": "idempotency fixture" }))
         .send()
         .await

@@ -2,6 +2,8 @@
 //! transport continues over the other, and an application refusal never changes transport.
 //! No database needed.
 
+mod common;
+
 use std::time::Duration;
 
 use avalon_protocol::connectivity::Connectivity;
@@ -20,19 +22,11 @@ use tokio::task::JoinHandle;
 
 const NETWORK: &str = "avalon-test";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 fn config() -> DhtConfig {
     DhtConfig {
         identity: identity::Keypair::generate_ed25519(),
         network_id: NETWORK.to_string(),
-        listen_addr: format!("/ip4/127.0.0.1/tcp/{}", free_port())
+        listen_addr: format!("/ip4/127.0.0.1/tcp/{}", common::free_port())
             .parse()
             .unwrap(),
         external_addr: None,
@@ -125,7 +119,7 @@ async fn failover_runs_both_ways_over_real_swarms() {
     let ghost = dht::start(PeerTable::new(), config()).await;
     let (live_url, _live) = serve_http(router("http", StatusCode::OK)).await;
     let mut ghost_entry = entry(&live_url, &ghost, Connectivity::Relayed);
-    ghost_entry.libp2p_listen_addrs = vec![format!("/ip4/127.0.0.1/tcp/{}", free_port())];
+    ghost_entry.libp2p_listen_addrs = vec![format!("/ip4/127.0.0.1/tcp/{}", common::free_port())];
     table.upsert(ghost_entry);
     let res = client
         .get(format!("{}/nodes/status", p2p_base_url(&ghost.peer_id)))

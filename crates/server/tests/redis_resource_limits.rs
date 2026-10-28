@@ -38,9 +38,7 @@
 //! request baseline (~5ms) — real cross-node backpressure, not a
 //! coincidence of two independent per-process ceilings never being hit.
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 fn require_peer_server_url() -> String {
     std::env::var("AVALON_REDIS_LIMITS_PEER_SERVER_URL").unwrap_or_else(|_| {
@@ -70,7 +68,7 @@ async fn the_rate_limit_is_shared_across_both_nodes() {
     };
 
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
 
     // Spend most of the shared budget on node A alone.
@@ -132,7 +130,7 @@ async fn the_concurrency_ceiling_is_shared_across_both_nodes() {
     };
 
     let http = reqwest::Client::new();
-    let node_a = server_url();
+    let node_a = common::server_url();
     let node_b = require_peer_server_url();
 
     let baseline_start = std::time::Instant::now();

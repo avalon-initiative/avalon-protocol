@@ -21,9 +21,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 struct RegisteredIntegrator {
     slug: String,
@@ -32,7 +30,7 @@ struct RegisteredIntegrator {
 }
 
 async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
-    let base = server_url();
+    let base = common::server_url();
     let suffix = Uuid::new_v4().simple().to_string();
     let root_signing_key = SigningKey::generate(&mut rand::rng());
     let body = serde_json::json!({
@@ -69,7 +67,7 @@ async fn signed_challenge_headers(
     key_id: &str,
     signing_key: &SigningKey,
 ) -> [(&'static str, String); 3] {
-    let base = server_url();
+    let base = common::server_url();
     let challenge: Value = http
         .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
@@ -105,7 +103,7 @@ fn with_headers(
 #[ignore]
 async fn a_shard_settlement_key_registers_and_reads_back_with_its_purpose() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let shard_key = SigningKey::generate(&mut rand::rng());
@@ -191,7 +189,7 @@ async fn a_shard_settlement_key_registers_and_reads_back_with_its_purpose() {
 #[ignore]
 async fn a_shard_settlement_key_still_authenticates_ordinary_calls() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = register_integrator(&http).await;
 
     let shard_key = SigningKey::generate(&mut rand::rng());

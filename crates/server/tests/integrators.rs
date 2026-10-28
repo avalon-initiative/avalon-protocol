@@ -9,9 +9,7 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use uuid::Uuid;
 
-fn server_url() -> String {
-    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
-}
+mod common;
 
 /// A fresh Ed25519 keypair plus the registration body it belongs in — a
 /// short random slug/name pair so concurrent test runs never collide on the
@@ -43,7 +41,7 @@ fn unique_integrator() -> UnregisteredIntegrator {
 #[ignore]
 async fn registering_a_integrator_returns_the_integrator_and_its_credential() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let response = http
@@ -77,7 +75,7 @@ async fn registering_a_integrator_returns_the_integrator_and_its_credential() {
 #[ignore]
 async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_integrator() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let mut integrator = unique_integrator();
     integrator.body["category"] = serde_json::json!("app");
 
@@ -106,7 +104,7 @@ async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_in
 #[ignore]
 async fn registering_with_an_unrecognized_category_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let mut integrator = unique_integrator();
     integrator.body["category"] = serde_json::json!("bogus");
 
@@ -123,7 +121,7 @@ async fn registering_with_an_unrecognized_category_is_rejected() {
 #[ignore]
 async fn a_second_registration_with_the_same_slug_conflicts() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let first = http
@@ -152,7 +150,7 @@ async fn a_second_registration_with_the_same_slug_conflicts() {
 #[ignore]
 async fn an_uppercase_slug_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let mut integrator = unique_integrator();
     integrator.body["slug"] = serde_json::json!("Not-Lowercase");
 
@@ -169,7 +167,7 @@ async fn an_uppercase_slug_is_rejected() {
 #[ignore]
 async fn the_challenge_response_auth_flow_round_trips() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
@@ -218,7 +216,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
 #[ignore]
 async fn a_challenge_cannot_be_replayed() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
@@ -270,7 +268,7 @@ async fn a_challenge_cannot_be_replayed() {
 #[ignore]
 async fn a_signature_from_the_wrong_key_is_rejected() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
@@ -316,7 +314,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
 #[ignore]
 async fn listing_integrators_finds_a_freshly_registered_integrator_by_name_search() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
@@ -358,7 +356,7 @@ async fn listing_integrators_finds_a_freshly_registered_integrator_by_name_searc
 #[ignore]
 async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
 
     for _ in 0..3 {
         let integrator = unique_integrator();
@@ -416,7 +414,7 @@ async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
 #[ignore]
 async fn registering_via_integrations_returns_the_integrator_and_its_credential() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let response = http
@@ -440,7 +438,7 @@ async fn registering_via_integrations_returns_the_integrator_and_its_credential(
 #[ignore]
 async fn get_integrations_slug_serves_directly_without_redirecting() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
@@ -466,7 +464,7 @@ async fn get_integrations_slug_serves_directly_without_redirecting() {
 #[ignore]
 async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     let http = reqwest::Client::new();
-    let base = server_url();
+    let base = common::server_url();
     let integrator = unique_integrator();
 
     let register = http
