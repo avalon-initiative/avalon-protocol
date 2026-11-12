@@ -195,7 +195,8 @@ async fn copies_attestation(
 /// What keeps a stored event out of the chain, and whether that rests on cosigned head dates.
 struct Verdict {
     settled: Settled,
-    /// Some revocation conflict exists, so a head date arriving or lowering can change the chain.
+    /// A conflicting event is still undated, so a head date arriving can change the chain; once every
+    /// involved event is dated the verdict is final.
     anchor_dependent: bool,
 }
 
@@ -228,8 +229,8 @@ async fn verdict_of(
     let events = hashed(stored.iter());
     let conflicts = revocation_conflicts(&events);
     let mut anchors: BTreeMap<EventHash, OffsetDateTime> = BTreeMap::new();
+    let involved: BTreeSet<EventHash> = conflicts.iter().flat_map(|(r, v)| [*r, *v]).collect();
     if let Some(heads) = heads {
-        let involved: BTreeSet<EventHash> = conflicts.iter().flat_map(|(r, v)| [*r, *v]).collect();
         for held in stored
             .iter()
             .filter(|s| involved.contains(&s.chained.event_hash))
@@ -242,7 +243,7 @@ async fn verdict_of(
     }
     Ok(Verdict {
         settled: settle(&events, &anchors),
-        anchor_dependent: !conflicts.is_empty(),
+        anchor_dependent: involved.iter().any(|h| !anchors.contains_key(h)),
     })
 }
 
@@ -575,16 +576,30 @@ pub async fn mark_projected(
     Ok(())
 }
 
-/// Identities whose chain depends on cosigned head dates, up to `limit`.
+/// Identities whose chain depends on cosigned head dates, up to `limit`, least recently visited first.
 pub async fn anchor_dependent_identities(
     tx: &mut Transaction<'_, Postgres>,
     limit: i64,
 ) -> Result<Vec<IdentityId>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT identity_id FROM identity_chain_state WHERE anchor_dependent \
-         ORDER BY identity_id LIMIT $1",
+         ORDER BY last_reconciled_at NULLS FIRST, identity_id LIMIT $1",
     )
     .bind(limit)
     .fetch_all(&mut **tx)
     .await
+}
+
+/// Records a visit of the identity by the reconcile worker, moving it behind the others.
+pub async fn mark_reconciled(
+    tx: &mut Transaction<'_, Postgres>,
+    identity_id: IdentityId,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE identity_chain_state SET last_reconciled_at = now() WHERE identity_id = $1",
+    )
+    .bind(identity_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }

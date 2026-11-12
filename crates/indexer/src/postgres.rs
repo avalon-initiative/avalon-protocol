@@ -628,19 +628,40 @@ impl PostgresIndexer {
         Ok(())
     }
 
-    /// Re-resolves up to `limit` identities whose chain depends on cosigned head dates, so projections
-    /// follow dates that arrive after the events themselves. Returns how many were examined.
+    /// Re-resolves up to `limit` identities whose chain depends on cosigned head dates, least recently
+    /// visited first, so projections follow dates that arrive after the events themselves. One
+    /// identity failing is logged and moved to the back; the rest still run. Returns how many were examined.
     pub async fn reconcile_anchor_dependent(&self, limit: usize) -> Result<usize, IndexError> {
         let mut tx = self.pool.begin().await?;
         let owners =
             identity_chain_store::anchor_dependent_identities(&mut tx, limit as i64).await?;
         tx.commit().await?;
         for owner in &owners {
-            let mut tx = self.pool.begin().await?;
-            self.reconcile(&mut tx, *owner).await?;
-            tx.commit().await?;
+            if let Err(err) = self.reconcile_visit(*owner).await {
+                tracing::warn!("identity chain reconcile of {owner}: {err}");
+                if let Err(err) = self.back_off(*owner).await {
+                    tracing::warn!("identity chain reconcile backoff of {owner}: {err}");
+                }
+            }
         }
         Ok(owners.len())
+    }
+
+    async fn reconcile_visit(
+        &self,
+        owner: avalon_protocol::ids::IdentityId,
+    ) -> Result<(), IndexError> {
+        let mut tx = self.pool.begin().await?;
+        self.reconcile(&mut tx, owner).await?;
+        identity_chain_store::mark_reconciled(&mut tx, owner).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn back_off(&self, owner: avalon_protocol::ids::IdentityId) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        identity_chain_store::mark_reconciled(&mut tx, owner).await?;
+        tx.commit().await
     }
 }
 

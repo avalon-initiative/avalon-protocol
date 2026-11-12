@@ -3017,10 +3017,12 @@ async fn every_flagged_identity_is_reconciled_across_passes_of_a_small_batch() {
         anchor_event(&f.thiefs, 10);
         assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("thief"));
     }
-    // Dated, yet flagged until visited: three passes of two reach all five.
-    for _ in 0..3 {
-        assert_eq!(reconcile_batch(&pool, 2).await, 2);
+    // Dated, yet flagged until visited: passes of two reach all five, and each visited one clears.
+    let mut visited = Vec::new();
+    for _ in 0..4 {
+        visited.push(reconcile_batch(&pool, 2).await);
     }
+    assert_eq!(visited, [2, 2, 1, 0]);
     for f in &all {
         assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("owner"));
     }
@@ -3046,9 +3048,11 @@ async fn an_identity_that_always_fails_does_not_stop_the_ones_behind_it() {
         .execute(&pool)
         .await
         .unwrap();
+    // The failing one stays flagged and queues behind the others after each visit.
     for _ in 0..3 {
-        assert_eq!(reconcile_batch(&pool, 2).await, 2);
+        assert!(reconcile_batch(&pool, 2).await >= 1);
     }
+    assert!(anchor_dependent_of(&pool, ids[0]).await);
     for f in &all[1..] {
         assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("owner"));
     }
