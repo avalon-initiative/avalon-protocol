@@ -3102,3 +3102,157 @@ async fn a_flood_of_superseded_events_is_bounded_and_does_not_wait() {
     );
     apply(&pool, &own, &game()).await.unwrap();
 }
+
+/// The same signed event republished under a fresh event id.
+fn copy_under_new_id(e: &ProtocolEvent) -> ProtocolEvent {
+    let mut copy = e.clone();
+    copy.id = Uuid::new_v4();
+    copy
+}
+
+/// The chain head and fork of the identity, and whether each key is active.
+async fn standing(
+    pool: &PgPool,
+    who: &TestIdentity,
+    keys: &[Uuid],
+) -> ((Option<String>, Option<i64>), Vec<bool>) {
+    let mut active_keys = Vec::new();
+    for key in keys {
+        active_keys.push(active(pool, who, *key).await);
+    }
+    (head_of(pool, who).await, active_keys)
+}
+
+/// Delivers `events` in `order` for a fresh identity built by `build`, checks the live tables match a
+/// rebuild in that order, and returns what the identity stands on.
+async fn run_copies<F>(
+    pool: &PgPool,
+    order: &[usize],
+    build: F,
+) -> ((Option<String>, Option<i64>), Vec<bool>)
+where
+    F: Fn(&Compromise) -> (Vec<ProtocolEvent>, Vec<Uuid>),
+{
+    let c = compromise(pool).await;
+    let (events, keys) = build(&c);
+    deliver(pool, &events, order).await;
+    let live = standing(pool, &c.owner, &keys).await;
+    let mut delivered = c.setup.clone();
+    delivered.extend(order.iter().map(|&i| events[i].clone()));
+    assert_rebuild_matches(pool, &c.owner, &delivered).await;
+    assert_eq!(live, standing(pool, &c.owner, &keys).await, "order {order:?}");
+    live
+}
+
+/// The owner's revocation R of the thief's key beside a thief event at the same position, R anchored
+/// before the thief event. `hostile` is a copy of R under a fresh id, anchored `hostile_hours_ago`
+/// hours back or never. Events: grant, hostile copy, R, thief event.
+fn revocation_scenario(
+    c: &Compromise,
+    hostile_hours_ago: Option<i64>,
+) -> (Vec<ProtocolEvent>, Vec<Uuid>) {
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&c.grant));
+    let thief_event = profile_after(&c.owner, &c.thief, c.t, Some(&c.grant), "thief", now);
+    let hostile = copy_under_new_id(&revocation);
+    anchor_event(&c.grant, 300);
+    anchor_event(&revocation, 100);
+    anchor_event(&thief_event, 50);
+    if let Some(hours) = hostile_hours_ago {
+        anchor_event(&hostile, hours);
+    }
+    (
+        vec![c.grant.clone(), hostile, revocation, thief_event],
+        vec![c.t],
+    )
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_copy_of_a_revocation_under_another_id_does_not_change_its_dating() {
+    let pool = pool().await;
+    let baseline = run_copies(&pool, &[0, 1, 2], |c| {
+        let (mut events, keys) = revocation_scenario(c, None);
+        events.remove(1);
+        (events, keys)
+    })
+    .await;
+    assert_eq!(baseline.1, vec![false], "the revocation ends the thief's key");
+    // Undated, then anchored after the genuine revocation; the copy first, last or before the thief.
+    for hostile in [None, Some(20)] {
+        for order in [[0usize, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2], [0, 1, 3, 2]] {
+            // The copy has the genuine revocation's hash, so heads and key states carry over.
+            let got = run_copies(&pool, &order, |c| revocation_scenario(c, hostile)).await;
+            assert_eq!(
+                got.1, baseline.1,
+                "hostile {hostile:?}, order {order:?}: key state"
+            );
+            assert_eq!(got.0 .1, None, "hostile {hostile:?}, order {order:?}: fork");
+        }
+    }
+}
+
+/// A thief's key addition signed with the revoked key, anchored before the owner's revocation of it,
+/// so it stands. `hostile` is a copy under a fresh id (with its unsigned label changed when
+/// `relabel`), anchored `hostile_hours_ago` hours back or never. Events: grant, hostile copy,
+/// revocation, thief addition.
+fn addition_scenario(
+    c: &Compromise,
+    hostile_hours_ago: Option<i64>,
+    relabel: bool,
+) -> (Vec<ProtocolEvent>, Vec<Uuid>) {
+    let thief_key = Uuid::new_v4();
+    let accomplice = TestIdentity::new();
+    let revocation = revoke(&c.owner, &c.thief, c.t, c.k0, Some(&c.grant));
+    let addition = grant(
+        &c.owner,
+        &c.owner,
+        c.k0,
+        &accomplice,
+        thief_key,
+        Some(&c.grant),
+    );
+    let mut hostile = copy_under_new_id(&addition);
+    if relabel {
+        hostile.payload["device_label"] = serde_json::json!("not the signed label");
+    }
+    anchor_event(&c.grant, 300);
+    anchor_event(&revocation, 100);
+    anchor_event(&addition, 150);
+    if let Some(hours) = hostile_hours_ago {
+        anchor_event(&hostile, hours);
+    }
+    (
+        vec![c.grant.clone(), hostile, revocation, addition],
+        vec![thief_key, c.k0],
+    )
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_copy_of_a_key_addition_under_another_id_does_not_change_its_dating() {
+    let pool = pool().await;
+    let baseline = run_copies(&pool, &[0, 1, 2], |c| {
+        let (mut events, keys) = addition_scenario(c, None, false);
+        events.remove(1);
+        (events, keys)
+    })
+    .await;
+    assert_eq!(baseline.0 .1, Some(2), "the older addition stands and forks the chain");
+    for relabel in [false, true] {
+        for hostile in [None, Some(20)] {
+            for order in [[0usize, 1, 2, 3], [0, 3, 1, 2], [0, 2, 3, 1], [0, 2, 1, 3]] {
+                let got =
+                    run_copies(&pool, &order, |c| addition_scenario(c, hostile, relabel)).await;
+                assert_eq!(
+                    got.1, baseline.1,
+                    "relabel {relabel}, hostile {hostile:?}, order {order:?}: key state"
+                );
+                assert_eq!(
+                    got.0 .1, baseline.0 .1,
+                    "relabel {relabel}, hostile {hostile:?}, order {order:?}: fork"
+                );
+            }
+        }
+    }
+}
