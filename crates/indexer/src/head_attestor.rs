@@ -77,25 +77,44 @@ pub trait HeadAttestor: Send + Sync {
     ) -> Result<Vec<EntryAttestation>, IndexError>;
 }
 
-/// The ledger entry of a chained `event`: the copies of its id (an id is not unique across shards)
-/// whose kind and payload hash are those of the event as stored (payload with its chain position
-/// embedded), merged to the earliest anchor. `None` while no node held entry matches.
-pub async fn chain_event_attestation(
-    conn: &mut PgConnection,
-    heads: &dyn HeadAttestor,
-    event: &ProtocolEvent,
-) -> Result<Option<EntryAttestation>, IndexError> {
+/// The payload hash (lowercase hex) a ledger entry holds for a chained `event`: its payload with the
+/// chain position embedded.
+pub fn stored_payload_hash(event: &ProtocolEvent) -> Result<Option<String>, IndexError> {
     let Some(position) = event.identity_chain.as_ref() else {
         return Ok(None);
     };
     let stored = payload_hash(&embed_position(&event.payload, position))
         .map_err(|_| IndexError::Rejected("chained event payload is not canonical".into()))?;
-    let wanted = hex::encode(stored);
-    let copies = heads
-        .by_event_id(conn, event.id)
+    Ok(Some(hex::encode(stored)))
+}
+
+/// The held entries of `event_id` (an id is not unique across shards) with this kind and payload hash.
+pub async fn entry_attestations(
+    conn: &mut PgConnection,
+    heads: &dyn HeadAttestor,
+    event_id: Uuid,
+    kind: &str,
+    payload_hash: &str,
+) -> Result<Vec<EntryAttestation>, IndexError> {
+    Ok(heads
+        .by_event_id(conn, event_id)
         .await?
         .into_iter()
-        .filter(|e| e.kind == event.kind && e.payload_hash == wanted);
+        .filter(|e| e.kind == kind && e.payload_hash == payload_hash)
+        .collect())
+}
+
+/// The ledger entry of a chained `event`: the copies of its id whose kind and payload hash are those
+/// of the event as stored, merged to the earliest anchor. `None` while no node held entry matches.
+pub async fn chain_event_attestation(
+    conn: &mut PgConnection,
+    heads: &dyn HeadAttestor,
+    event: &ProtocolEvent,
+) -> Result<Option<EntryAttestation>, IndexError> {
+    let Some(wanted) = stored_payload_hash(event)? else {
+        return Ok(None);
+    };
+    let copies = entry_attestations(conn, heads, event.id, &event.kind, &wanted).await?;
     Ok(EntryAttestation::earliest(copies))
 }
 

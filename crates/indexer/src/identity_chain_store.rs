@@ -19,7 +19,9 @@ use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::head_attestor::{chain_event_attestation, HeadAttestor};
+use crate::head_attestor::{
+    entry_attestations, stored_payload_hash, EntryAttestation, HeadAttestor,
+};
 use crate::IndexError;
 
 /// Resolved head of one identity's chain.
@@ -37,8 +39,8 @@ pub enum Recorded {
     Unchained,
     /// Chained but its timestamp was outside the node's clock bounds.
     Rejected(ChainEventError),
-    /// The chain already holds this hash under another event id: the same signed event,
-    /// republished with different unsigned fields.
+    /// The chain already holds this hash under another event id: the same signed event, republished.
+    /// The copy is remembered, since it can change how the event is dated.
     Duplicate,
     Chained {
         /// The event is part of the identity's resolved chain.
@@ -162,6 +164,34 @@ async fn load(
     Ok(out)
 }
 
+/// The ledger entry of a stored chain event: the earliest anchor over every copy of it the node holds.
+/// A copy under another id is the same chain event, so it dates it as much as the stored one does.
+async fn copies_attestation(
+    tx: &mut Transaction<'_, Postgres>,
+    heads: &dyn HeadAttestor,
+    owner: IdentityId,
+    held: &Stored,
+) -> Result<Option<EntryAttestation>, IndexError> {
+    let mut copies: BTreeSet<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT event_id, kind, payload_hash FROM identity_chain_event_copies \
+         WHERE identity_id = $1 AND event_hash = $2",
+    )
+    .bind(owner)
+    .bind(hex::encode(held.chained.event_hash))
+    .fetch_all(&mut **tx)
+    .await?
+    .into_iter()
+    .collect();
+    if let Some(own) = stored_payload_hash(&held.event)? {
+        copies.insert((held.event.id, held.event.kind.clone(), own));
+    }
+    let mut entries = Vec::new();
+    for (id, kind, payload_hash) in &copies {
+        entries.extend(entry_attestations(tx, heads, *id, kind, payload_hash).await?);
+    }
+    Ok(EntryAttestation::earliest(entries))
+}
+
 /// What keeps a stored event out of the chain, and whether that rests on cosigned head dates.
 struct Verdict {
     settled: Settled,
@@ -192,6 +222,7 @@ fn hashed<'a>(events: impl Iterator<Item = &'a Stored>) -> Vec<(ProtocolEvent, E
 async fn verdict_of(
     tx: &mut Transaction<'_, Postgres>,
     heads: Option<&dyn HeadAttestor>,
+    owner: IdentityId,
     stored: &[Stored],
 ) -> Result<Verdict, IndexError> {
     let events = hashed(stored.iter());
@@ -203,7 +234,7 @@ async fn verdict_of(
             .iter()
             .filter(|s| involved.contains(&s.chained.event_hash))
         {
-            let attested = chain_event_attestation(tx, heads, &held.event).await?;
+            let attested = copies_attestation(tx, heads, owner, held).await?;
             if let Some(at) = attested.and_then(|a| a.anchor_at) {
                 anchors.insert(held.chained.event_hash, at);
             }
@@ -227,9 +258,10 @@ fn resolve_live(live: &[&Stored]) -> ChainOutcome {
 async fn outcome_of(
     tx: &mut Transaction<'_, Postgres>,
     heads: Option<&dyn HeadAttestor>,
+    owner: IdentityId,
     stored: &[Stored],
 ) -> Result<(ChainOutcome, Verdict), IndexError> {
-    let verdict = verdict_of(tx, heads, stored).await?;
+    let verdict = verdict_of(tx, heads, owner, stored).await?;
     let live: Vec<&Stored> = stored
         .iter()
         .filter(|s| verdict.keeps(&s.chained.event_hash))
@@ -288,7 +320,13 @@ pub async fn accepted_events_beside(
         Some(event) => Some(with_event(stored.clone(), event)?),
         None => None,
     };
-    let verdict = verdict_of(tx, heads, with_candidate.as_deref().unwrap_or(&stored)).await?;
+    let verdict = verdict_of(
+        tx,
+        heads,
+        identity_id,
+        with_candidate.as_deref().unwrap_or(&stored),
+    )
+    .await?;
     let candidate_hash = candidate.and_then(|e| event_hash(e).ok());
     let live: Vec<Stored> = stored
         .into_iter()
@@ -351,7 +389,7 @@ pub async fn admit(
         return Ok(());
     }
     let with = with_event(stored, event)?;
-    let verdict = verdict_of(tx, heads, &with).await?;
+    let verdict = verdict_of(tx, heads, owner, &with).await?;
     if !verdict.keeps(&hash) && verdict.excluded_count() > MAX_EXCLUDED_PER_IDENTITY {
         return Err(IndexError::Rejected(
             "too many events of this identity are kept out of its chain".to_string(),
@@ -411,6 +449,7 @@ async fn record_locked(
     .bind(hex::encode(hash))
     .fetch_optional(&mut **tx)
     .await?;
+    record_copy(tx, owner, hash, event).await?;
     if held.is_some_and(|id| id != event.id) {
         return Ok(Recorded::Duplicate);
     }
@@ -431,11 +470,59 @@ async fn record_locked(
     .await?;
 
     let after = load(tx, owner).await?;
-    let (outcome, verdict) = outcome_of(tx, heads, &after).await?;
+    let (outcome, verdict) = outcome_of(tx, heads, owner, &after).await?;
     persist_state(tx, owner, &outcome, verdict.anchor_dependent).await?;
     Ok(Recorded::Chained {
         accepted: outcome.accepted.iter().any(|a| a.event_hash == hash),
     })
+}
+
+/// Remembers `event` as a copy of the chain event with `hash`.
+async fn record_copy(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: IdentityId,
+    hash: EventHash,
+    event: &ProtocolEvent,
+) -> Result<(), IndexError> {
+    let Some(payload_hash) = stored_payload_hash(event)? else {
+        return Ok(());
+    };
+    sqlx::query(
+        "INSERT INTO identity_chain_event_copies (identity_id, event_hash, event_id, kind, payload_hash) \
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+    )
+    .bind(owner)
+    .bind(hex::encode(hash))
+    .bind(event.id)
+    .bind(&event.kind)
+    .bind(payload_hash)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Whether this exact copy of the chain event (same id and payload) is remembered already.
+pub async fn has_copy(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ProtocolEvent,
+) -> Result<bool, IndexError> {
+    let (Some(owner), Ok(hash), Some(payload_hash)) = (
+        chain_owner(event),
+        event_hash(event),
+        stored_payload_hash(event)?,
+    ) else {
+        return Ok(false);
+    };
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM identity_chain_event_copies WHERE identity_id = $1 \
+         AND event_hash = $2 AND event_id = $3 AND payload_hash = $4)",
+    )
+    .bind(owner)
+    .bind(hex::encode(hash))
+    .bind(event.id)
+    .bind(payload_hash)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 /// Re-resolves the identity's chain with the dates now known, stores its head, and reports which
@@ -447,7 +534,7 @@ pub async fn reconcile_view(
 ) -> Result<Reconciliation, IndexError> {
     lock_state(tx, owner).await?;
     let stored = load(tx, owner).await?;
-    let (outcome, verdict) = outcome_of(tx, heads, &stored).await?;
+    let (outcome, verdict) = outcome_of(tx, heads, owner, &stored).await?;
     persist_state(tx, owner, &outcome, verdict.anchor_dependent).await?;
     let accepted = accepted_of(&stored, &outcome);
     let held: BTreeSet<EventHash> = accepted.iter().map(|s| s.chained.event_hash).collect();

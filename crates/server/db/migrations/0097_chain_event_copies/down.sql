@@ -1,0 +1,1 @@
+DROP TABLE identity_chain_event_copies;

@@ -63,6 +63,7 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_issuer_keys",
     "indexer_issuer_key_revocations",
     "identity_chain_events",
+    "identity_chain_event_copies",
     "identity_chain_state",
 ];
 
@@ -274,7 +275,11 @@ impl PostgresIndexer {
         .fetch_optional(&mut **tx)
         .await?;
 
-        if claimed.is_none() {
+        // A copy of a claimed chain event is verified and remembered, not projected twice.
+        if claimed.is_none()
+            && (!claim_key.starts_with("chain:")
+                || identity_chain_store::has_copy(tx, event).await?)
+        {
             return Ok(());
         }
 
@@ -292,7 +297,13 @@ impl PostgresIndexer {
         .await?
         {
             Recorded::Unchained => {}
-            Recorded::Duplicate => return Ok(()),
+            Recorded::Duplicate => {
+                // The copy can date the event earlier than the copy held before.
+                if let Some(owner) = avalon_protocol::identity_chain_wire::chain_owner(event) {
+                    self.reconcile(tx, owner).await?;
+                }
+                return Ok(());
+            }
             Recorded::Rejected(err) => {
                 eprintln!("indexer: dropping chained event {}: {err:?}", event.id);
                 return Ok(());

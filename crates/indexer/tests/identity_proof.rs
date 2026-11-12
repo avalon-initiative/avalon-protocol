@@ -1814,7 +1814,7 @@ fn anchor_event(e: &ProtocolEvent, hours_ago: i64) {
     let stored = payload_hash(&embed_position(&e.payload, position)).unwrap();
     let now = OffsetDateTime::now_utc();
     heads().put(
-        format!("anchor-{}", hex::encode(event_hash(e).unwrap())),
+        format!("anchor-{}-{}", hex::encode(event_hash(e).unwrap()), e.id),
         avalon_indexer::head_attestor::EntryAttestation {
             kind: e.kind.clone(),
             event_id: e.id,
@@ -3140,7 +3140,11 @@ where
     let mut delivered = c.setup.clone();
     delivered.extend(order.iter().map(|&i| events[i].clone()));
     assert_rebuild_matches(pool, &c.owner, &delivered).await;
-    assert_eq!(live, standing(pool, &c.owner, &keys).await, "order {order:?}");
+    assert_eq!(
+        live,
+        standing(pool, &c.owner, &keys).await,
+        "order {order:?}"
+    );
     live
 }
 
@@ -3177,7 +3181,11 @@ async fn a_copy_of_a_revocation_under_another_id_does_not_change_its_dating() {
         (events, keys)
     })
     .await;
-    assert_eq!(baseline.1, vec![false], "the revocation ends the thief's key");
+    assert_eq!(
+        baseline.1,
+        vec![false],
+        "the revocation ends the thief's key"
+    );
     // Undated, then anchored after the genuine revocation; the copy first, last or before the thief.
     for hostile in [None, Some(20)] {
         for order in [[0usize, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2], [0, 1, 3, 2]] {
@@ -3238,7 +3246,11 @@ async fn a_copy_of_a_key_addition_under_another_id_does_not_change_its_dating() 
         (events, keys)
     })
     .await;
-    assert_eq!(baseline.0 .1, Some(2), "the older addition stands and forks the chain");
+    assert_eq!(
+        baseline.0 .1,
+        Some(2),
+        "the older addition stands and forks the chain"
+    );
     for relabel in [false, true] {
         for hostile in [None, Some(20)] {
             for order in [[0usize, 1, 2, 3], [0, 3, 1, 2], [0, 2, 3, 1], [0, 2, 1, 3]] {
