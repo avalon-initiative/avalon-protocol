@@ -2931,6 +2931,161 @@ async fn a_projection_is_reverted_when_a_revocation_is_dated_without_any_further
     assert_rebuild_matches(&pool, &c.owner, &all).await;
 }
 
+/// An identity whose revocation of a stolen key is undated while the thief's profile beside it stands
+/// and is projected; dating the revocation later reverts the projection.
+struct Flagged {
+    c: Compromise,
+    revocation: ProtocolEvent,
+    thiefs: ProtocolEvent,
+    events: Vec<ProtocolEvent>,
+}
+
+async fn flagged_identity(pool: &PgPool) -> Flagged {
+    let c = compromise(pool).await;
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let owners = profile_after(&c.owner, &c.owner, c.k0, Some(&c.grant), "owner", now);
+    let thiefs = profile_after(
+        &c.owner,
+        &c.thief,
+        c.t,
+        Some(&c.grant),
+        "thief",
+        now + time::Duration::minutes(4),
+    );
+    let revocation = revoke(&c.owner, &c.owner, c.k0, c.t, Some(&owners));
+    anchor_event(&c.grant, 300);
+    anchor_event(&owners, 200);
+    let events = vec![c.grant.clone(), owners, thiefs.clone(), revocation.clone()];
+    deliver(pool, &events, &[0, 1, 2, 3]).await;
+    Flagged {
+        c,
+        revocation,
+        thiefs,
+        events,
+    }
+}
+
+async fn bio_of(pool: &PgPool, who: IdentityId) -> Option<String> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT bio FROM profiles WHERE identity_id = $1")
+        .bind(who)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .flatten()
+}
+
+async fn anchor_dependent_of(pool: &PgPool, who: IdentityId) -> bool {
+    sqlx::query_scalar("SELECT anchor_dependent FROM identity_chain_state WHERE identity_id = $1")
+        .bind(who)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Leaves only `mine` flagged, so a pass sees nothing from other tests sharing the database.
+async fn unflag_others(pool: &PgPool, mine: &[IdentityId]) {
+    sqlx::query(
+        "UPDATE identity_chain_state SET anchor_dependent = false WHERE identity_id <> ALL($1)",
+    )
+    .bind(mine)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn reconcile_batch(pool: &PgPool, limit: usize) -> usize {
+    PostgresIndexer::new(pool.clone())
+        .with_local_origin(TEST_NETWORK_ID, TEST_SHARD_ID)
+        .with_head_attestor(heads())
+        .reconcile_anchor_dependent(limit)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn every_flagged_identity_is_reconciled_across_passes_of_a_small_batch() {
+    let pool = pool().await;
+    let mut all = Vec::new();
+    for _ in 0..5 {
+        all.push(flagged_identity(&pool).await);
+    }
+    let ids: Vec<IdentityId> = all.iter().map(|f| f.c.owner.id).collect();
+    unflag_others(&pool, &ids).await;
+    for f in &all {
+        anchor_event(&f.revocation, 100);
+        anchor_event(&f.thiefs, 10);
+        assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("thief"));
+    }
+    // Dated, yet flagged until visited: three passes of two reach all five.
+    for _ in 0..3 {
+        assert_eq!(reconcile_batch(&pool, 2).await, 2);
+    }
+    for f in &all {
+        assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("owner"));
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_identity_that_always_fails_does_not_stop_the_ones_behind_it() {
+    let pool = pool().await;
+    let mut all = Vec::new();
+    for _ in 0..4 {
+        all.push(flagged_identity(&pool).await);
+    }
+    let ids: Vec<IdentityId> = all.iter().map(|f| f.c.owner.id).collect();
+    unflag_others(&pool, &ids).await;
+    for f in &all {
+        anchor_event(&f.revocation, 100);
+        anchor_event(&f.thiefs, 10);
+    }
+    // Every stored event of the first identity is unreadable, so its pass always errors.
+    sqlx::query("UPDATE identity_chain_events SET event = '{}'::jsonb WHERE identity_id = $1")
+        .bind(ids[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert_eq!(reconcile_batch(&pool, 2).await, 2);
+    }
+    for f in &all[1..] {
+        assert_eq!(bio_of(&pool, f.c.owner.id).await.as_deref(), Some("owner"));
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn the_flag_stays_while_an_involved_event_is_undated_and_clears_once_all_are_dated() {
+    let pool = pool().await;
+    let f = flagged_identity(&pool).await;
+    let owner = f.c.owner.id;
+    unflag_others(&pool, &[owner]).await;
+    assert!(anchor_dependent_of(&pool, owner).await);
+
+    // Neither involved event is dated.
+    reconcile_batch(&pool, 10).await;
+    assert!(anchor_dependent_of(&pool, owner).await);
+
+    // The revocation is dated, the thief's event is not: it is held pending and may still be dated.
+    anchor_event(&f.revocation, 100);
+    reconcile_batch(&pool, 10).await;
+    assert!(anchor_dependent_of(&pool, owner).await);
+    assert_eq!(bio_of(&pool, owner).await.as_deref(), Some("owner"));
+
+    // Both dated: the verdict can no longer change.
+    anchor_event(&f.thiefs, 10);
+    reconcile_batch(&pool, 10).await;
+    assert!(!anchor_dependent_of(&pool, owner).await);
+    assert_eq!(reconcile_batch(&pool, 10).await, 0);
+    assert_eq!(bio_of(&pool, owner).await.as_deref(), Some("owner"));
+    assert!(!active(&pool, &f.c.owner, f.c.t).await);
+
+    let mut all = f.c.setup.clone();
+    all.extend(f.events);
+    assert_rebuild_matches(&pool, &f.c.owner, &all).await;
+}
+
 #[tokio::test]
 #[ignore]
 async fn passkeys_of_a_later_revoked_key_end_the_same_whatever_the_order() {
